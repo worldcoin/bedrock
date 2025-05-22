@@ -1,0 +1,14 @@
+target/
+.DS_Store
+**/ios_build
+.swiftpm/
+
+# Swift build outputs are not committed to this repo.
+*.xcframework/
+Sources/
+
+# forge
+cache/
+**/out/build-info
+
+# NOTE: Cargo.lock is not ignored because this is a library to be used through foreign bindings
