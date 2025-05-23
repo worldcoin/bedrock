@@ -13,12 +13,12 @@ SWIFT_HEADERS_DIR="$BASE_PATH/ios_build/Headers/Bedrock"
 
 echo "Building $FRAMEWORK"
 
-rm -rf $BASE_PATH/ios_build
-rm -rf $BASE_PATH/$FRAMEWORK
-mkdir -p $BASE_PATH/ios_build/bindings
-mkdir -p $BASE_PATH/ios_build/target/universal-ios-sim/release
-mkdir -p $BASE_PATH/$SWIFT_SOURCES_DIR
-mkdir -p $SWIFT_HEADERS_DIR
+rm -rf "$BASE_PATH/ios_build"
+rm -rf "$BASE_PATH/$FRAMEWORK"
+mkdir -p "$BASE_PATH/ios_build/bindings"
+mkdir -p "$BASE_PATH/ios_build/target/universal-ios-sim/release"
+mkdir -p "$BASE_PATH/$SWIFT_SOURCES_DIR"
+mkdir -p "$SWIFT_HEADERS_DIR"
 
 
 export IPHONEOS_DEPLOYMENT_TARGET="13.0"
