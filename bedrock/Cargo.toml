@@ -1,0 +1,32 @@
+[package]
+name = "bedrock"
+description = "Foundational library which powers World App's crypto wallet."
+
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+exclude.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+name = "bedrock"
+
+
+[dependencies]
+alloy = { version = "1.0.6", default-features = false, features = ["signer-local", "sol-types"] }
+hex = "0.4.3"
+thiserror = "2.0.12"
+uniffi = { workspace = true, features = ["build", "tokio"] }
+
+
+[dev-dependencies]
+alloy = { version = "1.0.6", default-features = false, features = ["json", "contract", "node-bindings"] }
+tokio = "1.45.0"
+tokio-test = "0.4.4"
