@@ -15,6 +15,6 @@
 /// signing messages (ERC-191) and typed data (EIP-712).
 ///
 /// Reference: <https://github.com/safe-global/safe-smart-account>
-mod gnosis_safe;
+mod smart_account;
 
 uniffi::setup_scaffolding!("bedrock");
