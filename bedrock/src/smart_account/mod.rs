@@ -68,7 +68,7 @@ impl SafeSmartAccount {
     /// Signs a string message using the `personal_sign` method on behalf of the Safe Smart Account.
     ///
     /// # Errors
-    /// - Will throw an error if the signature process unexpectedlyfails.
+    /// - Will throw an error if the signature process unexpectedly fails.
     pub fn personal_sign(
         &self,
         chain_id: u32,
