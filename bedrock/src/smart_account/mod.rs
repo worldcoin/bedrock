@@ -34,7 +34,7 @@ pub struct SafeSmartAccount {
 
 #[uniffi::export]
 impl SafeSmartAccount {
-    /// Initializes a new `GnosisSafe` instance with the given EOA signing key.
+    /// Initializes a new `SafeSmartAccount` instance with the given EOA signing key.
     ///
     /// # Arguments
     /// - `ethereum_key`: A hex-encoded string representing the **secret key** of the EOA who is an owner in the Safe.

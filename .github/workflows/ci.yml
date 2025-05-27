@@ -27,6 +27,10 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features
 
+      # TODO: Build all targets in a matrix
+      - name: Build
+        run: cargo build
+
   swift-build:
     name: Test Swift Build
     runs-on: macos-latest

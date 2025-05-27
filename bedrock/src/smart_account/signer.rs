@@ -35,7 +35,7 @@ pub trait SafeSmartAccountSigner {
         chain_id: u32,
     ) -> Result<Signature, SafeSmartAccountError>;
 
-    /// Signs a message on behalf of the Gnosis Safe smart account (through the EOA). Generally for use with EIP-712 typed data.
+    /// Signs a message on behalf of the Safe Smart Account (through the EOA). Generally for use with EIP-712 typed data.
     ///
     /// # Errors
     /// - Will throw an error if the signature process fails.
@@ -92,7 +92,7 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
 }
 
 impl SafeSmartAccount {
-    /// Computes the digest for a specific message to be signed by the Gnosis Safe smart account.
+    /// Computes the digest for a specific message to be signed by the Safe Smart Account.
     ///
     /// This is equivalent to the contract's `getMessageHashForSafe` method (including also the `encodeMessageDataForSafe` logic).
     /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/handler/CompatibilityFallbackHandler.sol#L68>
@@ -114,7 +114,7 @@ impl SafeSmartAccount {
         self.eip_712_hash(message_hash, chain_id, domain_separator_address)
     }
 
-    /// Computes the digest for a specific EIP-712 message to be signed by the Gnosis Safe smart account.
+    /// Computes the digest for a specific EIP-712 message to be signed by the Safe Smart Account.
     ///
     /// This is used to sign personal messages (EIP-191; `0x45`), sign typed data (EIP-191; `0x01`) and sign transaction data.
     fn eip_712_hash(
@@ -134,7 +134,7 @@ impl SafeSmartAccount {
         keccak256(buf)
     }
 
-    /// Computes the domain separator ([EIP-712](https://eips.ethereum.org/EIPS/eip-712#definition-of-encodedata)) for the Gnosis Safe smart account.
+    /// Computes the domain separator ([EIP-712](https://eips.ethereum.org/EIPS/eip-712#definition-of-encodedata)) for the Safe Smart Account.
     ///
     /// This is equivalent to the contract's `domainSeparator` method.
     /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L365>
