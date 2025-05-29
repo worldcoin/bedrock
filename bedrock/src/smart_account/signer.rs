@@ -164,8 +164,6 @@ impl SafeSmartAccount {
 #[cfg(test)]
 mod tests {
 
-    use crate::CanonicalChain;
-
     use super::*;
     use alloy::{hex::FromHex, signers::local::PrivateKeySigner};
     use ruint::uint;
@@ -188,7 +186,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x4564420674EA68fcc61b463C0494807C759d47e6",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 
@@ -204,7 +201,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 
@@ -220,7 +216,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x75c9553956dfe249C815700b1E7076A5738F3d6d",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 
@@ -238,7 +233,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 
@@ -255,7 +249,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x619525ED4E862B62cFEDACCc4dA5a9864D6f4A97",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 
@@ -274,7 +267,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x4564420674EA68fcc61b463C0494807C759d47e6",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 
@@ -301,7 +293,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x4564420674EA68fcc61b463C0494807C759d47e6",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 
@@ -330,7 +321,6 @@ mod tests {
         let smart_account = SafeSmartAccount::new(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6",
-            CanonicalChain::WorldChain,
         )
         .unwrap();
 

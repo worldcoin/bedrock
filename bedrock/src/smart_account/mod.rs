@@ -6,8 +6,6 @@ use alloy::{
 };
 use signer::SafeSmartAccountSigner;
 
-use crate::CanonicalChain;
-
 mod signer;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -32,10 +30,6 @@ pub struct SafeSmartAccount {
     signer: LocalSigner<SigningKey>,
     /// The address of the Safe Smart Account (i.e. the deployed smart contract)
     wallet_address: Address,
-    /// The canonical chain of the Safe Smart Account (i.e. the chain where the primary Safe Smart Account is deployed)
-    /// Today only World Chain is supported, but this may change in the future.
-    #[allow(dead_code)] // this is introduced to future proof other chain support
-    canonical_chain: CanonicalChain,
 }
 
 #[uniffi::export]
@@ -43,7 +37,7 @@ impl SafeSmartAccount {
     /// Initializes a new `SafeSmartAccount` instance with the given EOA signing key.
     ///
     /// # Arguments
-    /// - `ethereum_key`: A hex-encoded string representing the **secret key** of the EOA who is an owner in the Safe.
+    /// - `private_key`: A hex-encoded string representing the **secret key** of the EOA who is an owner in the Safe.
     /// - `wallet_address`: The address of the Safe Smart Account (i.e. the deployed smart contract). This is required because
     ///   some legacy versions of the wallet were computed differently. Today, it cannot be deterministically computed for all users.
     ///
@@ -52,12 +46,11 @@ impl SafeSmartAccount {
     /// - Will return an error if the key is not a valid point in the k256 curve.
     #[uniffi::constructor]
     pub fn new(
-        ethereum_key: String,
+        private_key: String,
         wallet_address: &str,
-        canonical_chain: CanonicalChain,
     ) -> Result<Self, SafeSmartAccountError> {
         let signer = LocalSigner::from_slice(
-            &hex::decode(ethereum_key)
+            &hex::decode(private_key)
                 .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
         )
         .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
@@ -69,11 +62,15 @@ impl SafeSmartAccount {
         Ok(Self {
             signer,
             wallet_address,
-            canonical_chain,
         })
     }
 
     /// Signs a string message using the `personal_sign` method on behalf of the Safe Smart Account.
+    ///
+    /// # Arguments
+    /// - `chain_id`: The chain ID of the chain where the message is being signed. While technically the chain ID is a `U256` in EVM, we limit
+    ///   to sensible `u32` (which works well with foreign code).
+    /// - `message`: The message to sign. Do not add the EIP-191 prefix, or typehash prefixes. Should be the raw message.
     ///
     /// # Errors
     /// - Will throw an error if the signature process unexpectedly fails.
@@ -99,7 +96,6 @@ mod tests {
         let result = SafeSmartAccount::new(
             invalid_hex.to_string(),
             "0x0000000000000000000000000000000000000042",
-            CanonicalChain::WorldChain,
         );
         assert!(result.is_err());
         assert_eq!(
@@ -114,7 +110,6 @@ mod tests {
         let result = SafeSmartAccount::new(
             invalid_hex.to_string(),
             "0x0000000000000000000000000000000000000042",
-            CanonicalChain::WorldChain,
         );
         assert!(result.is_err());
         assert_eq!(
@@ -137,7 +132,6 @@ mod tests {
             let result = SafeSmartAccount::new(
                 hex::encode(PrivateKeySigner::random().to_bytes()),
                 invalid_address,
-                CanonicalChain::WorldChain,
             );
             assert!(result.is_err());
             assert_eq!(
