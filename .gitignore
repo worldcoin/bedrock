@@ -1,11 +1,18 @@
 target/
 .DS_Store
-**/ios_build
 .swiftpm/
 
-# Swift build outputs are not committed to this repo.
+# iOS build artifacts
+**/ios_build/
+test_ios/ios_build/
+test_ios/generated_swift/
+test_ios/Bedrock.xcframework/
+test_ios/ios_example_app/.build/
+
+# Swift build outputs
 *.xcframework/
 Sources/
+generated_swift/
 
 # forge
 cache/
