@@ -28,10 +28,19 @@ if [ ! -d "$BASE_PATH/Bedrock.xcframework" ]; then
 fi
 echo -e "${GREEN}✓ XCFramework built successfully${NC}"
 
-echo -e "${BLUE}Step 2: Copying generated Swift files to package${NC}"
+echo -e "${BLUE}Step 2: Copying XCFramework to test_ios directory${NC}"
+# Copy the built XCFramework to where the Swift package expects it
+rm -rf "$BASE_PATH/test_ios/Bedrock.xcframework"
+cp -R "$BASE_PATH/Bedrock.xcframework" "$BASE_PATH/test_ios/Bedrock.xcframework"
+echo -e "${GREEN}✓ XCFramework copied to test_ios directory${NC}"
+
+echo -e "${BLUE}Step 3: Copying generated Swift files to package${NC}"
+# Ensure the destination directory exists
+mkdir -p "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/"
+
 # Copy the generated Swift file to the package
 if [ -f "$BASE_PATH/$SWIFT_SOURCES_DIR/bedrock.swift" ]; then
-    mkdir -p "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/" && cp "$BASE_PATH/$SWIFT_SOURCES_DIR/bedrock.swift" "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/"
+    cp "$BASE_PATH/$SWIFT_SOURCES_DIR/bedrock.swift" "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/"
     # Remove the placeholder if it exists
     rm -f "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/Placeholder.swift"
     echo -e "${GREEN}✓ Swift bindings copied to package${NC}"
@@ -40,7 +49,7 @@ else
     exit 1
 fi
 
-echo -e "${BLUE}Step 3: Running Swift tests${NC}"
+echo -e "${BLUE}Step 4: Running Swift tests${NC}"
 cd "$BEDROCK_PACKAGE_DIR"
 
 # Clean any previous build artifacts
