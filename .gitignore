@@ -12,3 +12,5 @@ cache/
 **/out/build-info
 
 # NOTE: Cargo.lock is not ignored because this is a library to be used through foreign bindings
+
+.env
