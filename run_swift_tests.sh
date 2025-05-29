@@ -31,7 +31,7 @@ echo -e "${GREEN}✓ XCFramework built successfully${NC}"
 echo -e "${BLUE}Step 2: Copying generated Swift files to package${NC}"
 # Copy the generated Swift file to the package
 if [ -f "$BASE_PATH/$SWIFT_SOURCES_DIR/bedrock.swift" ]; then
-    cp "$BASE_PATH/$SWIFT_SOURCES_DIR/bedrock.swift" "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/"
+    mkdir -p "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/" && cp "$BASE_PATH/$SWIFT_SOURCES_DIR/bedrock.swift" "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/"
     # Remove the placeholder if it exists
     rm -f "$BEDROCK_PACKAGE_DIR/Sources/Bedrock/Placeholder.swift"
     echo -e "${GREEN}✓ Swift bindings copied to package${NC}"
