@@ -85,3 +85,18 @@ jobs:
         with:
           command: check ${{ matrix.checks }}
           rust-version: stable
+
+  kotlin-build-and-test:
+    name: Build and Test Kotlin Bindings
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Build and test Kotlin bindings
+        run: ./run_kotlin_tests.sh
