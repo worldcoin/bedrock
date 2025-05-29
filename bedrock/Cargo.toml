@@ -13,11 +13,9 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 name = "bedrock"
-
 
 [dependencies]
 alloy = { version = "1.0.6", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
@@ -25,7 +23,6 @@ hex = "0.4.3"
 ruint = "1.15.0"
 thiserror = "2.0.12"
 uniffi = { workspace = true, features = ["build", "tokio"] }
-
 
 [dev-dependencies]
 alloy = { version = "1.0.6", default-features = false, features = ["json", "contract", "node-bindings"] }

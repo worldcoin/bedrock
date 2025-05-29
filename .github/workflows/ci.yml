@@ -24,6 +24,11 @@ jobs:
       - name: Check code formatting
         run: cargo fmt -- --check
 
+      - name: Cargo sort
+        run: |
+          cargo install cargo-sort
+          cargo sort --workspace --check
+
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features
 
