@@ -6,6 +6,8 @@ use alloy::{
 };
 use signer::SafeSmartAccountSigner;
 
+use crate::CanonicalChain;
+
 mod signer;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -30,6 +32,10 @@ pub struct SafeSmartAccount {
     signer: LocalSigner<SigningKey>,
     /// The address of the Safe Smart Account (i.e. the deployed smart contract)
     wallet_address: Address,
+    /// The canonical chain of the Safe Smart Account (i.e. the chain where the primary Safe Smart Account is deployed)
+    /// Today only World Chain is supported, but this may change in the future.
+    #[allow(dead_code)] // this is introduced to future proof other chain support
+    canonical_chain: CanonicalChain,
 }
 
 #[uniffi::export]
@@ -48,6 +54,7 @@ impl SafeSmartAccount {
     pub fn new(
         ethereum_key: String,
         wallet_address: &str,
+        canonical_chain: CanonicalChain,
     ) -> Result<Self, SafeSmartAccountError> {
         let signer = LocalSigner::from_slice(
             &hex::decode(ethereum_key)
@@ -62,6 +69,7 @@ impl SafeSmartAccount {
         Ok(Self {
             signer,
             wallet_address,
+            canonical_chain,
         })
     }
 
@@ -91,6 +99,7 @@ mod tests {
         let result = SafeSmartAccount::new(
             invalid_hex.to_string(),
             "0x0000000000000000000000000000000000000042",
+            CanonicalChain::WorldChain,
         );
         assert!(result.is_err());
         assert_eq!(
@@ -105,6 +114,7 @@ mod tests {
         let result = SafeSmartAccount::new(
             invalid_hex.to_string(),
             "0x0000000000000000000000000000000000000042",
+            CanonicalChain::WorldChain,
         );
         assert!(result.is_err());
         assert_eq!(
@@ -127,6 +137,7 @@ mod tests {
             let result = SafeSmartAccount::new(
                 hex::encode(PrivateKeySigner::random().to_bytes()),
                 invalid_address,
+                CanonicalChain::WorldChain,
             );
             assert!(result.is_err());
             assert_eq!(

@@ -17,4 +17,14 @@
 /// Reference: <https://github.com/safe-global/safe-smart-account>
 mod smart_account;
 
+/// A canonical chain is a chain that is **natively** supported by World App.
+///
+/// This does not include chains supported by Mini Apps.
+#[repr(u32)]
+#[derive(Debug, uniffi::Enum)]
+pub enum CanonicalChain {
+    /// Blockchain for real humans. Reference: <https://world.org/world-chain>
+    WorldChain = 480,
+}
+
 uniffi::setup_scaffolding!("bedrock");

@@ -8,6 +8,7 @@
     "clippy",
     "foundryup",
     "keccak",
+    "repr",
     "ruint",
     "Uniffi",
     "xcframework",
