@@ -6,7 +6,7 @@ use alloy::{
 };
 use signer::SafeSmartAccountSigner;
 
-use crate::primitives::HexEncodedString;
+use crate::primitives::{HexEncodedString, PrimitiveError};
 
 mod signer;
 
@@ -19,6 +19,8 @@ pub enum SafeSmartAccountError {
     Signing(#[from] alloy::signers::Error),
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
+    #[error("failed to encode: {0}")]
+    Encoding(String),
 }
 
 /// A Safe Smart Account (previously Gnosis Safe) is the representation of a Safe smart contract.
@@ -84,7 +86,18 @@ impl SafeSmartAccount {
         message: String,
     ) -> Result<HexEncodedString, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
-        Ok(signature.to_string().into())
+
+        let signature: HexEncodedString =
+            signature
+                .to_string()
+                .try_into()
+                .map_err(|e: PrimitiveError| {
+                    SafeSmartAccountError::Encoding(format!(
+                        "signature encoding error: {e}"
+                    ))
+                })?;
+
+        Ok(signature)
     }
 }
 

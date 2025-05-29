@@ -30,10 +30,11 @@ impl HexEncodedString {
 
         hex::decode(&s).map_err(|_| PrimitiveError::InvalidHexString(s.clone()))?;
 
-        Ok(Self(format!("0x{}", s)))
+        Ok(Self(format!("0x{s}")))
     }
 
     /// Returns the wrapped hex string as a string.
+    #[must_use]
     pub fn as_string(&self) -> String {
         self.0.clone()
     }
@@ -45,9 +46,11 @@ impl From<HexEncodedString> for String {
     }
 }
 
-impl From<String> for HexEncodedString {
-    fn from(s: String) -> Self {
-        Self::new(s).unwrap()
+impl TryFrom<String> for HexEncodedString {
+    type Error = PrimitiveError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::new(s)
     }
 }
 
