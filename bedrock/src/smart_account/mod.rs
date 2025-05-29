@@ -6,6 +6,8 @@ use alloy::{
 };
 use signer::SafeSmartAccountSigner;
 
+use crate::primitives::HexEncodedString;
+
 mod signer;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -39,7 +41,9 @@ impl SafeSmartAccount {
     /// # Arguments
     /// - `private_key`: A hex-encoded string representing the **secret key** of the EOA who is an owner in the Safe.
     /// - `wallet_address`: The address of the Safe Smart Account (i.e. the deployed smart contract). This is required because
-    ///   some legacy versions of the wallet were computed differently. Today, it cannot be deterministically computed for all users.
+    ///   some legacy versions of the wallet were computed differently. Today, it cannot be deterministically computed for all
+    ///   users. This is also necessary to support signing for Safes deployed by third-party Mini App devs, where the
+    ///   wallet address is only known at runtime.
     ///
     /// # Errors
     /// - Will return an error if the key is not a validly encoded hex string.
@@ -78,9 +82,9 @@ impl SafeSmartAccount {
         &self,
         chain_id: u32,
         message: String,
-    ) -> Result<String, SafeSmartAccountError> {
+    ) -> Result<HexEncodedString, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
-        Ok(signature.to_string())
+        Ok(signature.to_string().into())
     }
 }
 
