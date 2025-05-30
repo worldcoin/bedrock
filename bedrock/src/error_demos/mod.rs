@@ -1,109 +1,28 @@
-use std::sync::Arc;
-
-/// Example #1: Strongly typed enum-based errors
-/// This is the traditional approach with specific error variants
+/// Unified error type demonstrating both strongly typed and generic error handling
+/// This shows how to combine specific error variants with flexible anyhow-based errors
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
-pub enum StronglyTypedError {
+pub enum DemoError {
+    // Strongly typed error variants - these provide structured access to error data
     #[error("Authentication failed with code: {code}")]
     AuthenticationFailed { code: u32 },
     #[error("Network timeout after {seconds} seconds")]
     NetworkTimeout { seconds: u32 },
     #[error("Invalid input: {message}")]
     InvalidInput { message: String },
+
+    // Generic variant for flexible error handling with anyhow
+    // This allows for complex error chains and context while still being part of the main error type
+    #[error("Generic error: {message}")]
+    Generic { message: String },
 }
 
-/// Example #2: Interface-based flexible errors (compatible with anyhow)
-/// This allows for more flexible error handling while still providing structured access
-#[derive(Debug, thiserror::Error)]
-#[error("{inner}")]
-pub struct FlexibleError {
-    inner: anyhow::Error,
-}
-
-impl FlexibleError {
-    /// Get the error message
-    pub fn message(&self) -> String {
-        self.inner.to_string()
+impl From<anyhow::Error> for DemoError {
+    fn from(err: anyhow::Error) -> Self {
+        DemoError::Generic {
+            message: err.to_string(),
+        }
     }
-
-    /// Get the error chain as a vector of strings
-    pub fn error_chain(&self) -> Vec<String> {
-        self.inner.chain().map(|e| e.to_string()).collect()
-    }
-
-    /// Check if this error was caused by a specific error type
-    pub fn is_caused_by(&self, error_type: &str) -> bool {
-        self.inner.to_string().contains(error_type)
-    }
-}
-
-impl From<anyhow::Error> for FlexibleError {
-    fn from(inner: anyhow::Error) -> Self {
-        Self { inner }
-    }
-}
-
-// UniFFI export for the flexible error interface
-#[derive(Debug, uniffi::Object)]
-pub struct FlexibleErrorWrapper {
-    error: FlexibleError,
-}
-
-#[uniffi::export]
-impl FlexibleErrorWrapper {
-    pub fn message(&self) -> String {
-        self.error.message()
-    }
-
-    pub fn error_chain(&self) -> Vec<String> {
-        self.error.error_chain()
-    }
-
-    pub fn is_caused_by(&self, error_type: String) -> bool {
-        self.error.is_caused_by(&error_type)
-    }
-}
-
-impl From<FlexibleError> for FlexibleErrorWrapper {
-    fn from(error: FlexibleError) -> Self {
-        Self { error }
-    }
-}
-
-impl std::fmt::Display for FlexibleErrorWrapper {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.error)
-    }
-}
-
-/// Demo functions that use strongly typed errors
-#[uniffi::export]
-pub fn demo_authenticate(
-    username: String,
-    password: String,
-) -> Result<String, StronglyTypedError> {
-    if username.is_empty() {
-        return Err(StronglyTypedError::InvalidInput {
-            message: "Username cannot be empty".to_string(),
-        });
-    }
-
-    if password.len() < 8 {
-        return Err(StronglyTypedError::InvalidInput {
-            message: "Password must be at least 8 characters".to_string(),
-        });
-    }
-
-    if username == "admin" && password == "wrongpassword" {
-        return Err(StronglyTypedError::AuthenticationFailed { code: 401 });
-    }
-
-    if username == "slowuser" {
-        return Err(StronglyTypedError::NetworkTimeout { seconds: 30 });
-    }
-
-    Ok(format!("Welcome, {}!", username))
 }
 
 /// Helper function that demonstrates real anyhow usage patterns
@@ -160,11 +79,38 @@ fn simulate_file_operation(filename: &str) -> anyhow::Result<String> {
     Ok(format!("File {} processed successfully", filename))
 }
 
-/// Demo function that uses flexible errors with real anyhow patterns
+/// Demo function that uses strongly typed errors for known error cases
 #[uniffi::export]
-pub fn demo_flexible_operation(
-    input: String,
-) -> Result<String, Arc<FlexibleErrorWrapper>> {
+pub fn demo_authenticate(
+    username: String,
+    password: String,
+) -> Result<String, DemoError> {
+    if username.is_empty() {
+        return Err(DemoError::InvalidInput {
+            message: "Username cannot be empty".to_string(),
+        });
+    }
+
+    if password.len() < 8 {
+        return Err(DemoError::InvalidInput {
+            message: "Password must be at least 8 characters".to_string(),
+        });
+    }
+
+    if username == "admin" && password == "wrongpassword" {
+        return Err(DemoError::AuthenticationFailed { code: 401 });
+    }
+
+    if username == "slowuser" {
+        return Err(DemoError::NetworkTimeout { seconds: 30 });
+    }
+
+    Ok(format!("Welcome, {}!", username))
+}
+
+/// Demo function that uses the generic error variant for complex anyhow patterns
+#[uniffi::export]
+pub fn demo_generic_operation(input: String) -> Result<String, DemoError> {
     use anyhow::Context;
 
     let result: anyhow::Result<String> = (|| {
@@ -207,20 +153,66 @@ pub fn demo_flexible_operation(
         Ok(format!("Successfully processed: {}", input))
     })();
 
-    match result {
-        Ok(success) => Ok(success),
-        Err(err) => Err(Arc::new(FlexibleError::from(err).into())),
-    }
+    result.map_err(DemoError::from)
 }
 
-/// Demo function that shows mixing both error types
+/// Demo function that shows mixing both error patterns in a single function
 #[uniffi::export]
-pub fn demo_mixed_errors(operation: String) -> Result<String, StronglyTypedError> {
+pub fn demo_mixed_operations(
+    operation: String,
+    data: String,
+) -> Result<String, DemoError> {
+    // First, do some validation using strongly typed errors
+    if operation.is_empty() {
+        return Err(DemoError::InvalidInput {
+            message: "Operation cannot be empty".to_string(),
+        });
+    }
+
     match operation.as_str() {
-        "simple" => Ok("Simple operation completed".to_string()),
-        "auth" => Err(StronglyTypedError::AuthenticationFailed { code: 403 }),
-        "timeout" => Err(StronglyTypedError::NetworkTimeout { seconds: 60 }),
-        _ => Err(StronglyTypedError::InvalidInput {
+        "validate_and_process" => {
+            // Start with validation (strongly typed)
+            if data.len() < 3 {
+                return Err(DemoError::InvalidInput {
+                    message: "Data must be at least 3 characters".to_string(),
+                });
+            }
+
+            // Then do complex processing (generic anyhow errors)
+            let result = simulate_network_call(&data)
+                .and_then(|_| simulate_file_operation("valid.txt"))
+                .map_err(DemoError::from)?;
+
+            Ok(format!("Processed: {}", result))
+        }
+        "auth_then_timeout" => {
+            // Specific auth error first
+            if data == "invalid_creds" {
+                return Err(DemoError::AuthenticationFailed { code: 403 });
+            }
+
+            // Then a timeout scenario
+            if data == "slow_network" {
+                return Err(DemoError::NetworkTimeout { seconds: 45 });
+            }
+
+            Ok("Authentication and network operations completed".to_string())
+        }
+        "complex_chain" => {
+            // This will use the generic error handling for complex anyhow chains
+            use anyhow::Context;
+
+            simulate_network_call(&data)
+                .context("Initial network call failed")
+                .and_then(|_| {
+                    simulate_file_operation(&format!("{}.txt", data))
+                        .context("Follow-up file operation failed")
+                })
+                .context("Complex operation chain failed")
+                .map(|result| format!("Chain completed: {}", result))
+                .map_err(DemoError::from)
+        }
+        _ => Err(DemoError::InvalidInput {
             message: format!("Unknown operation: {}", operation),
         }),
     }

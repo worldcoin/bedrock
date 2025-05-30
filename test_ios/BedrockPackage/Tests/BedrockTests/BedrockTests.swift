@@ -176,262 +176,379 @@ final class BedrockTests: XCTestCase {
     
     // MARK: - Error Demos Tests
     
-    func testStronglyTypedErrors_Success() throws {
+    func testDemoAuthenticate_Success() throws {
         // Test successful authentication
         let result = try demoAuthenticate(username: "testuser", password: "validpassword123")
         XCTAssertEqual(result, "Welcome, testuser!")
     }
     
-    func testStronglyTypedErrors_InvalidInput() {
-        // Test empty username
+    func testDemoAuthenticate_StronglyTypedErrors() {
+        // Test empty username - should get InvalidInput
         XCTAssertThrowsError(
             try demoAuthenticate(username: "", password: "validpassword123")
         ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
+            if let demoError = error as? DemoError {
+                switch demoError {
                 case .invalidInput(let message):
-                    XCTAssertEqual(message, "Username cannot be empty")
+                    XCTAssertTrue(message.contains("Username cannot be empty"), 
+                                 "Expected username error, got: \(message)")
                 default:
-                    XCTFail("Expected InvalidInput error, got \(strongError)")
+                    XCTFail("Expected InvalidInput error, got \(demoError)")
                 }
             } else {
-                XCTFail("Expected StronglyTypedError, got \(type(of: error))")
+                XCTFail("Expected DemoError, got \(type(of: error))")
             }
         }
         
-        // Test short password
+        // Test short password - should get InvalidInput
         XCTAssertThrowsError(
             try demoAuthenticate(username: "testuser", password: "short")
         ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
+            if let demoError = error as? DemoError {
+                switch demoError {
                 case .invalidInput(let message):
-                    XCTAssertEqual(message, "Password must be at least 8 characters")
+                    XCTAssertTrue(message.contains("Password must be at least 8 characters"), 
+                                 "Expected password error, got: \(message)")
                 default:
-                    XCTFail("Expected InvalidInput error, got \(strongError)")
+                    XCTFail("Expected InvalidInput error, got \(demoError)")
                 }
             } else {
-                XCTFail("Expected StronglyTypedError, got \(type(of: error))")
+                XCTFail("Expected DemoError, got \(type(of: error))")
             }
         }
-    }
-    
-    func testStronglyTypedErrors_AuthenticationFailed() {
+        
+        // Test authentication failure - should get AuthenticationFailed
         XCTAssertThrowsError(
             try demoAuthenticate(username: "admin", password: "wrongpassword")
         ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
-                case .authenticationFailed(let code):
-                    XCTAssertEqual(code, 401)
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .authenticationFailed(let message):
+                    XCTAssertTrue(message.contains("Authentication failed") && 
+                                 message.contains("401"), 
+                                 "Expected auth error with code 401, got: \(message)")
                 default:
-                    XCTFail("Expected AuthenticationFailed error, got \(strongError)")
+                    XCTFail("Expected AuthenticationFailed error, got \(demoError)")
                 }
             } else {
-                XCTFail("Expected StronglyTypedError, got \(type(of: error))")
+                XCTFail("Expected DemoError, got \(type(of: error))")
             }
         }
-    }
-    
-    func testStronglyTypedErrors_NetworkTimeout() {
+        
+        // Test network timeout - should get NetworkTimeout
         XCTAssertThrowsError(
             try demoAuthenticate(username: "slowuser", password: "validpassword123")
         ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
-                case .networkTimeout(let seconds):
-                    XCTAssertEqual(seconds, 30)
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .networkTimeout(let message):
+                    XCTAssertTrue(message.contains("Network timeout") && 
+                                 message.contains("30"), 
+                                 "Expected timeout error with 30 seconds, got: \(message)")
                 default:
-                    XCTFail("Expected NetworkTimeout error, got \(strongError)")
+                    XCTFail("Expected NetworkTimeout error, got \(demoError)")
                 }
             } else {
-                XCTFail("Expected StronglyTypedError, got \(type(of: error))")
+                XCTFail("Expected DemoError, got \(type(of: error))")
             }
         }
     }
     
-    func testFlexibleErrors_Success() throws {
+    func testDemoGenericOperation_Success() throws {
         // Test successful operation
-        let result = try demoFlexibleOperation(input: "valid_input")
+        let result = try demoGenericOperation(input: "valid_input")
         XCTAssertEqual(result, "Successfully processed: valid_input")
     }
     
-    func testFlexibleErrors_EmptyInput() {
+    func testDemoGenericOperation_GenericErrors() {
+        // Test empty input - should get Generic error
         XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "")
+            try demoGenericOperation(input: "")
         ) { error in
-            // Note: With Arc<FlexibleErrorWrapper>, the error comes through as a different type
-            // We need to check the actual error message
-            let errorMessage = error.localizedDescription
-            XCTAssertTrue(errorMessage.contains("Input cannot be empty"), 
-                         "Expected error message about empty input, got: \(errorMessage)")
-        }
-    }
-    
-    func testFlexibleErrors_NetworkError() {
-        XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "network_error")
-        ) { error in
-            let errorMessage = error.localizedDescription
-            // With anyhow context, we should see the full error chain
-            XCTAssertTrue(errorMessage.contains("Connection timed out") || 
-                         errorMessage.contains("Network operation failed") ||
-                         errorMessage.contains("Service call unsuccessful"), 
-                         "Expected network-related error message, got: \(errorMessage)")
-        }
-    }
-    
-    func testFlexibleErrors_ParseError() {
-        XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "parse_error")
-        ) { error in
-            let errorMessage = error.localizedDescription
-            // With anyhow context, we should see the full error chain
-            XCTAssertTrue(errorMessage.contains("Failed to parse server response") || 
-                         errorMessage.contains("Data processing failed") ||
-                         errorMessage.contains("Response format is invalid"), 
-                         "Expected parse-related error message, got: \(errorMessage)")
-        }
-    }
-    
-    func testFlexibleErrors_AuthError() {
-        XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "auth_error")
-        ) { error in
-            // With flexible errors, we primarily work with string descriptions
-            let description = error.localizedDescription
-            XCTAssertFalse(description.isEmpty, "Error description should not be empty")
-            // The exact message depends on how UniFFI presents the Arc<FlexibleErrorWrapper>
-            print("Flexible error description: \(description)")
-            
-            // Test that anyhow context chains are preserved in the error message
-            XCTAssertTrue(description.contains("Authentication") || 
-                         description.contains("credentials") ||
-                         description.contains("auth"), 
-                         "Expected authentication-related error content in: \(description)")
-        }
-    }
-    
-    func testFlexibleErrors_FileErrors() {
-        // Test file not found
-        XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "file_missing")
-        ) { error in
-            let errorMessage = error.localizedDescription
-            XCTAssertTrue(errorMessage.contains("File not found") || 
-                         errorMessage.contains("Could not find file") ||
-                         errorMessage.contains("File system operation failed"), 
-                         "Expected file not found error message, got: \(errorMessage)")
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .generic(let message):
+                    XCTAssertTrue(message.contains("Input cannot be empty"), 
+                                 "Expected empty input error, got: \(message)")
+                default:
+                    XCTFail("Expected Generic error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
         }
         
-        // Test permission denied
+        // Test network error - should get Generic error with anyhow context
         XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "file_permission")
+            try demoGenericOperation(input: "network_error")
         ) { error in
-            let errorMessage = error.localizedDescription
-            XCTAssertTrue(errorMessage.contains("Permission denied") || 
-                         errorMessage.contains("Access denied") ||
-                         errorMessage.contains("Insufficient permissions"), 
-                         "Expected permission error message, got: \(errorMessage)")
-        }
-    }
-    
-    func testFlexibleErrors_MultipleErrors() {
-        XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "multiple_errors")
-        ) { error in
-            let errorMessage = error.localizedDescription
-            // Should fail on the first error (auth)
-            XCTAssertTrue(errorMessage.contains("Authentication failed") || 
-                         errorMessage.contains("First operation failed"), 
-                         "Expected first operation error message, got: \(errorMessage)")
-        }
-    }
-    
-    func testMixedErrors_Success() throws {
-        let result = try demoMixedErrors(operation: "simple")
-        XCTAssertEqual(result, "Simple operation completed")
-    }
-    
-    func testMixedErrors_AuthError() {
-        XCTAssertThrowsError(
-            try demoMixedErrors(operation: "auth")
-        ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
-                case .authenticationFailed(let code):
-                    XCTAssertEqual(code, 403)
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .generic(let message):
+                    XCTAssertTrue(message.contains("Connection timed out") || 
+                                 message.contains("Network operation failed") ||
+                                 message.contains("Service call unsuccessful"), 
+                                 "Expected network-related error, got: \(message)")
                 default:
-                    XCTFail("Expected AuthenticationFailed error, got \(strongError)")
+                    XCTFail("Expected Generic error, got \(demoError)")
                 }
             } else {
-                XCTFail("Expected StronglyTypedError, got \(type(of: error))")
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test auth error - should get Generic error with anyhow context
+        XCTAssertThrowsError(
+            try demoGenericOperation(input: "auth_error")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .generic(let message):
+                    XCTAssertTrue(message.contains("Authentication failed") || 
+                                 message.contains("Invalid credentials") ||
+                                 message.contains("Authentication step failed"), 
+                                 "Expected auth-related error, got: \(message)")
+                default:
+                    XCTFail("Expected Generic error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test parse error - should get Generic error with anyhow context
+        XCTAssertThrowsError(
+            try demoGenericOperation(input: "parse_error")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .generic(let message):
+                    XCTAssertTrue(message.contains("Failed to parse server response") || 
+                                 message.contains("Data processing failed") ||
+                                 message.contains("Response format is invalid"), 
+                                 "Expected parse-related error, got: \(message)")
+                default:
+                    XCTFail("Expected Generic error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test file errors
+        XCTAssertThrowsError(
+            try demoGenericOperation(input: "file_missing")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .generic(let message):
+                    XCTAssertTrue(message.contains("File not found") || 
+                                 message.contains("Could not find file") ||
+                                 message.contains("File system operation failed"), 
+                                 "Expected file not found error, got: \(message)")
+                default:
+                    XCTFail("Expected Generic error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        XCTAssertThrowsError(
+            try demoGenericOperation(input: "file_permission")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .generic(let message):
+                    XCTAssertTrue(message.contains("Permission denied") || 
+                                 message.contains("Access denied") ||
+                                 message.contains("Insufficient permissions"), 
+                                 "Expected permission error, got: \(message)")
+                default:
+                    XCTFail("Expected Generic error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
             }
         }
     }
     
-    func testMixedErrors_TimeoutError() {
+    func testDemoMixedOperations() throws {
+        // Test successful validation and processing
+        let result1 = try demoMixedOperations(operation: "validate_and_process", data: "valid_data_123")
+        XCTAssertTrue(result1.contains("Processed:"))
+        
+        // Test successful auth and network operations
+        let result2 = try demoMixedOperations(operation: "auth_then_timeout", data: "good_data")
+        XCTAssertEqual(result2, "Authentication and network operations completed")
+        
+        // Test validation error (strongly typed)
         XCTAssertThrowsError(
-            try demoMixedErrors(operation: "timeout")
+            try demoMixedOperations(operation: "validate_and_process", data: "x")
         ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
-                case .networkTimeout(let seconds):
-                    XCTAssertEqual(seconds, 60)
-                default:
-                    XCTFail("Expected NetworkTimeout error, got \(strongError)")
-                }
-            } else {
-                XCTFail("Expected StronglyTypedError, got \(type(of: error))")
-            }
-        }
-    }
-    
-    func testMixedErrors_InvalidOperation() {
-        XCTAssertThrowsError(
-            try demoMixedErrors(operation: "unknown")
-        ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
+            if let demoError = error as? DemoError {
+                switch demoError {
                 case .invalidInput(let message):
-                    XCTAssertEqual(message, "Unknown operation: unknown")
+                    XCTAssertTrue(message.contains("Data must be at least 3 characters"), 
+                                 "Expected validation error, got: \(message)")
                 default:
-                    XCTFail("Expected InvalidInput error, got \(strongError)")
+                    XCTFail("Expected InvalidInput error, got \(demoError)")
                 }
             } else {
-                XCTFail("Expected StronglyTypedError, got \(type(of: error))")
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test auth failure (strongly typed)
+        XCTAssertThrowsError(
+            try demoMixedOperations(operation: "auth_then_timeout", data: "invalid_creds")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .authenticationFailed(let message):
+                    XCTAssertTrue(message.contains("Authentication failed") && 
+                                 message.contains("403"), 
+                                 "Expected auth error with code 403, got: \(message)")
+                default:
+                    XCTFail("Expected AuthenticationFailed error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test timeout (strongly typed)
+        XCTAssertThrowsError(
+            try demoMixedOperations(operation: "auth_then_timeout", data: "slow_network")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .networkTimeout(let message):
+                    XCTAssertTrue(message.contains("Network timeout") && 
+                                 message.contains("45"), 
+                                 "Expected timeout error with 45 seconds, got: \(message)")
+                default:
+                    XCTFail("Expected NetworkTimeout error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test complex chain operation (generic error)
+        XCTAssertThrowsError(
+            try demoMixedOperations(operation: "complex_chain", data: "auth")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .generic(let message):
+                    XCTAssertTrue(message.contains("Complex operation chain failed") ||
+                                 message.contains("Authentication failed") ||
+                                 message.contains("Initial network call failed"), 
+                                 "Expected complex chain error, got: \(message)")
+                default:
+                    XCTFail("Expected Generic error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test invalid operation (strongly typed)
+        XCTAssertThrowsError(
+            try demoMixedOperations(operation: "unknown", data: "any_data")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .invalidInput(let message):
+                    XCTAssertTrue(message.contains("Unknown operation: unknown"), 
+                                 "Expected unknown operation error, got: \(message)")
+                default:
+                    XCTFail("Expected InvalidInput error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
+            }
+        }
+        
+        // Test empty operation (strongly typed)
+        XCTAssertThrowsError(
+            try demoMixedOperations(operation: "", data: "any_data")
+        ) { error in
+            if let demoError = error as? DemoError {
+                switch demoError {
+                case .invalidInput(let message):
+                    XCTAssertTrue(message.contains("Operation cannot be empty"), 
+                                 "Expected empty operation error, got: \(message)")
+                default:
+                    XCTFail("Expected InvalidInput error, got \(demoError)")
+                }
+            } else {
+                XCTFail("Expected DemoError, got \(type(of: error))")
             }
         }
     }
     
-    // Test error message accessibility in both approaches
-    func testErrorMessageComparison() {
-        // Strongly typed error - structured access to error details
-        XCTAssertThrowsError(
-            try demoAuthenticate(username: "admin", password: "wrongpassword")
-        ) { error in
-            if let strongError = error as? StronglyTypedError {
-                switch strongError {
-                case .authenticationFailed(let code):
-                    // With strongly typed errors, we get structured access to error data
-                    XCTAssertEqual(code, 401)
-                    let description = strongError.localizedDescription
-                    XCTAssertTrue(description.contains("Authentication failed with code: 401"))
-                default:
-                    XCTFail("Expected AuthenticationFailed error")
-                }
-            }
+    // Test demonstrating the unified error handling approach
+    func testUnifiedErrorHandling() {
+        // This test shows how having a single error type makes error handling more consistent
+        var caughtErrors: [DemoError] = []
+        
+        // Collect different types of errors
+        do {
+            _ = try demoAuthenticate(username: "admin", password: "wrongpassword")
+        } catch let error as DemoError {
+            caughtErrors.append(error)
+        } catch {
+            XCTFail("Expected DemoError")
         }
         
-        // Flexible error - string-based error handling
-        XCTAssertThrowsError(
-            try demoFlexibleOperation(input: "network_error")
-        ) { error in
-            // With flexible errors, we primarily work with string descriptions
+        do {
+            _ = try demoGenericOperation(input: "auth_error")
+        } catch let error as DemoError {
+            caughtErrors.append(error)
+        } catch {
+            XCTFail("Expected DemoError")
+        }
+        
+        do {
+            _ = try demoMixedOperations(operation: "auth_then_timeout", data: "slow_network")
+        } catch let error as DemoError {
+            caughtErrors.append(error)
+        } catch {
+            XCTFail("Expected DemoError")
+        }
+        
+        // Verify we caught different types of errors, all using the same error enum
+        XCTAssertEqual(caughtErrors.count, 3)
+        
+        // Verify the error types
+        if case .authenticationFailed(let message) = caughtErrors[0] {
+            XCTAssertTrue(message.contains("Authentication failed") && message.contains("401"), 
+                         "Expected auth error with code 401, got: \(message)")
+        } else {
+            XCTFail("Expected AuthenticationFailed error")
+        }
+        
+        if case .generic(let message) = caughtErrors[1] {
+            XCTAssertTrue(message.contains("Authentication"), 
+                         "Expected authentication-related generic error, got: \(message)")
+        } else {
+            XCTFail("Expected Generic error")
+        }
+        
+        if case .networkTimeout(let message) = caughtErrors[2] {
+            XCTAssertTrue(message.contains("Network timeout") && message.contains("45"), 
+                         "Expected timeout error with 45 seconds, got: \(message)")
+        } else {
+            XCTFail("Expected NetworkTimeout error")
+        }
+        
+        // Demonstrate unified error message handling
+        for error in caughtErrors {
             let description = error.localizedDescription
             XCTAssertFalse(description.isEmpty, "Error description should not be empty")
-            // The exact message depends on how UniFFI presents the Arc<FlexibleErrorWrapper>
-            print("Flexible error description: \(description)")
+            print("Unified error: \(description)")
         }
     }
 } 
