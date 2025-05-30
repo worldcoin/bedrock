@@ -1,25 +1,24 @@
 use std::str::FromStr;
 
+use crate::bedrock_error::bedrock_error;
 use alloy::{
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
+use signer::SafeSmartAccountSigner;
 
 mod signer;
 
-pub use signer::SafeSmartAccountSigner;
-
 /// Errors that can occur when working with Safe Smart Accounts.
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+#[bedrock_error]
 pub enum SafeSmartAccountError {
-    /// Failed to decode hex-encoded secret into k256 signer.
+    /// Failed to decode a hex-encoded secret key into a k256 signer.
     #[error("failed to decode hex-encoded secret into k256 signer: {0}")]
     KeyDecoding(String),
-    /// Signing operation failed.
+    /// Error occurred during the signing process.
     #[error(transparent)]
     Signing(#[from] alloy::signers::Error),
-    /// Failed to parse address.
+    /// Failed to parse an Ethereum address string.
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
 }

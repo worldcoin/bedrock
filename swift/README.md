@@ -3,16 +3,33 @@
 This folder contains all relevant support files for Bedrock to work in Swift:
 
 1. Script to cross-compile and build Swift bindings.
-2. Foreign tests. Unit tests for Swift (`/tests` folder). Foreign unit tests run the XCTest suite on iOS simulator using `xcodebuild`.
+2. Script to build Swift package for local development.
+3. Foreign tests. Unit tests for Swift (`/tests` folder). Foreign unit tests run the XCTest suite on iOS simulator using `xcodebuild`.
 
 ### Building the Swift Project
 
-To build the Swift project run:
+To build the Swift project for release/distribution:
 
 ```bash
     # run from the root project directory
     ./swift/build_swift.sh
 ```
+
+### Building for Local iOS Development
+
+To build a Swift package that can be imported locally via Swift Package Manager:
+
+```bash
+    # run from the root project directory
+    ./swift/build_for_local_ios.sh
+```
+
+This creates a complete Swift package in the `swift/local_build/` directory that you can import in your iOS project:
+
+1. In Xcode: File → Add Package Dependencies → Add Local → Select the `swift/local_build/` directory
+2. In Package.swift: `.package(path: "/path/to/bedrock/swift/local_build")`
+
+**Note**: All local build artifacts are placed in `swift/local_build/` which is ignored by git to keep the repository clean.
 
 ### Running foreign tests for Swift
 
