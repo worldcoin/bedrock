@@ -2,20 +2,10 @@
 
 Foundational library which powers World App's crypto wallet.
 
-## Swift Bindings
+## Local Development & Contributing
 
-### Building (`build_swift.sh`)
+Review our [CONTRIBUTING](CONTRIBUTING.md) guide. Including details on how to run this project locally.
 
-Generates Swift bindings and creates an XCFramework for iOS:
+## 🐦‍🔥 Swift Bindings
 
-- Builds Rust library for iOS targets (device + simulator)
-- Generates Swift bindings using UniFFI
-- Packages everything into `Bedrock.xcframework`
-
-### Testing (`run_swift_tests.sh`)
-
-Runs Swift unit tests against the generated bindings:
-
-- Executes `build_swift.sh` to generate the framework
-- Copies Swift bindings to test package at `test_ios/BedrockPackage`
-- Runs XCTest suite on iOS simulator using `xcodebuild`
+Bedrock ships with foreign bindings for native Swift. All details can be found in the [/swift](./swift/README.md) folder.
