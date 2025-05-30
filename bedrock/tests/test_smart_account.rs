@@ -59,7 +59,7 @@ const SAFE_MODULE_SETUP_ADDRESS: Address =
     address!("2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47");
 
 fn setup_anvil() -> AnvilInstance {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
     let rpc_url = std::env::var("WORLDCHAIN_RPC_URL")
         .expect("WORLDCHAIN_RPC_URL not set. Copy .env.example to .env and add your Alchemy API key");
 
