@@ -4,10 +4,10 @@ target/
 
 # iOS build artifacts
 **/ios_build/
-test_ios/ios_build/
-test_ios/generated_swift/
-test_ios/Bedrock.xcframework/
-test_ios/ios_example_app/.build/
+swift/Bedrock.xcframework/
+swift/Sources/
+swift/tests/Sources/
+.swiftpm/
 
 # Swift build outputs
 *.xcframework/
