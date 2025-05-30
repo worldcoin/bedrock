@@ -1,33 +1,31 @@
-target/
+
+# NOTE: Cargo.lock is not ignored because this is a library to be used through foreign bindings
+
+# general & env
+.env
 .DS_Store
-.swiftpm/
 
-# iOS build artifacts
+# rust
+target/
+
+# swift
 **/ios_build/
-swift/Bedrock.xcframework/
-swift/Sources/
-swift/tests/Sources/
-.swiftpm/
-
-# Swift build outputs
+**/Sources/
 *.xcframework/
-Sources/
+.swiftpm/
 generated_swift/
+test_output.log
 
 # forge
 cache/
 **/out/build-info
 
-# NOTE: Cargo.lock is not ignored because this is a library to be used through foreign bindings
+# kotlin
+kotlin/src/main/java/
+kotlin/libs/
+kotlin/.gradle/
+kotlin/build/
+kotlin/gradlew
+kotlin/gradlew.bat
+kotlin/gradle/
 
-.env
-
-
-# Kotlin/Android test artifacts
-test_android/src/main/java/
-test_android/libs/
-test_android/.gradle/
-test_android/build/
-test_android/gradlew
-test_android/gradlew.bat
-test_android/gradle/

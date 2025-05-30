@@ -1,8 +1,8 @@
 package bedrock
 
-import kotlin.test.*
 import uniffi.bedrock.SafeSmartAccount
 import uniffi.bedrock.SafeSmartAccountException
+import kotlin.test.*
 
 class BedrockTests {
     private val testPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
@@ -32,13 +32,14 @@ class BedrockTests {
     @Test
     fun testMultipleMessages() {
         val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
-        val messages = listOf(
-            "Message 1",
-            "Another test message",
-            "Special characters: !@#\$%^&*()",
-            "Numbers: 1234567890",
-            "Empty string test: "
-        )
+        val messages =
+            listOf(
+                "Message 1",
+                "Another test message",
+                "Special characters: !@#\$%^&*()",
+                "Numbers: 1234567890",
+                "Empty string test: ",
+            )
 
         for (msg in messages) {
             val sig = account.personalSign(chainId, msg)

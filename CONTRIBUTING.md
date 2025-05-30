@@ -21,7 +21,13 @@ Thank you for your interest in contributing to our project! This document provid
    curl -L https://foundry.paradigm.xyz | bash
    foundryup
    ```
-4. Run tests to ensure everything is working as expected. This will run **all tests** including integration tests and doctests.
+4. **Recommended**. Install `ktlint` to lint the Kotlin tests.
+
+   ```bash
+   brew install ktlint
+   ```
+
+5. Run tests to ensure everything is working as expected. This will run **all tests** including integration tests and doctests.
    ```bash
    cargo test
    ```
