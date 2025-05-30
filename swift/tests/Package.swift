@@ -4,7 +4,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "BedrockPackage",
+    name: "BedrockForeignTestPackage",
     platforms: [
         .iOS(.v13)
     ],

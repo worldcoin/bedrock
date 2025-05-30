@@ -12,6 +12,8 @@ jobs:
   lint:
     name: Format, Clippy & Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -34,6 +36,8 @@ jobs:
   swift-build-and-test:
     name: Build and Test Swift Bindings
     runs-on: macos-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -45,11 +49,13 @@ jobs:
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
       - name: Build and test Swift bindings
-        run: ./run_swift_tests.sh
+        run: ./test_swift.sh
 
   test:
     name: Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -69,6 +75,8 @@ jobs:
   deny:
     name: Cargo deny
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         checks:
