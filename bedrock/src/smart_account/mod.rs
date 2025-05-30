@@ -5,7 +5,7 @@ use alloy::{
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 
-use crate::primitives::{HexEncodedString, PrimitiveError};
+use crate::primitives::{HexEncodedData, PrimitiveError};
 
 mod signer;
 
@@ -24,6 +24,7 @@ pub enum SafeSmartAccountError {
     /// Failed to parse address.
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
+    /// Failed to encode data to a specific format.
     #[error("failed to encode: {0}")]
     Encoding(String),
 }
@@ -89,10 +90,10 @@ impl SafeSmartAccount {
         &self,
         chain_id: u32,
         message: String,
-    ) -> Result<HexEncodedString, SafeSmartAccountError> {
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
 
-        let signature: HexEncodedString =
+        let signature: HexEncodedData =
             signature
                 .to_string()
                 .try_into()

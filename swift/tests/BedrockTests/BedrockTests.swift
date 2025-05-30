@@ -11,7 +11,7 @@ final class BedrockTests: XCTestCase {
     func testSafeSmartAccountCreation() throws {
         // Test creating a SafeSmartAccount instance
         let account = try SafeSmartAccount(
-            ethereumKey: testPrivateKey,
+            privateKey: testPrivateKey,
             walletAddress: testWalletAddress
         )
         
@@ -22,7 +22,7 @@ final class BedrockTests: XCTestCase {
     func testPersonalSign() throws {
         // Create account
         let account = try SafeSmartAccount(
-            ethereumKey: testPrivateKey,
+            privateKey: testPrivateKey,
             walletAddress: testWalletAddress
         )
         
@@ -31,7 +31,7 @@ final class BedrockTests: XCTestCase {
         let signature = try account.personalSign(
             chainId: 1,
             message: message
-        )
+        ).toHexString()
         
         // Expected signature from Rust test
         let expectedSignature = "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
@@ -48,7 +48,7 @@ final class BedrockTests: XCTestCase {
     func testMultipleMessages() throws {
         // Create account
         let account = try SafeSmartAccount(
-            ethereumKey: testPrivateKey,
+            privateKey: testPrivateKey,
             walletAddress: testWalletAddress
         )
         
@@ -65,7 +65,7 @@ final class BedrockTests: XCTestCase {
             let signature = try account.personalSign(
                 chainId: chainId,
                 message: message
-            )
+            ).toHexString()
             
             XCTAssertFalse(signature.isEmpty, "Signature for '\(message)' should not be empty")
             XCTAssertEqual(signature.count, 132, "Signature for '\(message)' should be 132 characters")
@@ -76,7 +76,7 @@ final class BedrockTests: XCTestCase {
         // Test with invalid private key - should throw
         XCTAssertThrowsError(
             try SafeSmartAccount(
-                ethereumKey: "invalid_key",
+                privateKey: "invalid_key",
                 walletAddress: testWalletAddress
             )
         ) { error in
@@ -89,7 +89,7 @@ final class BedrockTests: XCTestCase {
         // Test with empty private key - should throw
         XCTAssertThrowsError(
             try SafeSmartAccount(
-                ethereumKey: "",
+                privateKey: "",
                 walletAddress: testWalletAddress
             )
         ) { error in
@@ -101,7 +101,7 @@ final class BedrockTests: XCTestCase {
         // Test with invalid wallet address format
         XCTAssertThrowsError(
             try SafeSmartAccount(
-                ethereumKey: testPrivateKey,
+                privateKey: testPrivateKey,
                 walletAddress: "invalid_address"
             )
         ) { error in
@@ -112,7 +112,7 @@ final class BedrockTests: XCTestCase {
     func testDifferentChainIds() throws {
         // Create account
         let account = try SafeSmartAccount(
-            ethereumKey: testPrivateKey,
+            privateKey: testPrivateKey,
             walletAddress: testWalletAddress
         )
         
@@ -126,7 +126,7 @@ final class BedrockTests: XCTestCase {
             let signature = try account.personalSign(
                 chainId: chainId,
                 message: message
-            )
+            ).toHexString()
             
             XCTAssertFalse(signature.isEmpty, "Signature for chain \(chainId) should not be empty")
             XCTAssertEqual(signature.count, 132, "Signature for chain \(chainId) should be 132 characters")
@@ -143,7 +143,7 @@ final class BedrockTests: XCTestCase {
     func testLongMessage() throws {
         // Create account
         let account = try SafeSmartAccount(
-            ethereumKey: testPrivateKey,
+            privateKey: testPrivateKey,
             walletAddress: testWalletAddress
         )
         
@@ -153,7 +153,7 @@ final class BedrockTests: XCTestCase {
         let signature = try account.personalSign(
             chainId: chainId,
             message: longMessage
-        )
+        ).toHexString()
         
         XCTAssertFalse(signature.isEmpty, "Signature for long message should not be empty")
         XCTAssertEqual(signature.count, 132, "Signature for long message should be 132 characters")
@@ -162,7 +162,7 @@ final class BedrockTests: XCTestCase {
     func testUnicodeMessage() throws {
         // Create account
         let account = try SafeSmartAccount(
-            ethereumKey: testPrivateKey,
+            privateKey: testPrivateKey,
             walletAddress: testWalletAddress
         )
         
@@ -172,7 +172,7 @@ final class BedrockTests: XCTestCase {
         let signature = try account.personalSign(
             chainId: chainId,
             message: unicodeMessage
-        )
+        ).toHexString()
         
         XCTAssertFalse(signature.isEmpty, "Signature for unicode message should not be empty")
         XCTAssertEqual(signature.count, 132, "Signature for unicode message should be 132 characters")

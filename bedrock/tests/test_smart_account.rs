@@ -159,6 +159,8 @@ async fn test_integration_personal_sign() {
     println!("  Message:   '{}'", message);
     println!("  Signature: {}", signature);
 
+    let signature = signature.as_str();
+
     assert_eq!(signature.len(), 132, "Invalid signature length");
     assert!(
         signature.starts_with("0x"),
