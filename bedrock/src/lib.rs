@@ -11,6 +11,10 @@
 //!
 //! More info about World App can be found here: <https://www.toolsforhumanity.com/world-app>
 
+/// Demonstrates different error handling patterns for UniFFI exports.
+/// This module explores both strongly typed enum errors and flexible interface-based errors.
+mod error_demos;
+
 /// Introduces low level operations with the [Safe Smart Account](https://safe.global/), including
 /// signing messages (ERC-191) and typed data (EIP-712).
 ///

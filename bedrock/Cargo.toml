@@ -21,8 +21,10 @@ name = "bedrock"
 
 [dependencies]
 alloy = { version = "1.0.6", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
+anyhow = "1.0"
 hex = "0.4.3"
 ruint = "1.15.0"
+serde_json = "1.0"
 thiserror = "2.0.12"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 
