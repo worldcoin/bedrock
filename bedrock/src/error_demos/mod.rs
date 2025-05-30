@@ -1,12 +1,10 @@
-use crate::bedrock_error::bedrock_error;
-
 ///
 /// The `#[bedrock_error]` macro automatically:
 /// - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
 /// - Adds a `Generic { message: String }` variant
 /// - Implements `From<anyhow::Error>` for automatic conversion
 /// - Provides helper methods for error handling
-#[bedrock_error]
+#[crate::bedrock_error]
 pub enum DemoError {
     // Strongly typed errors - use when you want structured access to error data
     #[error("Authentication failed with code: {code}")]
