@@ -14,7 +14,7 @@
 // Import and re-export the bedrock_error macro globally
 pub use bedrock_error_macros::bedrock_error;
 
-/// Demonstrates different error handling patterns for UniFFI exports.
+/// Demonstrates different error handling patterns for `UniFFI` exports.
 /// This module explores both strongly typed enum errors and flexible interface-based errors.
 mod error_demos;
 
