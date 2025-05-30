@@ -26,7 +26,7 @@ let package = Package(
         .testTarget(
             name: "BedrockTests",
             dependencies: ["Bedrock"],
-            path: "Tests/BedrockTests"
+            path: "BedrockTests"
         )
     ]
 ) 
