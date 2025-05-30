@@ -15,6 +15,7 @@ NC='\033[0m' # No Color
 # Base paths
 BASE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_PATH="$BASE_PATH/tests"
+SOURCES_PATH_NAME="/Sources/Bedrock/"
 
 echo -e "${BLUE}Step 1: Building XCFramework with build_swift.sh${NC}"
 # Run the existing build_swift.sh script
@@ -27,7 +28,20 @@ if [ ! -d "$BASE_PATH/Bedrock.xcframework" ]; then
 fi
 echo -e "${GREEN}✓ XCFramework built successfully${NC}"
 
-echo -e "${BLUE}Step 2: Running Swift tests${NC}"
+echo -e "${BLUE}Step 2: Copying generated Swift files to package${NC}"
+# Ensure the destination directory exists
+mkdir -p "$TESTS_PATH/$SOURCES_PATH_NAME"
+
+# Copy the generated Swift file to the package
+if [ -f "$BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift" ]; then
+    cp "$BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift" "$TESTS_PATH/$SOURCES_PATH_NAME"
+    echo -e "${GREEN}✓ Swift bindings copied to package${NC}"
+else
+    echo -e "${RED}✗ Could not find generated Swift bindings${NC}"
+    exit 1
+fi
+
+echo -e "${BLUE}Step 3: Running Swift tests${NC}"
 
 # Clean any previous build artifacts
 rm -rf .build
