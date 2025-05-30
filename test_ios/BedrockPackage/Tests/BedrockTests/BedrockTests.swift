@@ -178,9 +178,10 @@ final class BedrockTests: XCTestCase {
     
     // Test: Strongly typed errors for validation and known cases
     func testDemoAuthenticate_StronglyTypedErrors() throws {
-        // Success case
+        // Success case - now includes result from post-auth operation
         let result = try demoAuthenticate(username: "testuser", password: "validpassword")
-        XCTAssertEqual(result, "Welcome, testuser!")
+        XCTAssertTrue(result.contains("Welcome, testuser!"))
+        XCTAssertTrue(result.contains("Successfully processed: auth_data_testuser"))
         
         // Empty username - InvalidInput
         XCTAssertThrowsError(try demoAuthenticate(username: "", password: "password")) { error in

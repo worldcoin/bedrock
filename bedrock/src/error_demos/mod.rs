@@ -1,6 +1,5 @@
 use crate::bedrock_error::bedrock_error;
 
-/// Unified error type demonstrating both strongly typed and generic error handling
 ///
 /// The `#[bedrock_error]` macro automatically:
 /// - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
@@ -39,15 +38,16 @@ pub fn demo_authenticate(
         return Err(DemoError::NetworkTimeout { seconds: 30 });
     }
 
-    Ok(format!("Welcome, {}!", username))
+    let welcome_message = format!("Welcome, {}!", username);
+
+    let operation_result = demo_generic_operation(format!("auth_data_{}", username))?;
+
+    Ok(format!("{} {}", welcome_message, operation_result))
 }
 
 /// Demo: Generic errors for complex operations with anyhow error chains
 #[uniffi::export]
 pub fn demo_generic_operation(input: String) -> Result<String, DemoError> {
-    use anyhow::Context;
-
-    // Complex operation that can fail in many ways
     let result: anyhow::Result<String> = (|| {
         if input.is_empty() {
             anyhow::bail!("Input cannot be empty");
@@ -65,7 +65,6 @@ pub fn demo_generic_operation(input: String) -> Result<String, DemoError> {
         Ok(format!("Successfully processed: {}", input))
     })();
 
-    // Convert anyhow error chain to Generic variant automatically
     DemoError::from_anyhow_result(result)
 }
 
@@ -75,14 +74,12 @@ pub fn demo_mixed_operation(
     operation: String,
     data: String,
 ) -> Result<String, DemoError> {
-    // Validation uses strongly typed errors
     if operation.is_empty() {
         return Err(DemoError::InvalidInput {
             message: "Operation cannot be empty".to_string(),
         });
     }
 
-    // Complex processing uses generic error handling
     match operation.as_str() {
         "process" => {
             let complex_result: anyhow::Result<String> = (|| {

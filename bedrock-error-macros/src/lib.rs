@@ -74,6 +74,9 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 
             // Generate the enhanced enum with automatic derives and attributes
             quote! {
+                // Automatically import anyhow::Context for convenience
+                use anyhow::Context;
+
                 #[derive(Debug, thiserror::Error, uniffi::Error)]
                 #[uniffi(flat_error)]
                 #(#attrs)*
