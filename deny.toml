@@ -7,6 +7,7 @@ unknown-registry = "deny"
 
 [bans]
 deny = [
+    { name = "openssl-sys", reason = "increases complexity for foreign binding compilation and bundle size" },
     { name = "openssl", reason = "increases complexity for foreign binding compilation and bundle size" },
     { name = "semaphore-rs", reason = "bedrock should not include World ID dependencies" },
     { name = "walletkit-core", reason = "bedrock should not include World ID dependencies" }
