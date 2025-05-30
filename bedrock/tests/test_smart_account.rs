@@ -1,32 +1,82 @@
-#[cfg(feature = "anvil-integration-tests")]
-#[tokio::test]
-async fn test_personal_sign() {
-    use alloy::{
-        node_bindings::Anvil,
-        primitives::{address, keccak256, Address, Bytes, U256},
-        providers::{ext::AnvilApi, ProviderBuilder},
-        signers::local::PrivateKeySigner,
-        sol,
-        sol_types::{SolCall, SolEvent},
-    };
-    use bedrock::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
+use alloy::{
+    node_bindings::AnvilInstance,
+    primitives::{address, keccak256, Address, Bytes, U256},
+    providers::{ext::AnvilApi, ProviderBuilder},
+    signers::local::PrivateKeySigner,
+    sol,
+    sol_types::{SolCall, SolEvent},
+};
+use bedrock::smart_account::SafeSmartAccount;
 
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    interface ISafeProxyFactory {
+        event ProxyCreation(address indexed proxy, address singleton);
+
+        function createProxyWithNonce(
+            address _singleton,
+            bytes memory initializer,
+            uint256 saltNonce
+        ) external returns (address proxy);
+    }
+);
+
+sol!(
+    /// The `setup` function of the Safe Smart Account. Sets an initial storage of the Safe contract.
+    ///
+    /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L95>
+    #[allow(clippy::too_many_arguments)] // this is how the function is defined in the Safe contract
+    #[sol(rpc)]
+    interface ISafe {
+        function setup(
+            address[] calldata _owners,
+            uint256 _threshold,
+            address to,
+            bytes calldata data,
+            address fallbackHandler,
+            address paymentToken,
+            uint256 payment,
+            address payable paymentReceiver
+        ) external;
+
+        function enableModules(address[] memory modules) external;
+
+        /// Verifies a signature is valid for a digest message following EIP-1271.
+        /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/handler/CompatibilityFallbackHandler.sol#L73>
+        function isValidSignature(bytes32 dataHash, bytes memory signature) external view returns (bytes4);
+    }
+);
+
+// Safe contract addresses on Worldchain
+const SAFE_PROXY_FACTORY_ADDRESS: Address =
+    address!("4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67");
+const SAFE_L2_SINGLETON_ADDRESS: Address =
+    address!("29fcB43b46531BcA003ddC8FCB67FFE91900C762");
+const SAFE_4337_MODULE_ADDRESS: Address =
+    address!("75cf11467937ce3F2f357CE24ffc3DBF8fD5c226");
+const SAFE_MODULE_SETUP_ADDRESS: Address =
+    address!("2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47");
+
+fn setup_anvil() -> AnvilInstance {
     dotenv::dotenv().ok();
-
     let rpc_url = std::env::var("WORLDCHAIN_RPC_URL")
         .expect("WORLDCHAIN_RPC_URL not set. Copy .env.example to .env and add your Alchemy API key");
 
-    println!("Starting Safe integration test...");
-
-    let anvil = Anvil::new().fork(rpc_url).spawn();
-
+    println!("Starting Anvil for Safe integration test...");
+    let anvil = alloy::node_bindings::Anvil::new().fork(rpc_url).spawn();
     println!("✓ Anvil started at: {}", anvil.endpoint());
+    anvil
+}
 
-    let owner_signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-
+#[tokio::test]
+async fn test_integration_personal_sign() {
+    let anvil = setup_anvil();
     let owner_signer = PrivateKeySigner::random();
-    let owner = owner_signer.address();
+
     let owner_key_hex = hex::encode(owner_signer.to_bytes());
+
+    let owner = owner_signer.address();
 
     let provider = ProviderBuilder::new()
         .wallet(owner_signer)
@@ -38,30 +88,6 @@ async fn test_personal_sign() {
         .expect("Failed to set balance");
 
     println!("✓ Using owner address: {}", owner);
-
-    sol!(
-        #[allow(missing_docs)]
-        #[sol(rpc)]
-        interface ISafeProxyFactory {
-            event ProxyCreation(address indexed proxy, address singleton);
-
-            function createProxyWithNonce(
-                address _singleton,
-                bytes memory initializer,
-                uint256 saltNonce
-            ) external returns (address proxy);
-        }
-    );
-
-    // Safe contract addresses on Worldchain
-    const SAFE_PROXY_FACTORY_ADDRESS: Address =
-        address!("4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67");
-    const SAFE_L2_SINGLETON_ADDRESS: Address =
-        address!("29fcB43b46531BcA003ddC8FCB67FFE91900C762");
-    const SAFE_4337_MODULE_ADDRESS: Address =
-        address!("75cf11467937ce3F2f357CE24ffc3DBF8fD5c226");
-    const SAFE_MODULE_SETUP_ADDRESS: Address =
-        address!("2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47");
 
     let proxy_factory = ISafeProxyFactory::new(SAFE_PROXY_FACTORY_ADDRESS, &provider);
 
@@ -117,34 +143,13 @@ async fn test_personal_sign() {
 
     println!("\n✓ Safe deployed at: {}", safe_address);
 
-    sol!(
-        #[allow(missing_docs)]
-        #[sol(rpc)]
-        interface ISafe {
-            function setup(
-                address[] calldata _owners,
-                uint256 _threshold,
-                address to,
-                bytes calldata data,
-                address fallbackHandler,
-                address paymentToken,
-                uint256 payment,
-                address payable paymentReceiver
-            ) external;
-
-            function enableModules(address[] memory modules) external;
-
-            function isValidSignature(bytes32 dataHash, bytes memory signature) external view returns (bytes4);
-        }
-    );
-
     let safe_contract = ISafe::new(safe_address, &provider);
-
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
-        .expect("Failed to create SafeSmartAccount");
 
     let message = "Hello from Safe integration test!";
     let chain_id = 480;
+
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
+        .expect("Failed to create SafeSmartAccount");
 
     let signature = safe_account
         .personal_sign(chain_id, message.to_string())
@@ -172,7 +177,7 @@ async fn test_personal_sign() {
     println!("Signature bytes: 0x{}", hex::encode(&sig_bytes));
 
     let is_valid_result = safe_contract
-        .isValidSignature(message_hash.into(), Bytes::from(sig_bytes))
+        .isValidSignature(message_hash, Bytes::from(sig_bytes))
         .call()
         .await
         .expect("Failed to call isValidSignature");

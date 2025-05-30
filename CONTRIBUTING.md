@@ -12,15 +12,23 @@ Thank you for your interest in contributing to our project! This document provid
 ## Local Development
 
 1. Install Rust (`rustup` is recommended). [Instructions](https://www.rust-lang.org/tools/install)/
-2. Install Foundry. Anvil (from the Foundry toolkit) is required for functional tests with Solidity.
+2. Configure your environment
+   ```bash
+   cp .env.example .env
+   ```
+3. Install Foundry. Anvil (from the Foundry toolkit) is required for functional tests with Solidity.
    ```bash
    curl -L https://foundry.paradigm.xyz | bash
    foundryup
    ```
-3. Run tests to ensure everything is working as expected.
+4. Run tests to ensure everything is working as expected. This will run **all tests** including integration tests and doctests.
    ```bash
    cargo test
    ```
+
+### About Integration Tests
+
+Integration tests deploy and interact with Safe contracts on a local fork of World Chain. This tests are are enabled by default and they require [Anvil](https://book.getfoundry.sh/anvil/overview#anvil) to be running.
 
 ## Code of Conduct
 
