@@ -26,10 +26,28 @@ To build a Swift package that can be imported locally via Swift Package Manager:
 
 This creates a complete Swift package in the `swift/local_build/` directory that you can import in your iOS project:
 
-1. In Xcode: File → Add Package Dependencies → Add Local → Select the `swift/local_build/` directory
-2. In Package.swift: `.package(path: "/path/to/bedrock/swift/local_build")`
+### Integration via Package.swift
 
-**Note**: All local build artifacts are placed in `swift/local_build/` which is ignored by git to keep the repository clean.
+Add the local package to your Package.swift dependencies:
+
+```swift
+dependencies: [
+    .package(name: "Bedrock", path: "../../../bedrock/swift/local_build"),
+    // ... other dependencies
+],
+```
+
+Then add it to specific targets that need bedrock functionality:
+
+```swift
+.target(
+    name: "YourTarget",
+    dependencies: [
+        .product(name: "Bedrock", package: "Bedrock"),
+        // ... other dependencies
+    ]
+),
+```
 
 ### Running foreign tests for Swift
 
