@@ -26,18 +26,22 @@ final class BedrockTests: XCTestCase {
             walletAddress: testWalletAddress
         )
         
-        // Test message signing
-        let message = "Hello from Bedrock!"
+        // Test message signing - using same parameters as Rust test
+        let message = "Hello, Safe Smart Account!"
         let signature = try account.personalSign(
-            chainId: chainId,
+            chainId: 1,
             message: message
         )
         
-        // Verify we got a signature
+        // Expected signature from Rust test
+        let expectedSignature = "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
+        
+        // Verify we got the exact expected signature
+        XCTAssertEqual(signature, expectedSignature, "Signature should match the expected value from Rust test")
+        
+        // Additional checks
         XCTAssertFalse(signature.isEmpty, "Signature should not be empty")
         XCTAssertTrue(signature.hasPrefix("0x"), "Signature should start with 0x")
-        
-        // A valid signature should be 132 characters (0x + 130 hex chars)
         XCTAssertEqual(signature.count, 132, "Signature should be 132 characters long")
     }
     
