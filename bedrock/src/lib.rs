@@ -15,7 +15,7 @@
 /// signing messages (ERC-191) and typed data (EIP-712).
 ///
 /// Reference: <https://github.com/safe-global/safe-smart-account>
-mod smart_account;
+pub mod smart_account;
 
 /// Introduces low level primitives for the crypto wallet.
 pub mod primitives;

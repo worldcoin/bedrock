@@ -4,19 +4,24 @@ use alloy::{
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
-use signer::SafeSmartAccountSigner;
 
 use crate::primitives::{HexEncodedString, PrimitiveError};
 
 mod signer;
 
+pub use signer::SafeSmartAccountSigner;
+
+/// Errors that can occur when working with Safe Smart Accounts.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum SafeSmartAccountError {
+    /// Failed to decode hex-encoded secret into k256 signer.
     #[error("failed to decode hex-encoded secret into k256 signer: {0}")]
     KeyDecoding(String),
+    /// Signing operation failed.
     #[error(transparent)]
     Signing(#[from] alloy::signers::Error),
+    /// Failed to parse address.
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
     #[error("failed to encode: {0}")]

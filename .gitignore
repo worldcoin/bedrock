@@ -1,14 +1,23 @@
 target/
 .DS_Store
-**/ios_build
 .swiftpm/
 
-# Swift build outputs are not committed to this repo.
+# iOS build artifacts
+**/ios_build/
+swift/Bedrock.xcframework/
+swift/Sources/
+swift/tests/Sources/
+.swiftpm/
+
+# Swift build outputs
 *.xcframework/
 Sources/
+generated_swift/
 
 # forge
 cache/
 **/out/build-info
 
 # NOTE: Cargo.lock is not ignored because this is a library to be used through foreign bindings
+
+.env
