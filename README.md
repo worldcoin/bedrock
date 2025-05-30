@@ -51,3 +51,11 @@ Both Swift and Kotlin tests run automatically in GitHub Actions:
 - Swift tests: `macos-latest` with iOS simulator
 - Kotlin tests: `ubuntu-latest` with OpenJDK
 - Rust tests: `ubuntu-latest` with Foundry for Ethereum testing
+
+## Local Development & Contributing
+
+Review our [CONTRIBUTING](CONTRIBUTING.md) guide. Including details on how to run this project locally.
+
+## 🐦‍🔥 Swift Bindings
+
+Bedrock ships with foreign bindings for native Swift. All details can be found in the [/swift](./swift/README.md) folder.

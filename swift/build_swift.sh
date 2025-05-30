@@ -5,7 +5,8 @@ set -e
 # This script is intended to be run in a GitHub Actions workflow.
 # When a release is created, the output is committed to the github.com/worldcoin/bedrock-swift repo.
 
-BASE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BASE_PATH="$PROJECT_ROOT_PATH/swift" # The base path for the Swift build
 FRAMEWORK="Bedrock.xcframework"
 PACKAGE_NAME="bedrock"
 SWIFT_SOURCES_DIR="Sources/Bedrock"
