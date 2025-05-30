@@ -64,6 +64,7 @@ jobs:
 
       - name: Run tests
         run: |
+          cp .env.example .env
           cargo test --all
 
   deny:
