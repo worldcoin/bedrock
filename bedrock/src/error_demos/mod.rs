@@ -1,85 +1,25 @@
+use crate::bedrock_error::bedrock_error;
+
 /// Unified error type demonstrating both strongly typed and generic error handling
-/// This shows how to combine specific error variants with flexible anyhow-based errors
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+///
+/// The `#[bedrock_error]` macro automatically:
+/// - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
+/// - Adds a `Generic { message: String }` variant
+/// - Implements `From<anyhow::Error>` for automatic conversion
+/// - Provides helper methods for error handling
+#[bedrock_error]
 pub enum DemoError {
-    // Strongly typed error variants - these provide structured access to error data
+    // Strongly typed errors - use when you want structured access to error data
     #[error("Authentication failed with code: {code}")]
     AuthenticationFailed { code: u32 },
     #[error("Network timeout after {seconds} seconds")]
     NetworkTimeout { seconds: u32 },
     #[error("Invalid input: {message}")]
     InvalidInput { message: String },
-
-    // Generic variant for flexible error handling with anyhow
-    // This allows for complex error chains and context while still being part of the main error type
-    #[error("Generic error: {message}")]
-    Generic { message: String },
+    // Note: Generic variant is automatically added by #[bedrock_error]
 }
 
-impl From<anyhow::Error> for DemoError {
-    fn from(err: anyhow::Error) -> Self {
-        DemoError::Generic {
-            message: err.to_string(),
-        }
-    }
-}
-
-/// Helper function that demonstrates real anyhow usage patterns
-fn simulate_network_call(endpoint: &str) -> anyhow::Result<String> {
-    use anyhow::Context;
-
-    if endpoint.is_empty() {
-        anyhow::bail!("Endpoint cannot be empty");
-    }
-
-    if endpoint == "timeout" {
-        anyhow::bail!("Connection timed out after 30 seconds");
-    }
-
-    if endpoint == "auth" {
-        Err(anyhow::anyhow!("Authentication failed"))
-            .context("Invalid credentials provided")
-            .context("Failed to authenticate with remote service")?;
-    }
-
-    if endpoint == "parse" {
-        // Simulate a JSON parsing error
-        let json_data = r#"{"incomplete": true"#; // Invalid JSON
-        serde_json::from_str::<serde_json::Value>(json_data)
-            .context("Failed to parse server response")
-            .context("Response format is invalid")?;
-    }
-
-    Ok(format!("Successfully called {}", endpoint))
-}
-
-/// Helper function that demonstrates anyhow with external library errors
-fn simulate_file_operation(filename: &str) -> anyhow::Result<String> {
-    use anyhow::Context;
-
-    if filename == "missing.txt" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "File not found",
-        ))
-        .context(format!("Could not find file: {}", filename))
-        .context("File operation failed");
-    }
-
-    if filename == "permission.txt" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "Permission denied",
-        ))
-        .context(format!("Access denied for file: {}", filename))
-        .context("Insufficient permissions");
-    }
-
-    Ok(format!("File {} processed successfully", filename))
-}
-
-/// Demo function that uses strongly typed errors for known error cases
+/// Demo: Strongly typed errors for known, structured error cases
 #[uniffi::export]
 pub fn demo_authenticate(
     username: String,
@@ -88,12 +28,6 @@ pub fn demo_authenticate(
     if username.is_empty() {
         return Err(DemoError::InvalidInput {
             message: "Username cannot be empty".to_string(),
-        });
-    }
-
-    if password.len() < 8 {
-        return Err(DemoError::InvalidInput {
-            message: "Password must be at least 8 characters".to_string(),
         });
     }
 
@@ -108,112 +42,107 @@ pub fn demo_authenticate(
     Ok(format!("Welcome, {}!", username))
 }
 
-/// Demo function that uses the generic error variant for complex anyhow patterns
+/// Demo: Generic errors for complex operations with anyhow error chains
 #[uniffi::export]
 pub fn demo_generic_operation(input: String) -> Result<String, DemoError> {
     use anyhow::Context;
 
+    // Complex operation that can fail in many ways
     let result: anyhow::Result<String> = (|| {
         if input.is_empty() {
             anyhow::bail!("Input cannot be empty");
         }
 
-        // Demonstrate chaining different types of operations that can fail
-        match input.as_str() {
-            "network_error" => {
-                simulate_network_call("timeout")
-                    .context("Network operation failed")
-                    .context("Service call unsuccessful")?;
-            }
-            "auth_error" => {
-                simulate_network_call("auth").context("Authentication step failed")?;
-            }
-            "parse_error" => {
-                simulate_network_call("parse").context("Data processing failed")?;
-            }
-            "file_missing" => {
-                simulate_file_operation("missing.txt")
-                    .context("File system operation failed")?;
-            }
-            "file_permission" => {
-                simulate_file_operation("permission.txt")
-                    .context("File access operation failed")?;
-            }
-            "multiple_errors" => {
-                // Demonstrate error accumulation
-                simulate_network_call("auth").context("First operation failed")?;
-                simulate_file_operation("missing.txt")
-                    .context("Second operation failed")?;
-            }
-            _ => {
-                // Successful case
-            }
+        if input == "network_error" {
+            anyhow::bail!("Connection timed out after 30 seconds");
+        }
+
+        if input == "parse_error" {
+            serde_json::from_str::<serde_json::Value>(&input)
+                .context("Failed to parse input as JSON")?;
         }
 
         Ok(format!("Successfully processed: {}", input))
     })();
 
-    result.map_err(DemoError::from)
+    // Convert anyhow error chain to Generic variant automatically
+    DemoError::from_anyhow_result(result)
 }
 
-/// Demo function that shows mixing both error patterns in a single function
+/// Demo: Mixed usage - structured errors for validation, generic for complex operations
 #[uniffi::export]
-pub fn demo_mixed_operations(
+pub fn demo_mixed_operation(
     operation: String,
     data: String,
 ) -> Result<String, DemoError> {
-    // First, do some validation using strongly typed errors
+    // Validation uses strongly typed errors
     if operation.is_empty() {
         return Err(DemoError::InvalidInput {
             message: "Operation cannot be empty".to_string(),
         });
     }
 
+    // Complex processing uses generic error handling
     match operation.as_str() {
-        "validate_and_process" => {
-            // Start with validation (strongly typed)
-            if data.len() < 3 {
-                return Err(DemoError::InvalidInput {
-                    message: "Data must be at least 3 characters".to_string(),
-                });
-            }
+        "process" => {
+            let complex_result: anyhow::Result<String> = (|| {
+                if data == "trigger_error" {
+                    anyhow::bail!("Simulated processing failure");
+                }
 
-            // Then do complex processing (generic anyhow errors)
-            let result = simulate_network_call(&data)
-                .and_then(|_| simulate_file_operation("valid.txt"))
-                .map_err(DemoError::from)?;
+                Ok(format!("Processed: {}", data))
+            })();
 
-            Ok(format!("Processed: {}", result))
-        }
-        "auth_then_timeout" => {
-            // Specific auth error first
-            if data == "invalid_creds" {
-                return Err(DemoError::AuthenticationFailed { code: 403 });
-            }
-
-            // Then a timeout scenario
-            if data == "slow_network" {
-                return Err(DemoError::NetworkTimeout { seconds: 45 });
-            }
-
-            Ok("Authentication and network operations completed".to_string())
-        }
-        "complex_chain" => {
-            // This will use the generic error handling for complex anyhow chains
-            use anyhow::Context;
-
-            simulate_network_call(&data)
-                .context("Initial network call failed")
-                .and_then(|_| {
-                    simulate_file_operation(&format!("{}.txt", data))
-                        .context("Follow-up file operation failed")
-                })
-                .context("Complex operation chain failed")
-                .map(|result| format!("Chain completed: {}", result))
-                .map_err(DemoError::from)
+            DemoError::from_anyhow_result_with_prefix(
+                complex_result,
+                "Operation failed",
+            )
         }
         _ => Err(DemoError::InvalidInput {
             message: format!("Unknown operation: {}", operation),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_demo_mixed_operation() {
+        // Test success case
+        let result =
+            demo_mixed_operation("process".to_string(), "valid_data".to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Processed:"));
+
+        // Test strongly typed error - empty operation
+        let result = demo_mixed_operation("".to_string(), "data".to_string());
+        assert!(result.is_err());
+        if let Err(DemoError::InvalidInput { message }) = result {
+            assert!(message.contains("Operation cannot be empty"));
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+
+        // Test strongly typed error - unknown operation
+        let result = demo_mixed_operation("unknown".to_string(), "data".to_string());
+        assert!(result.is_err());
+        if let Err(DemoError::InvalidInput { message }) = result {
+            assert!(message.contains("Unknown operation"));
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+
+        // Test generic error - anyhow style
+        let result =
+            demo_mixed_operation("process".to_string(), "trigger_error".to_string());
+        assert!(result.is_err());
+        if let Err(DemoError::Generic { message }) = result {
+            assert!(message.contains("Operation failed"));
+            assert!(message.contains("Simulated processing failure"));
+        } else {
+            panic!("Expected Generic error");
+        }
     }
 }

@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use crate::bedrock_error::bedrock_error;
 use alloy::{
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
@@ -8,8 +9,7 @@ use signer::SafeSmartAccountSigner;
 
 mod signer;
 
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+#[bedrock_error]
 pub enum SafeSmartAccountError {
     #[error("failed to decode hex-encoded secret into k256 signer: {0}")]
     KeyDecoding(String),

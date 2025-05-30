@@ -1,0 +1,4 @@
+module Bedrock {
+    header "/Users/luke.mann/bedrock/test_ios/BedrockPackage/.build/arm64-apple-macosx/debug/Bedrock.build/Bedrock-Swift.h"
+    requires objc
+}

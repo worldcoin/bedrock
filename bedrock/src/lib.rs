@@ -11,6 +11,10 @@
 //!
 //! More info about World App can be found here: <https://www.toolsforhumanity.com/world-app>
 
+/// Unified error handling utilities for the bedrock library.
+/// Provides macros and helpers for combining strongly typed and generic error handling.
+pub mod bedrock_error;
+
 /// Demonstrates different error handling patterns for UniFFI exports.
 /// This module explores both strongly typed enum errors and flexible interface-based errors.
 mod error_demos;

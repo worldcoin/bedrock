@@ -22,9 +22,13 @@ name = "bedrock"
 [dependencies]
 alloy = { version = "1.0.6", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
 anyhow = "1.0"
+bedrock-error-macros = { path = "../bedrock-error-macros" }
 hex = "0.4.3"
+proc-macro2 = "1.0"
+quote = "1.0"
 ruint = "1.15.0"
 serde_json = "1.0"
+syn = { version = "2.0", features = ["full"] }
 thiserror = "2.0.12"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 
