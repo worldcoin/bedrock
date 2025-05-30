@@ -3,7 +3,7 @@
 This folder contains all relevant support files for Bedrock to work in Swift:
 
 1. Script to cross-compile and build Swift bindings.
-2. Foreign tests. Unit tests for Swift (`/tests` folder).
+2. Foreign tests. Unit tests for Swift (`/tests` folder). Foreign unit tests run the XCTest suite on iOS simulator using `xcodebuild`.
 
 ### Building the Swift Project
 
