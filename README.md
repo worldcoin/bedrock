@@ -2,6 +2,14 @@
 
 Foundational library which powers World App's crypto wallet.
 
+## Error Handling
+
+Uses `#[bedrock_error]` macro for unified error handling across modules:
+
+- **Strongly typed errors**: Specific variants for known error cases
+- **Generic errors**: Flexible `anyhow::Error` variant for complex error chains
+- **Auto-generated**: Automatic `From` implementations and context support
+
 ## Swift Bindings
 
 ### Building (`build_swift.sh`)
