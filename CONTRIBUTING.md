@@ -17,20 +17,30 @@ Thank you for your interest in contributing to our project! This document provid
    cp .env.example .env
    ```
 3. Install Foundry. Anvil (from the Foundry toolkit) is required for functional tests with Solidity.
+
    ```bash
    curl -L https://foundry.paradigm.xyz | bash
    foundryup
    ```
-4. **Recommended**. Install `ktlint` to lint the Kotlin tests.
 
-   ```bash
-   brew install ktlint
-   ```
-
-5. Run tests to ensure everything is working as expected. This will run **all tests** including integration tests and doctests.
+4. Run tests to ensure everything is working as expected. This will run **all tests** including integration tests and doctests.
    ```bash
    cargo test
    ```
+
+### Dependencies for Foreign Tests
+
+More details on running foreign tests can be found in the respective READMEs for [Swift](swift/README.md) and [Kotlin](kotlin/README.md).
+
+1. For Kotlin, the following dependencies are needed:
+
+   ```bash
+   brew install openjdk@17 # current LTS
+   brew install gradle
+   brew install ktlint # to lint tests
+   ```
+
+2. For Swift tests, installing **Xcode** which iOS support is required. **Only works on macOS.**
 
 ### About Integration Tests
 

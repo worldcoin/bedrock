@@ -5,7 +5,7 @@ echo "========================================="
 echo "Running Kotlin/JVM Tests"
 echo "========================================="
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Set JAVA_HOME if not already set (for CI environments)
 if [ -z "${JAVA_HOME:-}" ]; then
@@ -28,13 +28,15 @@ fi
 # --------------------------------------------------
 
 echo "🔨 Step 1: Building Kotlin bindings with build_kotlin.sh"
-"$ROOT_DIR/build_kotlin.sh"
+"$ROOT_DIR/kotlin/build_kotlin.sh"
 
 echo "✅ Kotlin bindings built"
 
 # --------------------------------------------------
 # Step 2: Run unit tests via Gradle
 # --------------------------------------------------
+
+cd "$ROOT_DIR/kotlin"
 
 # Generate Gradle wrapper if missing (use host gradle)
 if [ ! -f "gradlew" ]; then
@@ -46,4 +48,4 @@ if [ ! -f "gradlew" ]; then
   gradle wrapper --gradle-version 8.7
 fi
 
-./gradlew --no-daemon test 
+"$ROOT_DIR/kotlin/gradlew" --no-daemon test
