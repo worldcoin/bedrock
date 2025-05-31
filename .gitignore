@@ -5,16 +5,15 @@
 .env
 .DS_Store
 
-# rust
 target/
 
-# swift
 **/ios_build/
 **/Sources/
 *.xcframework/
 .swiftpm/
 generated_swift/
 test_output.log
+
 
 # forge
 cache/

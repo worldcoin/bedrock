@@ -5,6 +5,8 @@ use alloy::{
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 
+use crate::primitives::{HexEncodedData, PrimitiveError};
+
 mod signer;
 
 pub use signer::SafeSmartAccountSigner;
@@ -22,6 +24,9 @@ pub enum SafeSmartAccountError {
     /// Failed to parse address.
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
+    /// Failed to encode data to a specific format.
+    #[error("failed to encode: {0}")]
+    Encoding(String),
 }
 
 /// A Safe Smart Account (previously Gnosis Safe) is the representation of a Safe smart contract.
@@ -42,20 +47,22 @@ impl SafeSmartAccount {
     /// Initializes a new `SafeSmartAccount` instance with the given EOA signing key.
     ///
     /// # Arguments
-    /// - `ethereum_key`: A hex-encoded string representing the **secret key** of the EOA who is an owner in the Safe.
+    /// - `private_key`: A hex-encoded string representing the **secret key** of the EOA who is an owner in the Safe.
     /// - `wallet_address`: The address of the Safe Smart Account (i.e. the deployed smart contract). This is required because
-    ///   some legacy versions of the wallet were computed differently. Today, it cannot be deterministically computed for all users.
+    ///   some legacy versions of the wallet were computed differently. Today, it cannot be deterministically computed for all
+    ///   users. This is also necessary to support signing for Safes deployed by third-party Mini App devs, where the
+    ///   wallet address is only known at runtime.
     ///
     /// # Errors
     /// - Will return an error if the key is not a validly encoded hex string.
     /// - Will return an error if the key is not a valid point in the k256 curve.
     #[uniffi::constructor]
     pub fn new(
-        ethereum_key: String,
+        private_key: String,
         wallet_address: &str,
     ) -> Result<Self, SafeSmartAccountError> {
         let signer = LocalSigner::from_slice(
-            &hex::decode(ethereum_key)
+            &hex::decode(private_key)
                 .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
         )
         .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
@@ -72,15 +79,31 @@ impl SafeSmartAccount {
 
     /// Signs a string message using the `personal_sign` method on behalf of the Safe Smart Account.
     ///
+    /// # Arguments
+    /// - `chain_id`: The chain ID of the chain where the message is being signed. While technically the chain ID is a `U256` in EVM, we limit
+    ///   to sensible `u32` (which works well with foreign code).
+    /// - `message`: The message to sign. Do not add the EIP-191 prefix, or typehash prefixes. Should be the raw message.
+    ///
     /// # Errors
     /// - Will throw an error if the signature process unexpectedly fails.
     pub fn personal_sign(
         &self,
         chain_id: u32,
         message: String,
-    ) -> Result<String, SafeSmartAccountError> {
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
-        Ok(signature.to_string())
+
+        let signature: HexEncodedData =
+            signature
+                .to_string()
+                .try_into()
+                .map_err(|e: PrimitiveError| {
+                    SafeSmartAccountError::Encoding(format!(
+                        "signature encoding error: {e}"
+                    ))
+                })?;
+
+        Ok(signature)
     }
 }
 
