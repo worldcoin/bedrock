@@ -26,4 +26,9 @@ java {
 test {
     useJUnit()
     systemProperty "jna.library.path", "$projectDir/libs"
+    
+    // Disable HTML reports
+    reports {
+        html.required = false
+    }
 } 

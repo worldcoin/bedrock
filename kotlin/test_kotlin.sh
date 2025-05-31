@@ -55,4 +55,35 @@ if [ ! -f "gradlew" ]; then
   gradle wrapper --gradle-version 8.7
 fi
 
-"$ROOT_DIR/kotlin/gradlew" --no-daemon test
+echo ""
+echo "🧪 Running Kotlin tests with verbose output..."
+echo ""
+
+# Run tests with verbose output (HTML reports disabled in build.gradle)
+./gradlew --no-daemon test --info --continue
+
+echo ""
+echo "📊 Test Results Summary:"
+echo "========================"
+
+# Show test results if they exist
+if [ -d "build/test-results/test" ]; then
+  echo "✅ Test results found in: build/test-results/test"
+  
+  # Count test results
+  TOTAL_TESTS=$(find build/test-results/test -name "*.xml" -exec grep -l "testcase" {} \; | wc -l | tr -d ' ')
+  if [ "$TOTAL_TESTS" -gt 0 ]; then
+    echo "📋 Total test files: $TOTAL_TESTS"
+    
+    # Show basic stats from XML files
+    PASSED=$(find build/test-results/test -name "*.xml" -exec grep -o "tests=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    FAILURES=$(find build/test-results/test -name "*.xml" -exec grep -o "failures=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    ERRORS=$(find build/test-results/test -name "*.xml" -exec grep -o "errors=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    
+    echo "✅ Tests passed: $PASSED"
+    echo "❌ Tests failed: $FAILURES"
+    echo "⚠️  Test errors: $ERRORS"
+  fi
+else
+  echo "⚠️  No test results found"
+fi 
