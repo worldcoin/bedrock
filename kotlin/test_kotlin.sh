@@ -7,12 +7,19 @@ echo "========================================="
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+cd "$ROOT_DIR"
+
 # Set JAVA_HOME if not already set (for CI environments)
 if [ -z "${JAVA_HOME:-}" ]; then
   if [ -d "/opt/homebrew/Cellar/openjdk@17" ]; then
-    # macOS with Homebrew
-    export JAVA_HOME="/opt/homebrew/Cellar/openjdk@17/17.0.15/libexec/openjdk.jdk/Contents/Home"
-    echo "🔧 Set JAVA_HOME to: $JAVA_HOME"
+    # macOS with Homebrew - find latest 17.x version
+    LATEST_JDK=$(ls -v /opt/homebrew/Cellar/openjdk@17 | grep "^17\." | tail -n 1)
+    if [ -n "$LATEST_JDK" ]; then
+      export JAVA_HOME="/opt/homebrew/Cellar/openjdk@17/$LATEST_JDK/libexec/openjdk.jdk/Contents/Home"
+      echo "🔧 Set JAVA_HOME to: $JAVA_HOME"
+    else
+      echo "⚠️  No OpenJDK 17.x found in Homebrew"
+    fi
   elif command -v java >/dev/null 2>&1; then
     # Try to find JAVA_HOME from java command
     JAVA_PATH=$(which java)
