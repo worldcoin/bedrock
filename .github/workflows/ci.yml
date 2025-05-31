@@ -98,6 +98,8 @@ jobs:
   kotlin-build-and-test:
     name: Build and Test Kotlin Bindings
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -108,4 +110,4 @@ jobs:
           toolchain: stable
 
       - name: Build and test Kotlin bindings
-        run: ./run_kotlin_tests.sh
+        run: ./kotlin/test_kotlin.sh

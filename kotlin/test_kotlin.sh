@@ -36,9 +36,6 @@ echo "✅ Kotlin bindings built"
 # Step 2: Run unit tests via Gradle
 # --------------------------------------------------
 
-TEST_ANDROID_DIR="$ROOT_DIR/test_android"
-cd "$TEST_ANDROID_DIR"
-
 # Generate Gradle wrapper if missing (use host gradle)
 if [ ! -f "gradlew" ]; then
   echo "Gradle wrapper missing, generating..."
