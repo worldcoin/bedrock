@@ -25,14 +25,16 @@ class BedrockTests {
     @Test
     fun testPersonalSign() {
         val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
-        
+
         // Test message signing - using same parameters as Rust test
         val message = "Hello, Safe Smart Account!"
         val signature = account.personalSign(1u, message).toHexString()
 
         // Expected signature from Rust test
-        val expectedSignature = "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
-        
+        val expectedSignature =
+            "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a" +
+                "0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
+
         // Verify we got the exact expected signature
         assertEquals(expectedSignature, signature, "should match the expected value from Rust test")
 
