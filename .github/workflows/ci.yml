@@ -51,6 +51,13 @@ jobs:
       - name: Build and test Swift bindings
         run: ./swift/test_swift.sh
 
+      - name: Install SwiftLint
+        run: |
+          brew install swiftlint
+
+      - name: Lint Swift Tests
+        run: swiftlint swift/tests
+
   test:
     name: Tests
     runs-on: ubuntu-latest

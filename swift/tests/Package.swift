@@ -11,7 +11,7 @@ let package = Package(
     products: [
         .library(
             name: "Bedrock",
-            targets: ["Bedrock"]),
+            targets: ["Bedrock"])
     ],
     targets: [
         .target(
@@ -29,4 +29,4 @@ let package = Package(
             path: "BedrockTests"
         )
     ]
-) 
+)
