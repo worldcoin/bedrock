@@ -9,3 +9,7 @@ Review our [CONTRIBUTING](CONTRIBUTING.md) guide. Including details on how to ru
 ## 🐦‍🔥 Swift Bindings
 
 Bedrock ships with foreign bindings for native Swift. All details can be found in the [/swift](./swift/README.md) folder.
+
+## 🧬 Kotlin Bindings
+
+Bedrock ships with foreign bindings for native Kotlin. All details can be found in the [/kotlin](./kotlin/README.md) folder.
