@@ -17,4 +17,7 @@
 /// Reference: <https://github.com/safe-global/safe-smart-account>
 pub mod smart_account;
 
+/// Introduces low level primitives for the crypto wallet.
+pub mod primitives;
+
 uniffi::setup_scaffolding!("bedrock");

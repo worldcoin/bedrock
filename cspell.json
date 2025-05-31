@@ -9,6 +9,7 @@
     "dotenv",
     "foundryup",
     "keccak",
+    "repr",
     "ruint",
     "Uniffi",
     "xcframework",

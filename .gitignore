@@ -2,17 +2,14 @@ target/
 .DS_Store
 .swiftpm/
 
-# iOS build artifacts
+# Swift build and test artifacts
 **/ios_build/
-swift/Bedrock.xcframework/
-swift/Sources/
-swift/tests/Sources/
-.swiftpm/
-
-# Swift build outputs
+**/Sources/
 *.xcframework/
-Sources/
+.swiftpm/
 generated_swift/
+test_output.log
+
 
 # forge
 cache/
