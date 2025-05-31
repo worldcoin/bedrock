@@ -89,14 +89,27 @@ TEST_SUITES_FAILED=0
 if [ -f test_output.log ]; then
     echo "✅ Test results found in: test_output.log"
     
-    # Count test cases
-    TOTAL_TESTS=$(grep -c "Test Case.*started" test_output.log || echo "0")
-    PASSED_TESTS=$(grep -c "Test Case.*passed" test_output.log || echo "0")
-    FAILED_TESTS=$(grep -c "Test Case.*failed" test_output.log || echo "0")
+    # Count test cases - ensure we get valid integers
+    TOTAL_TESTS=$(grep -c "Test Case.*started" test_output.log 2>/dev/null || echo "0")
+    TOTAL_TESTS=${TOTAL_TESTS%%[^0-9]*}  # Remove any non-numeric characters
+    TOTAL_TESTS=${TOTAL_TESTS:-0}        # Default to 0 if empty
     
-    # Count test suites
-    TEST_SUITES_PASSED=$(grep -c "Test Suite.*passed" test_output.log || echo "0")
-    TEST_SUITES_FAILED=$(grep -c "Test Suite.*failed" test_output.log || echo "0")
+    PASSED_TESTS=$(grep -c "Test Case.*passed" test_output.log 2>/dev/null || echo "0")
+    PASSED_TESTS=${PASSED_TESTS%%[^0-9]*}
+    PASSED_TESTS=${PASSED_TESTS:-0}
+    
+    FAILED_TESTS=$(grep -c "Test Case.*failed" test_output.log 2>/dev/null || echo "0")
+    FAILED_TESTS=${FAILED_TESTS%%[^0-9]*}
+    FAILED_TESTS=${FAILED_TESTS:-0}
+    
+    # Count test suites - ensure we get valid integers
+    TEST_SUITES_PASSED=$(grep -c "Test Suite.*passed" test_output.log 2>/dev/null || echo "0")
+    TEST_SUITES_PASSED=${TEST_SUITES_PASSED%%[^0-9]*}
+    TEST_SUITES_PASSED=${TEST_SUITES_PASSED:-0}
+    
+    TEST_SUITES_FAILED=$(grep -c "Test Suite.*failed" test_output.log 2>/dev/null || echo "0")
+    TEST_SUITES_FAILED=${TEST_SUITES_FAILED%%[^0-9]*}
+    TEST_SUITES_FAILED=${TEST_SUITES_FAILED:-0}
     
     echo "📋 Total test cases: $TOTAL_TESTS"
     echo "✅ Tests passed: $PASSED_TESTS"
