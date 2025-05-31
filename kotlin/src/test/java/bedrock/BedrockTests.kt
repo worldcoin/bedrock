@@ -2,7 +2,11 @@ package bedrock
 
 import uniffi.bedrock.SafeSmartAccount
 import uniffi.bedrock.SafeSmartAccountException
-import kotlin.test.*
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class BedrockTests {
     private val testPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
@@ -110,4 +114,4 @@ class BedrockTests {
         assertTrue(sig.isNotEmpty(), "Signature for unicode message should not be empty")
         assertEquals(132, sig.length, "Signature for unicode message should be 132 characters")
     }
-} 
+}

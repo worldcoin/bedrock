@@ -111,3 +111,14 @@ jobs:
 
       - name: Build and test Kotlin bindings
         run: ./kotlin/test_kotlin.sh
+
+      - name: Install ktlint
+        run: |
+          curl -sSLO https://github.com/pinterest/ktlint/releases/latest/download/ktlint &&
+          chmod a+x ktlint &&
+          sudo mv ktlint /usr/local/bin/
+
+      - name: Lint Kotlin Tests
+        run: |
+
+          ktlint kotlin/src/test
