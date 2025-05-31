@@ -28,7 +28,7 @@ class BedrockTests {
         
         // Test message signing - using same parameters as Rust test
         val message = "Hello, Safe Smart Account!"
-        val signature = account.personalSign(1u, message)
+        val signature = account.personalSign(1u, message).toHexString()
 
         // Expected signature from Rust test
         val expectedSignature = "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
@@ -55,7 +55,7 @@ class BedrockTests {
             )
 
         for (msg in messages) {
-            val sig = account.personalSign(chainId, msg)
+            val sig = account.personalSign(chainId, msg).toHexString()
             assertTrue(sig.isNotEmpty(), "Signature for '$msg' should not be empty")
             assertEquals(132, sig.length, "Signature for '$msg' should be 132 characters")
         }
@@ -90,7 +90,7 @@ class BedrockTests {
         val signatures = mutableSetOf<String>()
 
         for (cid in chainIds) {
-            val sig = account.personalSign(cid, message)
+            val sig = account.personalSign(cid, message).toHexString()
             assertTrue(sig.isNotEmpty(), "Signature for chain $cid should not be empty")
             assertEquals(132, sig.length, "Signature for chain $cid should be 132 characters")
             assertTrue(signatures.add(sig), "Signature for chain $cid should be unique")
@@ -101,7 +101,7 @@ class BedrockTests {
     fun testLongMessage() {
         val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
         val longMsg = "Lorem ipsum dolor sit amet. ".repeat(100)
-        val sig = account.personalSign(chainId, longMsg)
+        val sig = account.personalSign(chainId, longMsg).toHexString()
         assertTrue(sig.isNotEmpty(), "Signature for long message should not be empty")
         assertEquals(132, sig.length, "Signature for long message should be 132 characters")
     }
@@ -110,7 +110,7 @@ class BedrockTests {
     fun testUnicodeMessage() {
         val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
         val unicodeMsg = "Hello 世界 🌍 Здравствуй мир"
-        val sig = account.personalSign(chainId, unicodeMsg)
+        val sig = account.personalSign(chainId, unicodeMsg).toHexString()
         assertTrue(sig.isNotEmpty(), "Signature for unicode message should not be empty")
         assertEquals(132, sig.length, "Signature for unicode message should be 132 characters")
     }
