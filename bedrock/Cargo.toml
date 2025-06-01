@@ -28,5 +28,5 @@ uniffi = { workspace = true, features = ["build", "tokio"] }
 [dev-dependencies]
 alloy = { version = "1.0.6", default-features = false, features = ["json", "contract", "node-bindings", "reqwest-rustls-tls"] }
 dotenvy = "0.15.7"
-tokio = "1.45.0"
+tokio = "1.45.1"
 tokio-test = "0.4.4"
