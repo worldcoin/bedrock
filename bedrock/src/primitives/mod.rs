@@ -1,3 +1,4 @@
+use crate::bedrock_export;
 use std::fmt::Display;
 
 /// A wrapper around hex-encoded bytes (may or may not be a number).
@@ -13,7 +14,7 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
 pub struct HexEncodedData(String);
 
-#[uniffi::export]
+#[bedrock_export]
 impl HexEncodedData {
     /// Initializes a new `HexEncodedData` from a hex string.
     ///

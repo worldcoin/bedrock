@@ -1,6 +1,9 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Variant};
+use syn::{
+    parse_macro_input, Data, DeriveInput, ImplItem, ImplItemFn, ItemImpl, Stmt,
+    Variant, Visibility,
+};
 
 /// Procedural macro that enhances error enums with generic error handling
 ///
@@ -151,4 +154,91 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+/// Procedural macro that wraps `uniffi::export` and automatically injects logging context
+///
+/// This macro automatically:
+/// 1. Forwards the attribute to `#[uniffi::export]`
+/// 2. Injects `let _ctx = crate::logger::LogContext::new("StructName");` at the start of every `pub fn`
+/// 3. Extracts the struct/trait name from the impl block for context
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// #[bedrock_export]
+/// impl MyStruct {
+///     pub fn some_method(&self) -> String {
+///         // _ctx is automatically injected here
+///         debug!("This will be prefixed with [MyStruct]");
+///         "result".to_string()
+///     }
+/// }
+/// ```
+///
+/// This will automatically add logging context to all public methods in the impl block.
+#[proc_macro_attribute]
+pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input_impl = parse_macro_input!(input as ItemImpl);
+
+    // Extract the struct/trait name for logging context
+    let type_name = match &*input_impl.self_ty {
+        syn::Type::Path(type_path) => {
+            if let Some(segment) = type_path.path.segments.last() {
+                segment.ident.to_string()
+            } else {
+                "Unknown".to_string()
+            }
+        }
+        _ => "Unknown".to_string(),
+    };
+
+    // Process each method in the impl block
+    let mut new_items = Vec::new();
+
+    for item in &input_impl.items {
+        match item {
+            ImplItem::Fn(method) => {
+                // Check if this is a public function
+                if matches!(method.vis, Visibility::Public(_)) {
+                    // Inject logging context at the start of the function body
+                    let mut new_method = method.clone();
+                    inject_logging_context(&mut new_method, &type_name);
+                    new_items.push(ImplItem::Fn(new_method));
+                } else {
+                    // Keep private methods unchanged
+                    new_items.push(item.clone());
+                }
+            }
+            _ => {
+                // Keep other items unchanged
+                new_items.push(item.clone());
+            }
+        }
+    }
+
+    // Create the new impl block with modified methods
+    let new_impl = ItemImpl {
+        items: new_items,
+        ..input_impl
+    };
+
+    // Generate the output with uniffi::export attribute
+    let args = proc_macro2::TokenStream::from(args);
+    quote! {
+        #[uniffi::export(#args)]
+        #new_impl
+    }
+    .into()
+}
+
+/// Inject logging context at the start of a function body
+fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
+    // Create the logging context statement
+    let context_stmt: Stmt = syn::parse_quote! {
+        let _ctx = crate::logger::LogContext::new(#type_name);
+    };
+
+    // Insert at the beginning of the function body
+    method.block.stmts.insert(0, context_stmt);
 }

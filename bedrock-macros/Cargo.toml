@@ -1,6 +1,6 @@
 [package]
-name = "bedrock-error-macros"
-description = "Macros for bedrock error handling"
+name = "bedrock-macros"
+description = "Macros for bedrock error handling and UniFFI integration"
 
 version.workspace = true
 edition.workspace = true
@@ -21,4 +21,4 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
-syn = { version = "2.0", features = ["full"] } 
+syn = { version = "2.0", features = ["full", "extra-traits"] } 

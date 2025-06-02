@@ -20,7 +20,7 @@ name = "bedrock"
 [dependencies]
 alloy = { version = "1.0.6", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
 anyhow = "1.0"
-bedrock-error-macros = { path = "../bedrock-error-macros" }
+bedrock-macros = { path = "../bedrock-macros" }
 hex = "0.4.3"
 log = "0.4.22"
 rand = "0.9.1"

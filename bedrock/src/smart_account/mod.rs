@@ -7,7 +7,7 @@ use alloy::{
 use signer::SafeSmartAccountSigner;
 
 use crate::primitives::{HexEncodedData, PrimitiveError};
-use crate::{module_debug, module_error, module_info};
+use crate::{bedrock_export, debug, error, info};
 
 mod signer;
 
@@ -41,7 +41,7 @@ pub struct SafeSmartAccount {
     wallet_address: Address,
 }
 
-#[uniffi::export]
+#[bedrock_export]
 impl SafeSmartAccount {
     /// Initializes a new `SafeSmartAccount` instance with the given EOA signing key.
     ///
@@ -60,37 +60,27 @@ impl SafeSmartAccount {
         private_key: String,
         wallet_address: &str,
     ) -> Result<Self, SafeSmartAccountError> {
-        module_debug!(
-            "SmartAccount",
+        debug!(
             "Initializing SafeSmartAccount with wallet address: {}",
             wallet_address
         );
 
         let signer =
             LocalSigner::from_slice(&hex::decode(private_key).map_err(|e| {
-                module_error!("SmartAccount", "Failed to decode private key: {}", e);
+                error!("Failed to decode private key: {}", e);
                 SafeSmartAccountError::KeyDecoding(e.to_string())
             })?)
             .map_err(|e| {
-                module_error!(
-                    "SmartAccount",
-                    "Failed to create signer from decoded private key: {}",
-                    e
-                );
+                error!("Failed to create signer from decoded private key: {}", e);
                 SafeSmartAccountError::KeyDecoding(e.to_string())
             })?;
 
         let wallet_address = Address::from_str(wallet_address).map_err(|_| {
-            module_error!(
-                "SmartAccount",
-                "Failed to parse wallet address: {}",
-                wallet_address
-            );
+            error!("Failed to parse wallet address: {}", wallet_address);
             SafeSmartAccountError::AddressParsing(wallet_address.to_string())
         })?;
 
-        module_info!(
-            "SmartAccount",
+        info!(
             "Successfully initialized SafeSmartAccount for wallet: {}",
             wallet_address
         );
@@ -191,5 +181,22 @@ mod tests {
     #[test]
     fn test_personal_sign() {
         // todo: integration test with contract
+    }
+
+    #[test]
+    fn test_logging_context_injection() {
+        // Create a SafeSmartAccount instance
+        let account = SafeSmartAccount::new(
+            hex::encode(PrivateKeySigner::random().to_bytes()),
+            "0x0000000000000000000000000000000000000042",
+        )
+        .unwrap();
+
+        // Call a method that should automatically have logging context injected
+        // The personal_sign method should have [SafeSmartAccount] context
+        let result = account.personal_sign(1, "test message".to_string());
+
+        // The method should work normally despite the logging context injection
+        assert!(result.is_ok());
     }
 }

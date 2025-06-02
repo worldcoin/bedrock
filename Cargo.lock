@@ -949,7 +949,7 @@ version = "0.0.1"
 dependencies = [
  "alloy",
  "anyhow",
- "bedrock-error-macros",
+ "bedrock-macros",
  "dotenvy",
  "hex",
  "log",
@@ -966,7 +966,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bedrock-error-macros"
+name = "bedrock-macros"
 version = "0.0.1"
 dependencies = [
  "proc-macro2",

@@ -11,8 +11,8 @@
 //!
 //! More info about World App can be found here: <https://www.toolsforhumanity.com/world-app>
 
-// Import and re-export the bedrock_error macro globally
-pub use bedrock_error_macros::bedrock_error;
+// Import and re-export the macros globally
+pub use bedrock_macros::{bedrock_error, bedrock_export};
 
 /// Demonstrates different error handling patterns for `UniFFI` exports.
 /// This module explores both strongly typed enum errors and flexible interface-based errors.
@@ -29,8 +29,5 @@ pub mod primitives;
 
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
-
-/// Demonstrates the usage of module-specific logging functionality.
-pub mod logger_demo;
 
 uniffi::setup_scaffolding!("bedrock");

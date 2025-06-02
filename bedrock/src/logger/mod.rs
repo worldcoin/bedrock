@@ -11,7 +11,7 @@ use std::{sync::Arc, sync::OnceLock};
 ///
 /// ```rust
 ///
-/// use bedrock::{Logger, LogLevel};
+/// use bedrock::logger::{Logger, LogLevel};
 ///
 /// struct MyLogger;
 ///
@@ -216,57 +216,79 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
     Ok(())
 }
 
-/// Module-specific logging macros with custom prefixes.
+/// Context-aware logging macros that automatically use the current logging context.
 ///
-/// These macros allow you to log messages with a module-specific prefix.
-/// Use these instead of the standard log macros to get automatic prefixing.
+/// These macros allow you to log messages that will be automatically prefixed
+/// with the current logging context if one is set.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::{module_trace, module_debug, module_info, module_warn, module_error};
+/// use bedrock::{trace, debug, info, warn, error};
+/// use bedrock::logger::LogContext;
 ///
-/// module_info!("SmartAccount", "This is an info message");
-/// module_debug!("SmartAccount", "Debug info: {}", value);
+/// let _ctx = LogContext::new("SmartAccount");
+/// info!("This is an info message");
+/// debug!("Debug info: {}", 42);
 /// ```
 
-/// Logs a trace-level message with module prefix
+/// Logs a trace-level message with automatic context prefixing
 #[macro_export]
-macro_rules! module_trace {
-    ($module:expr, $($arg:tt)*) => {
-        log::trace!("[{}] {}", $module, format_args!($($arg)*))
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        if let Some(ctx) = $crate::logger::get_context() {
+            log::trace!("{} {}", ctx, format_args!($($arg)*))
+        } else {
+            log::trace!($($arg)*)
+        }
     };
 }
 
-/// Logs a debug-level message with module prefix
+/// Logs a debug-level message with automatic context prefixing
 #[macro_export]
-macro_rules! module_debug {
-    ($module:expr, $($arg:tt)*) => {
-        log::debug!("[{}] {}", $module, format_args!($($arg)*))
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        if let Some(ctx) = $crate::logger::get_context() {
+            log::debug!("{} {}", ctx, format_args!($($arg)*))
+        } else {
+            log::debug!($($arg)*)
+        }
     };
 }
 
-/// Logs an info-level message with module prefix
+/// Logs an info-level message with automatic context prefixing
 #[macro_export]
-macro_rules! module_info {
-    ($module:expr, $($arg:tt)*) => {
-        log::info!("[{}] {}", $module, format_args!($($arg)*))
+macro_rules! info {
+    ($($arg:tt)*) => {
+        if let Some(ctx) = $crate::logger::get_context() {
+            log::info!("{} {}", ctx, format_args!($($arg)*))
+        } else {
+            log::info!($($arg)*)
+        }
     };
 }
 
-/// Logs a warning-level message with module prefix
+/// Logs a warning-level message with automatic context prefixing
 #[macro_export]
-macro_rules! module_warn {
-    ($module:expr, $($arg:tt)*) => {
-        log::warn!("[{}] {}", $module, format_args!($($arg)*))
+macro_rules! warn {
+    ($($arg:tt)*) => {
+        if let Some(ctx) = $crate::logger::get_context() {
+            log::warn!("{} {}", ctx, format_args!($($arg)*))
+        } else {
+            log::warn!($($arg)*)
+        }
     };
 }
 
-/// Logs an error-level message with module prefix
+/// Logs an error-level message with automatic context prefixing
 #[macro_export]
-macro_rules! module_error {
-    ($module:expr, $($arg:tt)*) => {
-        log::error!("[{}] {}", $module, format_args!($($arg)*))
+macro_rules! error {
+    ($($arg:tt)*) => {
+        if let Some(ctx) = $crate::logger::get_context() {
+            log::error!("{} {}", ctx, format_args!($($arg)*))
+        } else {
+            log::error!($($arg)*)
+        }
     };
 }
 
