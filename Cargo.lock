@@ -948,15 +948,29 @@ name = "bedrock"
 version = "0.0.1"
 dependencies = [
  "alloy",
+ "anyhow",
+ "bedrock-error-macros",
  "dotenvy",
  "hex",
  "log",
- "rand 0.9.1",
+ "proc-macro2",
+ "quote",
  "ruint",
+ "serde_json",
+ "syn 2.0.101",
  "thiserror",
  "tokio",
  "tokio-test",
  "uniffi",
+]
+
+[[package]]
+name = "bedrock-error-macros"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
 ]
 
 [[package]]

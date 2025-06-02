@@ -8,7 +8,13 @@
 target/
 
 **/ios_build/
-**/Sources/
+swift/Bedrock.xcframework/
+swift/Sources/
+swift/tests/Sources/
+swift/local_build/
+.swiftpm/
+
+# Swift build outputs
 *.xcframework/
 .swiftpm/
 generated_swift/
