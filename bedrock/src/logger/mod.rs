@@ -269,3 +269,7 @@ macro_rules! module_error {
         log::error!("[{}] {}", $module, format_args!($($arg)*))
     };
 }
+
+/// Context-aware logging functionality with thread-local storage.
+pub mod context;
+pub use context::{get_context, LogContext};

@@ -5,7 +5,7 @@
 .env
 .DS_Store
 
-target/
+target/ 
 
 **/ios_build/
 swift/Bedrock.xcframework/
