@@ -22,6 +22,8 @@ alloy = { version = "1.0.6", default-features = false, features = ["dyn-abi", "s
 anyhow = "1.0"
 bedrock-error-macros = { path = "../bedrock-error-macros" }
 hex = "0.4.3"
+log = "0.4.22"
+rand = "0.9.1"
 proc-macro2 = "1.0"
 quote = "1.0"
 ruint = "1.15.0"
