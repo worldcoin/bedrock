@@ -21,11 +21,11 @@ class BedrockTests {
     fun testToolingDemoLogPrefixing() {
         // Test the ToolingDemo to verify log prefixing works
         val demo = ToolingDemo()
-        
+
         // These calls should generate logs with [ToolingDemo] prefix
         demo.logMessage("Testing log prefixing from Kotlin")
         demo.testLogLevels()
-        
+
         val result = demo.getDemoResult()
         assertTrue(result.contains("ToolingDemo"), "Result should contain the demo name")
         assertTrue(result.contains("Demo result"), "Result should contain expected text")
