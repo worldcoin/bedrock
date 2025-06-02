@@ -23,4 +23,7 @@ pub mod primitives;
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
 
+/// Demonstrates the usage of module-specific logging functionality.
+pub mod logger_demo;
+
 uniffi::setup_scaffolding!("bedrock");

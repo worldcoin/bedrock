@@ -215,3 +215,57 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
     log::set_max_level(log::LevelFilter::Trace);
     Ok(())
 }
+
+/// Module-specific logging macros with custom prefixes.
+///
+/// These macros allow you to log messages with a module-specific prefix.
+/// Use these instead of the standard log macros to get automatic prefixing.
+///
+/// # Examples
+///
+/// ```rust
+/// use bedrock::{module_trace, module_debug, module_info, module_warn, module_error};
+///
+/// module_info!("SmartAccount", "This is an info message");
+/// module_debug!("SmartAccount", "Debug info: {}", value);
+/// ```
+
+/// Logs a trace-level message with module prefix
+#[macro_export]
+macro_rules! module_trace {
+    ($module:expr, $($arg:tt)*) => {
+        log::trace!("[{}] {}", $module, format_args!($($arg)*))
+    };
+}
+
+/// Logs a debug-level message with module prefix
+#[macro_export]
+macro_rules! module_debug {
+    ($module:expr, $($arg:tt)*) => {
+        log::debug!("[{}] {}", $module, format_args!($($arg)*))
+    };
+}
+
+/// Logs an info-level message with module prefix
+#[macro_export]
+macro_rules! module_info {
+    ($module:expr, $($arg:tt)*) => {
+        log::info!("[{}] {}", $module, format_args!($($arg)*))
+    };
+}
+
+/// Logs a warning-level message with module prefix
+#[macro_export]
+macro_rules! module_warn {
+    ($module:expr, $($arg:tt)*) => {
+        log::warn!("[{}] {}", $module, format_args!($($arg)*))
+    };
+}
+
+/// Logs an error-level message with module prefix
+#[macro_export]
+macro_rules! module_error {
+    ($module:expr, $($arg:tt)*) => {
+        log::error!("[{}] {}", $module, format_args!($($arg)*))
+    };
+}
