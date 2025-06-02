@@ -20,6 +20,7 @@ name = "bedrock"
 [dependencies]
 alloy = { version = "1.0.6", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
 hex = "0.4.3"
+log = "0.4.22"
 rand = "0.9.1"
 ruint = "1.15.0"
 thiserror = "2.0.12"

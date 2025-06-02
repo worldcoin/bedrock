@@ -950,6 +950,7 @@ dependencies = [
  "alloy",
  "dotenvy",
  "hex",
+ "log",
  "rand 0.9.1",
  "ruint",
  "thiserror",

@@ -20,4 +20,7 @@ pub mod smart_account;
 /// Introduces low level primitives for the crypto wallet.
 pub mod primitives;
 
+/// Introduces logging functionality that can be integrated with foreign language bindings.
+pub mod logger;
+
 uniffi::setup_scaffolding!("bedrock");
