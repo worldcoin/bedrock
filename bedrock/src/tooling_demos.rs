@@ -35,19 +35,26 @@ pub enum DemoError {
     // Note: Generic variant is automatically added by #[bedrock_error]
 }
 
+impl Default for ToolingDemo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Demonstrates automatic logging context injection with bedrock_export.
 /// All public methods will automatically have [ToolingDemo] prefix in logs.
 #[bedrock_export]
 impl ToolingDemo {
     /// Creates a new tooling demo instance.
     #[uniffi::constructor]
+    #[must_use]
     pub fn new() -> Self {
         info!("Creating ToolingDemo instance");
         Self
     }
 
     /// Logs a simple message to test log prefixing.
-    pub fn log_message(&self, message: String) {
+    pub fn log_message(&self, message: &str) {
         info!("User message: {}", message);
     }
 
@@ -59,16 +66,24 @@ impl ToolingDemo {
     }
 
     /// Returns a simple result for testing.
+    #[must_use]
     pub fn get_demo_result(&self) -> String {
         debug!("Generating demo result");
         "Demo result from ToolingDemo".to_string()
     }
 
     /// Demo: Strongly typed errors for known, structured error cases
+    ///
+    /// # Errors
+    ///
+    /// Returns `DemoError::InvalidInput` if username is empty.
+    /// Returns `DemoError::AuthenticationFailed` if credentials are invalid.
+    /// Returns `DemoError::NetworkTimeout` if user is "slowuser".
+    /// Returns `DemoError::Generic` if the generic operation fails.
     pub fn demo_authenticate(
         &self,
-        username: String,
-        password: String,
+        username: &str,
+        password: &str,
     ) -> Result<String, DemoError> {
         info!("Attempting authentication for user: {}", username);
 
@@ -89,17 +104,22 @@ impl ToolingDemo {
             return Err(DemoError::NetworkTimeout { seconds: 30 });
         }
 
-        let welcome_message = format!("Welcome, {}!", username);
+        let welcome_message = format!("Welcome, {username}!");
         info!("Authentication successful for user: {}", username);
 
         let operation_result =
-            self.demo_generic_operation(format!("auth_data_{}", username))?;
+            self.demo_generic_operation(&format!("auth_data_{username}"))?;
 
-        Ok(format!("{} {}", welcome_message, operation_result))
+        Ok(format!("{welcome_message} {operation_result}"))
     }
 
     /// Demo: Generic errors for complex operations with anyhow error chains
-    pub fn demo_generic_operation(&self, input: String) -> Result<String, DemoError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `DemoError::Generic` for various error conditions including
+    /// empty input, network errors, parse errors, and deep chain errors.
+    pub fn demo_generic_operation(&self, input: &str) -> Result<String, DemoError> {
         debug!("Starting generic operation with input: {}", input);
 
         let result: anyhow::Result<String> = (|| {
@@ -112,7 +132,7 @@ impl ToolingDemo {
             }
 
             if input == "parse_error" {
-                serde_json::from_str::<serde_json::Value>(&input)
+                serde_json::from_str::<serde_json::Value>(input)
                     .with_context(|| "Failed to parse input as JSON")?;
             }
 
@@ -126,12 +146,12 @@ impl ToolingDemo {
                     .context("Service startup failed"));
             }
 
-            Ok(format!("Successfully processed: {}", input))
+            Ok(format!("Successfully processed: {input}"))
         })();
 
         match &result {
             Ok(success) => {
-                info!("Generic operation completed successfully: {}", success)
+                info!("Generic operation completed successfully: {}", success);
             }
             Err(error) => warn!("Generic operation failed: {}", error),
         }
@@ -140,10 +160,15 @@ impl ToolingDemo {
     }
 
     /// Demo: Mixed usage - structured errors for validation, generic for complex operations
+    ///
+    /// # Errors
+    ///
+    /// Returns `DemoError::InvalidInput` if operation is empty or unknown.
+    /// Returns `DemoError::Generic` if the processing operation fails.
     pub fn demo_mixed_operation(
         &self,
-        operation: String,
-        data: String,
+        operation: &str,
+        data: &str,
     ) -> Result<String, DemoError> {
         info!(
             "Starting mixed operation: {} with data: {}",
@@ -157,37 +182,34 @@ impl ToolingDemo {
             });
         }
 
-        match operation.as_str() {
-            "process" => {
-                info!("Processing data in mixed operation");
-                let complex_result: anyhow::Result<String> = (|| {
-                    if data == "trigger_error" {
-                        anyhow::bail!("Simulated processing failure");
-                    }
-
-                    Ok(format!("Processed: {}", data))
-                })();
-
-                let result = DemoError::from_anyhow_result_with_prefix(
-                    complex_result,
-                    "Operation failed",
-                );
-
-                match &result {
-                    Ok(success) => {
-                        info!("Mixed operation completed successfully: {}", success)
-                    }
-                    Err(error) => warn!("Mixed operation failed: {}", error),
+        if operation == "process" {
+            info!("Processing data in mixed operation");
+            let complex_result: anyhow::Result<String> = (|| {
+                if data == "trigger_error" {
+                    anyhow::bail!("Simulated processing failure");
                 }
 
-                result
+                Ok(format!("Processed: {data}"))
+            })();
+
+            let result = DemoError::from_anyhow_result_with_prefix(
+                complex_result,
+                "Operation failed",
+            );
+
+            match &result {
+                Ok(success) => {
+                    info!("Mixed operation completed successfully: {}", success);
+                }
+                Err(error) => warn!("Mixed operation failed: {}", error),
             }
-            _ => {
-                warn!("Mixed operation failed: unknown operation: {}", operation);
-                Err(DemoError::InvalidInput {
-                    message: format!("Unknown operation: {}", operation),
-                })
-            }
+
+            result
+        } else {
+            warn!("Mixed operation failed: unknown operation: {}", operation);
+            Err(DemoError::InvalidInput {
+                message: format!("Unknown operation: {operation}"),
+            })
         }
     }
 }
@@ -199,7 +221,7 @@ mod tests {
     #[test]
     fn test_logging_functionality() {
         let demo = ToolingDemo::new();
-        demo.log_message("Test message".to_string());
+        demo.log_message("Test message");
         demo.test_log_levels();
         let result = demo.get_demo_result();
         assert!(result.contains("Demo result"));
@@ -210,13 +232,12 @@ mod tests {
         let demo = ToolingDemo::new();
 
         // Test success case
-        let result =
-            demo.demo_mixed_operation("process".to_string(), "valid_data".to_string());
+        let result = demo.demo_mixed_operation("process", "valid_data");
         assert!(result.is_ok());
         assert!(result.unwrap().contains("Processed:"));
 
         // Test strongly typed error - empty operation
-        let result = demo.demo_mixed_operation("".to_string(), "data".to_string());
+        let result = demo.demo_mixed_operation("", "data");
         assert!(result.is_err());
         if let Err(DemoError::InvalidInput { message }) = result {
             assert!(message.contains("Operation cannot be empty"));
@@ -225,8 +246,7 @@ mod tests {
         }
 
         // Test strongly typed error - unknown operation
-        let result =
-            demo.demo_mixed_operation("unknown".to_string(), "data".to_string());
+        let result = demo.demo_mixed_operation("unknown", "data");
         assert!(result.is_err());
         if let Err(DemoError::InvalidInput { message }) = result {
             assert!(message.contains("Unknown operation"));
@@ -235,8 +255,7 @@ mod tests {
         }
 
         // Test generic error - anyhow style
-        let result = demo
-            .demo_mixed_operation("process".to_string(), "trigger_error".to_string());
+        let result = demo.demo_mixed_operation("process", "trigger_error");
         assert!(result.is_err());
         if let Err(DemoError::Generic { message }) = result {
             assert!(message.contains("Operation failed"));
@@ -251,7 +270,7 @@ mod tests {
         let demo = ToolingDemo::new();
 
         // Test empty username
-        let result = demo.demo_authenticate("".to_string(), "password".to_string());
+        let result = demo.demo_authenticate("", "password");
         assert!(result.is_err());
         if let Err(DemoError::InvalidInput { message }) = result {
             assert!(message.contains("Username cannot be empty"));
@@ -260,8 +279,7 @@ mod tests {
         }
 
         // Test wrong credentials
-        let result =
-            demo.demo_authenticate("admin".to_string(), "wrongpassword".to_string());
+        let result = demo.demo_authenticate("admin", "wrongpassword");
         assert!(result.is_err());
         if let Err(DemoError::AuthenticationFailed { code }) = result {
             assert_eq!(code, 401);
@@ -270,8 +288,7 @@ mod tests {
         }
 
         // Test network timeout
-        let result =
-            demo.demo_authenticate("slowuser".to_string(), "password".to_string());
+        let result = demo.demo_authenticate("slowuser", "password");
         assert!(result.is_err());
         if let Err(DemoError::NetworkTimeout { seconds }) = result {
             assert_eq!(seconds, 30);

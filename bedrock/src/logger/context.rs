@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 thread_local! {
-    static LOG_CONTEXT: RefCell<Option<String>> = RefCell::new(None);
+    static LOG_CONTEXT: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// A scope guard that sets a logging context and automatically clears it when dropped.
@@ -25,11 +25,12 @@ impl LogContext {
     /// Creates a new logging context scope.
     ///
     /// The context will be active until this `LogContext` is dropped.
+    #[must_use]
     pub fn new(module: &str) -> Self {
         let previous = LOG_CONTEXT.with(|ctx| {
             let mut ctx = ctx.borrow_mut();
             let prev = ctx.clone();
-            *ctx = Some(format!("[{}]", module));
+            *ctx = Some(format!("[{module}]"));
             prev
         });
 
@@ -40,12 +41,13 @@ impl LogContext {
 impl Drop for LogContext {
     fn drop(&mut self) {
         LOG_CONTEXT.with(|ctx| {
-            *ctx.borrow_mut() = self.previous.clone();
+            (*ctx.borrow_mut()).clone_from(&self.previous);
         });
     }
 }
 
 /// Gets the current logging context, if any.
+#[must_use]
 pub fn get_context() -> Option<String> {
     LOG_CONTEXT.with(|ctx| ctx.borrow().clone())
 }

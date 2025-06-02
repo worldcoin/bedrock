@@ -116,7 +116,7 @@ impl log::Log for ForeignLogger {
         // Determine if the record originates from the "bedrock" module.
         let is_record_from_bedrock = record
             .module_path()
-            .map_or(false, |module_path| module_path.starts_with("bedrock"));
+            .is_some_and(|module_path| module_path.starts_with("bedrock"));
 
         // Determine if the log level is Debug or Trace.
         let is_debug_or_trace_level =
@@ -190,7 +190,7 @@ static LOGGER_INSTANCE: OnceLock<Arc<dyn Logger>> = OnceLock::new();
 #[uniffi::export]
 pub fn set_logger(logger: Arc<dyn Logger>) {
     match LOGGER_INSTANCE.set(logger) {
-        Ok(_) => (),
+        Ok(()) => (),
         Err(_) => println!("Logger already set"),
     }
 
@@ -231,7 +231,6 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
 /// info!("This is an info message");
 /// debug!("Debug info: {}", 42);
 /// ```
-
 /// Logs a trace-level message with automatic context prefixing
 #[macro_export]
 macro_rules! trace {
