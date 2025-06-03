@@ -10,64 +10,19 @@ PROJECT_ROOT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_PATH="$PROJECT_ROOT_PATH/swift" # The base path for the Swift build
 LOCAL_BUILD_PATH="$BASE_PATH/local_build" # Local build artifacts directory
 FRAMEWORK="Bedrock.xcframework"
-PACKAGE_NAME="bedrock"
-SWIFT_SOURCES_DIR="$LOCAL_BUILD_PATH/Sources/Bedrock"
-SWIFT_HEADERS_DIR="$LOCAL_BUILD_PATH/ios_build/Headers/Bedrock"
 
 echo "Building $FRAMEWORK for local iOS development"
 
 # Clean up previous builds
 rm -rf "$LOCAL_BUILD_PATH"
 
-# Create necessary directories
-mkdir -p "$LOCAL_BUILD_PATH/ios_build/bindings"
-mkdir -p "$LOCAL_BUILD_PATH/ios_build/target/universal-ios-sim/release"
-mkdir -p "$SWIFT_SOURCES_DIR"
-mkdir -p "$SWIFT_HEADERS_DIR"
+# Create the local build directory
+mkdir -p "$LOCAL_BUILD_PATH"
 
-echo "Building Rust packages for iOS targets..."
+echo "Running core Swift build..."
 
-export IPHONEOS_DEPLOYMENT_TARGET="13.0"
-export RUSTFLAGS="-C link-arg=-Wl,-application_extension"
-
-# Build for all iOS targets
-cargo build --package $PACKAGE_NAME --target aarch64-apple-ios-sim --release
-cargo build --package $PACKAGE_NAME --target aarch64-apple-ios --release
-cargo build --package $PACKAGE_NAME --target x86_64-apple-ios --release
-
-echo "Rust packages built. Combining simulator targets into universal binary..."
-
-# Create universal binary for simulators
-lipo -create target/aarch64-apple-ios-sim/release/lib${PACKAGE_NAME}.a \
-  target/x86_64-apple-ios/release/lib${PACKAGE_NAME}.a \
-  -output $LOCAL_BUILD_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
-
-lipo -info $LOCAL_BUILD_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
-
-echo "Generating Swift bindings..."
-
-# Generate Swift bindings using uniffi
-cargo run -p uniffi-bindgen generate \
-  target/aarch64-apple-ios-sim/release/lib${PACKAGE_NAME}.dylib \
-  --library \
-  --language swift \
-  --no-format \
-  --out-dir $LOCAL_BUILD_PATH/ios_build/bindings
-
-# Move generated Swift file to Sources directory
-mv $LOCAL_BUILD_PATH/ios_build/bindings/${PACKAGE_NAME}.swift ${SWIFT_SOURCES_DIR}/
-
-# Move headers
-mv $LOCAL_BUILD_PATH/ios_build/bindings/${PACKAGE_NAME}FFI.h $SWIFT_HEADERS_DIR/
-cat $LOCAL_BUILD_PATH/ios_build/bindings/${PACKAGE_NAME}FFI.modulemap > $SWIFT_HEADERS_DIR/module.modulemap
-
-echo "Creating XCFramework..."
-
-# Create XCFramework
-xcodebuild -create-xcframework \
-  -library target/aarch64-apple-ios/release/lib${PACKAGE_NAME}.a -headers $LOCAL_BUILD_PATH/ios_build/Headers \
-  -library $LOCAL_BUILD_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a -headers $LOCAL_BUILD_PATH/ios_build/Headers \
-  -output $LOCAL_BUILD_PATH/$FRAMEWORK
+# Call the main build script with local build directory
+bash "$BASE_PATH/build_swift.sh" "$LOCAL_BUILD_PATH"
 
 echo "Creating Package.swift for local development..."
 
@@ -101,9 +56,6 @@ let package = Package(
     ]
 )
 EOF
-
-# Clean up intermediate build files
-rm -rf $LOCAL_BUILD_PATH/ios_build
 
 echo ""
 echo "✅ Swift package built successfully!"
