@@ -26,7 +26,4 @@ pub mod smart_account;
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
-// Re-export logger functionality for backward compatibility
-pub use primitives::logger;
-
 uniffi::setup_scaffolding!("bedrock");
