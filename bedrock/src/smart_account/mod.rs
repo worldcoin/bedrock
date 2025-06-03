@@ -65,18 +65,13 @@ impl SafeSmartAccount {
             wallet_address
         );
 
-        let signer =
-            LocalSigner::from_slice(&hex::decode(private_key).map_err(|e| {
-                error!("Failed to decode private key: {}", e);
-                SafeSmartAccountError::KeyDecoding(e.to_string())
-            })?)
-            .map_err(|e| {
-                error!("Failed to create signer from decoded private key: {}", e);
-                SafeSmartAccountError::KeyDecoding(e.to_string())
-            })?;
+        let signer = LocalSigner::from_slice(
+            &hex::decode(private_key)
+                .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
+        )
+        .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
 
         let wallet_address = Address::from_str(wallet_address).map_err(|_| {
-            error!("Failed to parse wallet address: {}", wallet_address);
             SafeSmartAccountError::AddressParsing(wallet_address.to_string())
         })?;
 
