@@ -163,4 +163,4 @@ class BedrockToolingTests {
             assertTrue(error.message?.isNotEmpty() == true, "Error message should not be empty")
         }
     }
-} 
+}

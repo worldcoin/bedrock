@@ -116,4 +116,4 @@ class BedrockCoreTests {
         assertTrue(sig.isNotEmpty(), "Signature for unicode message should not be empty")
         assertEquals(132, sig.length, "Signature for unicode message should be 132 characters")
     }
-} 
+}
