@@ -174,11 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn test_personal_sign() {
-        // todo: integration test with contract
-    }
-
-    #[test]
     fn test_logging_context_injection() {
         // Create a SafeSmartAccount instance
         let account = SafeSmartAccount::new(
