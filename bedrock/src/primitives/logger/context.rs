@@ -9,7 +9,7 @@ thread_local! {
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::logger::LogContext;
+/// use bedrock::primitives::logger::LogContext;
 ///
 /// {
 ///     let _ctx = LogContext::new("SmartAccount");

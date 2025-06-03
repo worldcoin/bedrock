@@ -11,7 +11,7 @@ use std::{sync::Arc, sync::OnceLock};
 ///
 /// ```rust
 ///
-/// use bedrock::logger::{Logger, LogLevel};
+/// use bedrock::primitives::logger::{Logger, LogLevel};
 ///
 /// struct MyLogger;
 ///
@@ -225,7 +225,7 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
 ///
 /// ```rust
 /// use bedrock::{trace, debug, info, warn, error};
-/// use bedrock::logger::LogContext;
+/// use bedrock::primitives::logger::LogContext;
 ///
 /// let _ctx = LogContext::new("SmartAccount");
 /// info!("This is an info message");
