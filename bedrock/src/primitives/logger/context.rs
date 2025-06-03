@@ -12,7 +12,7 @@ thread_local! {
 /// use bedrock::primitives::logger::LogContext;
 ///
 /// {
-///     let _ctx = LogContext::new("SmartAccount");
+///     let _bedrock_logger_ctx = LogContext::new("SmartAccount");
 ///     log::info!("This will be prefixed with [SmartAccount]");
 ///     log::debug!("This too!");
 /// } // Context automatically cleared here
@@ -67,7 +67,7 @@ pub fn get_context() -> Option<String> {
 #[macro_export]
 macro_rules! with_log_context {
     ($module:expr => $block:block) => {{
-        let _ctx = $crate::primitives::logger::LogContext::new($module);
+        let _bedrock_logger_ctx = $crate::primitives::logger::LogContext::new($module);
         $block
     }};
 }
@@ -82,7 +82,7 @@ macro_rules! with_log_context {
 /// ```rust
 /// use bedrock::set_log_context;
 ///
-/// let _ctx = set_log_context!("SmartAccount");
+/// let _bedrock_logger_ctx = set_log_context!("SmartAccount");
 /// log::info!("This will be prefixed with [SmartAccount]");
 /// ```
 #[macro_export]

@@ -227,7 +227,7 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
 /// use bedrock::{trace, debug, info, warn, error};
 /// use bedrock::primitives::logger::LogContext;
 ///
-/// let _ctx = LogContext::new("SmartAccount");
+/// let _bedrock_logger_ctx = LogContext::new("SmartAccount");
 /// info!("This is an info message");
 /// debug!("Debug info: {}", 42);
 /// ```

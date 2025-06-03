@@ -73,9 +73,9 @@ For fine-grained control over logging context:
 use bedrock::logger::LogContext;
 
 {
-    let _ctx = LogContext::new("CustomContext");
+    let _bedrock_logger_ctx = LogContext::new("CustomContext");
     info!("This message has custom context");  // Logs: [CustomContext] This message has custom context
-} // Context automatically cleared when _ctx is dropped
+} // Context automatically cleared when _bedrock_logger_ctx is dropped
 ```
 
 ## 🐦‍🔥 Swift Bindings
