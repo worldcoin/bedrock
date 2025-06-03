@@ -8,7 +8,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class BedrockToolingTests {
-
     @Test
     fun testToolingDemoLogPrefixing() {
         // Test the ToolingDemo to verify log prefixing works
@@ -36,22 +35,25 @@ class BedrockToolingTests {
         assertTrue(result.contains("Successfully processed: auth_data_testuser"))
 
         // Empty username - InvalidInput
-        val emptyUsernameException = assertFailsWith<DemoException.InvalidInput> {
-            demo.demoAuthenticate("", "password")
-        }
+        val emptyUsernameException =
+            assertFailsWith<DemoException.InvalidInput> {
+                demo.demoAuthenticate("", "password")
+            }
         assertTrue(emptyUsernameException.message?.contains("Username cannot be empty") == true)
 
         // Wrong credentials - AuthenticationFailed
-        val wrongCredentialsException = assertFailsWith<DemoException.AuthenticationFailed> {
-            demo.demoAuthenticate("admin", "wrongpassword")
-        }
+        val wrongCredentialsException =
+            assertFailsWith<DemoException.AuthenticationFailed> {
+                demo.demoAuthenticate("admin", "wrongpassword")
+            }
         assertTrue(wrongCredentialsException.message?.contains("Authentication failed") == true)
         assertTrue(wrongCredentialsException.message?.contains("401") == true)
 
         // Slow user - NetworkTimeout
-        val timeoutException = assertFailsWith<DemoException.NetworkTimeout> {
-            demo.demoAuthenticate("slowuser", "password")
-        }
+        val timeoutException =
+            assertFailsWith<DemoException.NetworkTimeout> {
+                demo.demoAuthenticate("slowuser", "password")
+            }
         assertTrue(timeoutException.message?.contains("Network timeout") == true)
         assertTrue(timeoutException.message?.contains("30") == true)
     }
@@ -66,21 +68,24 @@ class BedrockToolingTests {
         assertEquals("Successfully processed: valid_input", result)
 
         // Empty input - Generic error
-        val emptyInputException = assertFailsWith<DemoException.Generic> {
-            demo.demoGenericOperation("")
-        }
+        val emptyInputException =
+            assertFailsWith<DemoException.Generic> {
+                demo.demoGenericOperation("")
+            }
         assertTrue(emptyInputException.message?.contains("Input cannot be empty") == true)
 
         // Network error - Generic error with anyhow context
-        val networkException = assertFailsWith<DemoException.Generic> {
-            demo.demoGenericOperation("network_error")
-        }
+        val networkException =
+            assertFailsWith<DemoException.Generic> {
+                demo.demoGenericOperation("network_error")
+            }
         assertTrue(networkException.message?.contains("Connection timed out") == true)
 
         // Parse error - Generic error with anyhow context
-        val parseException = assertFailsWith<DemoException.Generic> {
-            demo.demoGenericOperation("parse_error")
-        }
+        val parseException =
+            assertFailsWith<DemoException.Generic> {
+                demo.demoGenericOperation("parse_error")
+            }
         assertTrue(parseException.message?.contains("Failed to parse input as JSON") == true)
     }
 
@@ -94,21 +99,24 @@ class BedrockToolingTests {
         assertTrue(result.contains("Processed:"))
 
         // Empty operation - InvalidInput (strongly typed validation)
-        val emptyOperationException = assertFailsWith<DemoException.InvalidInput> {
-            demo.demoMixedOperation("", "data")
-        }
+        val emptyOperationException =
+            assertFailsWith<DemoException.InvalidInput> {
+                demo.demoMixedOperation("", "data")
+            }
         assertTrue(emptyOperationException.message?.contains("Operation cannot be empty") == true)
 
         // Unknown operation - InvalidInput (strongly typed validation)
-        val unknownOperationException = assertFailsWith<DemoException.InvalidInput> {
-            demo.demoMixedOperation("unknown", "data")
-        }
+        val unknownOperationException =
+            assertFailsWith<DemoException.InvalidInput> {
+                demo.demoMixedOperation("unknown", "data")
+            }
         assertTrue(unknownOperationException.message?.contains("Unknown operation") == true)
 
         // Process operation with trigger_error - Generic error (anyhow processing)
-        val processingException = assertFailsWith<DemoException.Generic> {
-            demo.demoMixedOperation("process", "trigger_error")
-        }
+        val processingException =
+            assertFailsWith<DemoException.Generic> {
+                demo.demoMixedOperation("process", "trigger_error")
+            }
         assertTrue(processingException.message?.contains("Operation failed") == true)
         assertTrue(processingException.message?.contains("Simulated processing failure") == true)
     }
