@@ -160,7 +160,7 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// This macro automatically:
 /// 1. Forwards the attribute to `#[uniffi::export]`
-/// 2. Injects `let _ctx = crate::logger::LogContext::new("StructName");` at the start of every `pub fn`
+/// 2. Injects `let _ctx = crate::primitives::logger::LogContext::new("StructName");` at the start of every `pub fn`
 /// 3. Extracts the struct/trait name from the impl block for context
 ///
 /// # Usage
@@ -236,7 +236,7 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
 fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
     // Create the logging context statement
     let context_stmt: Stmt = syn::parse_quote! {
-        let _ctx = crate::logger::LogContext::new(#type_name);
+        let _ctx = crate::primitives::logger::LogContext::new(#type_name);
     };
 
     // Insert at the beginning of the function body

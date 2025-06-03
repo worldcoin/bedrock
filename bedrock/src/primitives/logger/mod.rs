@@ -235,7 +235,7 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
 #[macro_export]
 macro_rules! trace {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::logger::get_context() {
+        if let Some(ctx) = $crate::primitives::logger::get_context() {
             log::trace!("{} {}", ctx, format_args!($($arg)*))
         } else {
             log::trace!($($arg)*)
@@ -247,7 +247,7 @@ macro_rules! trace {
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::logger::get_context() {
+        if let Some(ctx) = $crate::primitives::logger::get_context() {
             log::debug!("{} {}", ctx, format_args!($($arg)*))
         } else {
             log::debug!($($arg)*)
@@ -259,7 +259,7 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::logger::get_context() {
+        if let Some(ctx) = $crate::primitives::logger::get_context() {
             log::info!("{} {}", ctx, format_args!($($arg)*))
         } else {
             log::info!($($arg)*)
@@ -271,7 +271,7 @@ macro_rules! info {
 #[macro_export]
 macro_rules! warn {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::logger::get_context() {
+        if let Some(ctx) = $crate::primitives::logger::get_context() {
             log::warn!("{} {}", ctx, format_args!($($arg)*))
         } else {
             log::warn!($($arg)*)
@@ -283,7 +283,7 @@ macro_rules! warn {
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::logger::get_context() {
+        if let Some(ctx) = $crate::primitives::logger::get_context() {
             log::error!("{} {}", ctx, format_args!($($arg)*))
         } else {
             log::error!($($arg)*)

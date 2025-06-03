@@ -67,7 +67,7 @@ pub fn get_context() -> Option<String> {
 #[macro_export]
 macro_rules! with_log_context {
     ($module:expr => $block:block) => {{
-        let _ctx = $crate::logger::LogContext::new($module);
+        let _ctx = $crate::primitives::logger::LogContext::new($module);
         $block
     }};
 }
@@ -88,6 +88,6 @@ macro_rules! with_log_context {
 #[macro_export]
 macro_rules! set_log_context {
     ($module:expr) => {
-        $crate::logger::LogContext::new($module)
+        $crate::primitives::logger::LogContext::new($module)
     };
 }

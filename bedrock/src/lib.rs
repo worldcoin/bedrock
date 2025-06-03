@@ -23,10 +23,10 @@ pub mod tooling_demos;
 /// Reference: <https://github.com/safe-global/safe-smart-account>
 pub mod smart_account;
 
-/// Introduces low level primitives for the crypto wallet.
+/// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
-/// Introduces logging functionality that can be integrated with foreign language bindings.
-pub mod logger;
+// Re-export logger functionality for backward compatibility
+pub use primitives::logger;
 
 uniffi::setup_scaffolding!("bedrock");

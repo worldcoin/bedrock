@@ -1,6 +1,12 @@
 use crate::bedrock_export;
 use std::fmt::Display;
 
+/// Introduces logging functionality that can be integrated with foreign language bindings.
+pub mod logger;
+
+// Re-export the main logger functionality for easier access
+pub use logger::{set_logger, LogLevel, Logger};
+
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
 /// This is used to ensure that the hex string is properly formatted and the output is always prefixed with "0x".
