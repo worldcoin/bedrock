@@ -15,6 +15,7 @@ swift/local_build/
 # Swift build outputs
 *.xcframework/
 .swiftpm/
+.build/
 generated_swift/
 test_output.log
 

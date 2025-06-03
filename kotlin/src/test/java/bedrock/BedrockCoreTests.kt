@@ -2,34 +2,19 @@ package bedrock
 
 import uniffi.bedrock.SafeSmartAccount
 import uniffi.bedrock.SafeSmartAccountException
-import uniffi.bedrock.ToolingDemo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-class BedrockTests {
+class BedrockCoreTests {
     private val testPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
     private val testWalletAddress = "0x4564420674EA68fcc61b463C0494807C759d47e6"
     private val chainId: UInt = 10u // Optimism
 
     // No explicit library preload is necessary: UniFFI-generated bindings
     // load the native `bedrock` library on first access.
-
-    @Test
-    fun testToolingDemoLogPrefixing() {
-        // Test the ToolingDemo to verify log prefixing works
-        val demo = ToolingDemo()
-
-        // These calls should generate logs with [ToolingDemo] prefix
-        demo.logMessage("Testing log prefixing from Kotlin")
-        demo.testLogLevels()
-
-        val result = demo.getDemoResult()
-        assertTrue(result.contains("ToolingDemo"), "Result should contain the demo name")
-        assertTrue(result.contains("Demo result"), "Result should contain expected text")
-    }
 
     @Test
     fun testSafeSmartAccountCreation() {
@@ -131,4 +116,4 @@ class BedrockTests {
         assertTrue(sig.isNotEmpty(), "Signature for unicode message should not be empty")
         assertEquals(132, sig.length, "Signature for unicode message should be 132 characters")
     }
-}
+} 
