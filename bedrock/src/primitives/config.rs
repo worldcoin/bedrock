@@ -1,9 +1,9 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::bedrock_export;
 
 /// Global configuration for Bedrock
-static CONFIG_INSTANCE: OnceLock<BedrockConfig> = OnceLock::new();
+static CONFIG_INSTANCE: OnceLock<Arc<BedrockConfig>> = OnceLock::new();
 
 /// Represents the environment for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -86,7 +86,7 @@ impl BedrockConfig {
 pub fn init_bedrock_config(environment: BedrockEnvironment) {
     let config = BedrockConfig::new(environment);
 
-    match CONFIG_INSTANCE.set(config) {
+    match CONFIG_INSTANCE.set(Arc::new(config)) {
         Ok(()) => {
             crate::info!(
                 "Bedrock config initialized with environment: {}",
@@ -118,6 +118,7 @@ pub fn init_bedrock_config(environment: BedrockEnvironment) {
 ///     print("Running in production environment")
 /// }
 /// ```
+#[uniffi::export]
 #[must_use]
 pub fn current_environment() -> BedrockEnvironment {
     CONFIG_INSTANCE.get().map_or_else(
@@ -125,7 +126,7 @@ pub fn current_environment() -> BedrockEnvironment {
             crate::warn!("Bedrock config not initialized, defaulting to Production");
             BedrockEnvironment::Production
         },
-        BedrockConfig::environment,
+        |config| config.environment(),
     )
 }
 
@@ -143,15 +144,17 @@ pub fn current_environment() -> BedrockEnvironment {
 ///     print("Environment: \(config.environment())")
 /// }
 /// ```
+#[uniffi::export]
 #[must_use]
-pub fn get_config() -> Option<&'static BedrockConfig> {
-    CONFIG_INSTANCE.get()
+pub fn get_config() -> Option<Arc<BedrockConfig>> {
+    CONFIG_INSTANCE.get().cloned()
 }
 
 /// Checks if the Bedrock configuration has been initialized.
 ///
 /// # Returns
 /// true if the config has been initialized, false otherwise.
+#[uniffi::export]
 #[must_use]
 pub fn is_initialized() -> bool {
     CONFIG_INSTANCE.get().is_some()
