@@ -18,7 +18,7 @@ crate-type = ["lib", "staticlib", "cdylib"]
 name = "bedrock"
 
 [dependencies]
-alloy = { version = "1.0.6", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
+alloy = { version = "1.0.9", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
 anyhow = "1.0"
 bedrock-macros = { path = "../bedrock-macros" }
 hex = "0.4.3"
@@ -33,7 +33,7 @@ thiserror = "2.0.12"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 
 [dev-dependencies]
-alloy = { version = "1.0.6", default-features = false, features = ["json", "contract", "node-bindings", "reqwest-rustls-tls"] }
+alloy = { version = "1.0.9", default-features = false, features = ["json", "contract", "node-bindings", "reqwest-rustls-tls"] }
 dotenvy = "0.15.7"
-tokio = "1.45.0"
+tokio = "1.45.1"
 tokio-test = "0.4.4"
