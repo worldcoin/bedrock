@@ -7,6 +7,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
+// Foreign Tests for tooling functionality (i.e. logging and error handling)
+// The demo structs are only available in Foreign Tests and are not available in built binaries.
+
 class BedrockToolingTests {
     @Test
     fun testToolingDemoLogPrefixing() {

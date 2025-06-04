@@ -172,21 +172,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn test_logging_context_injection() {
-        // Create a SafeSmartAccount instance
-        let account = SafeSmartAccount::new(
-            hex::encode(PrivateKeySigner::random().to_bytes()),
-            "0x0000000000000000000000000000000000000042",
-        )
-        .unwrap();
-
-        // Call a method that should automatically have logging context injected
-        // The personal_sign method should have [SafeSmartAccount] context
-        let result = account.personal_sign(1, "test message".to_string());
-
-        // The method should work normally despite the logging context injection
-        assert!(result.is_ok());
-    }
 }

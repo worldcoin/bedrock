@@ -2,11 +2,21 @@
 
 Foundational library which powers World App's crypto wallet.
 
-## Local Development & Contributing
+## 🧱 Local Development & Contributing
 
 Review our [CONTRIBUTING](CONTRIBUTING.md) guide. Including details on how to run this project locally.
 
+## 🐦‍🔥 Swift Bindings
+
+Bedrock ships with foreign bindings for native Swift. All details can be found in the [/swift](./swift/README.md) folder.
+
+## 🧬 Kotlin Bindings
+
+Bedrock ships with foreign bindings for native Kotlin. All details can be found in the [/kotlin](./kotlin/README.md) folder.
+
 ## 🛠️ Error Handling & Logging Tooling
+
+Each module should implement its own error enum. See [tooling_tests](/bedrock/src/primitives/tooling_tests.rs) for example references.
 
 ### `#[bedrock_error]` Macro
 
@@ -77,11 +87,3 @@ use bedrock::logger::LogContext;
     info!("This message has custom context");  // Logs: [CustomContext] This message has custom context
 } // Context automatically cleared when _bedrock_logger_ctx is dropped
 ```
-
-## 🐦‍🔥 Swift Bindings
-
-Bedrock ships with foreign bindings for native Swift. All details can be found in the [/swift](./swift/README.md) folder.
-
-## 🧬 Kotlin Bindings
-
-Bedrock ships with foreign bindings for native Kotlin. All details can be found in the [/kotlin](./kotlin/README.md) folder.

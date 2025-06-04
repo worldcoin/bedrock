@@ -1,6 +1,7 @@
 [package]
 name = "bedrock-macros"
 description = "Macros for bedrock error handling and UniFFI integration"
+publish = false
 
 version.workspace = true
 edition.workspace = true

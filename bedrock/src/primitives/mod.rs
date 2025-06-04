@@ -4,6 +4,11 @@ use std::fmt::Display;
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
 
+/// Introduces test elements to ensure tooling (logging and error handling) is working as expected.
+/// The elements in this module are only used in Foreign Tests and are not available in built binaries.
+#[cfg(feature = "tooling_tests")]
+pub mod tooling_tests;
+
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
 /// This is used to ensure that the hex string is properly formatted and the output is always prefixed with "0x".

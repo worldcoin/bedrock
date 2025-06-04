@@ -2,6 +2,9 @@ import XCTest
 
 @testable import Bedrock
 
+// Foreign Tests for tooling functionality (i.e. logging and error handling)
+// The demo structs are only available in Foreign Tests and are not available in built binaries.
+
 final class BedrockToolingTests: XCTestCase {
 
     func testToolingDemoLogPrefixing() throws {
