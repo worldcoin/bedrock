@@ -17,6 +17,10 @@ categories.workspace = true
 crate-type = ["lib", "staticlib", "cdylib"]
 name = "bedrock"
 
+[features]
+default = ["tooling_tests"]
+tooling_tests = []
+
 [dependencies]
 alloy = { version = "1.0.9", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
 anyhow = "1.0"
@@ -37,7 +41,3 @@ alloy = { version = "1.0.9", default-features = false, features = ["json", "cont
 dotenvy = "0.15.7"
 tokio = "1.45.1"
 tokio-test = "0.4.4"
-
-[features]
-default = ["tooling_tests"]
-tooling_tests = []
