@@ -14,9 +14,6 @@
 // Import and re-export the macros globally
 pub use bedrock_macros::{bedrock_error, bedrock_export};
 
-/// Demonstrates tooling functionality like automatic log prefixing with `bedrock_export`.
-pub mod tooling_demos;
-
 /// Introduces low level operations with the [Safe Smart Account](https://safe.global/), including
 /// signing messages (ERC-191) and typed data (EIP-712).
 ///

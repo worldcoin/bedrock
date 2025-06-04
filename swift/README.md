@@ -15,13 +15,13 @@ To build the Swift project for release/distribution:
     ./swift/build_swift.sh
 ```
 
-### Building for Local iOS Development
+### Testing `Bedrock` locally
 
 To build a Swift package that can be imported locally via Swift Package Manager:
 
 ```bash
     # run from the root project directory
-    ./swift/build_for_local_ios.sh
+    ./swift/local_swift.sh
 ```
 
 This creates a complete Swift package in the `swift/local_build/` directory that you can import in your iOS project:
