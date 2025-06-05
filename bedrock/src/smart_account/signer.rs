@@ -96,9 +96,6 @@ impl SafeSmartAccount {
     ///
     /// This is equivalent to the contract's `getMessageHashForSafe` method (including also the `encodeMessageDataForSafe` logic).
     /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/handler/CompatibilityFallbackHandler.sol#L68>
-    ///
-    /// This method replaces Alloy's built-in `eip712_signing_hash` to apply the domain separator from the Safe contract.
-    /// Reference: <https://github.com/alloy-rs/core/blob/b20e2326796827cbc5ca9ff7bd037fab9ba37e93/crates/dyn-abi/src/eip712/typed_data.rs#L212>
     fn get_message_hash_for_safe<T: AsRef<[u8]>>(
         &self,
         message: T,
@@ -117,9 +114,16 @@ impl SafeSmartAccount {
     /// Computes the digest for a specific EIP-712 message to be signed by the Safe Smart Account.
     ///
     /// This is used to sign personal messages (EIP-191; `0x45`), sign typed data (EIP-191; `0x01`) and sign transaction data.
-    fn eip_712_hash(
+    ///
+    /// This method replaces Alloy's built-in `eip712_signing_hash` to apply the domain separator specifically for the Safe Smart Account.
+    /// Reference: <https://github.com/alloy-rs/core/blob/b20e2326796827cbc5ca9ff7bd037fab9ba37e93/crates/dyn-abi/src/eip712/typed_data.rs#L212>
+    ///
+    /// Spec Reference: <https://eips.ethereum.org/EIPS/eip-712>
+    ///
+    /// Should not be called directly. Use `sign_message_eip_191_prefixed`, `sign_message` or `sign_digest` instead.
+    pub(crate) fn eip_712_hash(
         &self,
-        hash: FixedBytes<32>,
+        structured_data_hash: FixedBytes<32>,
         chain_id: u32,
         domain_separator_address: Option<Address>,
     ) -> FixedBytes<32> {
@@ -130,7 +134,7 @@ impl SafeSmartAccount {
             self.get_domain_separator(chain_id, domain_separator_address)
                 .as_slice(),
         );
-        buf[34..66].copy_from_slice(hash.as_slice());
+        buf[34..66].copy_from_slice(structured_data_hash.as_slice());
         keccak256(buf)
     }
 
@@ -158,18 +162,6 @@ impl SafeSmartAccount {
         ]);
         let encoded = domain_separator.abi_encode();
         keccak256(encoded)
-    }
-}
-
-#[cfg(test)]
-impl SafeSmartAccount {
-    pub(crate) fn eip_712_hash_for_tests(
-        &self,
-        hash: FixedBytes<32>,
-        chain_id: u32,
-        domain_separator_address: Option<Address>,
-    ) -> FixedBytes<32> {
-        self.eip_712_hash(hash, chain_id, domain_separator_address)
     }
 }
 

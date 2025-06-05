@@ -338,11 +338,8 @@ mod tests {
 
         let smart_account = SafeSmartAccount::random();
 
-        let safe_tx_hash = smart_account.eip_712_hash_for_tests(
-            hash,
-            480,
-            Some(*GNOSIS_SAFE_4337_MODULE),
-        );
+        let safe_tx_hash =
+            smart_account.eip_712_hash(hash, 480, Some(*GNOSIS_SAFE_4337_MODULE));
 
         let expected_hash =
             "f56239eeacb960d469a19f397dd6dce1b0ca6c9553aeff6fc72100cbddbfdb1a";
