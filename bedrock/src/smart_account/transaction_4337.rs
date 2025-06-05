@@ -15,6 +15,8 @@ use std::{str::FromStr, sync::LazyLock};
 
 /// A pseudo-transaction object for EIP-4337. Used to execute transactions through the Safe Smart Account.
 ///
+/// This object is expected to be initialized from foreign languages.
+///
 /// Reference: <https://www.erc4337.io/docs/understanding-ERC-4337/user-operation>
 ///
 /// Note the types of this struct are types that can be lifted from foreign languages to be then parsed and validated.
@@ -52,7 +54,6 @@ static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
 });
 
 /// Multichain address for the v0.3.0 `Safe4337Module`
-#[allow(dead_code)] // fixme
 pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x75cf11467937ce3f2f357ce24ffc3dbf8fd5c226")
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")

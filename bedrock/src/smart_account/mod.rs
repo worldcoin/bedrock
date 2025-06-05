@@ -225,4 +225,35 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_sign_4337_user_op() {
+        let safe = SafeSmartAccount::new(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let chain_id = 10;
+        let safe_address = "0x4564420674EA68fcc61b463C0494807C759d47e6".to_string();
+        let user_op = UserOperation {
+          sender:safe_address,
+          nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
+          call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
+          signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+          call_gas_limit: "0xabb8".to_string(),
+          verification_gas_limit: "0xfa07".to_string(),
+          pre_verification_gas: "0x8e4d78".to_string(),
+          max_fee_per_gas: "0x1af6f".to_string(),
+          max_priority_fee_per_gas: "0x1adb0".to_string(),
+          paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
+          paymaster_verification_gas_limit: "0x7415".to_string(),
+          paymaster_post_op_gas_limit: "0x".to_string(),
+          paymaster_data: Some( "000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
+          factory: None,
+          factory_data: None,
+      };
+
+        assert_eq!(safe.sign_4337_op(&user_op, chain_id).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
+    }
 }
