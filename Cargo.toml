@@ -6,7 +6,11 @@ resolver = "2"
 version = "0.0.1"
 license = "MIT"
 edition = "2021"
-authors = ["Paolo D'Amico <paolodamico@users.noreply.github.com", "Luke Mann <luke@mann.xyz>", "Seva Zhidkov <zhidkovseva@gmail.com>"]
+authors = [
+    "Paolo D'Amico <paolodamico@users.noreply.github.com",
+    "Luke Mann <luke@mann.xyz>",
+    "Seva Zhidkov <zhidkovseva@gmail.com>",
+]
 readme = "./README.md"
 homepage = "https://toolsforhumanity.com/world-app" # TODO: Update to specific Bedrock page
 repository = "https://github.com/worldcoin/bedrock"
