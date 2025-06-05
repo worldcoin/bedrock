@@ -4,24 +4,23 @@ use alloy::{
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
+use signer::SafeSmartAccountSigner;
 
 use crate::primitives::{HexEncodedData, PrimitiveError};
+use crate::{bedrock_export, debug, error, info};
 
 mod signer;
 
-pub use signer::SafeSmartAccountSigner;
-
 /// Errors that can occur when working with Safe Smart Accounts.
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+#[crate::bedrock_error]
 pub enum SafeSmartAccountError {
-    /// Failed to decode hex-encoded secret into k256 signer.
+    /// Failed to decode a hex-encoded secret key into a k256 signer.
     #[error("failed to decode hex-encoded secret into k256 signer: {0}")]
     KeyDecoding(String),
-    /// Signing operation failed.
+    /// Error occurred during the signing process.
     #[error(transparent)]
     Signing(#[from] alloy::signers::Error),
-    /// Failed to parse address.
+    /// Failed to parse an Ethereum address string.
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
     /// Failed to encode data to a specific format.
@@ -42,7 +41,7 @@ pub struct SafeSmartAccount {
     wallet_address: Address,
 }
 
-#[uniffi::export]
+#[bedrock_export]
 impl SafeSmartAccount {
     /// Initializes a new `SafeSmartAccount` instance with the given EOA signing key.
     ///
@@ -61,6 +60,11 @@ impl SafeSmartAccount {
         private_key: String,
         wallet_address: &str,
     ) -> Result<Self, SafeSmartAccountError> {
+        debug!(
+            "Initializing SafeSmartAccount with wallet address: {}",
+            wallet_address
+        );
+
         let signer = LocalSigner::from_slice(
             &hex::decode(private_key)
                 .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
@@ -70,6 +74,11 @@ impl SafeSmartAccount {
         let wallet_address = Address::from_str(wallet_address).map_err(|_| {
             SafeSmartAccountError::AddressParsing(wallet_address.to_string())
         })?;
+
+        info!(
+            "Successfully initialized SafeSmartAccount for wallet: {}",
+            wallet_address
+        );
 
         Ok(Self {
             signer,
@@ -162,10 +171,5 @@ mod tests {
                 format!("failed to parse address: {invalid_address}")
             );
         }
-    }
-
-    #[test]
-    fn test_personal_sign() {
-        // todo: integration test with contract
     }
 }

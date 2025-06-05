@@ -1,4 +1,13 @@
+use crate::bedrock_export;
 use std::fmt::Display;
+
+/// Introduces logging functionality that can be integrated with foreign language bindings.
+pub mod logger;
+
+/// Introduces test elements to ensure tooling (logging and error handling) is working as expected.
+/// The elements in this module are only used in Foreign Tests and are not available in built binaries.
+#[cfg(feature = "tooling_tests")]
+pub mod tooling_tests;
 
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
@@ -13,7 +22,7 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
 pub struct HexEncodedData(String);
 
-#[uniffi::export]
+#[bedrock_export]
 impl HexEncodedData {
     /// Initializes a new `HexEncodedData` from a hex string.
     ///

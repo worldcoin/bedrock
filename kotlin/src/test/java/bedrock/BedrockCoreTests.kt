@@ -8,7 +8,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-class BedrockTests {
+class BedrockCoreTests {
     private val testPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
     private val testWalletAddress = "0x4564420674EA68fcc61b463C0494807C759d47e6"
     private val chainId: UInt = 10u // Optimism

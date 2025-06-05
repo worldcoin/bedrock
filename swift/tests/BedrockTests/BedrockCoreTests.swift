@@ -2,7 +2,7 @@ import XCTest
 
 @testable import Bedrock
 
-final class BedrockTests: XCTestCase {
+final class BedrockCoreTests: XCTestCase {
 
     // Well-known Anvil test private key and address
     let testPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
@@ -186,4 +186,4 @@ final class BedrockTests: XCTestCase {
         XCTAssertEqual(
             signature.count, 132, "Signature for unicode message should be 132 characters")
     }
-}
+} 

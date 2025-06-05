@@ -17,8 +17,8 @@ BASE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_PATH="$BASE_PATH/tests"
 SOURCES_PATH_NAME="/Sources/Bedrock/"
 
-echo -e "${BLUE}🔨 Step 1: Building Swift bindings with build_swift.sh${NC}"
-# Run the existing build_swift.sh script
+echo -e "${BLUE}🔨 Step 1: Building Swift bindings${NC}"
+# Run the build_swift.sh script
 bash "$BASE_PATH/build_swift.sh"
 
 # Check if the XCFramework was created
@@ -28,16 +28,16 @@ if [ ! -d "$BASE_PATH/Bedrock.xcframework" ]; then
 fi
 echo -e "${GREEN}✅ Swift bindings built${NC}"
 
-echo -e "${BLUE}📦 Step 2: Copying generated Swift files to package${NC}"
+echo -e "${BLUE}📦 Step 2: Copying generated Swift files to test package${NC}"
 # Ensure the destination directory exists
 mkdir -p "$TESTS_PATH/$SOURCES_PATH_NAME"
 
-# Copy the generated Swift file to the package
+# Copy the generated Swift file to the test package
 if [ -f "$BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift" ]; then
     cp "$BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift" "$TESTS_PATH/$SOURCES_PATH_NAME"
-    echo -e "${GREEN}✅ Swift bindings copied to package${NC}"
+    echo -e "${GREEN}✅ Swift bindings copied to test package${NC}"
 else
-    echo -e "${RED}✗ Could not find generated Swift bindings${NC}"
+    echo -e "${RED}✗ Could not find generated Swift bindings at: $BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift${NC}"
     exit 1
 fi
 
