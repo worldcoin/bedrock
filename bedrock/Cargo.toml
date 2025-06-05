@@ -22,7 +22,7 @@ default = ["tooling_tests"]
 tooling_tests = []
 
 [dependencies]
-alloy = { version = "1.0.9", default-features = false, features = ["dyn-abi", "signer-local", "sol-types"] }
+alloy = { version = "1.0.9", default-features = false, features = ["dyn-abi", "eip712", "signer-local", "sol-types"] }
 anyhow = "1.0"
 bedrock-macros = { path = "../bedrock-macros" }
 hex = "0.4.3"

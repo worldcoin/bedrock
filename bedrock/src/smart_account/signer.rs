@@ -162,6 +162,18 @@ impl SafeSmartAccount {
 }
 
 #[cfg(test)]
+impl SafeSmartAccount {
+    pub(crate) fn eip_712_hash_for_tests(
+        &self,
+        hash: FixedBytes<32>,
+        chain_id: u32,
+        domain_separator_address: Option<Address>,
+    ) -> FixedBytes<32> {
+        self.eip_712_hash(hash, chain_id, domain_separator_address)
+    }
+}
+
+#[cfg(test)]
 mod tests {
 
     use super::*;

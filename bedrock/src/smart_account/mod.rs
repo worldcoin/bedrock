@@ -6,10 +6,20 @@ use alloy::{
 };
 use signer::SafeSmartAccountSigner;
 
-use crate::primitives::{HexEncodedData, PrimitiveError};
-use crate::{bedrock_export, debug, error, info};
+use crate::{
+    bedrock_export, debug, error, info,
+    smart_account::transaction_4337::GNOSIS_SAFE_4337_MODULE,
+};
+use crate::{
+    primitives::HexEncodedData,
+    smart_account::transaction_4337::{EncodedSafeOpStruct, UserOperation},
+};
 
+/// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
 mod signer;
+
+/// Enables EIP-4337 transaction crafting and signing
+mod transaction_4337;
 
 /// Errors that can occur when working with Safe Smart Accounts.
 #[crate::bedrock_error]
@@ -26,6 +36,14 @@ pub enum SafeSmartAccountError {
     /// Failed to encode data to a specific format.
     #[error("failed to encode: {0}")]
     Encoding(String),
+    /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
+    #[error("invalid input on {attribute}: {message}")]
+    InvalidInput {
+        /// The name of the attribute that was invalid.
+        attribute: &'static str,
+        /// Explicit failure message for the attribute validation.
+        message: String,
+    },
 }
 
 /// A Safe Smart Account (previously Gnosis Safe) is the representation of a Safe smart contract.
@@ -101,18 +119,53 @@ impl SafeSmartAccount {
         message: String,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
+        Ok(signature.into())
+    }
 
-        let signature: HexEncodedData =
-            signature
-                .to_string()
-                .try_into()
-                .map_err(|e: PrimitiveError| {
-                    SafeSmartAccountError::Encoding(format!(
-                        "signature encoding error: {e}"
-                    ))
-                })?;
+    /// Crafts and signs a 4337 user operation.
+    ///
+    /// # Arguments
+    /// - `user_operation`: The user operation to sign.
+    /// - `chain_id`: The chain ID of the chain where the user operation is being signed.
+    ///
+    /// # Errors
+    /// - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
+    /// - Will throw an error if the signature process unexpectedly fails.
+    ///
+    pub fn sign_4337_op(
+        &self,
+        user_operation: &UserOperation,
+        chain_id: u32,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let user_op: EncodedSafeOpStruct = user_operation.try_into()?;
 
-        Ok(signature)
+        let signature = self.sign_digest(
+            user_op.into_transaction_hash(),
+            chain_id,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        )?;
+
+        Ok(signature.into())
+    }
+}
+
+#[cfg(test)]
+impl SafeSmartAccount {
+    /// Creates a new `SafeSmartAccount` instance with a random EOA signing key.
+    ///
+    /// Only for test usage.
+    ///
+    /// # Panics
+    /// - Will panic if the wallet address cannot be computed correctly.
+    #[must_use]
+    pub fn random() -> Self {
+        let signer = LocalSigner::random();
+        let wallet_address =
+            Address::from_str("0x0000000000000000000000000000000000000000").unwrap(); // TODO: compute address correctly
+        Self {
+            signer,
+            wallet_address,
+        }
     }
 }
 
