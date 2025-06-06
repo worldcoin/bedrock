@@ -22,21 +22,36 @@ use std::{str::FromStr, sync::LazyLock};
 /// Note the types of this struct are types that can be lifted from foreign languages to be then parsed and validated.
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct UserOperation {
-    pub sender: String,                   /* Address */
-    pub nonce: String,                    /* U256 */
-    pub call_data: String,                /* Bytes */
-    pub call_gas_limit: String,           /* U128 */
-    pub verification_gas_limit: String,   /* U128 */
-    pub pre_verification_gas: String,     /* U256 */
-    pub max_fee_per_gas: String,          /* U128 */
-    pub max_priority_fee_per_gas: String, /* U128 */
-    pub paymaster: Option<String /* Address */>,
-    pub paymaster_verification_gas_limit: String, /* U128 */
-    pub paymaster_post_op_gas_limit: String,      /* U128 */
-    pub paymaster_data: Option<String /* Bytes */>,
-    pub signature: String, /* Bytes */
-    pub factory: Option<String /* Address */>,
-    pub factory_data: Option<String /* Bytes */>,
+    /// The address of the smart contract account (Solidity type: `address`)
+    pub sender: String,
+    /// Anti-replay protection; also used as the salt for first-time account creation (Solidity type: `uint256`)
+    pub nonce: String,
+    /// Data that's passed to the sender for execution (Solidity type: `bytes`)
+    pub call_data: String,
+    /// Gas limit for execution phase (Solidity type: `uint128`)
+    pub call_gas_limit: String,
+    /// Gas limit for verification phase (Solidity type: `uint128`)
+    pub verification_gas_limit: String,
+    /// Gas to compensate the bundler (Solidity type: `uint256`)
+    pub pre_verification_gas: String,
+    /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559)'s `max_fee_per_gas`) (Solidity type: `uint256`)
+    pub max_fee_per_gas: String,
+    /// Maximum priority fee per gas (Solidity type: `uint128`)
+    pub max_priority_fee_per_gas: String,
+    /// Paymaster contact address (Solidity type: `address`)
+    pub paymaster: Option<String>,
+    /// Paymaster verification gas limit (Solidity type: `uint128`)
+    pub paymaster_verification_gas_limit: String,
+    /// Paymaster post-operation gas limit (Solidity type: `uint128`)
+    pub paymaster_post_op_gas_limit: String,
+    /// Paymaster additional data for verification (Solidity type: `bytes`)
+    pub paymaster_data: Option<String>,
+    /// Used to validate a `UserOperation` along with the nonce during verification (Solidity type: `bytes`)
+    pub signature: String,
+    /// Factory address (Solidity type: `address`)
+    pub factory: Option<String>,
+    /// Factory data (Solidity type: `bytes`)
+    pub factory_data: Option<String>,
 }
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>

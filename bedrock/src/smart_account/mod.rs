@@ -11,8 +11,7 @@ use crate::{
     smart_account::transaction_4337::GNOSIS_SAFE_4337_MODULE,
 };
 use crate::{
-    primitives::HexEncodedData,
-    smart_account::transaction_4337::{EncodedSafeOpStruct, UserOperation},
+    primitives::HexEncodedData, smart_account::transaction_4337::EncodedSafeOpStruct,
 };
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
@@ -20,6 +19,7 @@ mod signer;
 
 /// Enables EIP-4337 transaction crafting and signing
 mod transaction_4337;
+pub use transaction_4337::UserOperation;
 
 /// Errors that can occur when working with Safe Smart Accounts.
 #[crate::bedrock_error]
@@ -132,6 +132,40 @@ impl SafeSmartAccount {
     /// - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
     /// - Will throw an error if the signature process unexpectedly fails.
     ///
+    /// # Examples
+    /// ```rust
+    /// use bedrock::smart_account::{UserOperation, SafeSmartAccount};
+    ///
+    /// let safe = SafeSmartAccount::new(
+    ///     // this is Anvil's default private key, it is a test secret
+    ///     "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string(),
+    ///     "0x4564420674EA68fcc61b463C0494807C759d47e6",
+    /// )
+    /// .unwrap();
+    ///
+    /// // This would normally be crafted by the user, or requested by Mini Apps.
+    /// let user_op = UserOperation {
+    ///      sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+    ///     nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
+    ///     call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
+    ///     signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+    ///     call_gas_limit: "0xabb8".to_string(),
+    ///     verification_gas_limit: "0xfa07".to_string(),
+    ///     pre_verification_gas: "0x8e4d78".to_string(),
+    ///     max_fee_per_gas: "0x1af6f".to_string(),
+    ///     max_priority_fee_per_gas: "0x1adb0".to_string(),
+    ///     paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
+    ///     paymaster_verification_gas_limit: "0x7415".to_string(),
+    ///     paymaster_post_op_gas_limit: "0x".to_string(),
+    ///     paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
+    ///     factory: None,
+    ///     factory_data: None,
+    /// };
+    ///
+    /// let signature = safe.sign_4337_op(&user_op, 480).unwrap();
+    ///
+    /// println!("Signature: {}", signature.to_hex_string());
+    /// ```
     pub fn sign_4337_op(
         &self,
         user_operation: &UserOperation,
