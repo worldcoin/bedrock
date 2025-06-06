@@ -2,7 +2,6 @@ name: Initiate Release
 description: "Initiates a release of the library by creating a PR that bumps the version."
 
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       bump_type:
@@ -35,8 +34,7 @@ jobs:
       - name: Calculate new version
         id: version
         env:
-          # BUMP_TYPE: ${{ github.event.inputs.bump_type }}
-          BUMP_TYPE: patch
+          BUMP_TYPE: ${{ github.event.inputs.bump_type }}
         run: |
           # Get current version from workspace package in Cargo.toml
           CURRENT_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.workspace_members[0]' | cut -d '#' -f2)
@@ -109,7 +107,8 @@ jobs:
           RELEASE_NOTES: ${{ steps.release_notes.outputs.release_notes }}
         run: |        
           # Create a temporary file with the new changelog entry
-          echo "## [$NEW_VERSION] - $(date +%Y-%m-%d)" > temp_changelog.md
+          echo "\n\n" > temp_changelog.md
+          echo "## [$NEW_VERSION] - $(date +%Y-%m-%d)" >> temp_changelog.md
           echo "" >> temp_changelog.md
           echo "$RELEASE_NOTES" >> temp_changelog.md
           echo "" >> temp_changelog.md
