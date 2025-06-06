@@ -103,6 +103,22 @@ jobs:
           echo "$NOTES" >> "$GITHUB_OUTPUT"
           echo "DELIM" >> "$GITHUB_OUTPUT"
 
+      - name: Update CHANGELOG.md
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          RELEASE_NOTES: ${{ steps.release_notes.outputs.release_notes }}
+        run: |        
+          # Create a temporary file with the new changelog entry
+          echo "## [$NEW_VERSION] - $(date +%Y-%m-%d)" > temp_changelog.md
+          echo "" >> temp_changelog.md
+          echo "$RELEASE_NOTES" >> temp_changelog.md
+          echo "" >> temp_changelog.md
+          
+          sed '1,/^# Changelog/r temp_changelog.md' CHANGELOG.md > new_changelog.md
+          
+          mv new_changelog.md CHANGELOG.md
+          rm temp_changelog.md
+
       - name: Get branch name
         id: branch_name
         env:
@@ -132,6 +148,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git add Cargo.toml
           git add Cargo.lock
+          git add CHANGELOG.md
           git commit -m "Bump version to $NEW_VERSION"
           git push origin "$BRANCH_NAME"
 
