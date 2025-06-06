@@ -173,7 +173,7 @@ class BedrockToolingTests {
     @Test
     fun testBedrockConfigInitialization() {
         // Initialize config with staging environment
-        uniffi.bedrock.init(uniffi.bedrock.BedrockEnvironment.STAGING)
+        uniffi.bedrock.setConfig(uniffi.bedrock.BedrockEnvironment.STAGING)
 
         // Verify current environment is staging
         val config = uniffi.bedrock.getConfig()
@@ -183,16 +183,8 @@ class BedrockToolingTests {
         // Verify config is initialized
         assertTrue(uniffi.bedrock.isInitialized(), "Config should be initialized")
 
-        // Get config and verify environment
-        val config = uniffi.bedrock.getConfig()
-        if (config != null) {
-            assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, config.environment(), "Config environment should be staging")
-        } else {
-            throw AssertionError("Config should be available after initialization")
-        }
-
         // Try to initialize again - should be ignored (check logs for warning)
-        uniffi.bedrock.init(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
+        uniffi.bedrock.setConfig(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
 
         // Environment should still be staging
         val configAfterSecondInit = uniffi.bedrock.getConfig()

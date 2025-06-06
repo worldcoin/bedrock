@@ -197,28 +197,28 @@ final class BedrockToolingTests: XCTestCase {
     
     func testBedrockConfigInitialization() throws {
         // Initialize config with staging environment
-        Bedrock.init(environment: .staging)
+        setConfig(environment: .staging)
         
         // Verify current environment is staging
-        let config = Bedrock.getConfig()
+        let config = getConfig()
         XCTAssertNotNil(config, "Config should be available after initialization")
         XCTAssertEqual(config?.environment(), .staging, "Environment should be staging after initialization")
         
         // Verify config is initialized
-        XCTAssertTrue(Bedrock.isInitialized(), "Config should be initialized")
+        XCTAssertTrue(isInitialized(), "Config should be initialized")
         
         // Get config and verify environment
-        if let config = Bedrock.getConfig() {
+        if let config = getConfig() {
             XCTAssertEqual(config.environment(), .staging, "Config environment should be staging")
         } else {
             XCTFail("Config should be available after initialization")
         }
         
         // Try to initialize again - should be ignored (check logs for warning)
-        Bedrock.init(environment: .production)
+        setConfig(environment: .production)
         
         // Environment should still be staging
-        let configAfterSecondInit = Bedrock.getConfig()
+        let configAfterSecondInit = getConfig()
         XCTAssertEqual(configAfterSecondInit?.environment(), .staging, "Environment should remain staging after second init attempt")
     }
     
