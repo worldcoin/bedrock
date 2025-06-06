@@ -5,6 +5,7 @@ import uniffi.bedrock.ToolingDemo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 // Foreign Tests for tooling functionality (i.e. logging and error handling)
@@ -175,8 +176,9 @@ class BedrockToolingTests {
         uniffi.bedrock.init(uniffi.bedrock.BedrockEnvironment.STAGING)
 
         // Verify current environment is staging
-        val currentEnv = uniffi.bedrock.currentEnvironment()
-        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, currentEnv, "Environment should be staging after initialization")
+        val config = uniffi.bedrock.getConfig()
+        assertNotNull(config, "Config should be available after initialization")
+        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, config.environment(), "Environment should be staging after initialization")
 
         // Verify config is initialized
         assertTrue(uniffi.bedrock.isInitialized(), "Config should be initialized")
@@ -193,8 +195,8 @@ class BedrockToolingTests {
         uniffi.bedrock.init(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
 
         // Environment should still be staging
-        val envAfterSecondInit = uniffi.bedrock.currentEnvironment()
-        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, envAfterSecondInit, "Environment should remain staging after second init attempt")
+        val configAfterSecondInit = uniffi.bedrock.getConfig()
+        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, configAfterSecondInit?.environment(), "Environment should remain staging after second init attempt")
     }
 
     @Test

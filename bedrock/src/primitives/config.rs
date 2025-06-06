@@ -99,37 +99,6 @@ pub fn init(environment: BedrockEnvironment) {
     }
 }
 
-/// Gets the current Bedrock environment.
-///
-/// # Returns
-/// The current environment if config has been initialized, otherwise returns Production as a safe default.
-///
-/// # Examples
-///
-/// ## Swift
-///
-/// ```swift
-/// let currentEnv = Bedrock.currentEnvironment()
-///
-/// switch currentEnv {
-/// case .staging:
-///     print("Running in staging environment")
-/// case .production:
-///     print("Running in production environment")
-/// }
-/// ```
-#[uniffi::export]
-#[must_use]
-pub fn current_environment() -> BedrockEnvironment {
-    CONFIG_INSTANCE.get().map_or_else(
-        || {
-            crate::warn!("Bedrock config not initialized, defaulting to Production");
-            BedrockEnvironment::Production
-        },
-        |config| config.environment(),
-    )
-}
-
 /// Gets a reference to the global Bedrock configuration.
 ///
 /// # Returns
