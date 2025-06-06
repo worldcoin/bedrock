@@ -166,4 +166,44 @@ class BedrockToolingTests {
             assertTrue(error.message?.isNotEmpty() == true, "Error message should not be empty")
         }
     }
+
+    // MARK: - BedrockConfig Tests
+
+    @Test
+    fun testBedrockConfigInitialization() {
+        // Initialize config with staging environment
+        uniffi.bedrock.initBedrockConfig(uniffi.bedrock.BedrockEnvironment.STAGING)
+
+        // Verify current environment is staging
+        val currentEnv = uniffi.bedrock.currentEnvironment()
+        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, currentEnv, "Environment should be staging after initialization")
+
+        // Verify config is initialized
+        assertTrue(uniffi.bedrock.isInitialized(), "Config should be initialized")
+
+        // Get config and verify environment
+        val config = uniffi.bedrock.getConfig()
+        if (config != null) {
+            assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, config.environment(), "Config environment should be staging")
+        } else {
+            throw AssertionError("Config should be available after initialization")
+        }
+
+        // Try to initialize again - should be ignored (check logs for warning)
+        uniffi.bedrock.initBedrockConfig(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
+
+        // Environment should still be staging
+        val envAfterSecondInit = uniffi.bedrock.currentEnvironment()
+        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, envAfterSecondInit, "Environment should remain staging after second init attempt")
+    }
+
+    @Test
+    fun testBedrockConfigEnvironmentTypes() {
+        // Test creating config with different environments
+        val stagingConfig = uniffi.bedrock.BedrockConfig(uniffi.bedrock.BedrockEnvironment.STAGING)
+        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, stagingConfig.environment(), "Staging config should have staging environment")
+
+        val productionConfig = uniffi.bedrock.BedrockConfig(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
+        assertEquals(uniffi.bedrock.BedrockEnvironment.PRODUCTION, productionConfig.environment(), "Production config should have production environment")
+    }
 }

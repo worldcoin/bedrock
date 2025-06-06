@@ -87,3 +87,23 @@ use bedrock::logger::LogContext;
     info!("This message has custom context");  // Logs: [CustomContext] This message has custom context
 } // Context automatically cleared when _bedrock_logger_ctx is dropped
 ```
+
+## 🌍 Global Configuration
+
+Bedrock provides a global configuration system for managing environment settings across your application.
+
+### Initialization
+
+Initialize the global configuration once at app startup:
+
+**Swift:**
+
+```swift
+Bedrock.initBedrockConfig(environment: .staging)
+```
+
+**Kotlin:**
+
+```kotlin
+uniffi.bedrock.initBedrockConfig(BedrockEnvironment.STAGING)
+```
