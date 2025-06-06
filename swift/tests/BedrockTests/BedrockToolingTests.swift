@@ -197,7 +197,7 @@ final class BedrockToolingTests: XCTestCase {
     
     func testBedrockConfigInitialization() throws {
         // Initialize config with staging environment
-        Bedrock.initBedrockConfig(environment: .staging)
+        Bedrock.init(environment: .staging)
         
         // Verify current environment is staging
         let currentEnv = Bedrock.currentEnvironment()
@@ -214,7 +214,7 @@ final class BedrockToolingTests: XCTestCase {
         }
         
         // Try to initialize again - should be ignored (check logs for warning)
-        Bedrock.initBedrockConfig(environment: .production)
+        Bedrock.init(environment: .production)
         
         // Environment should still be staging
         let envAfterSecondInit = Bedrock.currentEnvironment()

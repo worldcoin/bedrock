@@ -80,10 +80,10 @@ impl BedrockConfig {
 /// import Bedrock
 ///
 /// // In your app delegate or during app initialization
-/// Bedrock.initBedrockConfig(environment: .staging)
+/// Bedrock.init(environment: .staging)
 /// ```
 #[uniffi::export]
-pub fn init_bedrock_config(environment: BedrockEnvironment) {
+pub fn init(environment: BedrockEnvironment) {
     let config = BedrockConfig::new(environment);
 
     match CONFIG_INSTANCE.set(Arc::new(config)) {

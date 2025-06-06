@@ -172,7 +172,7 @@ class BedrockToolingTests {
     @Test
     fun testBedrockConfigInitialization() {
         // Initialize config with staging environment
-        uniffi.bedrock.initBedrockConfig(uniffi.bedrock.BedrockEnvironment.STAGING)
+        uniffi.bedrock.init(uniffi.bedrock.BedrockEnvironment.STAGING)
 
         // Verify current environment is staging
         val currentEnv = uniffi.bedrock.currentEnvironment()
@@ -190,7 +190,7 @@ class BedrockToolingTests {
         }
 
         // Try to initialize again - should be ignored (check logs for warning)
-        uniffi.bedrock.initBedrockConfig(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
+        uniffi.bedrock.init(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
 
         // Environment should still be staging
         val envAfterSecondInit = uniffi.bedrock.currentEnvironment()

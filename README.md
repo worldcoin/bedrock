@@ -99,11 +99,11 @@ Initialize the global configuration once at app startup:
 **Swift:**
 
 ```swift
-Bedrock.initBedrockConfig(environment: .staging)
+Bedrock.init(environment: .staging)
 ```
 
 **Kotlin:**
 
 ```kotlin
-uniffi.bedrock.initBedrockConfig(BedrockEnvironment.STAGING)
+uniffi.bedrock.init(BedrockEnvironment.STAGING)
 ```
