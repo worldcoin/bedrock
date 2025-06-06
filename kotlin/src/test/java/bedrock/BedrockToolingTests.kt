@@ -188,16 +188,28 @@ class BedrockToolingTests {
 
         // Environment should still be staging
         val configAfterSecondInit = uniffi.bedrock.getConfig()
-        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, configAfterSecondInit?.environment(), "Environment should remain staging after second init attempt")
+        assertEquals(
+            uniffi.bedrock.BedrockEnvironment.STAGING,
+            configAfterSecondInit?.environment(),
+            "Environment should remain staging after second init attempt",
+        )
     }
 
     @Test
     fun testBedrockConfigEnvironmentTypes() {
         // Test creating config with different environments
         val stagingConfig = uniffi.bedrock.BedrockConfig(uniffi.bedrock.BedrockEnvironment.STAGING)
-        assertEquals(uniffi.bedrock.BedrockEnvironment.STAGING, stagingConfig.environment(), "Staging config should have staging environment")
+        assertEquals(
+            uniffi.bedrock.BedrockEnvironment.STAGING,
+            stagingConfig.environment(),
+            "Staging config should have staging environment",
+        )
 
         val productionConfig = uniffi.bedrock.BedrockConfig(uniffi.bedrock.BedrockEnvironment.PRODUCTION)
-        assertEquals(uniffi.bedrock.BedrockEnvironment.PRODUCTION, productionConfig.environment(), "Production config should have production environment")
+        assertEquals(
+            uniffi.bedrock.BedrockEnvironment.PRODUCTION,
+            productionConfig.environment(),
+            "Production config should have production environment",
+        )
     }
 }
