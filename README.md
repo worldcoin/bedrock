@@ -103,7 +103,7 @@ Initialize the global configuration once at app startup:
 Bedrock.setConfig(environment: .staging)
 // or
 import Bedrock
-Bedrock.setConfig(environment: .staging)
+setConfig(environment: .staging)
 ```
 
 **Kotlin:**
