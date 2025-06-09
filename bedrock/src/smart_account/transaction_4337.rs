@@ -404,25 +404,11 @@ fn parse_hex_bytes(
         })
 }
 
-/// Merges verification gas limit & call gas limit into a 32-byte array
-/// (two 128-bit fields).
-fn get_account_gas_limits(
-    verification_gas_limit: &U128,
-    call_gas_limit: &U128,
-) -> [u8; 32] {
+/// Pack two U128 in 32 bytes
+fn pack_pair(a: &U128, b: &U128) -> [u8; 32] {
     let mut out = [0u8; 32];
-    // Each U128 → 16-byte BE slice
-    verification_gas_limit.copy_be_bytes_to(&mut out[0..16]);
-    call_gas_limit.copy_be_bytes_to(&mut out[16..32]);
-    out
-}
-
-/// Merges maxPriorityFeePerGas & maxFeePerGas into a 32-byte array
-/// (two 128-bit big-endian fields).
-fn get_gas_limits(max_priority_fee_per_gas: &U128, max_fee_per_gas: &U128) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    max_priority_fee_per_gas.copy_be_bytes_to(&mut out[0..16]);
-    max_fee_per_gas.copy_be_bytes_to(&mut out[16..32]);
+    a.copy_be_bytes_to(&mut out[..16]);
+    b.copy_be_bytes_to(&mut out[16..]);
     out
 }
 
@@ -435,7 +421,7 @@ impl TryFrom<&UserOperation> for PackedUserOperation {
             nonce: parse_u256(&user_op.nonce, "nonce")?,
             init_code: get_init_code(user_op)?,
             call_data: parse_hex_bytes(&user_op.call_data, "call_data")?,
-            account_gas_limits: get_account_gas_limits(
+            account_gas_limits: pack_pair(
                 &parse_u128(&user_op.verification_gas_limit, "verification_gas_limit")?,
                 &parse_u128(&user_op.call_gas_limit, "call_gas_limit")?,
             ),
@@ -443,7 +429,7 @@ impl TryFrom<&UserOperation> for PackedUserOperation {
                 &user_op.pre_verification_gas,
                 "pre_verification_gas",
             )?,
-            gas_fees: get_gas_limits(
+            gas_fees: pack_pair(
                 &parse_u128(
                     &user_op.max_priority_fee_per_gas,
                     "max_priority_fee_per_gas",
