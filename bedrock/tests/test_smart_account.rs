@@ -325,7 +325,7 @@ async fn test_execute_erc4337_tx() -> anyhow::Result<()> {
     }
     .abi_encode();
 
-    // Build UserOperation
+    // Build the userOp
     let valid_after = &0u64.to_be_bytes()[2..]; // validAfter = 0  (immediately valid)
     let valid_until = &u64::MAX.to_be_bytes()[2..]; // validUntil = 0xFFFF_FFFF_FFFF (≈ forever)
     let mut user_op = UserOperation {
@@ -352,7 +352,7 @@ async fn test_execute_erc4337_tx() -> anyhow::Result<()> {
         factory_data: None,
     };
 
-    // Sign UserOp and prepend validity timestamps
+    // Sign the userOp and prepend validity timestamps
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
         .expect("Failed to create SafeSmartAccount");
     let op_hash = EncodedSafeOpStruct::try_from(&user_op)?.into_transaction_hash();
@@ -367,14 +367,14 @@ async fn test_execute_erc4337_tx() -> anyhow::Result<()> {
     sig_with_timestamps.extend_from_slice(&sig);
     user_op.signature = format!("0x{}", hex::encode(sig_with_timestamps));
 
-    // Submit through EntryPoint
+    // Submit through the 4337 EntryPoint
     let _ = entry_point
         .handleOps(vec![PackedUserOperation::try_from(&user_op)?.into()], owner)
         .from(owner)
         .send()
         .await?;
 
-    //  Assert transfer succeeded
+    // Assert the transfer has succeeded
     let after_balance = provider.get_balance(safe_address2).await?;
     assert_eq!(
         after_balance,
