@@ -6,10 +6,20 @@ use alloy::{
 };
 use signer::SafeSmartAccountSigner;
 
-use crate::primitives::{HexEncodedData, PrimitiveError};
-use crate::{bedrock_export, debug, error, info};
+use crate::{
+    bedrock_export, debug, error, info,
+    smart_account::transaction_4337::GNOSIS_SAFE_4337_MODULE,
+};
+use crate::{
+    primitives::HexEncodedData, smart_account::transaction_4337::EncodedSafeOpStruct,
+};
 
+/// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
 mod signer;
+
+/// Enables EIP-4337 transaction crafting and signing
+mod transaction_4337;
+pub use transaction_4337::UserOperation;
 
 /// Errors that can occur when working with Safe Smart Accounts.
 #[crate::bedrock_error]
@@ -26,6 +36,14 @@ pub enum SafeSmartAccountError {
     /// Failed to encode data to a specific format.
     #[error("failed to encode: {0}")]
     Encoding(String),
+    /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
+    #[error("invalid input on {attribute}: {message}")]
+    InvalidInput {
+        /// The name of the attribute that was invalid.
+        attribute: &'static str,
+        /// Explicit failure message for the attribute validation.
+        message: String,
+    },
 }
 
 /// A Safe Smart Account (previously Gnosis Safe) is the representation of a Safe smart contract.
@@ -101,18 +119,87 @@ impl SafeSmartAccount {
         message: String,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
+        Ok(signature.into())
+    }
 
-        let signature: HexEncodedData =
-            signature
-                .to_string()
-                .try_into()
-                .map_err(|e: PrimitiveError| {
-                    SafeSmartAccountError::Encoding(format!(
-                        "signature encoding error: {e}"
-                    ))
-                })?;
+    /// Crafts and signs a 4337 user operation.
+    ///
+    /// # Arguments
+    /// - `user_operation`: The user operation to sign.
+    /// - `chain_id`: The chain ID of the chain where the user operation is being signed.
+    ///
+    /// # Errors
+    /// - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
+    /// - Will throw an error if the signature process unexpectedly fails.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use bedrock::smart_account::{UserOperation, SafeSmartAccount};
+    ///
+    /// let safe = SafeSmartAccount::new(
+    ///     // this is Anvil's default private key, it is a test secret
+    ///     "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string(),
+    ///     "0x4564420674EA68fcc61b463C0494807C759d47e6",
+    /// )
+    /// .unwrap();
+    ///
+    /// // This would normally be crafted by the user, or requested by Mini Apps.
+    /// let user_op = UserOperation {
+    ///      sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+    ///     nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
+    ///     call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
+    ///     signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+    ///     call_gas_limit: "0xabb8".to_string(),
+    ///     verification_gas_limit: "0xfa07".to_string(),
+    ///     pre_verification_gas: "0x8e4d78".to_string(),
+    ///     max_fee_per_gas: "0x1af6f".to_string(),
+    ///     max_priority_fee_per_gas: "0x1adb0".to_string(),
+    ///     paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
+    ///     paymaster_verification_gas_limit: "0x7415".to_string(),
+    ///     paymaster_post_op_gas_limit: "0x".to_string(),
+    ///     paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
+    ///     factory: None,
+    ///     factory_data: None,
+    /// };
+    ///
+    /// let signature = safe.sign_4337_op(&user_op, 480).unwrap();
+    ///
+    /// println!("Signature: {}", signature.to_hex_string());
+    /// ```
+    pub fn sign_4337_op(
+        &self,
+        user_operation: &UserOperation,
+        chain_id: u32,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let user_op: EncodedSafeOpStruct = user_operation.try_into()?;
 
-        Ok(signature)
+        let signature = self.sign_digest(
+            user_op.into_transaction_hash(),
+            chain_id,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        )?;
+
+        Ok(signature.into())
+    }
+}
+
+#[cfg(test)]
+impl SafeSmartAccount {
+    /// Creates a new `SafeSmartAccount` instance with a random EOA signing key.
+    ///
+    /// Only for test usage.
+    ///
+    /// # Panics
+    /// - Will panic if the wallet address cannot be computed correctly.
+    #[must_use]
+    pub fn random() -> Self {
+        let signer = LocalSigner::random();
+        let wallet_address =
+            Address::from_str("0x0000000000000000000000000000000000000000").unwrap(); // TODO: compute address correctly
+        Self {
+            signer,
+            wallet_address,
+        }
     }
 }
 
@@ -171,5 +258,36 @@ mod tests {
                 format!("failed to parse address: {invalid_address}")
             );
         }
+    }
+
+    #[test]
+    fn test_sign_4337_user_op() {
+        let safe = SafeSmartAccount::new(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let chain_id = 10;
+        let safe_address = "0x4564420674EA68fcc61b463C0494807C759d47e6".to_string();
+        let user_op = UserOperation {
+          sender:safe_address,
+          nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
+          call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
+          signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+          call_gas_limit: "0xabb8".to_string(),
+          verification_gas_limit: "0xfa07".to_string(),
+          pre_verification_gas: "0x8e4d78".to_string(),
+          max_fee_per_gas: "0x1af6f".to_string(),
+          max_priority_fee_per_gas: "0x1adb0".to_string(),
+          paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
+          paymaster_verification_gas_limit: "0x7415".to_string(),
+          paymaster_post_op_gas_limit: "0x".to_string(),
+          paymaster_data: Some( "000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
+          factory: None,
+          factory_data: None,
+      };
+
+        assert_eq!(safe.sign_4337_op(&user_op, chain_id).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
     }
 }
