@@ -284,7 +284,7 @@ async fn test_integration_personal_sign() {
     println!("✓ Safe integration test completed successfully!");
 }
 
-/// Integration test for the encoding, signging and execution of a 4337 transaction.
+/// Integration test for the encoding, signing and execution of a 4337 transaction.
 ///
 /// This test deploys two Safe Smart Accounts, and transfers 1 ETH from Safe 1 to Safe 2 using a 4337 transaction.
 #[tokio::test]
