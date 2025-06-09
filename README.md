@@ -14,6 +14,30 @@ Bedrock ships with foreign bindings for native Swift. All details can be found i
 
 Bedrock ships with foreign bindings for native Kotlin. All details can be found in the [/kotlin](./kotlin/README.md) folder.
 
+## 🌍 Global Configuration
+
+Bedrock provides a global configuration system for managing environment settings across your application.
+
+### Initialization
+
+Initialize the global configuration once at app startup:
+
+**Swift:**
+
+```swift
+@_exported import Bedrock
+Bedrock.setConfig(environment: .staging)
+// or
+import Bedrock
+setConfig(environment: .staging)
+```
+
+**Kotlin:**
+
+```kotlin
+uniffi.bedrock.setConfig(BedrockEnvironment.STAGING)
+```
+
 ## 🛠️ Error Handling & Logging Tooling
 
 Each module should implement its own error enum. See [tooling_tests](/bedrock/src/primitives/tooling_tests.rs) for example references.
@@ -86,28 +110,4 @@ use bedrock::logger::LogContext;
     let _bedrock_logger_ctx = LogContext::new("CustomContext");
     info!("This message has custom context");  // Logs: [CustomContext] This message has custom context
 } // Context automatically cleared when _bedrock_logger_ctx is dropped
-```
-
-## 🌍 Global Configuration
-
-Bedrock provides a global configuration system for managing environment settings across your application.
-
-### Initialization
-
-Initialize the global configuration once at app startup:
-
-**Swift:**
-
-```swift
-@_exported import Bedrock
-Bedrock.setConfig(environment: .staging)
-// or
-import Bedrock
-setConfig(environment: .staging)
-```
-
-**Kotlin:**
-
-```kotlin
-uniffi.bedrock.setConfig(BedrockEnvironment.STAGING)
 ```
