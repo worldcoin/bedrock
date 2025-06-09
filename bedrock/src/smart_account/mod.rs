@@ -4,23 +4,20 @@ use alloy::{
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
-use signer::SafeSmartAccountSigner;
+pub use signer::SafeSmartAccountSigner;
 
-use crate::{
-    bedrock_export, debug, error, info,
-    smart_account::transaction_4337::GNOSIS_SAFE_4337_MODULE,
-};
-use crate::{
-    primitives::HexEncodedData, smart_account::transaction_4337::EncodedSafeOpStruct,
-};
+use crate::{bedrock_export, debug, error, info, primitives::HexEncodedData};
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
 mod signer;
 
 /// Enables EIP-4337 transaction crafting and signing
 mod transaction_4337;
-pub use transaction_4337::UserOperation;
 
+pub use transaction_4337::{
+    EncodedSafeOpStruct, PackedUserOperation, UserOperation, ENTRYPOINT_4337,
+    GNOSIS_SAFE_4337_MODULE,
+};
 /// Errors that can occur when working with Safe Smart Accounts.
 #[crate::bedrock_error]
 pub enum SafeSmartAccountError {

@@ -63,7 +63,7 @@ static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
 });
 
 /// v0.7 `EntryPoint`
-static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
+pub static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x0000000071727De22E5E9d8BAf0edAc6f37da032")
         .expect("failed to decode ENTRYPOINT_4337")
 });
@@ -196,6 +196,8 @@ impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
 }
 
 impl EncodedSafeOpStruct {
+    /// computes the hash of the userOp
+    #[must_use]
     pub fn into_transaction_hash(self) -> FixedBytes<32> {
         keccak256(self.abi_encode())
     }
@@ -322,6 +324,136 @@ fn get_paymaster_and_data(
             Ok(out.into())
         },
     )
+}
+
+/// A gas efficient representation of a `UserOperation` for use with the `EntryPoint` contract.
+#[derive(Clone, Debug)]
+pub struct PackedUserOperation {
+    /// The address of the smart contract account to be called.
+    /// Solidity type: `address`
+    pub sender: Address,
+
+    /// Anti-replay nonce for the userOp.
+    /// Solidity type: `uint256`
+    pub nonce: U256,
+
+    /// Optional initialization code for deploying the account if it doesn't exist.
+    /// Solidity type: `bytes`
+    pub init_code: Bytes,
+
+    /// Calldata for the actual execution to be performed by the account.
+    /// Solidity type: `bytes`
+    pub call_data: Bytes,
+
+    /// Packed gas limits: first 16 bytes = `verificationGasLimit`, next 16 bytes = `callGasLimit`.
+    /// Solidity type: `uint256[2]` packed into `[u8; 32]`
+    pub account_gas_limits: [u8; 32],
+
+    /// The fixed gas to be paid before the verification step (covers calldata costs, etc.).
+    /// Solidity type: `uint256`
+    pub pre_verification_gas: U256,
+
+    /// Packed fee fields: first 16 bytes = `maxPriorityFeePerGas`, next 16 bytes = `maxFeePerGas`.
+    /// Solidity type: `uint256[2]` packed into `[u8; 32]`
+    pub gas_fees: [u8; 32],
+
+    /// Data and address for an optional paymaster sponsoring the transaction.
+    /// Solidity type: `bytes`
+    pub paymaster_and_data: Bytes,
+
+    /// Signature over the operation (account-specific validation logic).
+    /// Solidity type: `bytes`
+    pub signature: Bytes,
+}
+
+/// Parse an EVM address.
+fn parse_addr(s: &str, attr: &'static str) -> Result<Address, SafeSmartAccountError> {
+    Address::from_str(s).map_err(|e| SafeSmartAccountError::InvalidInput {
+        attribute: attr,
+        message: e.to_string(),
+    })
+}
+
+/// Parse a `U256`.
+fn parse_u256(s: &str, attr: &'static str) -> Result<U256, SafeSmartAccountError> {
+    U256::from_str(s).map_err(|e| SafeSmartAccountError::InvalidInput {
+        attribute: attr,
+        message: e.to_string(),
+    })
+}
+
+/// Parse a `U128`.
+fn parse_u128(s: &str, attr: &'static str) -> Result<U128, SafeSmartAccountError> {
+    U128::from_str(s).map_err(|e| SafeSmartAccountError::InvalidInput {
+        attribute: attr,
+        message: e.to_string(),
+    })
+}
+
+/// Decode a hex string (with or without 0x) into `Bytes`.
+fn parse_hex_bytes(
+    s: &str,
+    attr: &'static str,
+) -> Result<Bytes, SafeSmartAccountError> {
+    let raw = s.strip_prefix("0x").unwrap_or(s);
+    hex::decode(raw)
+        .map(Bytes::from)
+        .map_err(|e| SafeSmartAccountError::InvalidInput {
+            attribute: attr,
+            message: e.to_string(),
+        })
+}
+
+/// Merges verification gas limit & call gas limit into a 32-byte array
+/// (two 128-bit fields).
+fn get_account_gas_limits(
+    verification_gas_limit: &U128,
+    call_gas_limit: &U128,
+) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    // Each U128 → 16-byte BE slice
+    verification_gas_limit.copy_be_bytes_to(&mut out[0..16]);
+    call_gas_limit.copy_be_bytes_to(&mut out[16..32]);
+    out
+}
+
+/// Merges maxPriorityFeePerGas & maxFeePerGas into a 32-byte array
+/// (two 128-bit big-endian fields).
+fn get_gas_limits(max_priority_fee_per_gas: &U128, max_fee_per_gas: &U128) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    max_priority_fee_per_gas.copy_be_bytes_to(&mut out[0..16]);
+    max_fee_per_gas.copy_be_bytes_to(&mut out[16..32]);
+    out
+}
+
+impl TryFrom<&UserOperation> for PackedUserOperation {
+    type Error = SafeSmartAccountError;
+
+    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
+        Ok(Self {
+            sender: parse_addr(&user_op.sender, "sender")?,
+            nonce: parse_u256(&user_op.nonce, "nonce")?,
+            init_code: get_init_code(user_op)?,
+            call_data: parse_hex_bytes(&user_op.call_data, "call_data")?,
+            account_gas_limits: get_account_gas_limits(
+                &parse_u128(&user_op.verification_gas_limit, "verification_gas_limit")?,
+                &parse_u128(&user_op.call_gas_limit, "call_gas_limit")?,
+            ),
+            pre_verification_gas: parse_u256(
+                &user_op.pre_verification_gas,
+                "pre_verification_gas",
+            )?,
+            gas_fees: get_gas_limits(
+                &parse_u128(
+                    &user_op.max_priority_fee_per_gas,
+                    "max_priority_fee_per_gas",
+                )?,
+                &parse_u128(&user_op.max_fee_per_gas, "max_fee_per_gas")?,
+            ),
+            paymaster_and_data: get_paymaster_and_data(user_op)?,
+            signature: parse_hex_bytes(&user_op.signature, "signature")?,
+        })
+    }
 }
 
 #[cfg(test)]

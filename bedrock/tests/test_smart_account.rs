@@ -1,12 +1,16 @@
 use alloy::{
+    network::Ethereum,
     node_bindings::AnvilInstance,
     primitives::{address, keccak256, Address, Bytes, U256},
-    providers::{ext::AnvilApi, ProviderBuilder},
+    providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
     sol_types::{SolCall, SolEvent},
 };
-use bedrock::smart_account::SafeSmartAccount;
+use bedrock::smart_account::{
+    EncodedSafeOpStruct, PackedUserOperation, SafeSmartAccount, SafeSmartAccountSigner,
+    UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
+};
 
 sol!(
     #[allow(missing_docs)]
@@ -48,6 +52,58 @@ sol!(
     }
 );
 
+sol! {
+    struct PackedUserOperationStruct {
+    address sender;
+    uint256 nonce;
+    bytes initCode;
+    bytes callData;
+    bytes32 accountGasLimits;
+    uint256 preVerificationGas;
+    bytes32 gasFees;
+    bytes paymasterAndData;
+    bytes signature;
+    }
+
+    #[sol(rpc)]
+    interface IEntryPoint {
+        function depositTo(address account) external payable;
+        function handleOps(PackedUserOperationStruct[] calldata ops, address payable beneficiary) external;
+    }
+
+    #[sol(rpc)]
+    interface IERC20 {
+        function transfer(address to, uint256 amount) external returns (bool);
+        function balanceOf(address account) external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface ISafe4337Module {
+        function executeUserOp(
+            address to,
+            uint256 value,
+            bytes calldata data,
+            uint8 operation
+        ) external;
+    }
+}
+
+impl From<PackedUserOperation> for PackedUserOperationStruct {
+    fn from(packed: PackedUserOperation) -> Self {
+        PackedUserOperationStruct {
+            sender: packed.sender,
+            nonce: packed.nonce,
+            initCode: packed.init_code,
+            callData: packed.call_data,
+            accountGasLimits: packed.account_gas_limits.into(),
+            preVerificationGas: packed.pre_verification_gas,
+            gasFees: packed.gas_fees.into(),
+            paymasterAndData: packed.paymaster_and_data,
+            signature: packed.signature,
+        }
+    }
+}
+
 // Safe contract addresses on Worldchain
 const SAFE_PROXY_FACTORY_ADDRESS: Address =
     address!("4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67");
@@ -69,40 +125,26 @@ fn setup_anvil() -> AnvilInstance {
     anvil
 }
 
-#[tokio::test]
-async fn test_integration_personal_sign() {
-    let anvil = setup_anvil();
-    let owner_signer = PrivateKeySigner::random();
-
-    let owner_key_hex = hex::encode(owner_signer.to_bytes());
-
-    let owner = owner_signer.address();
-
-    let provider = ProviderBuilder::new()
-        .wallet(owner_signer)
-        .connect_http(anvil.endpoint_url());
-
-    provider
-        .anvil_set_balance(owner, U256::from(10).pow(U256::from(18)))
-        .await
-        .expect("Failed to set balance");
-
-    println!("✓ Using owner address: {}", owner);
-
-    let proxy_factory = ISafeProxyFactory::new(SAFE_PROXY_FACTORY_ADDRESS, &provider);
-
-    // Setup modules array
-    let modules = vec![SAFE_4337_MODULE_ADDRESS];
-
-    // Setup owners array
-    let owners = vec![owner];
+async fn deploy_safe<P>(
+    provider: &P,
+    owner: Address,
+    deploy_nonce: U256,
+) -> anyhow::Result<Address>
+where
+    P: Provider<Ethereum>,
+{
+    let proxy_factory = ISafeProxyFactory::new(SAFE_PROXY_FACTORY_ADDRESS, provider);
 
     // Encode the Safe setup call
     let setup_data = ISafe::setupCall {
-        _owners: owners,
+        _owners: vec![owner],
         _threshold: U256::from(1),
         to: SAFE_MODULE_SETUP_ADDRESS,
-        data: ISafe::enableModulesCall { modules }.abi_encode().into(),
+        data: ISafe::enableModulesCall {
+            modules: vec![SAFE_4337_MODULE_ADDRESS],
+        }
+        .abi_encode()
+        .into(),
         fallbackHandler: SAFE_4337_MODULE_ADDRESS,
         paymentToken: Address::ZERO,
         payment: U256::ZERO,
@@ -111,8 +153,13 @@ async fn test_integration_personal_sign() {
     .abi_encode();
 
     // Deploy Safe via proxy factory
+    println!("\nDeploying Safe-{}", deploy_nonce);
     let deploy_tx = proxy_factory
-        .createProxyWithNonce(SAFE_L2_SINGLETON_ADDRESS, setup_data.into(), U256::ZERO)
+        .createProxyWithNonce(
+            SAFE_L2_SINGLETON_ADDRESS,
+            setup_data.into(),
+            deploy_nonce,
+        )
         .from(owner)
         .send()
         .await
@@ -141,7 +188,43 @@ async fn test_integration_personal_sign() {
 
     let safe_address = proxy_creation_event.proxy;
 
-    println!("\n✓ Safe deployed at: {}", safe_address);
+    println!(
+        "✓ Safe deployed at: {}\nFunding Safe with 10 ETH",
+        safe_address
+    );
+
+    provider
+        .anvil_set_balance(safe_address, U256::from(1e19))
+        .await
+        .expect("Failed to set Safe balance");
+
+    Ok(safe_address)
+}
+
+#[tokio::test]
+async fn test_integration_personal_sign() {
+    let anvil = setup_anvil();
+    let owner_signer = PrivateKeySigner::random();
+
+    let owner_key_hex = hex::encode(owner_signer.to_bytes());
+
+    let owner = owner_signer.address();
+
+    let provider = ProviderBuilder::new()
+        .wallet(owner_signer)
+        .connect_http(anvil.endpoint_url());
+
+    provider
+        .anvil_set_balance(owner, U256::from(10).pow(U256::from(18)))
+        .await
+        .expect("Failed to set balance");
+
+    println!("✓ Using owner address: {}", owner);
+
+    // Deploy a Safe
+    let safe_address = deploy_safe(&provider, owner, U256::ZERO)
+        .await
+        .expect("Failed to deploy Safe");
 
     let safe_contract = ISafe::new(safe_address, &provider);
 
@@ -199,4 +282,104 @@ async fn test_integration_personal_sign() {
 
     println!("✓ Signature validation passed");
     println!("✓ Safe integration test completed successfully!");
+}
+
+#[tokio::test]
+async fn test_execute_erc4337_tx() -> anyhow::Result<()> {
+    let anvil = setup_anvil();
+    let owner_signer = PrivateKeySigner::random();
+
+    let owner_key_hex = hex::encode(owner_signer.to_bytes());
+
+    let owner = owner_signer.address();
+    println!("✓ Using owner address: {}", owner);
+
+    let provider = ProviderBuilder::new()
+        .wallet(owner_signer.clone())
+        .connect_http(anvil.endpoint_url());
+
+    // Fund owner
+    provider.anvil_set_balance(owner, U256::from(1e19)).await?;
+
+    // Deploy Safes
+    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address2 = deploy_safe(&provider, owner, U256::from(1)).await?;
+
+    let before_balance = provider.get_balance(safe_address2).await?;
+
+    // Fund EntryPoint deposit for the Safe
+    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    let _ = entry_point
+        .depositTo(safe_address)
+        .value(U256::from(1e18))
+        .send()
+        .await?;
+
+    // Let's transfer 1 ETH from Safe 1 to Safe 2
+    let eth_amount = U256::from(1e18);
+    let call_data = ISafe4337Module::executeUserOpCall {
+        to: safe_address2,
+        value: eth_amount,
+        data: Bytes::new(),
+        operation: 0, // CALL
+    }
+    .abi_encode();
+
+    // Build UserOperation
+    let valid_after = &0u64.to_be_bytes()[2..]; // validAfter = 0  (immediately valid)
+    let valid_until = &u64::MAX.to_be_bytes()[2..]; // validUntil = 0xFFFF_FFFF_FFFF (≈ forever)
+    let mut user_op = UserOperation {
+        sender: safe_address.to_string(),
+        nonce: "0x0".to_string(),
+        call_data: format!("0x{}", hex::encode(&call_data)),
+        call_gas_limit: "0x20000".to_string(),
+        verification_gas_limit: "0x20000".to_string(),
+        pre_verification_gas: "0x20000".to_string(),
+        max_fee_per_gas: "0x3b9aca00".to_string(), // 1 gwei
+        max_priority_fee_per_gas: "0x3b9aca00".to_string(), // 1 gwei
+        paymaster: None,
+        paymaster_verification_gas_limit: "0x0".to_string(),
+        paymaster_post_op_gas_limit: "0x0".to_string(),
+        paymaster_data: None,
+        signature: {
+            let mut buf = Vec::with_capacity(77);
+            buf.extend_from_slice(valid_after);
+            buf.extend_from_slice(valid_until);
+            buf.extend_from_slice(&[0u8; 65]);
+            format!("0x{}", hex::encode(&buf))
+        },
+        factory: None,
+        factory_data: None,
+    };
+
+    // Sign UserOp and prepend validity timestamps
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
+        .expect("Failed to create SafeSmartAccount");
+    let op_hash = EncodedSafeOpStruct::try_from(&user_op)?.into_transaction_hash();
+
+    let worldchain_chain_id = 480;
+    let sig = safe_account
+        .sign_digest(op_hash, worldchain_chain_id, Some(*GNOSIS_SAFE_4337_MODULE))?
+        .as_bytes();
+    let mut sig_with_timestamps = Vec::with_capacity(77);
+    sig_with_timestamps.extend_from_slice(valid_after);
+    sig_with_timestamps.extend_from_slice(valid_until);
+    sig_with_timestamps.extend_from_slice(&sig);
+    user_op.signature = format!("0x{}", hex::encode(sig_with_timestamps));
+
+    // Submit through EntryPoint
+    let _ = entry_point
+        .handleOps(vec![PackedUserOperation::try_from(&user_op)?.into()], owner)
+        .from(owner)
+        .send()
+        .await?;
+
+    //  Assert transfer succeeded
+    let after_balance = provider.get_balance(safe_address2).await?;
+    assert_eq!(
+        after_balance,
+        before_balance + U256::from(1e18),
+        "Native ETH transfer did not succeed"
+    );
+    Ok(())
 }
