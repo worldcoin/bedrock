@@ -330,39 +330,22 @@ fn get_paymaster_and_data(
 #[derive(Clone, Debug)]
 pub struct PackedUserOperation {
     /// The address of the smart contract account to be called.
-    /// Solidity type: `address`
     pub sender: Address,
-
     /// Anti-replay nonce for the userOp.
-    /// Solidity type: `uint256`
     pub nonce: U256,
-
     /// Optional initialization code for deploying the account if it doesn't exist.
-    /// Solidity type: `bytes`
     pub init_code: Bytes,
-
     /// Calldata for the actual execution to be performed by the account.
-    /// Solidity type: `bytes`
     pub call_data: Bytes,
-
     /// Packed gas limits: first 16 bytes = `verificationGasLimit`, next 16 bytes = `callGasLimit`.
-    /// Solidity type: `uint256[2]` packed into `[u8; 32]`
     pub account_gas_limits: [u8; 32],
-
     /// The fixed gas to be paid before the verification step (covers calldata costs, etc.).
-    /// Solidity type: `uint256`
     pub pre_verification_gas: U256,
-
     /// Packed fee fields: first 16 bytes = `maxPriorityFeePerGas`, next 16 bytes = `maxFeePerGas`.
-    /// Solidity type: `uint256[2]` packed into `[u8; 32]`
     pub gas_fees: [u8; 32],
-
     /// Data and address for an optional paymaster sponsoring the transaction.
-    /// Solidity type: `bytes`
     pub paymaster_and_data: Bytes,
-
     /// Signature over the operation (account-specific validation logic).
-    /// Solidity type: `bytes`
     pub signature: Bytes,
 }
 
