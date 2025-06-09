@@ -1,3 +1,5 @@
+use alloy::signers::Signature;
+
 use crate::bedrock_export;
 use std::fmt::Display;
 
@@ -78,6 +80,12 @@ impl TryFrom<&str> for HexEncodedData {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         Self::new(s)
+    }
+}
+
+impl From<Signature> for HexEncodedData {
+    fn from(signature: Signature) -> Self {
+        Self(signature.to_string())
     }
 }
 

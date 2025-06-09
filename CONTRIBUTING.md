@@ -16,7 +16,7 @@ Thank you for your interest in contributing to our project! This document provid
    ```bash
    cp .env.example .env
    ```
-3. Install Foundry. Anvil (from the Foundry toolkit) is required for functional tests with Solidity.
+3. Install Foundry. Anvil (from the Foundry toolkit) is required for functional tests with Solidity. Remember to source your profile after installing Foundry for the tools to be available in your PATH.
 
    ```bash
    curl -L https://foundry.paradigm.xyz | bash
