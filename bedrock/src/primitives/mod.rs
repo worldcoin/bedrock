@@ -1,7 +1,10 @@
-use alloy::signers::Signature;
+use alloy::primitives::Bytes;
+use alloy::{primitives::Address, signers::Signature};
+use ruint::aliases::{U128, U256};
 
 use crate::bedrock_export;
 use std::fmt::Display;
+use std::str::FromStr;
 
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
@@ -90,11 +93,76 @@ impl From<Signature> for HexEncodedData {
 }
 
 /// Represents primitive errors on Bedrock. These errors may not be called **from** FFI.
-#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[crate::bedrock_error]
 pub enum PrimitiveError {
     /// The provided string is not validly encoded hex data.
     #[error("invalid hex string: {0}")]
     InvalidHexString(String),
+    /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
+    #[error("invalid input on {attribute}: {message}")]
+    InvalidInput {
+        /// The name of the attribute that was invalid.
+        attribute: &'static str,
+        /// Explicit failure message for the attribute validation.
+        message: String,
+    },
+}
+
+/// A trait for parsing primitive types from foreign bindings.
+///
+/// This trait is used to parse primitive types from foreign provided values. For example, parsing
+/// a stringified address into an `Address` type.
+///
+/// # Examples
+/// ```rust,ignore
+/// let address = Address::parse_from_ffi("0x1234567890abcdef", "address");
+/// ```
+///
+/// # Errors
+/// - `PrimitiveError::InvalidInput` if the provided string is not a valid address.
+pub(crate) trait ParseFromForeignBinding {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError>
+    where
+        Self: Sized;
+}
+
+impl ParseFromForeignBinding for Address {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+            attribute: attr,
+            message: e.to_string(),
+        })
+    }
+}
+
+impl ParseFromForeignBinding for U256 {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+            attribute: attr,
+            message: e.to_string(),
+        })
+    }
+}
+
+impl ParseFromForeignBinding for U128 {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+            attribute: attr,
+            message: e.to_string(),
+        })
+    }
+}
+
+impl ParseFromForeignBinding for Bytes {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        let raw = s.strip_prefix("0x").unwrap_or(s);
+        hex::decode(raw)
+            .map(Self::from)
+            .map_err(|e| PrimitiveError::InvalidInput {
+                attribute: attr,
+                message: e.to_string(),
+            })
+    }
 }
 
 #[cfg(test)]

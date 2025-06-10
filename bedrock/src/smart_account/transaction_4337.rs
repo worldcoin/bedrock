@@ -3,6 +3,8 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
+use crate::primitives::ParseFromForeignBinding;
+
 use super::SafeSmartAccountError;
 use alloy::hex::FromHex;
 use alloy::{
@@ -63,7 +65,7 @@ static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
 });
 
 /// v0.7 `EntryPoint`
-static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
+pub static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x0000000071727De22E5E9d8BAf0edAc6f37da032")
         .expect("failed to decode ENTRYPOINT_4337")
 });
@@ -101,78 +103,40 @@ impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
     type Error = SafeSmartAccountError;
 
     fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
-        let sender = Address::from_str(&user_op.sender).map_err(|e| {
-            SafeSmartAccountError::InvalidInput {
-                attribute: "sender",
-                message: e.to_string(),
-            }
-        })?;
+        let sender = Address::parse_from_ffi(&user_op.sender, "sender")?;
 
-        let nonce = U256::from_str(&user_op.nonce).map_err(|e| {
-            SafeSmartAccountError::InvalidInput {
-                attribute: "nonce",
-                message: e.to_string(),
-            }
-        })?;
+        let nonce = U256::parse_from_ffi(&user_op.nonce, "nonce")?;
 
-        let call_data = hex::decode(
-            user_op
-                .call_data
-                .strip_prefix("0x")
-                .unwrap_or(&user_op.call_data),
-        )
-        .map_err(|e| SafeSmartAccountError::InvalidInput {
-            attribute: "call_data",
-            message: e.to_string(),
-        })?;
+        let call_data = Bytes::parse_from_ffi(&user_op.call_data, "call_data")?;
 
-        let verification_gas_limit = U128::from_str(&user_op.verification_gas_limit)
-            .map_err(|e| SafeSmartAccountError::InvalidInput {
-                attribute: "verification_gas_limit",
-                message: e.to_string(),
-            })?
-            .to::<u128>();
+        let verification_gas_limit = U128::parse_from_ffi(
+            &user_op.verification_gas_limit,
+            "verification_gas_limit",
+        )?
+        .to::<u128>();
 
-        let call_gas_limit = U128::from_str(&user_op.call_gas_limit)
-            .map_err(|e| SafeSmartAccountError::InvalidInput {
-                attribute: "call_gas_limit",
-                message: e.to_string(),
-            })?
-            .to::<u128>();
-
-        let pre_verification_gas = U256::from_str(&user_op.pre_verification_gas)
-            .map_err(|e| SafeSmartAccountError::InvalidInput {
-                attribute: "pre_verification_gas",
-                message: e.to_string(),
-            })?;
-
-        let max_priority_fee_per_gas =
-            U128::from_str(&user_op.max_priority_fee_per_gas)
-                .map_err(|e| SafeSmartAccountError::InvalidInput {
-                    attribute: "max_priority_fee_per_gas",
-                    message: e.to_string(),
-                })?
+        let call_gas_limit =
+            U128::parse_from_ffi(&user_op.call_gas_limit, "call_gas_limit")?
                 .to::<u128>();
 
-        let max_fee_per_gas = U128::from_str(&user_op.max_fee_per_gas)
-            .map_err(|e| SafeSmartAccountError::InvalidInput {
-                attribute: "max_fee_per_gas",
-                message: e.to_string(),
-            })?
-            .to::<u128>();
+        let pre_verification_gas = U256::parse_from_ffi(
+            &user_op.pre_verification_gas,
+            "pre_verification_gas",
+        )?;
+
+        let max_priority_fee_per_gas = U128::parse_from_ffi(
+            &user_op.max_priority_fee_per_gas,
+            "max_priority_fee_per_gas",
+        )?
+        .to::<u128>();
+
+        let max_fee_per_gas =
+            U128::parse_from_ffi(&user_op.max_fee_per_gas, "max_fee_per_gas")?
+                .to::<u128>();
 
         let paymaster_and_data = get_paymaster_and_data(user_op)?;
 
-        let signature = hex::decode(
-            user_op
-                .signature
-                .strip_prefix("0x")
-                .unwrap_or(&user_op.signature),
-        )
-        .map_err(|_| SafeSmartAccountError::InvalidInput {
-            attribute: "signature",
-            message: "not validly encoded hex-data".to_string(),
-        })?;
+        let signature = Bytes::parse_from_ffi(&user_op.signature, "signature")?;
 
         let (valid_after, valid_until) = extract_validity_timestamps(&signature)?;
 
@@ -196,6 +160,8 @@ impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
 }
 
 impl EncodedSafeOpStruct {
+    /// computes the hash of the userOp
+    #[must_use]
     pub fn into_transaction_hash(self) -> FixedBytes<32> {
         keccak256(self.abi_encode())
     }
@@ -322,6 +288,76 @@ fn get_paymaster_and_data(
             Ok(out.into())
         },
     )
+}
+
+/// A gas efficient representation of a `UserOperation` for use with the `EntryPoint` contract.
+///
+/// Submitting transactions through the `EntryPoint` requires a `PackedUserOperation`,
+/// see `handleOps` in the `EntryPoint` contract. Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol#L174>
+///
+///
+/// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/interfaces/PackedUserOperation.sol#L18>
+#[derive(Clone, Debug)]
+pub struct PackedUserOperation {
+    /// The address of the smart contract account to be called.
+    pub sender: Address,
+    /// Anti-replay nonce for the userOp.
+    pub nonce: U256,
+    /// Optional initialization code for deploying the account if it doesn't exist.
+    pub init_code: Bytes,
+    /// Calldata for the actual execution to be performed by the account.
+    pub call_data: Bytes,
+    /// Packed gas limits: first 16 bytes = `verificationGasLimit`, next 16 bytes = `callGasLimit`.
+    pub account_gas_limits: [u8; 32],
+    /// The fixed gas to be paid before the verification step (covers calldata costs, etc.).
+    pub pre_verification_gas: U256,
+    /// Packed fee fields: first 16 bytes = `maxPriorityFeePerGas`, next 16 bytes = `maxFeePerGas`.
+    pub gas_fees: [u8; 32],
+    /// Data and address for an optional paymaster sponsoring the transaction.
+    pub paymaster_and_data: Bytes,
+    /// Signature over the operation (account-specific validation logic).
+    pub signature: Bytes,
+}
+
+/// Pack two U128 in 32 bytes
+fn pack_pair(a: &U128, b: &U128) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    a.copy_be_bytes_to(&mut out[..16]);
+    b.copy_be_bytes_to(&mut out[16..]);
+    out
+}
+
+impl TryFrom<&UserOperation> for PackedUserOperation {
+    type Error = SafeSmartAccountError;
+
+    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
+        Ok(Self {
+            sender: Address::parse_from_ffi(&user_op.sender, "sender")?,
+            nonce: U256::parse_from_ffi(&user_op.nonce, "nonce")?,
+            init_code: get_init_code(user_op)?,
+            call_data: Bytes::parse_from_ffi(&user_op.call_data, "call_data")?,
+            account_gas_limits: pack_pair(
+                &U128::parse_from_ffi(
+                    &user_op.verification_gas_limit,
+                    "verification_gas_limit",
+                )?,
+                &U128::parse_from_ffi(&user_op.call_gas_limit, "call_gas_limit")?,
+            ),
+            pre_verification_gas: U256::parse_from_ffi(
+                &user_op.pre_verification_gas,
+                "pre_verification_gas",
+            )?,
+            gas_fees: pack_pair(
+                &U128::parse_from_ffi(
+                    &user_op.max_priority_fee_per_gas,
+                    "max_priority_fee_per_gas",
+                )?,
+                &U128::parse_from_ffi(&user_op.max_fee_per_gas, "max_fee_per_gas")?,
+            ),
+            paymaster_and_data: get_paymaster_and_data(user_op)?,
+            signature: Bytes::parse_from_ffi(&user_op.signature, "signature")?,
+        })
+    }
 }
 
 #[cfg(test)]
