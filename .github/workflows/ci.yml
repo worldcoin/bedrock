@@ -81,6 +81,8 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Run tests
+        env:
+          WORLDCHAIN_RPC_URL: ${{ secrets.WORLDCHAIN_RPC_URL }}
         run: |
           cp .env.example .env
           cargo test --all
