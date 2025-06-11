@@ -69,6 +69,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
       - name: Build the Swift project
         run: ./swift/build_swift.sh
@@ -128,7 +129,7 @@ jobs:
 
   prepare-kotlin:
     name: Prepare Kotlin
-    runs-on: arm64-ubuntu-22.04-32core
+    runs-on: ubuntu-22.04-32core
     needs: [pre-release-checks]
     permissions:
       contents: read
@@ -151,6 +152,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          targets: ${{ matrix.settings.target }}
 
       - name: Install Cross
         run: |
@@ -169,7 +171,7 @@ jobs:
 
   publish-kotlin:
     name: Publish Kotlin
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-32core
     needs: [pre-release-checks, prepare-kotlin]
     permissions:
         packages: write
