@@ -78,7 +78,7 @@ jobs:
         run: |
           zip -r Bedrock.xcframework.zip swift/Bedrock.xcframework
 
-      - name: Create draft release in oxide-swift & upload binaries
+      - name: Create draft release in bedrock-swift & upload binaries
         uses: softprops/action-gh-release@v2
         id: release
         with:
@@ -113,6 +113,7 @@ jobs:
           cp -r swift/Sources/ target-repo/Sources
 
           # prepare Package.swift
+          brew install swiftlint
           ./swift/archive_swift.sh --asset-url "$ASSET_URL" --checksum "$CHECKSUM" --release-version "$NEW_VERSION"
           cp Package.swift target-repo/
 
@@ -167,7 +168,7 @@ jobs:
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: android-${{ matrix.settings.target }}
-          path: ./target/${{ matrix.settings.target }}/release/liboxide.so
+          path: ./target/${{ matrix.settings.target }}/release/libbedrock.so
           if-no-files-found: error
 
   publish-kotlin:
