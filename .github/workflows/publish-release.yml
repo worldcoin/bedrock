@@ -106,13 +106,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.DEPLOY_BOT_TOKEN }}
           ASSET_URL: ${{ steps.meta.outputs.asset_url }}
           CHECKSUM: ${{ steps.meta.outputs.checksum }}
+          NEW_VERSION: ${{ needs.pre-release-checks.outputs.new_version }}
         run: |
 
           # copy non-binary source files
           cp -r swift/Sources/ target-repo/Sources
 
           # prepare Package.swift
-          ./swift/archive_swift.sh
+          ./swift/archive_swift.sh --asset-url "$ASSET_URL" --checksum "$CHECKSUM" --release-version "$NEW_VERSION"
           cp Package.swift target-repo/
 
           cd target-repo
@@ -120,12 +121,12 @@ jobs:
           git config --global user.name "github-actions[bot]"
 
           git add .
-          git commit -m "Release ${{ needs.pre-release-checks.outputs.new_version }}"
+          git commit -m "Release $NEW_VERSION"
 
           # Tag the release
-          git tag ${{ needs.pre-release-checks.outputs.new_version }}
+          git tag $NEW_VERSION
           git push
-          git push origin ${{ needs.pre-release-checks.outputs.new_version }}
+          git push origin $NEW_VERSION
 
   prepare-kotlin:
     name: Prepare Kotlin
