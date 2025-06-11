@@ -48,6 +48,8 @@ jobs:
     name: Publish Swift
     runs-on: macos-latest
     needs: [pre-release-checks]
+    permissions:
+      contents: read
     outputs:
       release_id: ${{ steps.release.outputs.id }}
 
@@ -128,6 +130,8 @@ jobs:
     name: Prepare Kotlin
     runs-on: arm64-ubuntu-22.04-32core
     needs: [pre-release-checks]
+    permissions:
+      contents: read
 
     # Each target is built separately to run in parallel. Running sequentially takes vastly more time.
     # The jobs prepare-kotlin and publish-kotlin replace the kotlin/build_kotlin.sh script.
