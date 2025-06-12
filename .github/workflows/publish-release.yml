@@ -199,15 +199,15 @@ jobs:
           path: .
 
       - name: Move artifacts
-        working-directory: kotlin/sdk/src/main/jniLibs
         run: |
-          mkdir armeabi-v7a arm64-v8a x86 x86_64
+          mkdir -p kotlin/src/main/jniLibs && cd kotlin/src/main/jniLibs
+          mkdir armeabi-v7a arm64-v8a
           mv /home/runner/work/bedrock/bedrock/android-armv7-linux-androideabi/libbedrock.so ./armeabi-v7a/libbedrock.so
           mv /home/runner/work/bedrock/bedrock/android-aarch64-linux-android/libbedrock.so ./arm64-v8a/libbedrock.so
 
       - name: Generate bindings
         working-directory: kotlin
-        run: cargo run -p uniffi-bindgen generate ./sdk/src/main/jniLibs/arm64-v8a/libbedrock.so --library --language kotlin --no-format --out-dir sdk/src/main/java
+        run: cargo run -p uniffi-bindgen generate ./src/main/jniLibs/arm64-v8a/libbedrock.so --library --language kotlin --no-format --out-dir src/main/java
 
       - name: Publish
         working-directory: kotlin
