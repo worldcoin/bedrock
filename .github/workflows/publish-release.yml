@@ -118,6 +118,8 @@ jobs:
           cp Package.swift target-repo/
 
           cd target-repo
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git
+
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
@@ -144,8 +146,6 @@ jobs:
         settings:
           - target: aarch64-linux-android
           - target: armv7-linux-androideabi
-          - target: x86_64-linux-android
-          - target: i686-linux-android
 
     steps:
       - name: Checkout code
@@ -173,7 +173,7 @@ jobs:
 
   publish-kotlin:
     name: Publish Kotlin
-    runs-on: ubuntu-22.04-32core
+    runs-on: ubuntu-latest
     needs: [pre-release-checks, prepare-kotlin]
     permissions:
         packages: write
@@ -204,8 +204,6 @@ jobs:
           mkdir armeabi-v7a arm64-v8a x86 x86_64
           mv /home/runner/work/bedrock/bedrock/android-armv7-linux-androideabi/libbedrock.so ./armeabi-v7a/libbedrock.so
           mv /home/runner/work/bedrock/bedrock/android-aarch64-linux-android/libbedrock.so ./arm64-v8a/libbedrock.so
-          mv /home/runner/work/bedrock/bedrock/android-i686-linux-android/libbedrock.so ./x86/libbedrock.so
-          mv /home/runner/work/bedrock/bedrock/android-x86_64-linux-android/libbedrock.so ./x86_64/libbedrock.so
 
       - name: Generate bindings
         working-directory: kotlin
