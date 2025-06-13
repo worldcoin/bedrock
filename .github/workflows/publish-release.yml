@@ -209,6 +209,13 @@ jobs:
         working-directory: kotlin
         run: cargo run -p uniffi-bindgen generate ./src/main/jniLibs/arm64-v8a/libbedrock.so --library --language kotlin --no-format --out-dir src/main/java
 
+      - name: Set up Gradle
+        working-directory: kotlin
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          sdk install gradle 8.7
+          gradle wrapper --gradle-version 8.7
+
       - name: Publish
         working-directory: kotlin
         run: ./gradlew sdk:publish
