@@ -50,6 +50,7 @@ jobs:
     needs: [pre-release-checks]
     permissions:
       contents: read
+      packages: write
     outputs:
       release_id: ${{ steps.release.outputs.id }}
 
