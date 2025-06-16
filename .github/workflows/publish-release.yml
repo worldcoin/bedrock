@@ -48,8 +48,6 @@ jobs:
     name: Publish Swift
     runs-on: macos-latest
     needs: [pre-release-checks]
-    permissions:
-      contents: write
     outputs:
       release_id: ${{ steps.release.outputs.id }}
 
