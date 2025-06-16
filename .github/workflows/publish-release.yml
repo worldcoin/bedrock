@@ -116,7 +116,6 @@ jobs:
           cp Package.swift target-repo/
 
           cd target-repo
-          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git
 
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
@@ -126,8 +125,10 @@ jobs:
 
           # Tag the release
           git tag $NEW_VERSION
-          git push
-          git push origin $NEW_VERSION
+          # Push commit
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git
+          # Push tag
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git $NEW_VERSION
 
   prepare-kotlin:
     name: Prepare Kotlin
