@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 TEST_RESULTS_DIR="$ROOT_DIR/kotlin/bedrock-tests/build/test-results/test"
-rm -r "$TEST_RESULTS_DIR"
+rm -rf "$TEST_RESULTS_DIR"
 
 cd "$ROOT_DIR"
 
