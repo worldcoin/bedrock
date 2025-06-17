@@ -41,7 +41,7 @@ afterEvaluate {
         publications {
             create<MavenPublication>("maven") {
                 groupId = "com.toolsforhumanity"
-                artifactId = "bedrock-android"
+                artifactId = "bedrock"
 
                 version = if (project.hasProperty("versionName")) {
                     project.property("versionName") as String
