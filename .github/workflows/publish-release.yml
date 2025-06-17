@@ -109,10 +109,10 @@ jobs:
           NEW_VERSION: ${{ needs.pre-release-checks.outputs.new_version }}
         run: |
 
-          # copy non-binary source files
+          # Copy non-binary source files
           cp -r swift/Sources/ target-repo/Sources
 
-          # prepare Package.swift
+          # Prepare Package.swift
           brew install swiftlint
           ./swift/archive_swift.sh --asset-url "$ASSET_URL" --checksum "$CHECKSUM" --release-version "$NEW_VERSION"
           cp Package.swift target-repo/
@@ -122,16 +122,18 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
-          curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
+          curl -I -H -v "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
           curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/worldcoin/bedrock-swift
 
           git add .
           git commit -m "Release $NEW_VERSION"
 
+          git remote -v
+
           # Tag the release
-          git tag $NEW_VERSION
-          # Push tag
-          git push https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git $NEW_VERSION
+          # git tag $NEW_VERSION
+          # # Push tag
+          # git push https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git $NEW_VERSION
           # Push commit
           git push https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git
 
@@ -217,12 +219,13 @@ jobs:
         working-directory: kotlin
         run: |
           curl -s "https://get.sdkman.io" | bash
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
           sdk install gradle 8.7
-          gradle wrapper --gradle-version 8.7
+          gradle wrapper --gradle-version 8.7 # same as `test_kotlin.sh`
 
       - name: Publish
         working-directory: kotlin
-        run: ./gradlew sdk:publish
+        run: ./gradlew ffi:publish -PversionName=${{ needs.pre-release-checks.outputs.new_version }}
         env:
           GITHUB_ACTOR: wc-cicd
           GITHUB_TOKEN: ${{ github.token }}

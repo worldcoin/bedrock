@@ -52,7 +52,7 @@ if [ ! -f "gradlew" ]; then
     echo -e "${RED}✗ Gradle is required but not installed. Aborting.${NC}" >&2
     exit 1
   fi
-  gradle wrapper --gradle-version 8.7
+  gradle wrapper --gradle-version 8.7 # same version as in publish-release.yml
 fi
 echo -e "${GREEN}✅ Gradle test environment ready${NC}"
 
