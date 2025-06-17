@@ -62,6 +62,7 @@ jobs:
         with:
           repository: worldcoin/bedrock-swift
           path: target-repo
+          token: ${{ secrets.DEPLOY_BOT_TOKEN }}
 
       - name: Setup Swift
         uses: swift-actions/setup-swift@v2
