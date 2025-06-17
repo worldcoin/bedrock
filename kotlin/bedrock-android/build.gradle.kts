@@ -6,6 +6,10 @@ plugins {
     id("maven-publish")
 }
 
+kotlin {
+    jvmToolchain(17)
+}
+
 android {
     namespace = "com.toolsforhumanity.bedrock"
     compileSdk = 33
@@ -22,7 +26,7 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "17"
     }
 
     publishing {

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+rm -rf bedrock-tests/build/test-results
+
 echo "========================================="
 echo "Running Kotlin/JVM Tests"
 echo "========================================="
@@ -68,18 +70,18 @@ echo "📊 Test Results Summary:"
 echo "========================"
 
 # Show test results if they exist
-if [ -d "build/test-results/test" ]; then
-  echo "✅ Test results found in: build/test-results/test"
+if [ -d "bedrock-tests/build/test-results/test" ]; then
+  echo "✅ Test results found in: bedrock-tests/build/test-results/test"
   
   # Count test results
-  TOTAL_TESTS=$(find build/test-results/test -name "*.xml" -exec grep -l "testcase" {} \; | wc -l | tr -d ' ')
+  TOTAL_TESTS=$(find bedrock-tests/build/test-results/test -name "*.xml" -exec grep -l "testcase" {} \; | wc -l | tr -d ' ')
   if [ "$TOTAL_TESTS" -gt 0 ]; then
     echo "📋 Total test files: $TOTAL_TESTS"
     
     # Show basic stats from XML files
-    PASSED=$(find build/test-results/test -name "*.xml" -exec grep -o "tests=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
-    FAILURES=$(find build/test-results/test -name "*.xml" -exec grep -o "failures=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
-    ERRORS=$(find build/test-results/test -name "*.xml" -exec grep -o "errors=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    PASSED=$(find bedrock-tests/build/test-results/test -name "*.xml" -exec grep -o "tests=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    FAILURES=$(find bedrock-tests/build/test-results/test -name "*.xml" -exec grep -o "failures=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    ERRORS=$(find bedrock-tests/build/test-results/test -name "*.xml" -exec grep -o "errors=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
     
     echo "✅ Tests passed: $PASSED"
     echo "❌ Tests failed: $FAILURES"
