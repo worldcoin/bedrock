@@ -61,7 +61,7 @@ echo -e "${BLUE}🧪 Step 3: Running Kotlin tests with verbose output...${NC}"
 echo ""
 
 # Run tests with verbose output (HTML reports disabled in build.gradle)
-./gradlew --no-daemon test --info --continue
+./gradlew --no-daemon bedrock-tests:test --info --continue
 
 echo ""
 echo "📊 Test Results Summary:"

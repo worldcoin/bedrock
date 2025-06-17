@@ -118,25 +118,17 @@ jobs:
           ./swift/archive_swift.sh --asset-url "$ASSET_URL" --checksum "$CHECKSUM" --release-version "$NEW_VERSION"
           cp Package.swift target-repo/
 
+          # Commit changes
           cd target-repo
-
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-
-          curl -I -H -v "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
-          curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/worldcoin/bedrock-swift
-
           git add .
           git commit -m "Release $NEW_VERSION"
 
-          git remote -v
-
           # Tag the release
-          # git tag $NEW_VERSION
-          # # Push tag
-          # git push https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git $NEW_VERSION
-          # Push commit
-          git push https://x-access-token:${GITHUB_TOKEN}@github.com/worldcoin/bedrock-swift.git
+          git tag $NEW_VERSION
+          git push
+          git push origin $NEW_VERSION
 
   prepare-kotlin:
     name: Prepare Kotlin
@@ -226,7 +218,7 @@ jobs:
 
       - name: Publish
         working-directory: kotlin
-        run: ./gradlew ffi:publish -PversionName=${{ needs.pre-release-checks.outputs.new_version }}
+        run: ./gradlew bedrock-android:publish -PversionName=${{ needs.pre-release-checks.outputs.new_version }}
         env:
           GITHUB_ACTOR: wc-cicd
           GITHUB_TOKEN: ${{ github.token }}

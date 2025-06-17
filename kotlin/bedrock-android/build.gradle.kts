@@ -12,18 +12,13 @@ android {
 
     defaultConfig {
         minSdk = 23
-
         @Suppress("deprecation")
         targetSdk = 33
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // TODO: Review applicable minification & ProGuard
-
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
@@ -48,7 +43,7 @@ afterEvaluate {
                     project.property("versionName") as String
                 } else {
                     val stdout = ByteArrayOutputStream()
-                    project.exec {
+                    exec {
                         commandLine = listOf(
                             "curl", "-s", "-H",
                             "Authorization: token ${System.getenv("GITHUB_TOKEN")}",
@@ -67,6 +62,7 @@ afterEvaluate {
                 }
             }
         }
+
         repositories {
             maven {
                 name = "GitHubPackages"
@@ -81,13 +77,10 @@ afterEvaluate {
 }
 
 dependencies {
-    implementation("net.java.dev.jna:jna:5.13.0@aar")
+    // UniFFI requires JNA for native calls
+    implementation("net.java.dev.jna:jna:5.13.0")
     implementation("androidx.core:core-ktx:1.8.0")
     implementation("androidx.appcompat:appcompat:1.4.1")
     implementation("com.google.android.material:material:1.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
 }
