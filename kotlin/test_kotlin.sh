@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
+
 echo "========================================="
 echo "Running Kotlin/JVM Tests"
 echo "========================================="
@@ -13,6 +15,9 @@ YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+TEST_RESULTS_DIR="$ROOT_DIR/kotlin/bedrock-tests/build/test-results/test"
+rm -rf "$TEST_RESULTS_DIR"
 
 cd "$ROOT_DIR"
 
@@ -52,7 +57,7 @@ if [ ! -f "gradlew" ]; then
     echo -e "${RED}✗ Gradle is required but not installed. Aborting.${NC}" >&2
     exit 1
   fi
-  gradle wrapper --gradle-version 8.7
+  gradle wrapper --gradle-version 8.7 # same version as in publish-release.yml
 fi
 echo -e "${GREEN}✅ Gradle test environment ready${NC}"
 
@@ -61,25 +66,25 @@ echo -e "${BLUE}🧪 Step 3: Running Kotlin tests with verbose output...${NC}"
 echo ""
 
 # Run tests with verbose output (HTML reports disabled in build.gradle)
-./gradlew --no-daemon test --info --continue
+./gradlew --no-daemon bedrock-tests:test --info --continue
 
 echo ""
 echo "📊 Test Results Summary:"
 echo "========================"
 
 # Show test results if they exist
-if [ -d "build/test-results/test" ]; then
-  echo "✅ Test results found in: build/test-results/test"
+if [ -d "$TEST_RESULTS_DIR" ]; then
+  echo "✅ Test results found in: $TEST_RESULTS_DIR"
   
   # Count test results
-  TOTAL_TESTS=$(find build/test-results/test -name "*.xml" -exec grep -l "testcase" {} \; | wc -l | tr -d ' ')
+  TOTAL_TESTS=$(find "$TEST_RESULTS_DIR" -name "*.xml" -exec grep -l "testcase" {} \; | wc -l | tr -d ' ')
   if [ "$TOTAL_TESTS" -gt 0 ]; then
     echo "📋 Total test files: $TOTAL_TESTS"
     
     # Show basic stats from XML files
-    PASSED=$(find build/test-results/test -name "*.xml" -exec grep -o "tests=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
-    FAILURES=$(find build/test-results/test -name "*.xml" -exec grep -o "failures=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
-    ERRORS=$(find build/test-results/test -name "*.xml" -exec grep -o "errors=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    PASSED=$(find "$TEST_RESULTS_DIR" -name "*.xml" -exec grep -o "tests=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    FAILURES=$(find "$TEST_RESULTS_DIR" -name "*.xml" -exec grep -o "failures=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
+    ERRORS=$(find "$TEST_RESULTS_DIR" -name "*.xml" -exec grep -o "errors=\"[0-9]*\"" {} \; | cut -d'"' -f2 | awk '{sum+=$1} END {print sum+0}')
     
     echo "✅ Tests passed: $PASSED"
     echo "❌ Tests failed: $FAILURES"

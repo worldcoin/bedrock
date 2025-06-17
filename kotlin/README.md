@@ -20,3 +20,10 @@ To build the Kotlin project run:
     # run from the root project directory
     ./swift/test_kotlin.sh
 ```
+
+
+### Kotlin Project Structure
+
+The Kotlin project has two members:
+- `bedrock-android`: The main bedrock library with foreign bindings for Kotlin.
+- `bedrock-tests`: Unit tests to assert the Kotlin bindings behave as intended (called "Foreign Tests"). These tests are not bundled with the library.

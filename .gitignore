@@ -25,10 +25,11 @@ cache/
 **/out/build-info
 
 # kotlin
-kotlin/src/main/java/
+kotlin/bedrock-android/src
 kotlin/libs/
 kotlin/.gradle/
 kotlin/build/
+kotlin/**/build/
 kotlin/gradlew
 kotlin/gradlew.bat
 kotlin/gradle/
