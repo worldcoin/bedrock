@@ -3,9 +3,9 @@ name: Publish Release
 on:
   pull_request:
     # FIXME
-    types: [closed]
-    branches:
-      - main
+    # types: [closed]
+    # branches:
+    #   - main
 
 jobs:
   pre-release-checks:
