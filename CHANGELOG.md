@@ -1,5 +1,7 @@
 # Changelog
-\n\n
+
+
+
 ## [0.0.2] - 2025-06-18
 
 ## What's Changed
