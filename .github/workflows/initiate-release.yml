@@ -2,7 +2,6 @@ name: Initiate Release
 description: "Initiates a release of the library by creating a PR that bumps the version."
 
 on:
-  pull_request: # FIXME
   workflow_dispatch:
     inputs:
       bump_type:
@@ -35,8 +34,7 @@ jobs:
       - name: Calculate new version
         id: version
         env:
-          BUMP_TYPE: patch # FIXME
-          # BUMP_TYPE: ${{ github.event.inputs.bump_type }}
+          BUMP_TYPE: ${{ github.event.inputs.bump_type }}
         run: |
           # Get current version from workspace package in Cargo.toml
           CURRENT_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.workspace_members[0]' | cut -d '#' -f2)
