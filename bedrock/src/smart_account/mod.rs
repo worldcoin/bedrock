@@ -339,6 +339,7 @@ mod tests {
         .unwrap();
         let chain_id = 10;
 
+        // Example from specs: https://eips.ethereum.org/EIPS/eip-712#specification-of-the-eth_signtypeddata-json-rpc
         let typed_data = json!({
              "types":{
                 "EIP712Domain":[
