@@ -16,14 +16,14 @@ on:
 jobs:
   initiate-release:
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: write # required to open the PR and generate release notes
       pull-requests: write
-    
+
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -105,16 +105,16 @@ jobs:
         env:
           NEW_VERSION: ${{ steps.version.outputs.new_version }}
           RELEASE_NOTES: ${{ steps.release_notes.outputs.release_notes }}
-        run: |        
+        run: |
           # Create a temporary file with the new changelog entry
           echo -e "\n\n" > temp_changelog.md
           echo "## [$NEW_VERSION] - $(date +%Y-%m-%d)" >> temp_changelog.md
           echo "" >> temp_changelog.md
           echo "$RELEASE_NOTES" >> temp_changelog.md
           echo "" >> temp_changelog.md
-          
+
           sed '1,/^# Changelog/r temp_changelog.md' CHANGELOG.md > new_changelog.md
-          
+
           mv new_changelog.md CHANGELOG.md
           rm temp_changelog.md
 
@@ -154,7 +154,7 @@ jobs:
           echo "RELEASE_NOTES: $RELEASE_NOTES"
 
           gh pr create \
-            --title "Oxide Release $NEW_VERSION" \
+            --title "Bedrock Release $NEW_VERSION" \
             --body "${RELEASE_NOTES}" \
             --base main \
             --label "release" \
