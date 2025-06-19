@@ -1,12 +1,13 @@
 use std::str::FromStr;
 
 use alloy::{
+    dyn_abi::TypedData,
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 pub use signer::SafeSmartAccountSigner;
 
-use crate::{bedrock_export, debug, error, info, primitives::HexEncodedData};
+use crate::{bedrock_export, debug, error, primitives::HexEncodedData};
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
 mod signer;
@@ -94,7 +95,7 @@ impl SafeSmartAccount {
             SafeSmartAccountError::AddressParsing(wallet_address.to_string())
         })?;
 
-        info!(
+        debug!(
             "Successfully initialized SafeSmartAccount for wallet: {}",
             wallet_address
         );
@@ -123,7 +124,7 @@ impl SafeSmartAccount {
         Ok(signature.into())
     }
 
-    /// Crafts and signs a 4337 user operation.
+    /// Crafts and signs a 4337 user operation on behalf of the Safe Smart Account.
     ///
     /// # Arguments
     /// - `user_operation`: The user operation to sign.
@@ -182,6 +183,41 @@ impl SafeSmartAccount {
 
         Ok(signature.into())
     }
+
+    /// Signs an arbitrary EIP-712 typed data message on behalf of the Safe Smart Account.
+    ///
+    /// # Arguments
+    /// - `chain_id`: The chain ID of the chain where the message is being signed. While technically the chain ID is a `U256` in EVM, we limit
+    ///   to sensible `u32` (which works well with foreign code).
+    /// - `stringified_typed_data`: A JSON string representing the typed data as per EIP-712.
+    ///
+    /// # Errors
+    /// - Will throw an error if the typed data is not a valid JSON string.
+    /// - Will throw an error if the typed data is not a valid EIP-712 typed data message.
+    /// - Will throw an error if the signature process unexpectedly fails.
+    pub fn sign_typed_data(
+        &self,
+        chain_id: u32,
+        stringified_typed_data: &str,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let typed_data: TypedData = serde_json::from_str(stringified_typed_data)
+            .map_err(|_| SafeSmartAccountError::InvalidInput {
+                attribute: "stringified_typed_data",
+                message:
+                    "invalid JSON string or not a valid EIP-712 typed data message"
+                        .to_string(),
+            })?;
+
+        let typed_data_eip712_hash = typed_data.eip712_signing_hash().map_err(|e| {
+            SafeSmartAccountError::Generic {
+                message: format!("failed to calculate EIP-712 signing hash: {e}"),
+            }
+        })?;
+
+        let signature = self.sign_message(typed_data_eip712_hash, chain_id)?;
+
+        Ok(signature.into())
+    }
 }
 
 #[cfg(test)]
@@ -207,6 +243,7 @@ impl SafeSmartAccount {
 #[cfg(test)]
 mod tests {
     use alloy::signers::local::PrivateKeySigner;
+    use serde_json::json;
 
     use super::*;
 
@@ -290,5 +327,87 @@ mod tests {
       };
 
         assert_eq!(safe.sign_4337_op(&user_op, chain_id).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
+    }
+
+    #[test]
+    fn test_sign_typed_data() {
+        let safe = SafeSmartAccount::new(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let chain_id = 10;
+
+        let typed_data = json!({
+             "types":{
+                "EIP712Domain":[
+                   {
+                      "name":"name",
+                      "type":"string"
+                   },
+                   {
+                      "name":"version",
+                      "type":"string"
+                   },
+                   {
+                      "name":"chainId",
+                      "type":"uint256"
+                   },
+                   {
+                      "name":"verifyingContract",
+                      "type":"address"
+                   }
+                ],
+                "Person":[
+                   {
+                      "name":"name",
+                      "type":"string"
+                   },
+                   {
+                      "name":"wallet",
+                      "type":"address"
+                   }
+                ],
+                "Mail":[
+                   {
+                      "name":"from",
+                      "type":"Person"
+                   },
+                   {
+                      "name":"to",
+                      "type":"Person"
+                   },
+                   {
+                      "name":"contents",
+                      "type":"string"
+                   }
+                ]
+             },
+             "primaryType":"Mail",
+             "domain":{
+                "name":"Ether Mail",
+                "version":"1",
+                "chainId":1,
+                "verifyingContract":"0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"
+             },
+             "message":{
+                "from":{
+                   "name":"Cow",
+                   "wallet":"0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826"
+                },
+                "to":{
+                   "name":"Bob",
+                   "wallet":"0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+                },
+                "contents":"Hello, Bob!"
+             }
+        });
+
+        assert_eq!(
+        safe.sign_typed_data(chain_id, &typed_data.to_string())
+            .unwrap().to_hex_string(),
+        "0x02ef654edf58fdc39597af35b8e16931cb5f16233d15a9f8d1a06f13612225f04c4927677f5f60a82a1b69d08dd61cd8658d1a7c29efc223f5912695adf7a0931c"
+    );
     }
 }
