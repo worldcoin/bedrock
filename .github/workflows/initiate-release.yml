@@ -107,7 +107,7 @@ jobs:
           RELEASE_NOTES: ${{ steps.release_notes.outputs.release_notes }}
         run: |
           # Create a temporary file with the new changelog entry
-          echo "\n\n" > temp_changelog.md
+          echo -e "\n\n" > temp_changelog.md
           echo "## [$NEW_VERSION] - $(date +%Y-%m-%d)" >> temp_changelog.md
           echo "" >> temp_changelog.md
           echo "$RELEASE_NOTES" >> temp_changelog.md
