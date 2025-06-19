@@ -105,16 +105,23 @@ jobs:
         env:
           NEW_VERSION: ${{ steps.version.outputs.new_version }}
           RELEASE_NOTES: ${{ steps.release_notes.outputs.release_notes }}
-        run: |
+        run: |        
+          # Check if version already exists in changelog
+          if grep -q "## \[$NEW_VERSION\]" CHANGELOG.md; then
+            echo "Version $NEW_VERSION already exists in CHANGELOG.md, skipping update"
+            exit 0
+          fi
+
           # Create a temporary file with the new changelog entry
           echo -e "\n\n" > temp_changelog.md
           echo "## [$NEW_VERSION] - $(date +%Y-%m-%d)" >> temp_changelog.md
           echo "" >> temp_changelog.md
           echo "$RELEASE_NOTES" >> temp_changelog.md
           echo "" >> temp_changelog.md
-
-          sed '1,/^# Changelog/r temp_changelog.md' CHANGELOG.md > new_changelog.md
-
+          
+          # Insert the new changelog entry after the header
+          awk 'NR==1{print; system("cat temp_changelog.md"); next} 1' CHANGELOG.md > new_changelog.md
+          
           mv new_changelog.md CHANGELOG.md
           rm temp_changelog.md
 
