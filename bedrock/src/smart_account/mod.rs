@@ -225,7 +225,8 @@ impl SafeSmartAccount {
         if RESTRICTED_PRIMARY_TYPES.contains(&typed_data.primary_type.as_str()) {
             return Err(SafeSmartAccountError::InvalidInput {
                 attribute: "primary_type",
-                message: "primary type is restricted and cannot be signed".to_string(),
+                message: "this type of TypedData is restricted and cannot be arbitrarily signed"
+                    .to_string(),
             });
         }
 
@@ -330,8 +331,11 @@ impl SafeSmartAccount {
 
 #[cfg(test)]
 mod tests {
-    use alloy::signers::local::PrivateKeySigner;
+    use alloy::{primitives::address, signers::local::PrivateKeySigner};
+    use ruint::uint;
     use serde_json::json;
+
+    use crate::smart_account::permit2::TokenPermissions;
 
     use super::*;
 
@@ -498,5 +502,60 @@ mod tests {
             .unwrap().to_hex_string(),
         "0x02ef654edf58fdc39597af35b8e16931cb5f16233d15a9f8d1a06f13612225f04c4927677f5f60a82a1b69d08dd61cd8658d1a7c29efc223f5912695adf7a0931c"
     );
+    }
+
+    #[test]
+    fn test_cannot_sign_invalid_permit2_transfer() {
+        let permitted = Permit2TokenPermissions {
+            token: "123".to_string(), // note this is invalid
+            amount: "1000000000000000000".to_string(),
+        };
+
+        let transfer_from = Permit2TransferFrom {
+            permitted,
+            spender: "0x3f1480266afef1ba51834cfef0a5d61841d57572".to_string(),
+            nonce: "123".to_string(),
+            deadline: "1704067200".to_string(),
+        };
+
+        let smart_account = SafeSmartAccount::random();
+
+        let result = smart_account.sign_permit2_transfer(480, transfer_from);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("invalid input on permitted.token: odd number of digits")
+        );
+    }
+
+    #[test]
+    fn test_cannot_sign_restricted_typed_data() {
+        let permitted = TokenPermissions {
+            token: address!("0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1"),
+            amount: uint!(1000000000000000000_U256),
+        };
+
+        let transfer_from = PermitTransferFrom {
+            permitted,
+            spender: address!("0x3f1480266afef1ba51834cfef0a5d61841d57572"),
+            nonce: uint!(123_U256),
+            deadline: uint!(1704067200_U256),
+        };
+
+        let typed_data =
+            serde_json::to_string(&transfer_from.as_typed_data(480)).unwrap();
+
+        let smart_account = SafeSmartAccount::random();
+
+        let result = smart_account.sign_typed_data(480, &typed_data);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("invalid input on primary_type: this type of TypedData is restricted and cannot be arbitrarily signed")
+        );
     }
 }
