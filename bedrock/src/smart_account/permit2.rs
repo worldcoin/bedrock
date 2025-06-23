@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Reference: <https://docs.uniswap.org/contracts/v4/deployments#worldchain-480>
-static PERMIT2_ADDRESS: Address =
+pub static PERMIT2_ADDRESS: Address =
     address!("0x000000000022d473030f116ddee9f6b43ac78ba3");
 
 sol! {

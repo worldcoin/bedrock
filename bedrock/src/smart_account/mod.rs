@@ -8,8 +8,9 @@ use alloy::{
 pub use signer::SafeSmartAccountSigner;
 
 use crate::{
-    bedrock_export, debug, error, primitives::HexEncodedData,
-    smart_account::permit2::PermitTransferFrom,
+    bedrock_export, debug, error,
+    primitives::HexEncodedData,
+    smart_account::permit2::{PermitTransferFrom, PERMIT2_ADDRESS},
 };
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
@@ -27,9 +28,9 @@ pub use transaction_4337::{
     GNOSIS_SAFE_4337_MODULE,
 };
 
-const RESTRICTED_PRIMARY_TYPES: &[&str] = &[
-    // Permit2's `PermitTransferFrom` requires using the custom `sign_permit2_transfer` method.
-    "PermitTransferFrom",
+const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[
+    // Permit2 requires using the custom `sign_permit2_transfer` method which has additional validation and other permission verification.
+    PERMIT2_ADDRESS,
 ];
 
 /// Errors that can occur when working with Safe Smart Accounts.
@@ -47,6 +48,9 @@ pub enum SafeSmartAccountError {
     /// Failed to encode data to a specific format.
     #[error("failed to encode: {0}")]
     Encoding(String),
+    /// For security reasons, the contract is restricted from directly signing `TypedData`.
+    #[error("the contract {0} is restricted from TypedData signing.")]
+    RestrictedContract(String),
     /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
     #[error("invalid input on {attribute}: {message}")]
     InvalidInput {
@@ -222,12 +226,12 @@ impl SafeSmartAccount {
                         .to_string(),
             })?;
 
-        if RESTRICTED_PRIMARY_TYPES.contains(&typed_data.primary_type.as_str()) {
-            return Err(SafeSmartAccountError::InvalidInput {
-                attribute: "primary_type",
-                message: "this type of TypedData is restricted and cannot be arbitrarily signed"
-                    .to_string(),
-            });
+        if let Some(verifying_contract) = typed_data.domain.verifying_contract {
+            if RESTRICTED_TYPED_DATA_CONTRACTS.contains(&verifying_contract) {
+                return Err(SafeSmartAccountError::RestrictedContract(
+                    verifying_contract.to_string(),
+                ));
+            }
         }
 
         let typed_data_eip712_hash = typed_data.eip712_signing_hash().map_err(|e| {
@@ -531,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cannot_sign_restricted_typed_data() {
+    fn test_cannot_sign_restricted_permit2_typed_data() {
         let permitted = TokenPermissions {
             token: address!("0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1"),
             amount: uint!(1000000000000000000_U256),
@@ -555,7 +559,52 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!("invalid input on primary_type: this type of TypedData is restricted and cannot be arbitrarily signed")
+            format!("the contract 0x000000000022D473030F116dDEE9F6B43aC78BA3 is restricted from TypedData signing.")
         );
+    }
+
+    #[test]
+    fn test_cannot_sign_restricted_permit2_typed_data_with_alternate_contract_casing() {
+        let permitted = TokenPermissions {
+            token: address!("0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1"),
+            amount: uint!(1000000000000000000_U256),
+        };
+
+        let transfer_from = PermitTransferFrom {
+            permitted,
+            spender: address!("0x3f1480266afef1ba51834cfef0a5d61841d57572"),
+            nonce: uint!(123_U256),
+            deadline: uint!(1704067200_U256),
+        };
+
+        let mut typed_data = transfer_from.as_typed_data(480);
+
+        let alternative_cases = [
+            "0x000000000022d473030f116ddee9f6b43ac78BA3", // mixed case
+            "000000000022d473030f116ddee9f6b43ac78ba3",   // no 0x
+            "0x000000000022D473030F116DDEE9F6B43AC78BA3", // upper case
+            "000000000022D473030F116DDEE9F6B43AC78BA3",   // upper case, no 0x
+        ];
+
+        for alternative_case in alternative_cases {
+            let mut domain = typed_data.domain.clone();
+            let address = Address::from_str(alternative_case).unwrap();
+            domain.verifying_contract = Some(address);
+
+            typed_data.domain = domain;
+
+            let typed_data_str = serde_json::to_string(&typed_data).unwrap();
+
+            let smart_account = SafeSmartAccount::random();
+
+            let result = smart_account.sign_typed_data(480, &typed_data_str);
+
+            assert!(result.is_err());
+
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!("the contract {address} is restricted from TypedData signing.")
+            );
+        }
     }
 }
