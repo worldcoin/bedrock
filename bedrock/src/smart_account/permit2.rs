@@ -41,6 +41,8 @@ sol! {
 }
 
 impl PermitTransferFrom {
+    /// Converts the `PermitTransferFrom` struct into an EIP-712 `TypedData` struct with its relevant domain.
+    #[must_use]
     pub fn as_typed_data(&self, chain_id: u32) -> TypedData {
         let domain: Eip712Domain = eip712_domain!(
             name: "Permit2",
