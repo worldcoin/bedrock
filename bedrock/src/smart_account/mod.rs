@@ -352,8 +352,6 @@ pub enum SafeOperation {
     DelegateCall,
 }
 
-//impl From<SafeOperation> for u8 {
-
 /// For Swift & Kotlin usage only.
 ///
 /// Represents a Safe Smart Account transaction which can be initialized by foreign code to be then signed.

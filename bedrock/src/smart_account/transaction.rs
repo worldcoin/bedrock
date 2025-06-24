@@ -39,7 +39,7 @@ impl SafeTransaction {
     ///
     /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L427>
     ///
-    /// Will attempt to convert the `SafeTransaction` into a `SafeTxHash` to be able to ABI encode it.
+    /// Attempts to convert the `SafeTransaction` (from foreign code) into a `SafeTxHash` which can be ABI encoded.
     ///
     /// # Errors
     /// - Returns an error if there's an error parsing any of the attributes.
@@ -58,7 +58,7 @@ impl TryFrom<SafeTransaction> for SafeTxHash {
 
         let value = U256::parse_from_ffi(&unparsed_tx.value, "value")?;
 
-        let calldata = if unparsed_tx.data.starts_with("0x") {
+        let data = if unparsed_tx.data.starts_with("0x") {
             &unparsed_tx.data[2..]
         } else {
             return Err(SafeSmartAccountError::InvalidInput {
@@ -66,7 +66,8 @@ impl TryFrom<SafeTransaction> for SafeTxHash {
                 message: "must be hex encoded and start with 0x".to_string(),
             });
         };
-        let data = keccak256(&hex::decode(calldata).map_err(|e| {
+
+        let data = keccak256(&hex::decode(data).map_err(|e| {
             SafeSmartAccountError::InvalidInput {
                 attribute: "data",
                 message: e.to_string(),
@@ -77,13 +78,9 @@ impl TryFrom<SafeTransaction> for SafeTxHash {
 
         let safe_tx_gas =
             U256::parse_from_ffi(&unparsed_tx.safe_tx_gas, "safe_tx_gas")?;
-
         let base_gas = U256::parse_from_ffi(&unparsed_tx.base_gas, "base_gas")?;
-
         let gas_price = U256::parse_from_ffi(&unparsed_tx.gas_price, "gas_price")?;
-
         let gas_token = Address::parse_from_ffi(&unparsed_tx.gas_token, "gas_token")?;
-
         let refund_receiver =
             Address::parse_from_ffi(&unparsed_tx.refund_receiver, "refund_receiver")?;
 
