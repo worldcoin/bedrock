@@ -7,7 +7,11 @@ use alloy::{
 };
 pub use signer::SafeSmartAccountSigner;
 
-use crate::{bedrock_export, debug, error, primitives::HexEncodedData};
+use crate::{
+    bedrock_export, debug, error,
+    primitives::HexEncodedData,
+    smart_account::permit2::{PermitTransferFrom, PERMIT2_ADDRESS},
+};
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
 mod signer;
@@ -15,10 +19,19 @@ mod signer;
 /// Enables EIP-4337 transaction crafting and signing
 mod transaction_4337;
 
+/// Enables crafting and signing of Permit2 allowances.
+/// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
+mod permit2;
+
 pub use transaction_4337::{
     EncodedSafeOpStruct, PackedUserOperation, UserOperation, ENTRYPOINT_4337,
     GNOSIS_SAFE_4337_MODULE,
 };
+
+const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[
+    // Permit2 requires using the custom `sign_permit2_transfer` method which has additional validation and other permission verification.
+    PERMIT2_ADDRESS,
+];
 
 /// Errors that can occur when working with Safe Smart Accounts.
 #[crate::bedrock_error]
@@ -35,6 +48,9 @@ pub enum SafeSmartAccountError {
     /// Failed to encode data to a specific format.
     #[error("failed to encode: {0}")]
     Encoding(String),
+    /// For security reasons, the contract is restricted from directly signing `TypedData`.
+    #[error("the contract {0} is restricted from TypedData signing.")]
+    RestrictedContract(String),
     /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
     #[error("invalid input on {attribute}: {message}")]
     InvalidInput {
@@ -127,8 +143,8 @@ impl SafeSmartAccount {
     /// Crafts and signs a 4337 user operation on behalf of the Safe Smart Account.
     ///
     /// # Arguments
-    /// - `user_operation`: The user operation to sign.
     /// - `chain_id`: The chain ID of the chain where the user operation is being signed.
+    /// - `user_operation`: The user operation to sign.
     ///
     /// # Errors
     /// - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
@@ -164,14 +180,14 @@ impl SafeSmartAccount {
     ///     factory_data: None,
     /// };
     ///
-    /// let signature = safe.sign_4337_op(&user_op, 480).unwrap();
+    /// let signature = safe.sign_4337_op(480, &user_op).unwrap();
     ///
     /// println!("Signature: {}", signature.to_hex_string());
     /// ```
     pub fn sign_4337_op(
         &self,
-        user_operation: &UserOperation,
         chain_id: u32,
+        user_operation: &UserOperation,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let user_op: EncodedSafeOpStruct = user_operation.try_into()?;
 
@@ -185,6 +201,8 @@ impl SafeSmartAccount {
     }
 
     /// Signs an arbitrary EIP-712 typed data message on behalf of the Safe Smart Account.
+    ///
+    /// Please note that certain primary types are restricted and cannot be signed. For example Permit2's `PermitTransferFrom` is restricted.
     ///
     /// # Arguments
     /// - `chain_id`: The chain ID of the chain where the message is being signed. While technically the chain ID is a `U256` in EVM, we limit
@@ -208,6 +226,14 @@ impl SafeSmartAccount {
                         .to_string(),
             })?;
 
+        if let Some(verifying_contract) = typed_data.domain.verifying_contract {
+            if RESTRICTED_TYPED_DATA_CONTRACTS.contains(&verifying_contract) {
+                return Err(SafeSmartAccountError::RestrictedContract(
+                    verifying_contract.to_string(),
+                ));
+            }
+        }
+
         let typed_data_eip712_hash = typed_data.eip712_signing_hash().map_err(|e| {
             SafeSmartAccountError::Generic {
                 message: format!("failed to calculate EIP-712 signing hash: {e}"),
@@ -218,6 +244,73 @@ impl SafeSmartAccount {
 
         Ok(signature.into())
     }
+
+    /// Signs a `Permit2` transfer on behalf of the Safe Smart Account.
+    ///
+    /// Used by Mini Apps where users approve transfers for specific tokens and amounts for a period of time on their behalf.
+    ///
+    /// # Arguments
+    /// - `chain_id`: The chain ID of the chain where the message is being signed.
+    /// - `transfer`: The `Permit2` transfer to sign.
+    ///
+    /// # Errors
+    /// - Will throw an error if the transfer is invalid, particularly if any attribute is not valid.
+    /// - Will throw an error if the signature process unexpectedly fails.
+    pub fn sign_permit2_transfer(
+        &self,
+        chain_id: u32,
+        transfer: Permit2TransferFrom,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let transfer_from: PermitTransferFrom = transfer.try_into()?;
+
+        let signing_hash = transfer_from
+            .as_typed_data(chain_id)
+            .eip712_signing_hash()
+            .map_err(|e| SafeSmartAccountError::Generic {
+                message: format!("failed to calculate EIP-712 signing hash: {e}"),
+            })?;
+
+        let signature = self.sign_message(signing_hash, chain_id)?;
+        Ok(signature.into())
+    }
+}
+
+/// For Swift & Kotlin usage only.
+///
+/// Allows foreign code to construct a signed permit message for a single token transfer.
+///
+/// [Permit2](https://docs.uniswap.org/contracts/permit2/overview) is an extension to EIP-2612 that allows for more efficient token approvals.
+///
+/// In World App, Permit2 is used to approve tokens for a Mini App spender to transfer on behalf of the user.
+///
+/// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
+#[derive(uniffi::Record, Debug)]
+pub struct Permit2TransferFrom {
+    permitted: Permit2TokenPermissions,
+    /// The address of the spender
+    /// Solidity type: `address`
+    spender: String,
+    /// A unique value for every token owner's signature to prevent signature replays
+    /// Solidity type: `uint256`
+    nonce: String,
+    /// The expiration timestamp on the permit signature
+    /// Solidity type: `uint256`
+    deadline: String,
+}
+
+/// For Swift & Kotlin usage only.
+///
+/// The token and amount details for a transfer signed in the permit transfer signature.
+///
+/// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L22>
+#[derive(uniffi::Record, Debug)]
+pub struct Permit2TokenPermissions {
+    /// ERC-20 token address
+    /// Solidity type: `address`
+    token: String,
+    /// The maximum amount of tokens that can be transferred
+    /// Solidity type: `uint256`
+    amount: String,
 }
 
 #[cfg(test)]
@@ -242,8 +335,11 @@ impl SafeSmartAccount {
 
 #[cfg(test)]
 mod tests {
-    use alloy::signers::local::PrivateKeySigner;
+    use alloy::{primitives::address, signers::local::PrivateKeySigner};
+    use ruint::uint;
     use serde_json::json;
+
+    use crate::smart_account::permit2::TokenPermissions;
 
     use super::*;
 
@@ -326,7 +422,7 @@ mod tests {
           factory_data: None,
       };
 
-        assert_eq!(safe.sign_4337_op(&user_op, chain_id).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
+        assert_eq!(safe.sign_4337_op(chain_id, &user_op).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
     }
 
     #[test]
@@ -410,5 +506,105 @@ mod tests {
             .unwrap().to_hex_string(),
         "0x02ef654edf58fdc39597af35b8e16931cb5f16233d15a9f8d1a06f13612225f04c4927677f5f60a82a1b69d08dd61cd8658d1a7c29efc223f5912695adf7a0931c"
     );
+    }
+
+    #[test]
+    fn test_cannot_sign_invalid_permit2_transfer() {
+        let permitted = Permit2TokenPermissions {
+            token: "123".to_string(), // note this is invalid
+            amount: "1000000000000000000".to_string(),
+        };
+
+        let transfer_from = Permit2TransferFrom {
+            permitted,
+            spender: "0x3f1480266afef1ba51834cfef0a5d61841d57572".to_string(),
+            nonce: "123".to_string(),
+            deadline: "1704067200".to_string(),
+        };
+
+        let smart_account = SafeSmartAccount::random();
+
+        let result = smart_account.sign_permit2_transfer(480, transfer_from);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("invalid input on permitted.token: odd number of digits")
+        );
+    }
+
+    #[test]
+    fn test_cannot_sign_restricted_permit2_typed_data() {
+        let permitted = TokenPermissions {
+            token: address!("0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1"),
+            amount: uint!(1000000000000000000_U256),
+        };
+
+        let transfer_from = PermitTransferFrom {
+            permitted,
+            spender: address!("0x3f1480266afef1ba51834cfef0a5d61841d57572"),
+            nonce: uint!(123_U256),
+            deadline: uint!(1704067200_U256),
+        };
+
+        let typed_data =
+            serde_json::to_string(&transfer_from.as_typed_data(480)).unwrap();
+
+        let smart_account = SafeSmartAccount::random();
+
+        let result = smart_account.sign_typed_data(480, &typed_data);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("the contract 0x000000000022D473030F116dDEE9F6B43aC78BA3 is restricted from TypedData signing.")
+        );
+    }
+
+    #[test]
+    fn test_cannot_sign_restricted_permit2_typed_data_with_alternate_contract_casing() {
+        let permitted = TokenPermissions {
+            token: address!("0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1"),
+            amount: uint!(1000000000000000000_U256),
+        };
+
+        let transfer_from = PermitTransferFrom {
+            permitted,
+            spender: address!("0x3f1480266afef1ba51834cfef0a5d61841d57572"),
+            nonce: uint!(123_U256),
+            deadline: uint!(1704067200_U256),
+        };
+
+        let mut typed_data = transfer_from.as_typed_data(480);
+
+        let alternative_cases = [
+            "0x000000000022d473030f116ddee9f6b43ac78BA3", // mixed case
+            "000000000022d473030f116ddee9f6b43ac78ba3",   // no 0x
+            "0x000000000022D473030F116DDEE9F6B43AC78BA3", // upper case
+            "000000000022D473030F116DDEE9F6B43AC78BA3",   // upper case, no 0x
+        ];
+
+        for alternative_case in alternative_cases {
+            let mut domain = typed_data.domain.clone();
+            let address = Address::from_str(alternative_case).unwrap();
+            domain.verifying_contract = Some(address);
+
+            typed_data.domain = domain;
+
+            let typed_data_str = serde_json::to_string(&typed_data).unwrap();
+
+            let smart_account = SafeSmartAccount::random();
+
+            let result = smart_account.sign_typed_data(480, &typed_data_str);
+
+            assert!(result.is_err());
+
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!("the contract {address} is restricted from TypedData signing.")
+            );
+        }
     }
 }

@@ -536,6 +536,7 @@ async fn test_integration_sign_typed_data() {
 
     let safe_contract = ISafe::new(safe_address, &provider);
 
+    // Example from specs: https://eips.ethereum.org/EIPS/eip-712#specification-of-the-eth_signtypeddata-json-rpc
     let typed_data = json!({
          "types":{
             "EIP712Domain":[
@@ -642,5 +643,5 @@ async fn test_integration_sign_typed_data() {
         "Signature verification failed on-chain"
     );
 
-    println!("✓ Signature validation for EIP-712 typed datapassed");
+    println!("✓ Signature validation for EIP-712 typed data passed");
 }

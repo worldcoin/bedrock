@@ -1299,6 +1299,7 @@ dependencies = [
  "quote",
  "rand 0.9.1",
  "ruint",
+ "serde",
  "serde_json",
  "syn 2.0.101",
  "thiserror 2.0.12",
