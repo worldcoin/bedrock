@@ -22,7 +22,9 @@ sol! {
     /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L22>
     #[derive(serde::Serialize)]
     struct TokenPermissions {
+        // ERC20 token address
         address token;
+        // Amount of tokens which can be transferred
         uint256 amount;
     }
 
@@ -33,9 +35,15 @@ sol! {
     /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
     #[derive(serde::Serialize)]
     struct PermitTransferFrom {
+        /// The token and amount details for a transfer signed in the permit transfer signature
         TokenPermissions permitted;
+        /// The address that is allowed to spend the tokens. Note this is not part of the `PermitTransferFrom` struct in the contract.
+        /// This is however added in the contract from `msg.sender` to compute the hash.
+        /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/libraries/PermitHash.sol#L62>
         address spender;
+        /// A unique value for every token owner's signature to prevent replays
         uint256 nonce;
+        /// Deadline (timestamp) after which the signature is no longer valid
         uint256 deadline;
     }
 }

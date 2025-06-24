@@ -157,6 +157,12 @@ async fn deploy_safe<P>(
 where
     P: Provider<Ethereum>,
 {
+    // Fund the owner to be able to execute transactions
+    provider
+        .anvil_set_balance(owner, U256::from(1e19))
+        .await
+        .unwrap();
+
     let proxy_factory = ISafeProxyFactory::new(SAFE_PROXY_FACTORY_ADDRESS, provider);
 
     // Encode the Safe setup call
@@ -209,11 +215,6 @@ where
         .expect("ProxyCreation event not found");
 
     let safe_address = proxy_creation_event.proxy;
-
-    provider
-        .anvil_set_balance(safe_address, U256::from(1e19))
-        .await
-        .expect("Failed to set Safe balance");
 
     Ok(safe_address)
 }
@@ -438,12 +439,15 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());
 
-    // Fund owner
-    provider.anvil_set_balance(owner, U256::from(1e19)).await?;
-
     // Deploy Safes
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     let safe_address2 = deploy_safe(&provider, owner, U256::from(1)).await?;
+
+    // Fund the Safe, to be able to test the balance transfer
+    provider
+        .anvil_set_balance(safe_address, U256::from(1e18))
+        .await
+        .unwrap();
 
     let before_balance = provider.get_balance(safe_address2).await?;
 
@@ -455,7 +459,7 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         .send()
         .await?;
 
-    // Let's transfer 1 ETH from Safe 1 to Safe 2
+    // Transfer 1 ETH from Safe 1 to Safe 2
     let eth_amount = U256::from(1e18);
     let call_data = ISafe4337Module::executeUserOpCall {
         to: safe_address2,
@@ -705,7 +709,7 @@ sol!(
 /// 6. Execute a `permitTransferFrom` call on the Permit2 contract to transfer WLD tokens from the Safe to the Mini App
 /// 7. Verify the tokens were transferred
 #[tokio::test]
-async fn test_integration_permit2_transfer() {
+async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
     // Step 1: Initial setup
     let anvil = setup_anvil();
     let owner_signer = PrivateKeySigner::random();
@@ -716,16 +720,12 @@ async fn test_integration_permit2_transfer() {
         .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());
 
-    provider
-        .anvil_set_balance(owner, U256::from(1e18))
-        .await
-        .unwrap();
+    provider.anvil_set_balance(owner, U256::from(1e18)).await?;
 
     // Step 2: Deploy a Safe (World App User)
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await.unwrap();
+    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     let chain_id = 480;
-    let safe_account =
-        SafeSmartAccount::new(owner_key_hex, &safe_address.to_string()).unwrap();
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 
     // Step 3: Give the Safe some simulated WLD balance
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
@@ -740,13 +740,9 @@ async fn test_integration_permit2_transfer() {
 
     provider
         .anvil_set_storage_at(wld_token_address, slot, balance.into())
-        .await
-        .unwrap();
+        .await?;
 
-    assert_eq!(
-        wld_contract.balanceOf(safe_address).call().await.unwrap(),
-        balance,
-    );
+    assert_eq!(wld_contract.balanceOf(safe_address).call().await?, balance,);
 
     // Step 4: Approve the Permit2 contract to transfer WLD tokens from the Safe
     // This uses the `sign_transaction` method to approve the Permit2 contract to transfer WLD tokens from the Safe on the ERC-20 WLD contract.
@@ -768,7 +764,7 @@ async fn test_integration_permit2_transfer() {
         refund_receiver: "0x0000000000000000000000000000000000000000".to_string(),
         nonce: "0".to_string(),
     };
-    let signature = safe_account.sign_transaction(chain_id, tx).unwrap();
+    let signature = safe_account.sign_transaction(chain_id, tx)?;
 
     let safe_contract = ISafe::new(safe_address, &provider);
     let approve_result = safe_contract
@@ -782,14 +778,13 @@ async fn test_integration_permit2_transfer() {
             U256::ZERO,            // gas_price (no refund)
             Address::ZERO,         // ETH token
             Address::ZERO,         // refund_receiver
-            signature.as_vec().unwrap().into(),
+            signature.as_vec()?.into(),
         )
         .from(owner)
         .send()
-        .await
-        .unwrap();
+        .await?;
 
-    approve_result.get_receipt().await.unwrap(); // important to get the receipt to ensure the transaction was executed
+    approve_result.get_receipt().await?; // important to get the receipt to ensure the transaction was executed
 
     // Step 5: Initialize a "Mini App" Wallet which will get approved to transfer WLD tokens on behalf of the user
     let mini_app_signer = PrivateKeySigner::random();
@@ -799,8 +794,7 @@ async fn test_integration_permit2_transfer() {
 
     mini_app_provider
         .anvil_set_balance(mini_app_signer.address(), U256::from(1e18))
-        .await
-        .unwrap();
+        .await?;
 
     // Step 6: Execute a `permitTransferFrom` call on the Permit2 contract
     let permitted = Permit2TokenPermissions {
@@ -833,7 +827,7 @@ async fn test_integration_permit2_transfer() {
         requestedAmount: U256::from(1e18), // 1 WLD
     };
 
-    let signature = signature.as_vec().unwrap();
+    let signature = signature.as_vec()?;
 
     let permit2_contract = ISignatureTransfer::new(PERMIT2_ADDRESS, &mini_app_provider);
     let result = permit2_contract
@@ -846,18 +840,19 @@ async fn test_integration_permit2_transfer() {
         .from(mini_app_signer.address())
         .gas(500_000)
         .send()
-        .await;
+        .await?;
 
-    result.unwrap().get_receipt().await.unwrap();
+    result.get_receipt().await?;
 
     // Step 7: Verify the tokens were indeed transferred
     let mini_app_balance = wld_contract
         .balanceOf(mini_app_signer.address())
         .call()
-        .await
-        .unwrap();
-    let safe_balance_after = wld_contract.balanceOf(safe_address).call().await.unwrap();
+        .await?;
+    let safe_balance_after = wld_contract.balanceOf(safe_address).call().await?;
 
     assert_eq!(mini_app_balance, U256::from(1e18));
     assert_eq!(safe_balance_after, U256::from(9e18));
+
+    Ok(())
 }
