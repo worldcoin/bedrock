@@ -14,6 +14,7 @@ use bedrock::smart_account::{
     SafeTransaction, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
     PERMIT2_ADDRESS,
 };
+use chrono::Utc;
 use serde_json::json;
 
 sol!(
@@ -778,7 +779,7 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
             U256::ZERO,            // gas_price (no refund)
             Address::ZERO,         // ETH token
             Address::ZERO,         // refund_receiver
-            signature.as_vec()?.into(),
+            signature.to_vec()?.into(),
         )
         .from(owner)
         .send()
@@ -802,11 +803,13 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
         amount: "1000000000000000000".to_string(), // 1 WLD
     };
 
+    let deadline = Utc::now().timestamp() + 180; // 3 minutes from now
+
     let transfer_from = Permit2TransferFrom {
         permitted,
         spender: mini_app_signer.address().to_string(),
         nonce: "0".to_string(),
-        deadline: "1804067200".to_string(),
+        deadline: deadline.to_string(),
     };
 
     let signature = safe_account
@@ -819,7 +822,7 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
             amount: U256::from(1e18), // 1 WLD
         },
         nonce: U256::from(0),
-        deadline: U256::from(1804067200u64),
+        deadline: U256::from(deadline),
     };
 
     let signature_transfer = SignatureTransferDetails {
@@ -827,7 +830,7 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
         requestedAmount: U256::from(1e18), // 1 WLD
     };
 
-    let signature = signature.as_vec()?;
+    let signature = signature.to_vec()?;
 
     let permit2_contract = ISignatureTransfer::new(PERMIT2_ADDRESS, &mini_app_provider);
     let result = permit2_contract

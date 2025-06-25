@@ -57,10 +57,10 @@ impl HexEncodedData {
     /// # Errors
     /// - `PrimitiveError::Generic` in the unexpected case that the hex string is not validly encoded hex data.
     ///     This should never happen as this is verified on initialization.
-    pub fn as_vec(&self) -> Result<Vec<u8>, PrimitiveError> {
+    pub fn to_vec(&self) -> Result<Vec<u8>, PrimitiveError> {
         hex::decode(self.0.trim_start_matches("0x")).map_err(|_| {
             PrimitiveError::Generic {
-                message: "unexpected error in HexEncodedData::as_vec".to_string(),
+                message: "unexpected error in HexEncodedData::to_vec".to_string(),
             }
         })
     }
