@@ -10,7 +10,7 @@ authors = [
     "Paolo D'Amico <paolodamico@users.noreply.github.com",
     "Luke Mann <luke@mann.xyz>",
     "Seva Zhidkov <zhidkovseva@gmail.com>",
-    "Aurel <105201452+aurel-fr@users.noreply.github.com>"
+    "Aurel <105201452+aurel-fr@users.noreply.github.com>",
 ]
 readme = "./README.md"
 homepage = "https://toolsforhumanity.com/world-app" # TODO: Update to specific Bedrock page
