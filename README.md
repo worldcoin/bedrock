@@ -1,4 +1,6 @@
-# bedrock
+![Banner image](./banner.png)
+
+# Bedrock
 
 Foundational library which powers World App's crypto wallet.
 
