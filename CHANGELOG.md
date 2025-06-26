@@ -2,6 +2,19 @@
 
 
 
+## [0.0.4] - 2025-06-26
+
+## What's Changed
+* feat: sign typed data for smart accounts by @paolodamico in https://github.com/worldcoin/bedrock/pull/33
+* feat!: permit2 TransferFrom support by @paolodamico in https://github.com/worldcoin/bedrock/pull/34
+* feat: craft & sign safe transactions by @paolodamico in https://github.com/worldcoin/bedrock/pull/35
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.3...0.0.4
+
+
+
+
 ## [0.0.3] - 2025-06-19
 
 ## What's Changed
