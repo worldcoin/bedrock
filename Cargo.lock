@@ -1292,6 +1292,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "bedrock-macros",
+ "chrono",
  "dotenvy",
  "hex",
  "log",

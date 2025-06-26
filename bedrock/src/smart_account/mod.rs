@@ -8,9 +8,8 @@ use alloy::{
 pub use signer::SafeSmartAccountSigner;
 
 use crate::{
-    bedrock_export, debug, error,
-    primitives::HexEncodedData,
-    smart_account::permit2::{PermitTransferFrom, PERMIT2_ADDRESS},
+    bedrock_export, debug, error, primitives::HexEncodedData,
+    smart_account::permit2::PermitTransferFrom,
 };
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
@@ -18,6 +17,10 @@ mod signer;
 
 /// Enables EIP-4337 transaction crafting and signing
 mod transaction_4337;
+
+/// Allows executing operations (i.e. regular transactions) on behalf of the Safe Smart Account
+/// Reference: <https://docs.safe.global/reference-smart-account/transactions/execTransaction>
+mod transaction;
 
 /// Enables crafting and signing of Permit2 allowances.
 /// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
@@ -32,6 +35,8 @@ const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[
     // Permit2 requires using the custom `sign_permit2_transfer` method which has additional validation and other permission verification.
     PERMIT2_ADDRESS,
 ];
+
+pub use permit2::PERMIT2_ADDRESS;
 
 /// Errors that can occur when working with Safe Smart Accounts.
 #[crate::bedrock_error]
@@ -137,6 +142,27 @@ impl SafeSmartAccount {
         message: String,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
+        Ok(signature.into())
+    }
+
+    /// Signs a transaction on behalf of the Safe Smart Account.
+    ///
+    /// This allows execution of normal transactions for the Safe.
+    ///
+    /// # Arguments
+    /// - `chain_id`: The chain ID of the chain where the transaction is being signed.
+    /// - `transaction`: The transaction to sign.
+    ///
+    /// # Errors
+    /// - Will throw an error if the transaction is invalid, particularly if any attribute is not valid.
+    /// - Will throw an error if the signature process unexpectedly fails.
+    pub fn sign_transaction(
+        &self,
+        chain_id: u32,
+        transaction: SafeTransaction,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let signature =
+            self.sign_digest(transaction.get_transaction_hash()?, chain_id, None)?;
         Ok(signature.into())
     }
 
@@ -286,16 +312,17 @@ impl SafeSmartAccount {
 /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
 #[derive(uniffi::Record, Debug)]
 pub struct Permit2TransferFrom {
-    permitted: Permit2TokenPermissions,
+    /// The token and amount allowed for transfers.
+    pub permitted: Permit2TokenPermissions,
     /// The address of the spender
     /// Solidity type: `address`
-    spender: String,
+    pub spender: String,
     /// A unique value for every token owner's signature to prevent signature replays
     /// Solidity type: `uint256`
-    nonce: String,
+    pub nonce: String,
     /// The expiration timestamp on the permit signature
     /// Solidity type: `uint256`
-    deadline: String,
+    pub deadline: String,
 }
 
 /// For Swift & Kotlin usage only.
@@ -307,10 +334,61 @@ pub struct Permit2TransferFrom {
 pub struct Permit2TokenPermissions {
     /// ERC-20 token address
     /// Solidity type: `address`
-    token: String,
+    pub token: String,
     /// The maximum amount of tokens that can be transferred
     /// Solidity type: `uint256`
-    amount: String,
+    pub amount: String,
+}
+
+/// The type of operation to perform on behalf of the Safe Smart Account.
+///
+/// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/libraries/Enum.sol#L9>
+#[derive(uniffi::Enum, Clone, Debug)]
+#[repr(u8)]
+pub enum SafeOperation {
+    /// Performs a standard message call.
+    Call,
+    /// Performs a `delegatecall`. Executes the target contract’s code in the context of the Safe's storage.
+    DelegateCall,
+}
+
+/// For Swift & Kotlin usage only.
+///
+/// Represents a Safe Smart Account transaction which can be initialized by foreign code to be then signed.
+///
+/// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L139>
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct SafeTransaction {
+    /// Destination address of the Safe transaction.
+    /// Solidity type: `address`
+    pub to: String,
+    /// Ether value of the Safe transaction.
+    /// Solidity type: `uint256`
+    pub value: String,
+    /// Data payload of the Safe transaction.
+    /// Solidity type: `bytes`
+    pub data: String,
+    /// The type of operation to perform on behalf of the Safe Smart Account.
+    /// Solidity type: `uint8`
+    pub operation: SafeOperation,
+    /// The maximum gas that can be used for the Safe transaction.
+    /// Solidity type: `uint256`
+    pub safe_tx_gas: String,
+    /// Gas costs that are independent of the transaction execution (e.g. base transaction fee, signature check, payment of the refund)
+    /// Solidity type: `uint256`
+    pub base_gas: String,
+    /// Gas price that should be used for the payment calculation.
+    /// Solidity type: `uint256`
+    pub gas_price: String,
+    /// Token address (or 0 if ETH) that is used for the payment.
+    /// Solidity type: `address`
+    pub gas_token: String,
+    /// Address of receiver of gas payment (or 0 if tx.origin).
+    /// Solidity type: `address`
+    pub refund_receiver: String,
+    /// The sequential nonce of the transaction. Used to prevent replay attacks.
+    /// Solidity type: `uint256`
+    pub nonce: String,
 }
 
 #[cfg(test)]
@@ -392,6 +470,30 @@ mod tests {
                 format!("failed to parse address: {invalid_address}")
             );
         }
+    }
+
+    #[test]
+    fn test_sign_transaction() {
+        let safe = SafeSmartAccount::new(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let chain_id = 10;
+        let tx = SafeTransaction {
+            to: "0x00000000219ab540356cbb839cbe05303d7705fa".to_string(),
+            value: "0x1".to_string(),
+            data: "0x095ea7b3000000000000000000000000c36442b4a4522e871399cd717abdd847ab11fe8800000000000000000000000000000000000000000000000000015c3b87af4cf5".to_string(),
+            operation: SafeOperation::DelegateCall,
+            safe_tx_gas: "0x123".to_string(),
+            base_gas: "0x321".to_string(),
+            gas_price: "0x1234".to_string(),
+            gas_token: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2".to_string(),
+            refund_receiver: "0x8315177ab297ba92a06054ce80a67ed4dbd7ed3a".to_string(),
+            nonce: "0x2".to_string(),
+        };
+        assert_eq!(safe.sign_transaction(chain_id, tx).unwrap().to_hex_string(), "0x6245bb5f5685ad9089981baac54bb01eb9b2e5d5239ca8e9a7d6faa7b168bb03552bade1c61ef5d198ae11f11d12c6f59cbf3d092317140d28cad3163b5a88971b");
     }
 
     #[test]
