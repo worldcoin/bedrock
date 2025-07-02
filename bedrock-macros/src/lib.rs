@@ -201,14 +201,7 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // Check if any public functions in the impl block are async
-    let has_async_functions = input_impl.items.iter().any(|item| {
-        if let ImplItem::Fn(method) = item {
-            matches!(method.vis, Visibility::Public(_))
-                && method.sig.asyncness.is_some()
-        } else {
-            false
-        }
-    });
+    let has_async_functions = has_async_functions_in_impl(&input_impl.items);
 
     // Process each method in the impl block
     let mut new_items = Vec::new();
@@ -261,6 +254,18 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Check if any public functions in the impl items are async
+fn has_async_functions_in_impl(impl_items: &[ImplItem]) -> bool {
+    impl_items.iter().any(|item| {
+        if let ImplItem::Fn(method) = item {
+            matches!(method.vis, Visibility::Public(_))
+                && method.sig.asyncness.is_some()
+        } else {
+            false
+        }
+    })
+}
+
 /// Inject logging context at the start of a function body
 fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
     // Create the logging context statement
@@ -275,18 +280,6 @@ fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Helper function to extract the async detection logic for testing
-    fn has_async_functions_in_impl(impl_items: &[ImplItem]) -> bool {
-        impl_items.iter().any(|item| {
-            if let ImplItem::Fn(method) = item {
-                matches!(method.vis, Visibility::Public(_))
-                    && method.sig.asyncness.is_some()
-            } else {
-                false
-            }
-        })
-    }
 
     #[test]
     fn test_async_detection_with_async_functions() {
