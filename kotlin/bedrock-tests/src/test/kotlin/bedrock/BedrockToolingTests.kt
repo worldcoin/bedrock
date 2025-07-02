@@ -7,6 +7,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 // Foreign Tests for tooling functionality (i.e. logging and error handling)
 // The demo structs are only available in Foreign Tests and are not available in built binaries.
@@ -211,5 +212,66 @@ class BedrockToolingTests {
             productionConfig.environment(),
             "Production config should have production environment",
         )
+    }
+
+    // MARK: - Async Operation Tests
+    
+    @Test
+    fun testDemoAsyncOperation_Success() = runBlocking {
+        val demo = ToolingDemo()
+        
+        // Test successful async operation with short delay
+        val result = demo.demoAsyncOperation(100uL)
+        assertTrue(result.contains("Async operation completed after 100ms"))
+        assertTrue(result.contains("completed"))
+    }
+    
+    @Test
+    fun testDemoAsyncOperation_Timeout() = runBlocking {
+        val demo = ToolingDemo()
+        
+        // Test async operation that should timeout (over 5000ms)
+        val timeoutException = assertFailsWith<DemoException.Generic> {
+            demo.demoAsyncOperation(6000uL)
+        }
+        assertTrue(timeoutException.message?.contains("timeout exceeded") == true)
+        assertTrue(timeoutException.message?.contains("5 seconds") == true)
+    }
+    
+    @Test
+    fun testDemoAsyncOperation_MultipleOperations() = runBlocking {
+        val demo = ToolingDemo()
+        
+        // Test multiple async operations to ensure runtime stability
+        val result1 = demo.demoAsyncOperation(50uL)
+        val result2 = demo.demoAsyncOperation(100uL)
+        val result3 = demo.demoAsyncOperation(150uL)
+        
+        assertTrue(result1.contains("completed after 50ms"))
+        assertTrue(result2.contains("completed after 100ms"))
+        assertTrue(result3.contains("completed after 150ms"))
+    }
+    
+    @Test
+    fun testDemoAsyncOperation_RuntimeIntegration() = runBlocking {
+        // This test specifically verifies that the automatic tokio runtime configuration
+        // added by bedrock_export works correctly in foreign code
+        val demo = ToolingDemo()
+        
+        // Run a series of async operations to stress test the runtime
+        val delays = listOf(10uL, 25uL, 50uL, 75uL, 100uL)
+        val results = mutableListOf<String>()
+        
+        for (delay in delays) {
+            val result = demo.demoAsyncOperation(delay)
+            results.add(result)
+        }
+        
+        // Verify all operations completed successfully
+        assertEquals(5, results.size)
+        for ((index, result) in results.withIndex()) {
+            val expectedDelay = delays[index]
+            assertTrue(result.contains("completed after ${expectedDelay}ms"))
+        }
     }
 }

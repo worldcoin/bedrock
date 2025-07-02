@@ -212,6 +212,36 @@ impl ToolingDemo {
             })
         }
     }
+
+    /// Demo: Async operation that showcases automatic tokio runtime configuration
+    ///
+    /// This async method demonstrates that the bedrock_export macro automatically
+    /// adds `async_runtime = "tokio"` to the uniffi::export attribute when any
+    /// async functions are detected in the impl block.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DemoError::Generic` if the async operation fails.
+    pub async fn demo_async_operation(
+        &self,
+        delay_ms: u64,
+    ) -> Result<String, DemoError> {
+        info!("Starting async operation with delay: {}ms", delay_ms);
+
+        // Simulate an async operation with a delay
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+
+        if delay_ms > 5000 {
+            warn!("Async operation failed: timeout exceeded");
+            return Err(DemoError::Generic {
+                message: "Operation timeout exceeded 5 seconds".to_string(),
+            });
+        }
+
+        let result = format!("Async operation completed after {delay_ms}ms");
+        info!("Async operation successful: {}", result);
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -294,6 +324,25 @@ mod tests {
             assert_eq!(seconds, 30);
         } else {
             panic!("Expected NetworkTimeout error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_demo() {
+        let demo = ToolingDemo::new();
+
+        // Test successful async operation
+        let result = demo.demo_async_operation(100).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("completed after 100ms"));
+
+        // Test timeout error
+        let result = demo.demo_async_operation(6000).await;
+        assert!(result.is_err());
+        if let Err(DemoError::Generic { message }) = result {
+            assert!(message.contains("timeout exceeded"));
+        } else {
+            panic!("Expected Generic error for timeout");
         }
     }
 }
