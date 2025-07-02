@@ -13,6 +13,7 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.13.0")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
 
 sourceSets {
