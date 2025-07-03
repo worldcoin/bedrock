@@ -305,7 +305,7 @@ macro_rules! error {
 ///
 /// {
 ///     let _bedrock_logger_ctx = LogContext::new("SmartAccount");
-///     log::info!("This will be prefixed with [SmartAccount]");
+///     log::info!("This will be prefixed with [Bedrock][SmartAccount]");
 ///     log::debug!("This too!");
 /// } // Context automatically cleared here
 /// ```
@@ -322,7 +322,7 @@ impl LogContext {
         let previous = LOG_CONTEXT.with(|ctx| {
             let mut ctx = ctx.borrow_mut();
             let prev = ctx.clone();
-            *ctx = Some(format!("[{module}]"));
+            *ctx = Some(format!("[Bedrock][{module}]"));
             prev
         });
 
@@ -352,7 +352,7 @@ pub fn get_context() -> Option<String> {
 /// use bedrock::with_log_context;
 ///
 /// with_log_context!("SmartAccount" => {
-///     log::info!("This will be prefixed with [SmartAccount]");
+///     log::info!("This will be prefixed with [Bedrock][SmartAccount]");
 ///     log::debug!("This too!");
 /// });
 /// ```
@@ -375,7 +375,7 @@ macro_rules! with_log_context {
 /// use bedrock::set_log_context;
 ///
 /// let _bedrock_logger_ctx = set_log_context!("SmartAccount");
-/// log::info!("This will be prefixed with [SmartAccount]");
+/// log::info!("This will be prefixed with [Bedrock][SmartAccount]");
 /// ```
 #[macro_export]
 macro_rules! set_log_context {

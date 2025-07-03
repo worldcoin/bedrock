@@ -42,7 +42,7 @@ impl Default for ToolingDemo {
 }
 
 /// Demonstrates automatic logging context injection with bedrock_export.
-/// All public methods will automatically have [ToolingDemo] prefix in logs.
+/// All public methods will automatically have [Bedrock][ToolingDemo] prefix in logs.
 #[bedrock_export]
 impl ToolingDemo {
     /// Creates a new tooling demo instance.

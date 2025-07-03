@@ -171,7 +171,7 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// impl MyStruct {
 ///     pub fn some_method(&self) -> String {
 ///         // _bedrock_logger_ctx is automatically injected here
-///         debug!("This will be prefixed with [MyStruct]");
+///         debug!("This will be prefixed with [Bedrock][MyStruct]");
 ///         "result".to_string()
 ///     }
 ///     
