@@ -6,17 +6,6 @@ pre-build = [
     "export PKG_CONFIG_LIBDIR=/usr/lib/$CROSS_DEB_ARCH/pkgconfig:/usr/lib/$CROSS_DEB_ARCH/lib/pkgconfig:/usr/share/pkgconfig",
 ]
 
-# Pass through NDK environment variables for proper Android toolchain configuration
-[target.aarch64-linux-android.env]
-passthrough = [
-    "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
-    "CC_aarch64_linux_android",
-    "CXX_aarch64_linux_android",
-    "AR_aarch64_linux_android",
-    "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
-    "RUSTFLAGS",
-]
-
 # Configure 16KB page size alignment for Android 15+ compatibility
 [build.env]
 RUSTFLAGS = "-C link-arg=-Wl,-z,max-page-size=16384"
