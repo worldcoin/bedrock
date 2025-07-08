@@ -1,0 +1,13 @@
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android-clang"
+rustflags = [
+    "-C",
+    "link-arg=-Wl,-z,max-page-size=16384",
+    "-C",
+    "link-arg=-Wl,--hash-style=both",
+    "-C",
+    "link-arg=-Wl,--build-id=sha1",
+]
+
+[build]
+target-dir = "target"

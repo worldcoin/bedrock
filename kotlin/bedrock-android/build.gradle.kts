@@ -12,12 +12,12 @@ kotlin {
 
 android {
     namespace = "com.toolsforhumanity.bedrock"
-    compileSdk = 33
+    compileSdk = 35
 
     defaultConfig {
-        minSdk = 23
+        minSdk = 35
         @Suppress("deprecation")
-        targetSdk = 33
+        targetSdk = 35
     }
 
     compileOptions {
