@@ -18,7 +18,7 @@ class BedrockToolingTests {
         // Test the ToolingDemo to verify log prefixing works
         val demo = ToolingDemo()
 
-        // These calls should generate logs with [ToolingDemo] prefix
+        // These calls should generate logs with [Bedrock][ToolingDemo] prefix
         demo.logMessage("Testing log prefixing from Kotlin")
         demo.testLogLevels()
 
