@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
 echo "========================================="
 echo "Running Swift Tests"
