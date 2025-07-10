@@ -62,6 +62,21 @@ if [ -z "$SIMULATOR_ID" ]; then
     exit 1
 fi
 
+# ------------------------------------------------------------------
+# Simulator hygiene: clear residual state that intermittently prevents
+# the test runner from launching inside the device ("Test runner never
+# began executing tests after launching" timeout observed in CI).
+# ------------------------------------------------------------------
+if [ "${GITHUB_ACTIONS:-false}" = "true" ] || [ "${CI:-false}" = "true" ]; then
+    echo "🧹 Running simulator hygiene (CI environment detected)..."
+    xcrun simctl shutdown "$SIMULATOR_ID" >/dev/null 2>&1 || true
+    xcrun simctl erase    "$SIMULATOR_ID"
+    xcrun simctl boot     "$SIMULATOR_ID"
+    xcrun simctl bootstatus "$SIMULATOR_ID" -b   # wait until boot completes
+else
+    echo "💻 Local environment detected - skipping simulator hygiene"
+fi
+
 echo "📱 Using simulator ID: $SIMULATOR_ID"
 
 cd "$TESTS_PATH"
