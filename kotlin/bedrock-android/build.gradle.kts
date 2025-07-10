@@ -15,7 +15,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        minSdk = 35
+        minSdk = 23
         @Suppress("deprecation")
         targetSdk = 35
     }
