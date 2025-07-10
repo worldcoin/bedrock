@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 echo "========================================="
 echo "Running Swift Tests"
@@ -61,6 +61,16 @@ if [ -z "$SIMULATOR_ID" ]; then
     echo -e "${RED}✗ No iPhone simulator available${NC}"
     exit 1
 fi
+
+# ------------------------------------------------------------------
+# Simulator hygiene: clear residual state that intermittently prevents
+# the test runner from launching inside the device (“Test runner never
+# began executing tests after launching” timeout observed in CI).
+# ------------------------------------------------------------------
+xcrun simctl shutdown "$SIMULATOR_ID" >/dev/null 2>&1 || true
+xcrun simctl erase    "$SIMULATOR_ID"
+xcrun simctl boot     "$SIMULATOR_ID"
+xcrun simctl bootstatus "$SIMULATOR_ID" -b   # wait until boot completes
 
 echo "📱 Using simulator ID: $SIMULATOR_ID"
 
