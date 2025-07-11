@@ -632,7 +632,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!("invalid input on permitted.token: odd number of digits")
+            format!("invalid input on permitted.token: Odd number of digits")
         );
     }
 
