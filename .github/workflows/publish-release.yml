@@ -143,7 +143,7 @@ jobs:
         settings:
           - target: aarch64-linux-android
           - target: armv7-linux-androideabi
-          - target: x86_64‑linux‑android
+          - target: x86_64-linux-android
 
     steps:
       - name: Checkout code
