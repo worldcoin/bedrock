@@ -163,6 +163,27 @@ fn validate_address_and_statement(
         .ok_or_else(|| SiweError::ValidationError("Invalid Address".to_string()))?;
 
     // Check if there's a statement (mini app format) or empty line (world app format)
+    //
+    // The SIWE message format differs between Mini App and World App authentication:
+    //
+    // Mini App Format (line 3 contains a statement):
+    //   Line 0: https://example.com wants you to sign in with your Ethereum account.
+    //   Line 1: 0x1234567890123456789012345678901234567890
+    //   Line 2: (empty line)
+    //   Line 3: Statement describing the authentication request
+    //   Line 4: (empty line)
+    //   Line 5: URI: https://example.com
+    //   ...
+    //
+    // World App Format (line 3 is empty, no statement):
+    //   Line 0: https://example.com wants you to sign in with your Ethereum account.
+    //   Line 1: 0x1234567890123456789012345678901234567890
+    //   Line 2: (empty line)
+    //   Line 3: (empty line)
+    //   Line 4: URI: https://example.com
+    //   ...
+    //
+    // We check line 3 to determine the format and extract the statement if present.
     let statement = match lines.get(3) {
         None => {
             return Err(SiweError::ValidationError(
