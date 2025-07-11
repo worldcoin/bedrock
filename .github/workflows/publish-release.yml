@@ -143,6 +143,7 @@ jobs:
         settings:
           - target: aarch64-linux-android
           - target: armv7-linux-androideabi
+          - target: x86_64‑linux‑android
 
     steps:
       - name: Checkout code
@@ -198,9 +199,10 @@ jobs:
       - name: Move artifacts
         run: |
           mkdir -p kotlin/bedrock-android/src/main/jniLibs && cd kotlin/bedrock-android/src/main/jniLibs
-          mkdir armeabi-v7a arm64-v8a
-          mv /home/runner/work/bedrock/bedrock/android-armv7-linux-androideabi/libbedrock.so ./armeabi-v7a/libbedrock.so
+          mkdir armeabi-v7a arm64-v8a x86_64
           mv /home/runner/work/bedrock/bedrock/android-aarch64-linux-android/libbedrock.so ./arm64-v8a/libbedrock.so
+          mv /home/runner/work/bedrock/bedrock/android-armv7-linux-androideabi/libbedrock.so ./armeabi-v7a/libbedrock.so
+          mv /home/runner/work/bedrock/bedrock/android-x86_64-linux-android/libbedrock.so ./x86_64/libbedrock.so
 
       - name: Generate bindings
         working-directory: kotlin

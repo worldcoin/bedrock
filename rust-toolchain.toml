@@ -3,12 +3,13 @@ channel = "stable"
 profile = "default"
 components = ["rustfmt", "clippy", "rust-analyzer"]
 targets = [
+    # iOS
     "aarch64-apple-ios-sim",
     "aarch64-apple-ios",
     "x86_64-apple-ios",
-    "x86_64-unknown-linux-gnu",
-    # 32‑bit ARM (for device support on old devices, <1% active installs)
-    "armv7-linux-androideabi",
-    # 64-bit
-    "aarch64-linux-android"
+
+    # Android
+    "armv7-linux-androideabi", # 32‑bit ARM (for device support on old devices, <1% active installs)
+    "x86_64‑linux‑android", # required by Play Store for desktop
+    "aarch64-linux-android" # 64-bit
 ]
