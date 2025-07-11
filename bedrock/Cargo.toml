@@ -67,7 +67,10 @@ alloy = { version = "1.0.17", default-features = false, features = [
     "node-bindings",
     "reqwest-rustls-tls",
 ] }
+ethers = "2.0.11"
 dotenvy = "0.15.7"
 pretty_assertions = "1.4.0"
+siwe = { version = "0.6.1", features = ["ethers"] }
 tokio = { version = "1.45.1", features = ["time"] }
 tokio-test = "0.4.4"
+sha2 = "0.10.8"

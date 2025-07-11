@@ -168,8 +168,8 @@ fn validate_address_and_statement(
                 "No lines found after address".to_string(),
             ))
         }
-        Some(&"") => String::new(),
-        Some(&s) => s.to_string(),
+        Some(&"") => String::new(), // World app format - no statement
+        Some(&s) => s.to_string(),  // Mini app format - has statement
     };
 
     Ok(statement)
