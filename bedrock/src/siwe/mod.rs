@@ -1,6 +1,7 @@
 use crate::siwe::world_app_auth::{create_message, WorldAppAuthFlow};
 use crate::smart_account::SafeSmartAccount;
 use alloy::primitives::Address;
+use alloy::signers::local::LocalSigner;
 use format::{
     CHAIN_TAG, EXP_TAG, IAT_TAG, NBF_TAG, NONCE_TAG, PREAMBLE, RES_TAG, RID_TAG,
     URI_TAG, VERSION_TAG,
@@ -12,6 +13,9 @@ use std::{fmt::Write, str::FromStr, sync::Arc};
 use time::{
     format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
 };
+
+#[cfg(feature = "tooling_tests")]
+use {alloy::signers::Signer, tokio::runtime::Runtime};
 
 mod format;
 mod world_app_auth;
@@ -34,6 +38,9 @@ pub enum SiweError {
     /// Failed to sign message
     #[error("Failed to sign message: {0}")]
     SigningError(String),
+    /// Failed to sign message (legacy alias)
+    #[error("Failed to sign message: {0}")]
+    FailedToSignMessage(String),
     /// Failed to convert timestamp to datetime
     #[error("Failed to convert timestamp to datetime")]
     TimestampConversion,
@@ -434,6 +441,59 @@ impl Siwe {
             current_time,
             nonce,
         )
+    }
+
+    /// Signs a SIWE message for World App primary authentication.
+    /// Assumes that the message is already validated.
+    ///
+    /// There are two notable differences from the standard SIWE signing:
+    /// 1) We don't double prefix the message with \x19Ethereum Signed Message:\n. It was a bug
+    /// in the original implementation, but we can't break compatibility.
+    /// 2) We don't need to checksum the address, since it's already checksummed in the message
+    /// from create_world_app_auth_message.
+    /// 3) Signature is returned as a hex string prefixed with `0x`.
+    ///
+    /// Note that message will be signed from an EOA address, not a Safe address.
+    /// This is because Safe signature should follow a different standard — see
+    /// `sign_personal_sign_message` implementation in the Gnosis Safe module.
+    ///
+    /// # Errors
+    /// Returns an error if the Ethereum key is invalid or message signing fails.
+    #[cfg(feature = "tooling_tests")]
+    pub fn sign_world_app_auth_message(
+        &self,
+        message: ValidationSuccess,
+        ethereum_key: String,
+    ) -> SiweResult<SiweSignatureResponse> {
+        let rt = Runtime::new().map_err(|e| SiweError::Generic {
+            message: format!("Failed to create runtime: {e}"),
+        })?;
+        rt.block_on(self.sign_world_app_auth_message_async(message, ethereum_key))
+    }
+
+    #[cfg(feature = "tooling_tests")]
+    async fn sign_world_app_auth_message_async(
+        &self,
+        message: ValidationSuccess,
+        ethereum_key: String,
+    ) -> SiweResult<SiweSignatureResponse> {
+        let signer = LocalSigner::from_slice(
+            &hex::decode(ethereum_key)
+                .map_err(|e| SiweError::InvalidEthereumKey(e.to_string()))?,
+        )
+        .map_err(|e| SiweError::InvalidEthereumKey(e.to_string()))?;
+
+        let message_text = message.message; // We unwrap the message here since we accept ValidationSuccess
+
+        let signature = signer
+            .sign_message(message_text.as_bytes())
+            .await
+            .map_err(|err| SiweError::FailedToSignMessage(err.to_string()))?;
+
+        Ok(SiweSignatureResponse {
+            signature: signature.to_string(),
+            message: message_text,
+        })
     }
 }
 

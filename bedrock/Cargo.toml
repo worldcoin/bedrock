@@ -53,7 +53,11 @@ time = { version = "0.3", features = [
     "macros",
     "parsing",
 ] }
-tokio = { version = "1.45.1", features = ["time"], optional = true }
+tokio = { version = "1.45.1", features = [
+    "time",
+    "rt",
+    "rt-multi-thread",
+], optional = true }
 uniffi = { workspace = true, features = ["build", "tokio"] }
 
 [dev-dependencies]

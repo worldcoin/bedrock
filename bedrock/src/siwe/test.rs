@@ -134,3 +134,36 @@ fn test_siwe_sign_wallet_auth_message_v2() {
     assert!(signature.signature.starts_with("0x"));
     assert!(signature.message.contains(&wallet_address));
 }
+
+#[cfg(feature = "tooling_tests")]
+#[test]
+fn test_siwe_sign_world_app_auth_message() {
+    let siwe = create_siwe_service();
+    let wallet_address = "0x11a1801863e1f0941a663f0338aea395be1ec8a4";
+    let private_key =
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+    let message = siwe
+        .create_world_app_auth_message(
+            WorldAppAuthFlow::SignUp,
+            wallet_address,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .expect("Failed to create World App auth message");
+
+    let validation_result = ValidationSuccess { message };
+
+    let signature = siwe
+        .sign_world_app_auth_message(validation_result, private_key.to_string())
+        .unwrap();
+
+    // Verify the signature contains the expected structure
+    assert!(signature.signature.starts_with("0x"));
+    // The message should contain the checksummed address, not the original
+    assert!(signature
+        .message
+        .contains("0x11A1801863e1F0941A663f0338aEa395Be1Ec8A4"));
+}
