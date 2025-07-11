@@ -34,7 +34,6 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features
 
-      # TODO: Build all targets in a matrix
       - name: Build
         run: cargo build
 
@@ -82,7 +81,7 @@ jobs:
 
       - name: Run tests
         env:
-          WORLDCHAIN_RPC_URL: ${{ secrets.WORLDCHAIN_RPC_URL }}
+          WORLDCHAIN_RPC_URL: ${{ secrets.WORLDCHAIN_RPC_URL || 'https://worldchain-mainnet.g.alchemy.com/public' }}
         run: |
           cp .env.example .env
           cargo test --all

@@ -51,6 +51,19 @@ impl HexEncodedData {
     pub fn to_hex_string(&self) -> String {
         self.0.to_string()
     }
+
+    /// Converts the wrapped hex string into a `Bytes` struct.
+    ///
+    /// # Errors
+    /// - `PrimitiveError::Generic` in the unexpected case that the hex string is not validly encoded hex data.
+    ///     This should never happen as this is verified on initialization.
+    pub fn to_vec(&self) -> Result<Vec<u8>, PrimitiveError> {
+        hex::decode(self.0.trim_start_matches("0x")).map_err(|_| {
+            PrimitiveError::Generic {
+                message: "unexpected error in HexEncodedData::to_vec".to_string(),
+            }
+        })
+    }
 }
 
 impl HexEncodedData {

@@ -75,7 +75,7 @@ Wraps `#[uniffi::export]` with automatic logging context injection:
 impl MyStruct {
     pub fn some_method(&self) -> String {
         // LogContext automatically set to "MyStruct"
-        info!("This will be prefixed with [MyStruct]");
+        info!("This will be prefixed with [Bedrock][MyStruct]");
         "result".to_string()
     }
 }
@@ -95,8 +95,8 @@ Simplified logging macros that automatically use the current context:
 use bedrock::{trace, debug, info, warn, error};
 
 // In a bedrock_export impl, logs will be automatically prefixed
-info!("User authenticated successfully");  // Logs: [MyStruct] User authenticated successfully
-debug!("Processing data: {}", value);       // Logs: [MyStruct] Processing data: 42
+info!("User authenticated successfully");  // Logs: [Bedrock][MyStruct] User authenticated successfully
+debug!("Processing data: {}", value);       // Logs: [Bedrock][MyStruct] Processing data: 42
 ```
 
 **Available macros:** `trace!`, `debug!`, `info!`, `warn!`, `error!`
@@ -110,6 +110,6 @@ use bedrock::logger::LogContext;
 
 {
     let _bedrock_logger_ctx = LogContext::new("CustomContext");
-    info!("This message has custom context");  // Logs: [CustomContext] This message has custom context
+    info!("This message has custom context");  // Logs: [Bedrock][CustomContext] This message has custom context
 } // Context automatically cleared when _bedrock_logger_ctx is dropped
 ```

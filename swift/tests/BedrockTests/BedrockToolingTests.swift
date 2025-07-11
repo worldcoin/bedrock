@@ -11,7 +11,7 @@ final class BedrockToolingTests: XCTestCase {
         // Test the ToolingDemo to verify log prefixing works
         let demo = ToolingDemo()
         
-        // These calls should generate logs with [ToolingDemo] prefix
+        // These calls should generate logs with [Bedrock][ToolingDemo] prefix
         demo.logMessage(message: "Testing log prefixing from Swift")
         demo.testLogLevels()
         
@@ -229,5 +229,96 @@ final class BedrockToolingTests: XCTestCase {
         
         let productionConfig = BedrockConfig(environment: .production)
         XCTAssertEqual(productionConfig.environment(), .production, "Production config should have production environment")
+    }
+    
+    // MARK: - Async Operation Tests
+    
+    func testDemoAsyncOperation_Success() async throws {
+        let demo = ToolingDemo()
+        
+        // Test successful async operation with short delay
+        let result = try await demo.demoAsyncOperation(delayMs: 100)
+        XCTAssertTrue(result.contains("Async operation completed after 100ms"))
+        XCTAssertTrue(result.contains("completed"))
+    }
+    
+    func testDemoAsyncOperation_Timeout() async throws {
+        let demo = ToolingDemo()
+        
+        // Test async operation that should timeout (over 5000ms)
+        do {
+            _ = try await demo.demoAsyncOperation(delayMs: 6000)
+            XCTFail("Expected timeout error")
+        } catch let error as DemoError {
+            if case .Generic(let message) = error {
+                XCTAssertTrue(message.contains("timeout exceeded"))
+                XCTAssertTrue(message.contains("5 seconds"))
+            } else {
+                XCTFail("Expected Generic error for timeout")
+            }
+        }
+    }
+    
+    func testDemoAsyncOperation_MultipleOperations() async throws {
+        let demo = ToolingDemo()
+        
+        // Test multiple async operations to ensure runtime stability
+        let result1 = try await demo.demoAsyncOperation(delayMs: 50)
+        let result2 = try await demo.demoAsyncOperation(delayMs: 100)
+        let result3 = try await demo.demoAsyncOperation(delayMs: 150)
+        
+        XCTAssertTrue(result1.contains("completed after 50ms"))
+        XCTAssertTrue(result2.contains("completed after 100ms"))
+        XCTAssertTrue(result3.contains("completed after 150ms"))
+    }
+    
+    func testDemoAsyncOperation_ConcurrentOperations() async throws {
+        // This test specifically verifies that the automatic tokio runtime configuration
+        // added by bedrock_export works correctly with concurrent async operations in Swift
+        let demo = ToolingDemo()
+        
+        // Run concurrent async operations to stress test the runtime
+        let delays: [UInt64] = [10, 25, 50, 75, 100]
+        
+        let results = try await withThrowingTaskGroup(of: String.self) { group in
+            for delay in delays {
+                group.addTask {
+                    return try await demo.demoAsyncOperation(delayMs: delay)
+                }
+            }
+            
+            var collectedResults: [String] = []
+            for try await result in group {
+                collectedResults.append(result)
+            }
+            return collectedResults
+        }
+        
+        // Verify all operations completed successfully
+        XCTAssertEqual(results.count, 5)
+        for result in results {
+            XCTAssertTrue(result.contains("completed"))
+            XCTAssertTrue(result.contains("ms"))
+        }
+    }
+    
+    func testDemoAsyncOperation_RuntimeIntegration() async throws {
+        // Additional test to verify sequential async operations work correctly
+        let demo = ToolingDemo()
+        
+        let delays: [UInt64] = [20, 40, 60, 80, 100]
+        var results: [String] = []
+        
+        for delay in delays {
+            let result = try await demo.demoAsyncOperation(delayMs: delay)
+            results.append(result)
+        }
+        
+        // Verify all operations completed successfully
+        XCTAssertEqual(results.count, 5)
+        for (index, result) in results.enumerated() {
+            let expectedDelay = delays[index]
+            XCTAssertTrue(result.contains("completed after \(expectedDelay)ms"))
+        }
     }
 } 
