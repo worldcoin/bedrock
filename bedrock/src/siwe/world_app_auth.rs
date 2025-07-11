@@ -1,4 +1,6 @@
-use crate::siwe::format::{CHAIN_TAG, EXP_TAG, IAT_TAG, NBF_TAG, NONCE_TAG, PREAMBLE, URI_TAG, VERSION_TAG};
+use crate::siwe::format::{
+    CHAIN_TAG, EXP_TAG, IAT_TAG, NBF_TAG, NONCE_TAG, PREAMBLE, URI_TAG, VERSION_TAG,
+};
 use crate::siwe::{SiweError, SiweResult};
 use alloy::primitives::Address;
 use std::ops::Add;
@@ -45,7 +47,9 @@ pub fn create_message(
 
     let version = 1;
     let chain_id = 480; // World Chain ID;
-    let issued_at = current_time.format(&Rfc3339).expect("failed to format time");
+    let issued_at = current_time
+        .format(&Rfc3339)
+        .expect("failed to format time");
     let expires_at = current_time
         .add(TOKEN_EXPIRES_IN)
         .format(&Rfc3339)
@@ -76,10 +80,12 @@ mod test {
         let flow = WorldAppAuthFlow::SignUp;
         let wallet_address = "0x11a1801863e1f0941a663f0338aea395be1ec8a4";
         let current_time = datetime!(2025-01-15 23:23:25.608083 UTC);
-        let nonce = 1469020534;
+        let nonce = 1_469_020_534;
 
-        let message = create_message(base_url, flow, wallet_address, current_time, nonce).unwrap();
-        
+        let message =
+            create_message(base_url, flow, wallet_address, current_time, nonce)
+                .unwrap();
+
         let expected = "https://app-backend.toolsforhumanity.com wants you to sign in with your Ethereum account:\n\
         0x11A1801863e1F0941A663f0338aEa395Be1Ec8A4\n\n\n\
         URI: https://app-backend.toolsforhumanity.com/public/v1/auth/sign-up\n\
@@ -92,4 +98,4 @@ mod test {
 
         assert_eq!(message, expected);
     }
-} 
+}

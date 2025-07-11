@@ -1,13 +1,6 @@
 use super::*;
-use alloy::primitives::Address;
-use alloy::signers::local::LocalSigner;
 use pretty_assertions::assert_eq;
-use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
-use time::macros::datetime;
-
-#[cfg(feature = "tooling_tests")]
-use alloy::signers::SignerSync;
 
 fn create_siwe_service() -> Arc<Siwe> {
     Siwe::new("https://app-backend.toolsforhumanity.com".to_string())
@@ -33,20 +26,19 @@ fn test_siwe_validation() {
         Version: 1\n\
         Chain ID: 480\n\
         Nonce: 12345678\n\
-        Issued At: {}\n\
+        Issued At: {datetime}\n\
         Expiration Time: 2024-05-03T00:00:00Z\n\
         Not Before: 2024-05-03T00:00:00Z\n\
         Request ID: 0",
-        datetime
     );
     let wallet_address = "0x19c96ab".to_string();
     let current_url = "https://test.com".to_string();
     let integration_url = "https://test.com".to_string();
     let response = siwe.validate_auth_message(
-        raw_message.clone(),
-        wallet_address,
-        current_url,
-        integration_url,
+        &raw_message,
+        &wallet_address,
+        &current_url,
+        &integration_url,
     );
     assert_eq!(
         response.unwrap(),
@@ -75,20 +67,19 @@ fn test_siwe_with_invalid_domain_subdomains() {
         Version: 1\n\
         Chain ID: 480\n\
         Nonce: 12345678\n\
-        Issued At: {}\n\
+        Issued At: {datetime}\n\
         Expiration Time: 2024-05-03T00:00:00Z\n\
         Not Before: 2024-05-03T00:00:00Z\n\
         Request ID: 0",
-        datetime
     );
     let wallet_address = "0x123".to_string();
     let current_url = "https://test.com/test/one".to_string();
     let integration_url = "https://test.com".to_string();
     let response = siwe.validate_auth_message(
-        raw_message,
-        wallet_address,
-        current_url,
-        integration_url,
+        &raw_message,
+        &wallet_address,
+        &current_url,
+        &integration_url,
     );
     assert!(
         matches!(response, Err(SiweError::ValidationError(msg)) if msg == "URI domain does not match integration or current URL domain"),
@@ -104,7 +95,7 @@ fn test_siwe_create_world_app_auth_message() {
     let message = siwe
         .create_world_app_auth_message(
             WorldAppAuthFlow::SignUp,
-            wallet_address.clone(),
+            &wallet_address,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -114,11 +105,10 @@ fn test_siwe_create_world_app_auth_message() {
 
     let response = siwe
         .validate_auth_message(
-            message.clone(),
-            wallet_address.clone(),
-            "https://app-backend.toolsforhumanity.com/public/v1/auth/sign-up"
-                .to_string(),
-            "https://app-backend.toolsforhumanity.com/".to_string(),
+            &message,
+            &wallet_address,
+            "https://app-backend.toolsforhumanity.com/public/v1/auth/sign-up",
+            "https://app-backend.toolsforhumanity.com/",
         )
         .expect("Failed to validate World App auth message");
 
@@ -137,11 +127,7 @@ fn test_siwe_sign_wallet_auth_message_v2() {
     };
 
     let signature = siwe
-        .sign_wallet_auth_message_v2(
-            message,
-            private_key.to_string(),
-            wallet_address.clone(),
-        )
+        .sign_wallet_auth_message_v2(&message, private_key.to_string(), &wallet_address)
         .unwrap();
 
     // Verify the signature contains the expected structure
