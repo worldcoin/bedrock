@@ -10,6 +10,6 @@ targets = [
 
     # Android
     "armv7-linux-androideabi", # 32‑bit ARM (for device support on old devices, <1% active installs)
-    "x86_64‑linux‑android", # required by Play Store for desktop
+    "x86_64-linux-android", # required by Play Store for desktop
     "aarch64-linux-android" # 64-bit
 ]
