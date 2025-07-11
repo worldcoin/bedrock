@@ -102,41 +102,6 @@ fn extract_scheme(uri: &str) -> SiweResult<String> {
         .ok_or_else(|| SiweError::ValidationError("Missing domain".to_string()))
 }
 
-fn validate_uri_and_domains(
-    lines: &[&str],
-    current_url: &str,
-    integration_url: &str,
-) -> SiweResult<(String, String, String)> {
-    let uri: Uri = lines
-        .first()
-        .and_then(|preamble| preamble.strip_suffix(PREAMBLE))
-        .ok_or_else(|| SiweError::ValidationError("Missing Preamble Line".to_string()))?
-        .parse()
-        .map_err(|_| SiweError::ValidationError("Invalid URI format".to_string()))?;
-
-    let integration_domain = extract_domain(integration_url)?;
-    let current_url_domain = extract_domain(current_url)?;
-    let uri_domain = uri
-        .host()
-        .ok_or_else(|| SiweError::ValidationError("URI missing host".to_string()))?
-        .to_owned();
-
-    if uri_domain != integration_domain && uri_domain != current_url_domain {
-        return Err(SiweError::ValidationError(
-            "URI domain does not match integration or current URL domain".to_string(),
-        ));
-    }
-
-    uri.scheme()
-        .is_none_or(|s| s == "https")
-        .then_some(())
-        .ok_or_else(|| {
-            SiweError::ValidationError("Scheme must be HTTPS".to_string())
-        })?;
-
-    Ok((uri_domain, integration_domain, current_url_domain))
-}
-
 // This function should sanitize the message from <> and check payload length
 fn precheck_and_sanitize_message(message: &str) -> SiweResult<String> {
     // We simply escape brackets for now.
@@ -149,127 +114,6 @@ fn precheck_and_sanitize_message(message: &str) -> SiweResult<String> {
     }
 
     Ok(cleaned_message)
-}
-
-fn validate_address_and_statement(
-    lines: &[&str],
-    wallet_address: &str,
-) -> SiweResult<String> {
-    lines
-        .get(1)
-        .filter(|&addr| {
-            addr.to_lowercase() == wallet_address.to_lowercase() || *addr == "{address}"
-        })
-        .ok_or_else(|| SiweError::ValidationError("Invalid Address".to_string()))?;
-
-    let statement = match lines.get(3) {
-        None => {
-            return Err(SiweError::ValidationError(
-                "No lines found after address".to_string(),
-            ))
-        }
-        Some(&"") => String::new(), // World app format - no statement
-        Some(&s) => s.to_string(),  // Mini app format - has statement
-    };
-
-    Ok(statement)
-}
-
-fn validate_siwe_fields(lines: &[&str], current_url_domain: &str) -> SiweResult<()> {
-    // Find the URI line - it should start with "URI: "
-    let uri_line_idx = lines
-        .iter()
-        .position(|line| line.starts_with(URI_TAG))
-        .ok_or_else(|| SiweError::ValidationError("Missing URI field".to_string()))?;
-
-    let uri = extract_domain(tagged(URI_TAG, lines.get(uri_line_idx).copied())?)?;
-    if uri != current_url_domain {
-        return Err(SiweError::ValidationError(
-            "URI does not match current URL".to_string(),
-        ));
-    }
-
-    if tagged(VERSION_TAG, lines.get(uri_line_idx + 1).copied())? != "1" {
-        return Err(SiweError::ValidationError("Version must be 1".to_string()));
-    }
-
-    if !["480"].contains(&tagged(CHAIN_TAG, lines.get(uri_line_idx + 2).copied())?) {
-        return Err(SiweError::ValidationError(
-            "Chain ID must be 480 (World Chain)".to_string(),
-        ));
-    }
-
-    if tagged(NONCE_TAG, lines.get(uri_line_idx + 3).copied())?.len() < 8 {
-        return Err(SiweError::ValidationError(
-            "Nonce must be longer than 8 characters".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-fn validate_timestamps(lines: &[&str]) -> SiweResult<()> {
-    // Find the IAT line - it should start with "Issued At: "
-    let iat_line_idx = lines
-        .iter()
-        .position(|line| line.starts_with(IAT_TAG))
-        .ok_or_else(|| SiweError::ValidationError("Missing IAT field".to_string()))?;
-
-    // Check issued at is valid and not more than 5 minutes old
-    let issued_at = PrimitiveDateTime::parse(
-        tagged(IAT_TAG, lines.get(iat_line_idx).copied())?,
-        &Rfc3339,
-    )
-    .map_err(|_| SiweError::ValidationError("Invalid IAT".to_string()))?
-    .assume_utc();
-    let current_time = OffsetDateTime::now_utc();
-
-    if (current_time - issued_at) > time::Duration::minutes(5) {
-        return Err(SiweError::ValidationError(
-            "IAT is more than 5 minutes old".to_string(),
-        ));
-    }
-
-    // Check expiration time
-    if let Some(exp) = tag_optional(EXP_TAG, lines.get(iat_line_idx + 1).copied())? {
-        let expiration_time = PrimitiveDateTime::parse(exp, &Rfc3339)
-            .map_err(|_| {
-                SiweError::ValidationError("Invalid Expiration format".to_string())
-            })?
-            .assume_utc();
-        if (expiration_time - current_time) > time::Duration::days(7) {
-            return Err(SiweError::ValidationError(
-                "Expiration time is more than 7 days in the future".to_string(),
-            ));
-        }
-    }
-
-    // Check not before time
-    if let Some(nbf) = tag_optional(NBF_TAG, lines.get(iat_line_idx + 2).copied())? {
-        let nbf_time = PrimitiveDateTime::parse(nbf, &Rfc3339)
-            .map_err(|_| {
-                SiweError::ValidationError("Invalid Expiration format".to_string())
-            })?
-            .assume_utc();
-        if (nbf_time - current_time) > time::Duration::days(7) {
-            return Err(SiweError::ValidationError(
-                "Not before time is more than 7 days in the future".to_string(),
-            ));
-        }
-    }
-
-    // Check for request ID and resources at the end
-    let mut check_idx = iat_line_idx + 3;
-    if tag_optional(RID_TAG, lines.get(check_idx).copied())?.is_some() {
-        check_idx += 1;
-    }
-
-    match lines.get(check_idx).copied() {
-        Some(line) if line.starts_with(RES_TAG) => Err(SiweError::ValidationError(
-            "No resources allowed".to_string(),
-        )),
-        _ => Ok(()), // Could be additional fields we don't care about or end of message
-    }
 }
 
 /// Represents a successfully validated SIWE message.
@@ -336,6 +180,7 @@ impl Siwe {
     ///
     /// # Errors
     /// Returns an error if the message is invalid, has expired timestamps, or contains invalid URIs.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_auth_message(
         &self,
         raw_message: &str,
@@ -344,20 +189,147 @@ impl Siwe {
         integration_url: &str,
     ) -> SiweResult<SiweValidationResponse> {
         let raw_message = precheck_and_sanitize_message(raw_message)?;
-        let lines: Vec<&str> = raw_message.split('\n').collect();
 
-        // Validate URI and domains
-        let (_, _, current_url_domain) =
-            validate_uri_and_domains(&lines, current_url, integration_url)?;
+        let mut lines = raw_message.split('\n');
+        let uri: Uri = lines
+            .next()
+            .and_then(|preamble| preamble.strip_suffix(PREAMBLE))
+            .ok_or_else(|| {
+                SiweError::ValidationError("Missing Preamble Line".to_string())
+            })?
+            .parse()
+            .map_err(|_| {
+                SiweError::ValidationError("Invalid URI format".to_string())
+            })?;
 
-        // Validate address and extract statement
-        let statement = validate_address_and_statement(&lines, wallet_address)?;
+        // Check domain
+        let integration_domain = extract_domain(integration_url)?;
+        let current_url_domain = extract_domain(current_url)?;
+        let uri_domain = uri
+            .host()
+            .ok_or_else(|| SiweError::ValidationError("URI missing host".to_string()))?
+            .to_owned();
 
-        // Validate SIWE fields
-        validate_siwe_fields(&lines, &current_url_domain)?;
+        if uri_domain != integration_domain && uri_domain != current_url_domain {
+            return Err(SiweError::ValidationError(
+                "URI domain does not match integration or current URL domain"
+                    .to_string(),
+            ));
+        }
 
-        // Validate timestamps
-        validate_timestamps(&lines)?;
+        // Check scheme if present
+        uri.scheme()
+            .is_none_or(|s| s == "https")
+            .then_some(())
+            .ok_or_else(|| {
+                SiweError::ValidationError("Scheme must be HTTPS".to_string())
+            })?;
+
+        // Note: according to the standard, the address should be mixed case and checksummed
+        // according to EIP55. However, it will be a breaking change to enforce this,
+        // so we only check that it's the correct address. Address is getting checksummed in the
+        // sign method.
+        lines
+            .next()
+            .filter(|&addr| {
+                addr.to_lowercase() == wallet_address.to_lowercase()
+                    || addr == "{address}"
+            })
+            .ok_or_else(|| SiweError::ValidationError("Invalid Address".to_string()))?;
+
+        lines.next(); // skip a line
+
+        let mut statement = String::new(); // Statement is optional
+
+        match lines.next() {
+            None => {
+                return Err(SiweError::ValidationError(
+                    "No lines found after address".to_string(),
+                ));
+            }
+            Some("") => None,
+            Some(s) => {
+                lines.next(); // new line validation is done by checking URI
+                statement = s.to_string();
+                Some(&s)
+            }
+        };
+
+        let uri = extract_domain(tagged(URI_TAG, lines.next())?)?;
+        if uri != current_url_domain {
+            return Err(SiweError::ValidationError(
+                "URI does not match current URL".to_string(),
+            ));
+        }
+
+        if tagged(VERSION_TAG, lines.next())? != "1" {
+            return Err(SiweError::ValidationError("Version must be 1".to_string()));
+        }
+
+        if !["480"].contains(&tagged(CHAIN_TAG, lines.next())?) {
+            return Err(SiweError::ValidationError(
+                "Chain ID must be 480 (World Chain)".to_string(),
+            ));
+        }
+
+        if tagged(NONCE_TAG, lines.next())?.len() < 8 {
+            return Err(SiweError::ValidationError(
+                "Nonce must be longer than 8 characters".to_string(),
+            ));
+        }
+
+        // Check issued at is valid and not more than 5 minutes old
+        let issued_at = OffsetDateTime::parse(tagged(IAT_TAG, lines.next())?, &Rfc3339)
+            .map_err(|_| SiweError::ValidationError("Invalid IAT".to_string()))?;
+        let current_time = OffsetDateTime::now_utc();
+
+        if current_time - issued_at > time::Duration::minutes(5) {
+            return Err(SiweError::ValidationError(
+                "IAT is more than 5 minutes old".to_string(),
+            ));
+        }
+
+        let mut line = lines.next();
+
+        // Check expiration time
+        if let Some(exp) = tag_optional(EXP_TAG, line)? {
+            line = lines.next();
+            let expiration_time =
+                OffsetDateTime::parse(exp, &Rfc3339).map_err(|_| {
+                    SiweError::ValidationError("Invalid Expiration format".to_string())
+                })?;
+            if expiration_time - current_time > time::Duration::days(7) {
+                return Err(SiweError::ValidationError(
+                    "Expiration time is more than 7 days in the future".to_string(),
+                ));
+            }
+        }
+
+        if let Some(nbf) = tag_optional(NBF_TAG, line)? {
+            line = lines.next();
+            let nbf_time = OffsetDateTime::parse(nbf, &Rfc3339).map_err(|_| {
+                SiweError::ValidationError("Invalid Expiration format".to_string())
+            })?;
+            if nbf_time - current_time > time::Duration::days(7) {
+                return Err(SiweError::ValidationError(
+                    "Not before time is more than 7 days in the future".to_string(),
+                ));
+            }
+        }
+
+        if tag_optional(RID_TAG, line)?.is_some() {
+            line = lines.next();
+        }
+
+        match line {
+            Some(RES_TAG) => Err(SiweError::ValidationError(
+                "No resources allowed".to_string(),
+            )),
+            Some(_) => Err(SiweError::ValidationError(
+                "Unexpected at end of message".to_string(),
+            )),
+            None => Ok(()),
+        }?;
 
         let current_url_scheme = extract_scheme(current_url)?;
 

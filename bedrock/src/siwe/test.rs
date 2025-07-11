@@ -1,5 +1,6 @@
 use super::*;
 use chrono::{DateTime, Duration, Utc};
+use dryoc::kdf::Kdf;
 use ethers::types::{Address, Signature};
 use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
@@ -222,8 +223,8 @@ fn test_siwe_message_too_long() {
     let siwe = create_siwe_service();
     let datetime = get_current_time();
     let raw_message = format!(
-        "<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:
-        <https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:
+        "<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:
+        <https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:
         <https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:\n\
         <https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:<https://test.com> wants you to sign in with your Ethereum account:\n
         {{address}}\n\n\
@@ -804,6 +805,7 @@ fn test_siwe_no_extraneous_text() {
         &current_url,
         &integration_url,
     );
+
     assert!(
         matches!(response, Err(SiweError::ValidationError(msg)) if msg == "Unexpected at end of message"),
         "Expected 'Unexpected at end of message' error"
@@ -852,7 +854,10 @@ async fn test_siwe_sign_message_v2() {
 
 #[test]
 fn test_siwe_create_world_app_auth_message() {
-    let siwe = create_siwe_service();
+    const CONTEXT: [u8; 8] = *b"OXIDEKEY";
+    const ETHEREUM_KEY_ID: u64 = 0x00;
+
+    let siwe: Arc<Siwe> = create_siwe_service();
     let wallet_address = "0x11a1801863e1f0941a663f0338aea395be1ec8a4".to_string();
     let key = r#"{"key":"db547ff3ded25c60e791917584090eafd8efceba61d6e73946b89b7d6fc04725","version":"V1"}"#;
 
@@ -891,13 +896,26 @@ fn test_siwe_create_world_app_auth_message() {
 
     // Minimal replacement for OxideKey::decode + .ethereum_key()
     // The key is a JSON string: {"key":"<hex>","version":"V1"}
-    // We'll parse it and extract the hex string for the key, which is the Ethereum key.
+    // We need to properly derive the Ethereum key using KDF, not just extract the raw key
     let key_json: serde_json::Value = serde_json::from_str(key).unwrap();
-    let ethereum_key = key_json
+    let key_hex = key_json
         .get("key")
         .and_then(|v| v.as_str())
-        .expect("Missing key field")
-        .to_string();
+        .expect("Missing key field");
+
+    // Decode hex to bytes
+    let key_bytes = hex::decode(key_hex).expect("Invalid hex");
+    let mut key_array = [0u8; 32];
+    key_array.copy_from_slice(&key_bytes);
+
+    // Derive the Ethereum subkey using KDF (matching OxideKey logic)
+    let kdf = Kdf::from_parts(key_array, CONTEXT);
+    let subkey = kdf
+        .derive_subkey_to_vec(ETHEREUM_KEY_ID)
+        .expect("KDF failed");
+
+    // Convert to hex
+    let ethereum_key = hex::encode(&subkey);
 
     let signed_response = siwe
         .sign_world_app_auth_message(response.result, ethereum_key)

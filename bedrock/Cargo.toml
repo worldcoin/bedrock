@@ -59,6 +59,7 @@ tokio = { version = "1.45.1", features = [
     "rt-multi-thread",
 ], optional = true }
 uniffi = { workspace = true, features = ["build", "tokio"] }
+dryoc = { git = "https://github.com/brndnmtthws/dryoc", rev = "e0e0ef0" }
 
 [dev-dependencies]
 alloy = { version = "1.0.17", default-features = false, features = [
