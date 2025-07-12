@@ -1,0 +1,10 @@
+pub const PREAMBLE: &str = " wants you to sign in with your Ethereum account:";
+pub const URI_TAG: &str = "URI: ";
+pub const VERSION_TAG: &str = "Version: ";
+pub const CHAIN_TAG: &str = "Chain ID: ";
+pub const NONCE_TAG: &str = "Nonce: ";
+pub const IAT_TAG: &str = "Issued At: ";
+pub const EXP_TAG: &str = "Expiration Time: ";
+pub const NBF_TAG: &str = "Not Before: ";
+pub const RID_TAG: &str = "Request ID: ";
+pub const RES_TAG: &str = "Resources:";
