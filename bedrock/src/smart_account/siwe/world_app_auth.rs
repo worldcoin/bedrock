@@ -23,6 +23,7 @@ pub enum WorldAppAuthFlow {
 
 impl WorldAppAuthFlow {
     /// Converts the authentication flow to its corresponding SIWE URI path
+    #[must_use]
     pub fn to_siwe_uri(self, base_url: &str) -> String {
         let path = match self {
             Self::Refresh => "/public/v1/auth/refresh",

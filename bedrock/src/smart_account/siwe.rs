@@ -177,6 +177,7 @@ fn precheck_and_sanitize_message(
 }
 
 impl SiweCapable for SafeSmartAccount {
+    #[allow(clippy::too_many_lines)]
     fn validate_siwe_message(
         &self,
         raw_message: &str,
@@ -282,7 +283,7 @@ impl SiweCapable for SafeSmartAccount {
                 lines.next(); // new line validation is done by checking URI
                 statement = s.to_string();
             }
-        };
+        }
 
         let uri = extract_domain(tagged(URI_TAG, lines.next())?)?;
         if uri != current_url_domain {
@@ -456,17 +457,16 @@ impl SiweCapable for SafeSmartAccount {
                     message: "Failed to convert timestamp".to_string(),
                 })?;
 
-                let nonce = match nonce {
-                    Some(n) => n,
-                    None => {
-                        let mut bytes = [0u8; 4];
-                        getrandom::getrandom(&mut bytes).map_err(|_| {
-                            SafeSmartAccountError::Generic {
-                                message: "Failed to generate random nonce".to_string(),
-                            }
-                        })?;
-                        u32::from_be_bytes(bytes)
-                    }
+                let nonce = if let Some(n) = nonce {
+                    n
+                } else {
+                    let mut bytes = [0u8; 4];
+                    getrandom::getrandom(&mut bytes).map_err(|_| {
+                        SafeSmartAccountError::Generic {
+                            message: "Failed to generate random nonce".to_string(),
+                        }
+                    })?;
+                    u32::from_be_bytes(bytes)
                 };
 
                 world_app_auth::create_message(
@@ -496,6 +496,9 @@ impl SiweCapable for SafeSmartAccount {
 impl SafeSmartAccount {
     /// Signs a SIWE message for World App primary authentication using EOA.
     /// This is for compatibility with existing World App auth flow.
+    ///
+    /// # Errors
+    /// Returns an error if the ethereum key decoding or signing fails
     pub async fn sign_world_app_auth_message_async(
         &self,
         message: ValidationSuccess,
@@ -511,7 +514,7 @@ impl SafeSmartAccount {
         let signature = signer
             .sign_message(message_text.as_bytes())
             .await
-            .map_err(|err| SafeSmartAccountError::Signing(err))?;
+            .map_err(SafeSmartAccountError::Signing)?;
 
         Ok(SiweSignatureResponse {
             signature: signature.to_string(),
@@ -531,4 +534,4 @@ impl PartialEq for SiweValidationResponse {
 }
 
 #[cfg(test)]
-pub(crate) mod test;
+mod test;

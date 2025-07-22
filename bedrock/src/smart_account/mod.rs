@@ -26,7 +26,7 @@ mod transaction;
 /// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
 mod permit2;
 
-/// Adds SIWE (Sign-In with Ethereum) capabilities to SafeSmartAccount
+/// Adds SIWE (Sign-In with Ethereum) capabilities to `SafeSmartAccount`
 mod siwe;
 
 pub use transaction_4337::{

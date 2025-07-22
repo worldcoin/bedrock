@@ -1,5 +1,4 @@
 /// Constants for SIWE message format
-
 /// Preamble suffix for SIWE messages
 pub const PREAMBLE: &str = " wants you to sign in with your Ethereum account:";
 
