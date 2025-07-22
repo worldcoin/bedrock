@@ -4,7 +4,6 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use pretty_assertions::assert_eq;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 use siwe::Message;
 
 const TEST_PRIVATE_KEY: &str =
@@ -252,7 +251,7 @@ fn test_siwe_message_too_long() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "message" && message == "Message is too long"),
         "Expected 'Message is too long' error"
     );
@@ -285,7 +284,7 @@ fn test_siwe_with_invalid_domain_subdomains() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "uri" && message == "URI domain does not match integration or current URL domain"),
         "Expected 'URI domain does not match integration or current URL domain' error"
     );
@@ -318,7 +317,7 @@ fn test_siwe_with_invalid_subdomains() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "uri" && message == "URI does not match current URL"),
         "Expected 'URI does not match current URL' error"
     );
@@ -351,7 +350,7 @@ fn test_siwe_with_invalid_scheme() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "scheme" && message == "Scheme must be HTTPS"),
         "Expected 'Scheme must be HTTPS' error"
     );
@@ -385,7 +384,7 @@ fn test_siwe_with_invalid_domain() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "preamble" && message == "Missing Preamble Line"),
         "Expected 'Missing Preamble Line' error"
     );
@@ -419,7 +418,7 @@ fn test_siwe_with_mismatched_domain() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "uri" && message == "URI domain does not match integration or current URL domain"),
         "Expected 'URI domain does not match integration or current URL domain' error"
     );
@@ -452,7 +451,7 @@ fn test_siwe_with_mismatched_current_url() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "uri" && message == "URI does not match current URL"),
         "Expected 'URI does not match current URL' error"
     );
@@ -486,7 +485,7 @@ fn test_siwe_mismatched_uri() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "uri" && message == "URI does not match current URL"),
         "Expected 'URI does not match current URL' error"
     );
@@ -521,7 +520,7 @@ fn test_siwe_with_invalid_statement() {
 
     // if statement is \n it will cause a line mismatch
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "siwe_message" && message == "Missing 'URI: '"),
         "Expected 'Missing 'URI: '' error"
     );
@@ -555,7 +554,7 @@ fn test_siwe_with_invalid_version() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "version" && message == "Version must be 1"),
         "Expected 'Version must be 1' error"
     );
@@ -589,7 +588,7 @@ fn test_siwe_with_invalid_chain_id() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "chain_id" && message == "Chain ID must be 480 (World Chain)"),
         "Expected 'Chain ID must be 480 (World Chain)' error"
     );
@@ -622,7 +621,7 @@ fn test_siwe_with_invalid_wallet_address() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "address" && message == "Invalid Address"),
         "Expected 'Invalid Address' error"
     );
@@ -656,7 +655,7 @@ fn test_siwe_with_invalid_nonce() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "nonce" && message == "Nonce must be longer than 8 characters"),
         "Expected 'Nonce must be longer than 8 characters' error"
     );
@@ -689,7 +688,7 @@ fn test_siwe_with_past_issued_at_date() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "issued_at" && message == "IAT is more than 5 minutes old"),
         "Expected 'IAT is more than 5 minutes old' error"
     );
@@ -723,7 +722,7 @@ fn test_siwe_with_invalid_expiration() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "expiration" && message == "Expiration time is more than 7 days in the future"),
         "Expected 'Expiration time is more than 7 days in the future' error"
     );
@@ -757,7 +756,7 @@ fn test_siwe_with_invalid_nbf() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "not_before" && message == "Not before time is more than 7 days in the future"),
         "Expected 'Not before time is more than 7 days in the future' error"
     );
@@ -792,7 +791,7 @@ fn test_siwe_no_resources() {
         &integration_url,
     );
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "resources" && message == "No resources allowed"),
         "Expected 'No resources allowed' error"
     );
@@ -828,7 +827,7 @@ fn test_siwe_no_extraneous_text() {
     );
 
     assert!(
-        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message }) 
+        matches!(response, Err(SafeSmartAccountError::InvalidInput { attribute, message })
             if attribute == "message" && message == "Unexpected at end of message"),
         "Expected 'Unexpected at end of message' error"
     );
