@@ -1,7 +1,7 @@
-use crate::siwe::format::{
+use super::format::{
     CHAIN_TAG, EXP_TAG, IAT_TAG, NBF_TAG, NONCE_TAG, PREAMBLE, URI_TAG, VERSION_TAG,
 };
-use crate::siwe::{SiweError, SiweResult};
+use crate::smart_account::SafeSmartAccountError;
 use alloy::primitives::Address;
 use std::ops::Add;
 use std::str::FromStr;
@@ -10,6 +10,7 @@ use time::{Duration, OffsetDateTime};
 
 const TOKEN_EXPIRES_IN: Duration = Duration::minutes(5);
 
+/// Represents the different authentication flows for World App
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum WorldAppAuthFlow {
     /// User has a valid and non-expired refresh token
@@ -21,6 +22,7 @@ pub enum WorldAppAuthFlow {
 }
 
 impl WorldAppAuthFlow {
+    /// Converts the authentication flow to its corresponding SIWE URI path
     pub fn to_siwe_uri(self, base_url: &str) -> String {
         let path = match self {
             Self::Refresh => "/public/v1/auth/refresh",
@@ -39,10 +41,13 @@ pub fn create_message(
     wallet_address: &str,
     current_time: OffsetDateTime,
     nonce: u32,
-) -> SiweResult<String> {
+) -> Result<String, SafeSmartAccountError> {
     let uri = flow.to_siwe_uri(base_url);
     let wallet_address = Address::from_str(wallet_address)
-        .map_err(|_| SiweError::WalletAddressInit)?
+        .map_err(|_| SafeSmartAccountError::InvalidInput {
+            attribute: "wallet_address",
+            message: "Failed to parse wallet address".to_string(),
+        })?
         .to_checksum(None);
 
     let version = 1;

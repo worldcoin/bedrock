@@ -26,9 +26,18 @@ mod transaction;
 /// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
 mod permit2;
 
+/// Adds SIWE (Sign-In with Ethereum) capabilities to SafeSmartAccount
+mod siwe;
+
 pub use transaction_4337::{
     EncodedSafeOpStruct, PackedUserOperation, UserOperation, ENTRYPOINT_4337,
     GNOSIS_SAFE_4337_MODULE,
+};
+
+// Re-export SIWE types for external use
+pub use siwe::{
+    AuthConfig, SiweCapable, SiweSignatureResponse, SiweValidationResponse,
+    ValidationSuccess, WorldAppAuthFlow,
 };
 
 const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[

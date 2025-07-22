@@ -23,10 +23,4 @@ pub mod smart_account;
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
-/// Introduces SIWE (Sign-In with Ethereum) functionality for authentication flows.
-pub mod siwe;
-
-// Re-export SIWE types for external use
-pub use siwe::*;
-
 uniffi::setup_scaffolding!("bedrock");
