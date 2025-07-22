@@ -184,7 +184,7 @@ where
     .abi_encode();
 
     // Deploy Safe via proxy factory
-    println!("\nDeploying Safe-{}", deploy_nonce);
+    println!("\nDeploying Safe-{deploy_nonce}");
     let deploy_tx = proxy_factory
         .createProxyWithNonce(
             SAFE_L2_SINGLETON_ADDRESS,
@@ -238,7 +238,7 @@ async fn test_integration_personal_sign() {
         .await
         .expect("Failed to set balance");
 
-    println!("✓ Using owner address: {}", owner);
+    println!("✓ Using owner address: {owner}");
 
     // Deploy a Safe
     let safe_address = deploy_safe(&provider, owner, U256::ZERO)
@@ -258,8 +258,8 @@ async fn test_integration_personal_sign() {
         .expect("Failed to sign message");
 
     println!("✓ Message signed successfully");
-    println!("  Message:   '{}'", message);
-    println!("  Signature: {}", signature);
+    println!("  Message:   '{message}'");
+    println!("  Signature: {signature}");
 
     let signature = signature.as_str();
 
@@ -360,7 +360,7 @@ async fn test_integration_personal_sign_failure_on_incorrect_chain_id() {
                 "execution reverted: GS026"
             );
         }
-        _ => panic!("Expected TransportError error, got {:?}", is_valid_result),
+        _ => panic!("Expected TransportError error, got {is_valid_result:?}"),
     }
 }
 
@@ -419,7 +419,7 @@ async fn test_integration_personal_sign_failure_on_incorrect_eip_191_prefix() {
                 "execution reverted: GS026"
             );
         }
-        _ => panic!("Expected TransportError error, got {:?}", is_valid_result),
+        _ => panic!("Expected TransportError error, got {is_valid_result:?}"),
     }
 }
 
@@ -434,7 +434,7 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     let owner_key_hex = hex::encode(owner_signer.to_bytes());
 
     let owner = owner_signer.address();
-    println!("✓ Using owner address: {}", owner);
+    println!("✓ Using owner address: {owner}");
 
     let provider = ProviderBuilder::new()
         .wallet(owner_signer.clone())
@@ -547,7 +547,7 @@ async fn test_integration_sign_typed_data() {
         .await
         .expect("Failed to set balance");
 
-    println!("✓ Using owner address: {}", owner);
+    println!("✓ Using owner address: {owner}");
 
     // Deploy a Safe
     let safe_address = deploy_safe(&provider, owner, U256::ZERO)
