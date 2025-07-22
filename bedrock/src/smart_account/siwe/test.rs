@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(feature = "tooling_tests")]
 use siwe::Message;
 
-const TEST_PRIVATE_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const TEST_PRIVATE_KEY: &str =
+    "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const TEST_WALLET_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 
 fn get_current_time() -> String {
@@ -226,7 +227,9 @@ fn test_siwe_validation_with_url_path() {
 fn test_siwe_message_too_long() {
     let safe = create_test_account();
     let datetime = get_current_time();
-    let long_preamble = "<https://test.com> wants you to sign in with your Ethereum account:".repeat(100);
+    let long_preamble =
+        "<https://test.com> wants you to sign in with your Ethereum account:"
+            .repeat(100);
     let raw_message = format!(
         "{long_preamble}
         {{address}}\n\n\
@@ -837,13 +840,14 @@ fn test_siwe_no_extraneous_text() {
 async fn test_siwe_sign_message_v2() {
     // World Chain Safe
     let wallet_address = "0x619525ED4E862B62cFEDACCc4dA5a9864D6f4A97";
-    let private_key = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    let private_key =
+        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     let safe = SafeSmartAccount::new(private_key.to_string(), wallet_address).unwrap();
-    
+
     let message = ValidationSuccess {
         message: generate_valid_payload(),
     };
-    
+
     // Use SafeSmartAccount to sign the message
     let signature = safe.sign_siwe_message(&message, 480).unwrap();
 
@@ -851,7 +855,7 @@ async fn test_siwe_sign_message_v2() {
     assert!(signature.signature.starts_with("0x"));
     assert!(!signature.message.contains("{address}")); // Address should be replaced
     assert!(signature.message.contains(wallet_address)); // Should contain actual address
-    
+
     // Full verification against RPC would require the message to be signed by the actual Safe
     // which involves the 4337 module, so we just verify the signature format here
     let message_parsed: Message = signature.message.parse().unwrap();
@@ -863,42 +867,54 @@ async fn test_siwe_sign_message_v2() {
 #[test]
 fn test_siwe_create_world_app_auth_message() {
     let wallet_address = "0x11a1801863e1f0941a663f0338aea395be1ec8a4";
-    let private_key = "db547ff3ded25c60e791917584090eafd8efceba61d6e73946b89b7d6fc04725";
+    let private_key =
+        "db547ff3ded25c60e791917584090eafd8efceba61d6e73946b89b7d6fc04725";
     let safe = SafeSmartAccount::new(private_key.to_string(), wallet_address).unwrap();
 
-    let message = safe.create_auth_message(AuthConfig::WorldApp {
-        flow: WorldAppAuthFlow::SignUp,
-        base_url: "https://app-backend.toolsforhumanity.com".to_string(),
-        nonce: Some(1_469_020_534),
-        current_time: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-    }).expect("Failed to create World App auth message");
+    let message = safe
+        .create_auth_message(AuthConfig::WorldApp {
+            flow: WorldAppAuthFlow::SignUp,
+            base_url: "https://app-backend.toolsforhumanity.com".to_string(),
+            nonce: Some(1_469_020_534),
+            current_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        })
+        .expect("Failed to create World App auth message");
 
     // Validate the message
-    let validation_response = safe.validate_siwe_message(
-        &message,
-        wallet_address,
-        "https://app-backend.toolsforhumanity.com/auth/sign-up",
-        "https://app-backend.toolsforhumanity.com/",
-    ).expect("Failed to validate World App auth message");
-    
+    let validation_response = safe
+        .validate_siwe_message(
+            &message,
+            wallet_address,
+            "https://app-backend.toolsforhumanity.com/auth/sign-up",
+            "https://app-backend.toolsforhumanity.com/",
+        )
+        .expect("Failed to validate World App auth message");
+
     assert_eq!(validation_response.statement, String::new());
-    assert_eq!(validation_response.domain, "https://app-backend.toolsforhumanity.com");
+    assert_eq!(
+        validation_response.domain,
+        "https://app-backend.toolsforhumanity.com"
+    );
 
     // Test signing with SafeSmartAccount directly
-    let signed_response = safe.sign_siwe_message(&validation_response.result, 480).unwrap();
-    
+    let signed_response = safe
+        .sign_siwe_message(&validation_response.result, 480)
+        .unwrap();
+
     // Verify the message content
     assert_eq!(signed_response.message, message);
     assert!(signed_response.signature.starts_with("0x"));
-    
+
     // Verify the message has the correct format and contains expected values
     // The address in the message should be checksummed
     let checksummed_address = "0x11A1801863e1F0941A663f0338aEa395Be1Ec8A4";
     assert!(signed_response.message.contains(checksummed_address));
-    assert!(signed_response.message.contains("https://app-backend.toolsforhumanity.com/public/v1/auth/sign-up"));
+    assert!(signed_response
+        .message
+        .contains("https://app-backend.toolsforhumanity.com/public/v1/auth/sign-up"));
     assert!(signed_response.message.contains("Chain ID: 480"));
 }
 
@@ -920,4 +936,4 @@ fn generate_valid_payload() -> String {
         now = now.format("%Y-%m-%dT%H:%M:%SZ"),
         expiration = expiration.format("%Y-%m-%dT%H:%M:%SZ")
     )
-} 
+}
