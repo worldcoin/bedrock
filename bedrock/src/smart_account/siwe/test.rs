@@ -895,7 +895,9 @@ fn test_siwe_create_world_app_auth_message() {
     assert!(signed_response.signature.starts_with("0x"));
     
     // Verify the message has the correct format and contains expected values
-    assert!(signed_response.message.contains(&wallet_address.to_lowercase()));
+    // The address in the message should be checksummed
+    let checksummed_address = "0x11A1801863e1F0941A663f0338aEa395Be1Ec8A4";
+    assert!(signed_response.message.contains(checksummed_address));
     assert!(signed_response.message.contains("https://app-backend.toolsforhumanity.com/public/v1/auth/sign-up"));
     assert!(signed_response.message.contains("Chain ID: 480"));
 }
