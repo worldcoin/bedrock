@@ -4,8 +4,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use pretty_assertions::assert_eq;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// For compatibility tests
-#[cfg(feature = "tooling_tests")]
+
 use siwe::Message;
 
 const TEST_PRIVATE_KEY: &str =
