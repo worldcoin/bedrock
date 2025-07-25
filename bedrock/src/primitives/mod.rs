@@ -12,10 +12,22 @@ pub mod logger;
 /// Introduces global configuration for Bedrock operations.
 pub mod config;
 
+/// Introduces filesystem functionality with automatic path prefixing for each exported struct.
+pub mod filesystem;
+
+/// Example demonstrating automatic FileSystemError support in bedrock_error macro.
+#[cfg(feature = "tooling_tests")]
+pub mod filesystem_example;
+
 /// Introduces test elements to ensure tooling (logging and error handling) is working as expected.
 /// The elements in this module are only used in Foreign Tests and are not available in built binaries.
 #[cfg(feature = "tooling_tests")]
 pub mod tooling_tests;
+
+/// Introduces test elements to ensure filesystem functionality is working as expected.
+/// The elements in this module are only used in Foreign Tests and are not available in built binaries.
+#[cfg(feature = "tooling_tests")]
+pub mod filesystem_tests;
 
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
