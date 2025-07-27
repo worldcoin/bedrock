@@ -20,6 +20,9 @@ pub use bedrock_macros::{bedrock_error, bedrock_export};
 /// Reference: <https://github.com/safe-global/safe-smart-account>
 pub mod smart_account;
 
+/// Introduces key smart contracts and exposes common operations for them.
+pub mod contracts;
+
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 

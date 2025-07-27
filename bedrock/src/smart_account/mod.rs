@@ -189,7 +189,7 @@ impl SafeSmartAccount {
     ///
     /// // This would normally be crafted by the user, or requested by Mini Apps.
     /// let user_op = UserOperation {
-    ///      sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+    ///     sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
     ///     nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
     ///     call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
     ///     signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
@@ -389,6 +389,25 @@ pub struct SafeTransaction {
     /// The sequential nonce of the transaction. Used to prevent replay attacks.
     /// Solidity type: `uint256`
     pub nonce: String,
+}
+
+impl SafeTransaction {
+    /// Creates a new `SafeTransaction` with default values.
+    #[must_use]
+    pub fn with_defaults(to: String, data: String, nonce: String) -> Self {
+        Self {
+            to,
+            value: "0".into(),
+            data,
+            operation: SafeOperation::Call,
+            safe_tx_gas: "0".into(),
+            base_gas: "0".into(),
+            gas_price: "0".into(),
+            gas_token: Address::ZERO.to_string(),
+            refund_receiver: Address::ZERO.to_string(),
+            nonce,
+        }
+    }
 }
 
 #[cfg(test)]
