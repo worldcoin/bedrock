@@ -64,21 +64,20 @@ mkdir -p "$SWIFT_HEADERS_DIR"
 echo "Building Rust packages for iOS targets..."
 
 export IPHONEOS_DEPLOYMENT_TARGET="13.0"
-export RUSTFLAGS="-C link-arg=-Wl,-application_extension"
-
+# ————————————————————————————————————————————————————————————————
+# Pass link args only to the iOS targets, so host build‑scripts are unaffected
+# ————————————————————————————————————————————————————————————————
+IOS_LINK_ARGS="-C link-arg=-Wl,-application_extension \
+               -C link-arg=-Wl,-install_name,@rpath/Bedrock.framework/Bedrock"
+export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="$IOS_LINK_ARGS"
+export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS="$IOS_LINK_ARGS"
+export CARGO_TARGET_X86_64_APPLE_IOS_RUSTFLAGS="$IOS_LINK_ARGS"
 # Build for all iOS targets
 cargo build --package $PACKAGE_NAME --target aarch64-apple-ios-sim --release
 cargo build --package $PACKAGE_NAME --target aarch64-apple-ios --release
 cargo build --package $PACKAGE_NAME --target x86_64-apple-ios --release
 
-echo "Rust packages built. Combining simulator targets into universal binary..."
-
-# Create universal binary for simulators
-lipo -create target/aarch64-apple-ios-sim/release/lib${PACKAGE_NAME}.a \
-  target/x86_64-apple-ios/release/lib${PACKAGE_NAME}.a \
-  -output $BASE_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
-
-lipo -info $BASE_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
+echo "Rust packages built."
 
 echo "Generating Swift bindings..."
 
@@ -97,12 +96,31 @@ mv $BASE_PATH/ios_build/bindings/${PACKAGE_NAME}.swift ${SWIFT_SOURCES_DIR}/
 mv $BASE_PATH/ios_build/bindings/${PACKAGE_NAME}FFI.h $SWIFT_HEADERS_DIR/
 cat $BASE_PATH/ios_build/bindings/${PACKAGE_NAME}FFI.modulemap > $SWIFT_HEADERS_DIR/module.modulemap
 
-echo "Creating XCFramework..."
+# ─────────────────────────────────────────────────────────────────────────────
+# Now that headers exist, wrap each dylib slice in a framework bundle
+# ─────────────────────────────────────────────────────────────────────────────
+for T in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+  FRAME_DIR="target/$T/release/Bedrock.framework"
+  mkdir -p "$FRAME_DIR/Headers"
+  cp "target/$T/release/lib${PACKAGE_NAME}.dylib" "$FRAME_DIR/Bedrock"
+  cp -a "$SWIFT_HEADERS_DIR/"* "$FRAME_DIR/Headers/"
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Create one fat simulator binary (arm64 + x86_64) so Xcode sees a single
+# iOS‑simulator definition instead of duplicates.
+# ─────────────────────────────────────────────────────────────────────────────
+lipo -create \
+  target/aarch64-apple-ios-sim/release/lib${PACKAGE_NAME}.dylib \
+  target/x86_64-apple-ios/release/lib${PACKAGE_NAME}.dylib \
+  -output target/aarch64-apple-ios-sim/release/Bedrock.framework/Bedrock
+
+echo "Creating XCFramework..." 
 
 # Create XCFramework
 xcodebuild -create-xcframework \
-  -library target/aarch64-apple-ios/release/lib${PACKAGE_NAME}.a -headers $BASE_PATH/ios_build/Headers \
-  -library $BASE_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a -headers $BASE_PATH/ios_build/Headers \
+  -framework target/aarch64-apple-ios/release/Bedrock.framework \
+  -framework target/aarch64-apple-ios-sim/release/Bedrock.framework \
   -output $FRAMEWORK_OUTPUT
 
 # Clean up intermediate build files

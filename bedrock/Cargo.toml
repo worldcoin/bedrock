@@ -14,7 +14,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [lib]
-crate-type = ["lib", "staticlib", "cdylib"]
+crate-type = ["cdylib"]
 name = "bedrock"
 
 [features]
