@@ -22,7 +22,7 @@ default = ["tooling_tests"]
 tooling_tests = ["dep:tokio"]
 
 [dependencies]
-alloy = { version = "1.0.9", default-features = false, features = [
+alloy = { version = "1.0.17", default-features = false, features = [
     "dyn-abi",
     "eip712",
     "signer-local",
@@ -48,7 +48,7 @@ tokio = { version = "1.45.1", features = ["time"], optional = true }
 uniffi = { workspace = true, features = ["build", "tokio"] }
 
 [dev-dependencies]
-alloy = { version = "1.0.9", default-features = false, features = [
+alloy = { version = "1.0.17", default-features = false, features = [
     "json",
     "contract",
     "node-bindings",

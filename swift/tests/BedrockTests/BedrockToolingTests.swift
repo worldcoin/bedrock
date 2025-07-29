@@ -11,7 +11,7 @@ final class BedrockToolingTests: XCTestCase {
         // Test the ToolingDemo to verify log prefixing works
         let demo = ToolingDemo()
         
-        // These calls should generate logs with [ToolingDemo] prefix
+        // These calls should generate logs with [Bedrock][ToolingDemo] prefix
         demo.logMessage(message: "Testing log prefixing from Swift")
         demo.testLogLevels()
         
