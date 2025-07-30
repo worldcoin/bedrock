@@ -29,6 +29,9 @@ pub mod tooling_tests;
 #[cfg(feature = "tooling_tests")]
 pub mod filesystem_tests;
 
+/// Introduces personal custody keypair functionality.
+pub mod personal_custody_keypair;
+
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
 /// This is used to ensure that the hex string is properly formatted and the output is always prefixed with "0x".
