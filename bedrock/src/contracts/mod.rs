@@ -5,11 +5,24 @@ use alloy::{
 use bedrock_macros::bedrock_export;
 
 use crate::{
-    contracts::erc20::IERC20, primitives::ParseFromForeignBinding,
-    smart_account::SafeTransaction,
+    contracts::erc20::IERC20,
+    primitives::ParseFromForeignBinding,
+    smart_account::{EncodedSafeOpStruct, SafeTransaction},
 };
 
 mod erc20;
+
+#[derive(uniffi::Object)]
+struct ExecutableTx {
+    tx: EncodedSafeOpStruct,
+}
+
+#[bedrock_export]
+impl ExecutableTx {
+    pub fn as_signed_calldata(&self) -> Vec<u8> {
+        todo!("todo");
+    }
+}
 
 /// Exposes common operations for key smart contracts. This will return a `SafeTransaction` which can be then signed and executed.
 #[derive(uniffi::Object)]
