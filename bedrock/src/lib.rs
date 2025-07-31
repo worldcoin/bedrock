@@ -23,4 +23,7 @@ pub mod smart_account;
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
+/// Introduces backup and recovery functionality for secure storage and retrieval of wallet data.
+pub mod backup;
+
 uniffi::setup_scaffolding!("bedrock");
