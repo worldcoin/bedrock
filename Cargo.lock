@@ -1291,6 +1291,7 @@ version = "0.0.6"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-trait",
  "bedrock-macros",
  "chrono",
  "dotenvy",

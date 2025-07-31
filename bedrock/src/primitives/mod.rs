@@ -6,11 +6,17 @@ use crate::bedrock_export;
 use std::fmt::Display;
 use std::str::FromStr;
 
+// Re-export HTTP client types for external use
+pub use http_client::{AuthenticatedHttpClient, HttpError};
+
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
 
 /// Introduces global configuration for Bedrock operations.
 pub mod config;
+
+/// Introduces authenticated HTTP client functionality that native applications must implement for bedrock.
+pub mod http_client;
 
 /// Introduces test elements to ensure tooling (logging and error handling) is working as expected.
 /// The elements in this module are only used in Foreign Tests and are not available in built binaries.
