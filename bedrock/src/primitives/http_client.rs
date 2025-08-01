@@ -4,57 +4,8 @@
 /// ensuring proper handling of platform-specific networking requirements like SSL pinning,
 /// proxy support, and authentication.
 ///
-/// # Examples
-///
-/// ## Swift Implementation
-///
-/// ```swift
-/// class BedrockAuthenticatedHttpClientBridge: Bedrock.AuthenticatedHttpClient {
-///     func fetchFromAppBackend(url: String) async throws -> Data {
-///         guard let url = URL(string: url) else {
-///             throw HttpError.Generic(message: "Invalid URL")
-///         }
-///         
-///         let (data, response) = try await URLSession.shared.data(from: url)
-///         
-///         guard let httpResponse = response as? HTTPURLResponse else {
-///             throw HttpError.Generic(message: "Invalid response type")
-///         }
-///         
-///         guard 200...299 ~= httpResponse.statusCode else {
-///             throw HttpError.BadStatusCode(
-///                 code: UInt64(httpResponse.statusCode),
-///                 responseBody: data // Include error response body
-///             )
-///         }
-///         
-///         return data
-///     }
-/// }
-/// ```
-///
-/// ## Kotlin Implementation
-///
-/// ```kotlin
-/// class BedrockAuthenticatedHttpClientBridge : AuthenticatedHttpClient {
-///     override suspend fun fetchFromAppBackend(url: String): ByteArray {
-///         return withContext(Dispatchers.IO) {
-///             val request = Request.Builder().url(url).build()
-///             val response = httpClient.newCall(request).execute()
-///             
-///             if (!response.isSuccessful) {
-///                 val errorBody = response.body?.bytes() ?: ByteArray(0)
-///                 throw HttpError.BadStatusCode(
-///                     code = response.code.toULong(),
-///                     responseBody = errorBody // Include error response body
-///                 )
-///             }
-///             
-///             response.body?.bytes() ?: throw HttpError.Generic("Empty response body")
-///         }
-///     }
-/// }
-/// ```
+/// Native implementations should map platform-specific errors to the appropriate `HttpError` variants
+/// for consistent error handling across platforms.
 #[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait AuthenticatedHttpClient: Send + Sync {
