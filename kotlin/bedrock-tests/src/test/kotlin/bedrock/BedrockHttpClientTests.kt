@@ -212,6 +212,6 @@ class BedrockHttpClientTests {
         assertEquals(urls, client.requestHistory)
         // Verify all requests were GET with no body
         assertEquals(listOf(HttpMethod.GET, HttpMethod.GET, HttpMethod.GET), client.methodHistory)
-        assertEquals(listOf(null, null, null), client.bodyHistory)
+        assertEquals(arrayOf<ByteArray?>(null, null, null).toList(), client.bodyHistory)
     }
 } 
