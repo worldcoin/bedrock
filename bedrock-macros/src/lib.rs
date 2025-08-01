@@ -322,25 +322,38 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
     let mut i = 0;
 
     while i < lines.len() {
-        let line = lines[i].trim();
+        let line = lines[i];
 
-        if line.starts_with("#[unparsed(") && line.ends_with(")]") {
-            // Parse the struct names from the attribute
-            let content = line
-                .strip_prefix("#[unparsed(")
-                .unwrap()
-                .strip_suffix(")]")
-                .unwrap();
+        // Check if this line contains #[unparsed(...)]
+        if let Some(start) = line.find("#[unparsed(") {
+            if let Some(end_bracket) = line[start..].find(")]") {
+                let end = start + end_bracket;
+                // Extract the attribute content
+                let attr_start = start + "#[unparsed(".len();
+                let content = &line[attr_start..end];
 
-            unparsed_struct_names =
-                content.split(',').map(|s| s.trim().to_string()).collect();
+                unparsed_struct_names =
+                    content.split(',').map(|s| s.trim().to_string()).collect();
 
-            // Skip this line in the cleaned output
-            i += 1;
-            continue;
+                // Remove the attribute from the line
+                let before = &line[..start];
+                let after = if end + 2 < line.len() {
+                    &line[end + 2..]
+                } else {
+                    ""
+                };
+                let cleaned_line = format!("{}{}", before, after);
+                let cleaned_line = cleaned_line.trim();
+
+                if !cleaned_line.is_empty() {
+                    cleaned_lines.push(cleaned_line.to_string());
+                }
+                i += 1;
+                continue;
+            }
         }
 
-        cleaned_lines.push(lines[i]);
+        cleaned_lines.push(lines[i].to_string());
         i += 1;
     }
 
@@ -348,11 +361,15 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
     let mut all_structs = Vec::new();
     let mut i = 0;
 
-    while i < cleaned_lines.len() {
-        let line = cleaned_lines[i].trim();
+    // Convert cleaned_lines to &[&str] for parse_struct_definition
+    let cleaned_lines_refs: Vec<&str> =
+        cleaned_lines.iter().map(|s| s.as_str()).collect();
+
+    while i < cleaned_lines_refs.len() {
+        let line = cleaned_lines_refs[i].trim();
 
         if line.contains(" struct ") {
-            if let Some(struct_info) = parse_struct_definition(&cleaned_lines, i) {
+            if let Some(struct_info) = parse_struct_definition(&cleaned_lines_refs, i) {
                 all_structs.push(struct_info);
             }
         }
@@ -388,7 +405,12 @@ alloy::sol! {{
         generated_code
     );
 
-    output.parse().unwrap()
+    output.parse().unwrap_or_else(|e| {
+        panic!(
+            "Failed to parse macro output: {}\nGenerated output:\n{}",
+            e, output
+        );
+    })
 }
 
 #[derive(Debug)]
@@ -450,28 +472,30 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
         let next_line = lines[start_idx + 1].trim();
 
         // Check if next line is a single-line field definition like "{ address token; uint256 amount; }"
-        if next_line.starts_with('{') && next_line.ends_with('}') {
-            let content = &next_line[1..next_line.len() - 1];
-            for field_str in content.split(';') {
-                let field_str = field_str.trim();
-                if field_str.is_empty() {
-                    continue;
+        if next_line.starts_with('{') {
+            if let Some(close_brace_pos) = next_line.find('}') {
+                let content = &next_line[1..close_brace_pos];
+                for field_str in content.split(';') {
+                    let field_str = field_str.trim();
+                    if field_str.is_empty() {
+                        continue;
+                    }
+                    let parts: Vec<&str> = field_str.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        fields.push(FieldInfo {
+                            ty: parts[0].to_string(),
+                            name: parts[1].to_string(),
+                            doc_comment: None,
+                        });
+                    }
                 }
-                let parts: Vec<&str> = field_str.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    fields.push(FieldInfo {
-                        ty: parts[0].to_string(),
-                        name: parts[1].to_string(),
-                        doc_comment: None,
-                    });
-                }
-            }
 
-            return Some(StructInfo {
-                name,
-                fields,
-                doc_comments,
-            });
+                return Some(StructInfo {
+                    name,
+                    fields,
+                    doc_comments,
+                });
+            }
         }
     }
 
@@ -611,7 +635,7 @@ fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
     }
 
     // Add struct definition
-    code.push_str("#[derive(uniffi::Record, Debug)]\n");
+    code.push_str("#[derive(uniffi::Record, Debug, Clone)]\n");
     code.push_str(&format!("pub struct Unparsed{} {{\n", struct_info.name));
 
     // Add fields
