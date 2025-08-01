@@ -1,6 +1,6 @@
 # `bedrock_sol!` Macro
 
-The `bedrock_sol!` macro is a procedural macro that extends `alloy::sol!` with automatic generation of unparsed struct variants for foreign language bindings (Swift and Kotlin).
+The `bedrock_sol!` macro is a powerful procedural macro that extends `alloy::sol!` with automatic generation of unparsed struct variants for foreign language bindings (Swift and Kotlin).
 
 ## Overview
 
@@ -26,7 +26,6 @@ bedrock_sol! {
         uint256 amount;
     }
 
-    #[derive(serde::Serialize)]
     struct PermitTransferFrom {
         TokenPermissions permitted;
         address spender;
@@ -116,3 +115,60 @@ bedrock_sol! {
     }
 }
 ```
+
+## Foreign Language Usage
+
+### Swift Example
+
+```swift
+// Create unparsed struct with string values
+let unparsedPermissions = UnparsedTokenPermissions(
+    token: "0x1234567890abcdef1234567890abcdef12345678",
+    amount: "1000000000000000000"
+)
+
+// Convert to typed struct for processing
+let typedPermissions = try TokenPermissions.from(unparsed: unparsedPermissions)
+```
+
+### Kotlin Example
+
+```kotlin
+// Create unparsed struct with string values
+val unparsedPermissions = UnparsedTokenPermissions(
+    token = "0x1234567890abcdef1234567890abcdef12345678",
+    amount = "1000000000000000000"
+)
+
+// Convert to typed struct for processing
+val typedPermissions = TokenPermissions.from(unparsedPermissions)
+```
+
+## Benefits
+
+1. **Type Safety**: Foreign languages get strongly-typed structs while maintaining string-based input flexibility
+2. **Error Handling**: Automatic validation and detailed error messages during conversion
+3. **Documentation**: Each string field includes Solidity type information in comments
+4. **Maintainability**: Single source of truth - update the `bedrock_sol!` definition and both typed and unparsed variants update automatically
+
+## Error Handling
+
+Conversion failures return detailed `SafeSmartAccountError::InvalidInput` errors with:
+
+- **Attribute name**: Which field failed to parse
+- **Error message**: Specific parsing failure details
+
+```rust
+// Example error for invalid address
+SafeSmartAccountError::InvalidInput {
+    attribute: "token",
+    message: "failed to parse: invalid address checksum"
+}
+```
+
+## Best Practices
+
+1. **Mark only necessary structs**: Only include structs in the `#[unparsed(...)]` attribute that need foreign language bindings
+2. **Document your structs**: Doc comments on original structs are preserved in unparsed variants
+3. **Use descriptive field names**: Field names become part of the foreign language API
+4. **Validate early**: Convert from unparsed to typed structs as early as possible in your processing pipeline

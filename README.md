@@ -132,7 +132,7 @@ bedrock_sol! {
 - `TryFrom` implementations for seamless conversion from unparsed to typed structs
 - Perfect for Swift and Kotlin foreign language bindings
 
-📖 **[Complete documentation and examples →](BEDROCK_SOL_MACRO.md)**
+📖 **[Complete documentation and examples →](bedrock-macros/README.md)**
 
 ### Manual Context Management
 
