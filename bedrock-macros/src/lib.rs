@@ -690,7 +690,7 @@ fn generate_try_from_impl(
         "impl TryFrom<Unparsed{}> for {} {{\n",
         struct_info.name, struct_info.name
     ));
-    code.push_str("    type Error = crate::smart_account::SafeSmartAccountError;\n\n");
+    code.push_str("    type Error = crate::primitives::PrimitiveError;\n\n");
     code.push_str(&format!(
         "    fn try_from(value: Unparsed{}) -> Result<Self, Self::Error> {{\n",
         struct_info.name
@@ -728,7 +728,7 @@ fn generate_try_from_impl(
                     field.name, field.name, field.name
                 ),
                 _ => format!(
-                    "            {}: value.{}.parse().map_err(|e| crate::smart_account::SafeSmartAccountError::InvalidInput {{ attribute: \"{}\", message: format!(\"failed to parse: {{}}\", e) }})?",
+                    "            {}: value.{}.parse().map_err(|e| crate::primitives::PrimitiveError::InvalidInput {{ attribute: \"{}\", message: format!(\"failed to parse: {{}}\", e) }})?",
                     field.name, field.name, field.name
                 ),
             }
