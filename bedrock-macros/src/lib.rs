@@ -370,8 +370,14 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
             next_struct_is_unparsed = false;
         }
 
-        // Add all other lines to cleaned_lines
-        cleaned_lines.push(line.to_string());
+        // Remove #[optional] attributes from lines and add to cleaned_lines
+        let line_without_optional = line.replace("#[optional]", "").trim().to_string();
+        if !line_without_optional.is_empty() {
+            cleaned_lines.push(line_without_optional);
+        } else if !line.trim().contains("#[optional]") {
+            // Only add empty lines if they weren't just #[optional] attributes
+            cleaned_lines.push(line.to_string());
+        }
     }
 
     // Parse all structs in the input
@@ -442,6 +448,7 @@ struct FieldInfo {
     name: String,
     ty: String,
     doc_comment: Option<String>,
+    optional: bool,
 }
 
 fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInfo> {
@@ -505,6 +512,7 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
                             ty: parts[0].to_string(),
                             name: parts[1].to_string(),
                             doc_comment: None,
+                            optional: false,
                         });
                     }
                 }
@@ -534,6 +542,7 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
                         ty: parts[0].to_string(),
                         name: parts[1].to_string(),
                         doc_comment: None,
+                        optional: false,
                     });
                 }
             }
@@ -559,22 +568,32 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
                     let ty = parts[0].to_string();
                     let name = parts[1].to_string();
 
-                    // Check for doc comment on previous line
-                    let doc_comment = if i > 0 {
-                        let prev_line = lines[i - 1].trim();
+                    // Check for doc comment and attributes on previous lines
+                    let mut doc_comment = None;
+                    let mut optional = false;
+
+                    // Look backwards from current line to find attributes and doc comments
+                    let mut check_idx = i;
+                    while check_idx > 0 {
+                        check_idx -= 1;
+                        let prev_line = lines[check_idx].trim();
+
                         if prev_line.starts_with("///") {
-                            Some(prev_line.to_string())
-                        } else {
-                            None
+                            doc_comment = Some(prev_line.to_string());
+                        } else if prev_line.contains("#[optional]") {
+                            optional = true;
+                        } else if !prev_line.is_empty() && !prev_line.starts_with("//")
+                        {
+                            // Hit a non-empty, non-comment line, stop looking backwards
+                            break;
                         }
-                    } else {
-                        None
-                    };
+                    }
 
                     fields.push(FieldInfo {
                         name,
                         ty,
                         doc_comment,
+                        optional,
                     });
                 }
 
@@ -612,22 +631,32 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
                     let ty = parts[0].to_string();
                     let name = parts[1].to_string();
 
-                    // Check for doc comment on previous line
-                    let doc_comment = if i > 0 {
-                        let prev_line = lines[i - 1].trim();
+                    // Check for doc comment and attributes on previous lines
+                    let mut doc_comment = None;
+                    let mut optional = false;
+
+                    // Look backwards from current line to find attributes and doc comments
+                    let mut check_idx = i;
+                    while check_idx > 0 {
+                        check_idx -= 1;
+                        let prev_line = lines[check_idx].trim();
+
                         if prev_line.starts_with("///") {
-                            Some(prev_line.to_string())
-                        } else {
-                            None
+                            doc_comment = Some(prev_line.to_string());
+                        } else if prev_line.contains("#[optional]") {
+                            optional = true;
+                        } else if !prev_line.is_empty() && !prev_line.starts_with("//")
+                        {
+                            // Hit a non-empty, non-comment line, stop looking backwards
+                            break;
                         }
-                    } else {
-                        None
-                    };
+                    }
 
                     fields.push(FieldInfo {
                         name,
                         ty,
                         doc_comment,
+                        optional,
                     });
                 }
 
@@ -664,12 +693,19 @@ fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
         }
 
         // Check if this field type is another unparsed struct
-        let field_type = if is_sol_struct_type(&field.ty) {
+        let base_field_type = if is_sol_struct_type(&field.ty) {
             format!("Unparsed{}", field.ty)
         } else {
             // Add Solidity type comment for primitive types
             code.push_str(&format!("    /// Solidity type: `{}`\n", field.ty));
             "String".to_string()
+        };
+
+        // Wrap in Option if optional
+        let field_type = if field.optional {
+            format!("Option<{}>", base_field_type)
+        } else {
+            base_field_type
         };
 
         code.push_str(&format!("    pub {}: {},\n", field.name, field_type));
@@ -700,16 +736,64 @@ fn generate_try_from_impl(
     let mut field_conversions = Vec::new();
 
     for field in &struct_info.fields {
-        let conversion = if is_sol_struct_type(&field.ty)
+        let conversion = if field.optional {
+            // Optional field conversion - use default value if None
+            if is_sol_struct_type(&field.ty)
+                && all_structs.iter().any(|s| s.name == field.ty)
+            {
+                // Optional nested struct conversion
+                format!(
+                    "            {}: match value.{} {{\n                Some(val) => val.try_into()?,\n                None => Default::default(),\n            }}",
+                    field.name, field.name
+                )
+            } else {
+                // Optional primitive type conversion using parse_from_ffi
+                let default_value = match field.ty.as_str() {
+                    "address" => "alloy::primitives::Address::ZERO",
+                    "uint256" => "alloy::primitives::U256::ZERO",
+                    "uint128" => "alloy::primitives::U128::ZERO",
+                    "bytes" => "alloy::primitives::Bytes::new()",
+                    _ => "Default::default()",
+                };
+
+                let parser = match field.ty.as_str() {
+                    "address" => format!(
+                        "<alloy::primitives::Address as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&val, \"{}\")?",
+                        field.name
+                    ),
+                    "uint256" => format!(
+                        "<alloy::primitives::U256 as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&val, \"{}\")?",
+                        field.name
+                    ),
+                    "uint128" => format!(
+                        "<alloy::primitives::U128 as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&val, \"{}\")?",
+                        field.name
+                    ),
+                    "bytes" => format!(
+                        "<alloy::primitives::Bytes as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&val, \"{}\")?",
+                        field.name
+                    ),
+                    _ => format!(
+                        "val.parse().map_err(|e| crate::primitives::PrimitiveError::InvalidInput {{ attribute: \"{}\", message: format!(\"failed to parse: {{}}\", e) }})?",
+                        field.name
+                    ),
+                };
+
+                format!(
+                    "            {}: match value.{} {{\n                Some(val) => {},\n                None => {},\n            }}",
+                    field.name, field.name, parser, default_value
+                )
+            }
+        } else if is_sol_struct_type(&field.ty)
             && all_structs.iter().any(|s| s.name == field.ty)
         {
-            // Nested struct conversion
+            // Required nested struct conversion
             format!(
                 "            {}: value.{}.try_into()?",
                 field.name, field.name
             )
         } else {
-            // Primitive type conversion using parse_from_ffi
+            // Required primitive type conversion using parse_from_ffi
             match field.ty.as_str() {
                 "address" => format!(
                     "            {}: <alloy::primitives::Address as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&value.{}, \"{}\")?",
