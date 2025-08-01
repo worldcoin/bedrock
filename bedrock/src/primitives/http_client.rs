@@ -119,6 +119,14 @@ pub enum HttpError {
     Cancelled,
 }
 
+/// Converts unexpected UniFFI callback errors to `HttpError`.
+///
+/// This implementation is required for foreign trait support. When native apps
+/// (Swift/Kotlin) implement `AuthenticatedHttpClient` and encounter unexpected
+/// errors (panics, unhandled exceptions), UniFFI converts them to this error type
+/// instead of causing Rust to panic.
+///
+/// Without this implementation, unexpected foreign errors would panic the Rust code.
 impl From<uniffi::UnexpectedUniFFICallbackError> for HttpError {
     fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
         error.to_string().parse::<u64>().map_or_else(
