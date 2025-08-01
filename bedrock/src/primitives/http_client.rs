@@ -67,26 +67,74 @@ pub trait AuthenticatedHttpClient: Send + Sync {
     /// * `Result<Vec<u8>, HttpError>` - The response body as bytes on success, or an error
     ///
     /// # Errors
-    /// * `HttpError::Generic` - For general networking errors (network unavailable, timeout, etc.)
     /// * `HttpError::BadStatusCode` - For HTTP error status codes (4xx, 5xx)
+    /// * `HttpError::NoConnectivity` - When no internet connection is available
+    /// * `HttpError::Timeout` - When the request times out
+    /// * `HttpError::DnsResolutionFailed` - When DNS lookup fails
+    /// * `HttpError::ConnectionRefused` - When the server refuses the connection
+    /// * `HttpError::SslError` - When SSL/TLS validation fails
+    /// * `HttpError::Cancelled` - When the request is cancelled
+    /// * `HttpError::Generic` - For other unexpected errors
     async fn fetch_from_app_backend(&self, url: String) -> Result<Vec<u8>, HttpError>;
 }
 
 /// Represents HTTP-related errors that can occur during network requests.
 #[crate::bedrock_error]
 pub enum HttpError {
-    /// HTTP error with specific status code
+    /// HTTP error with specific status code (4xx, 5xx responses)
     #[error("Bad status code {code}")]
     BadStatusCode {
         /// The HTTP status code that was returned
         code: u64,
     },
+    /// No internet connectivity available
+    #[error("No internet connectivity")]
+    NoConnectivity,
+    /// Request timed out
+    #[error("Request timed out after {seconds} seconds")]
+    Timeout {
+        /// Number of seconds before timeout occurred
+        seconds: u64,
+    },
+    /// DNS resolution failed for the hostname
+    #[error("DNS resolution failed for {hostname}")]
+    DnsResolutionFailed {
+        /// The hostname that failed to resolve
+        hostname: String,
+    },
+    /// Connection was refused by the server
+    #[error("Connection refused by {host}")]
+    ConnectionRefused {
+        /// The host that refused the connection
+        host: String,
+    },
+    /// SSL/TLS certificate validation failed
+    #[error("SSL certificate validation failed: {reason}")]
+    SslError {
+        /// Reason for the SSL failure
+        reason: String,
+    },
+    /// The request was cancelled before completion
+    #[error("Request was cancelled")]
+    Cancelled,
 }
 
 impl Clone for HttpError {
     fn clone(&self) -> Self {
         match self {
             Self::BadStatusCode { code } => Self::BadStatusCode { code: *code },
+            Self::NoConnectivity => Self::NoConnectivity,
+            Self::Timeout { seconds } => Self::Timeout { seconds: *seconds },
+            Self::DnsResolutionFailed { hostname } => Self::DnsResolutionFailed {
+                hostname: hostname.clone(),
+            },
+            Self::ConnectionRefused { host } => {
+                Self::ConnectionRefused { host: host.clone() }
+            }
+            Self::SslError { reason } => Self::SslError {
+                reason: reason.clone(),
+            },
+            Self::Cancelled => Self::Cancelled,
             Self::Generic { message } => Self::Generic {
                 message: message.clone(),
             },
