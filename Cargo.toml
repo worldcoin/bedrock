@@ -1,5 +1,5 @@
 [workspace]
-members = ["bedrock", "uniffi-bindgen"]
+members = ["bedrock", "bedrock-macros", "uniffi-bindgen"]
 resolver = "2"
 
 [workspace.package]

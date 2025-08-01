@@ -277,6 +277,461 @@ fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
     method.block.stmts.insert(0, context_stmt);
 }
 
+/// Procedural macro that wraps `alloy::sol!` and generates unparsed versions of structs
+///
+/// This macro:
+/// 1. Forwards everything to `alloy::sol!`
+/// 2. For structs listed in the `unparsed` attribute, generates:
+///    - An `Unparsed{StructName}` struct with all String fields
+///    - A `TryFrom<Unparsed{StructName}>` implementation
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// bedrock_sol! {
+///     #[unparsed(TokenPermissions, PermitTransferFrom)]
+///     
+///     #[derive(serde::Serialize)]
+///     struct TokenPermissions {
+///         address token;
+///         uint256 amount;
+///     }
+///     
+///     #[derive(serde::Serialize)]
+///     struct PermitTransferFrom {
+///         TokenPermissions permitted;
+///         address spender;
+///         uint256 nonce;
+///         uint256 deadline;
+///     }
+/// }
+/// ```
+///
+/// This generates:
+/// - The original sol! structs
+/// - `UnparsedTokenPermissions` and `UnparsedPermitTransferFrom` structs
+/// - `TryFrom` implementations for converting from unparsed to sol structs
+#[proc_macro]
+pub fn bedrock_sol(input: TokenStream) -> TokenStream {
+    let input_str = input.to_string();
+    let lines = input_str.lines().collect::<Vec<_>>();
+
+    // Find the #[unparsed(...)] attribute
+    let mut unparsed_struct_names = Vec::new();
+    let mut cleaned_lines = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i].trim();
+
+        if line.starts_with("#[unparsed(") && line.ends_with(")]") {
+            // Parse the struct names from the attribute
+            let content = line
+                .strip_prefix("#[unparsed(")
+                .unwrap()
+                .strip_suffix(")]")
+                .unwrap();
+
+            unparsed_struct_names =
+                content.split(',').map(|s| s.trim().to_string()).collect();
+
+            // Skip this line in the cleaned output
+            i += 1;
+            continue;
+        }
+
+        cleaned_lines.push(lines[i]);
+        i += 1;
+    }
+
+    // Parse all structs in the input
+    let mut all_structs = Vec::new();
+    let mut i = 0;
+
+    while i < cleaned_lines.len() {
+        let line = cleaned_lines[i].trim();
+
+        if line.contains(" struct ") {
+            if let Some(struct_info) = parse_struct_definition(&cleaned_lines, i) {
+                all_structs.push(struct_info);
+            }
+        }
+        i += 1;
+    }
+
+    // Filter to only the structs that should have unparsed versions
+    let unparsed_structs: Vec<_> = all_structs
+        .iter()
+        .filter(|s| unparsed_struct_names.contains(&s.name))
+        .collect();
+
+    // Generate the unparsed structs and TryFrom implementations
+    let mut generated_code = String::new();
+
+    for struct_info in &unparsed_structs {
+        generated_code.push_str(&generate_unparsed_struct(struct_info));
+        generated_code.push_str("\n\n");
+        generated_code.push_str(&generate_try_from_impl(struct_info, &all_structs));
+        generated_code.push_str("\n\n");
+    }
+
+    // Combine the cleaned sol! invocation with the generated code
+    let output = format!(
+        r#"
+alloy::sol! {{
+{}
+}}
+
+{}
+"#,
+        cleaned_lines.join("\n"),
+        generated_code
+    );
+
+    output.parse().unwrap()
+}
+
+#[derive(Debug)]
+struct StructInfo {
+    name: String,
+    fields: Vec<FieldInfo>,
+    doc_comments: Vec<String>,
+}
+
+#[derive(Debug)]
+struct FieldInfo {
+    name: String,
+    ty: String,
+    doc_comment: Option<String>,
+}
+
+fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInfo> {
+    let struct_line = lines[start_idx].trim();
+
+    // Find the struct keyword and extract the name
+    let struct_pos = struct_line.find(" struct ")? + " struct ".len();
+    let remaining = &struct_line[struct_pos..];
+    let name = remaining
+        .trim()
+        .split_whitespace()
+        .next()?
+        .trim_end_matches('{')
+        .to_string();
+
+    // Collect doc comments before the struct
+    let mut doc_comments = Vec::new();
+    if start_idx > 0 {
+        let mut idx = start_idx - 1;
+        loop {
+            let line = lines[idx].trim();
+            if line.starts_with("///") {
+                doc_comments.push(line.to_string());
+                if idx == 0 {
+                    break;
+                }
+                idx = idx.saturating_sub(1);
+            } else if line.is_empty() {
+                if idx == 0 {
+                    break;
+                }
+                idx = idx.saturating_sub(1);
+            } else {
+                break;
+            }
+        }
+        doc_comments.reverse();
+    }
+
+    // Parse fields
+    let mut fields = Vec::new();
+
+    // First check if the next line has the fields (common in sol! macros)
+    if start_idx + 1 < lines.len() {
+        let next_line = lines[start_idx + 1].trim();
+
+        // Check if next line is a single-line field definition like "{ address token; uint256 amount; }"
+        if next_line.starts_with('{') && next_line.ends_with('}') {
+            let content = &next_line[1..next_line.len() - 1];
+            for field_str in content.split(';') {
+                let field_str = field_str.trim();
+                if field_str.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = field_str.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    fields.push(FieldInfo {
+                        ty: parts[0].to_string(),
+                        name: parts[1].to_string(),
+                        doc_comment: None,
+                    });
+                }
+            }
+
+            return Some(StructInfo {
+                name,
+                fields,
+                doc_comments,
+            });
+        }
+    }
+
+    // Check if this is a single-line struct (e.g., "struct Foo { address token; uint256 amount; }")
+    if let Some(open_brace) = struct_line.find('{') {
+        if let Some(close_brace) = struct_line.find('}') {
+            // Single line struct
+            let content = &struct_line[open_brace + 1..close_brace];
+            for field_str in content.split(';') {
+                let field_str = field_str.trim();
+                if field_str.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = field_str.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    fields.push(FieldInfo {
+                        ty: parts[0].to_string(),
+                        name: parts[1].to_string(),
+                        doc_comment: None,
+                    });
+                }
+            }
+        } else {
+            // Multi-line struct, parse line by line
+            let mut i = start_idx + 1;
+            while i < lines.len() {
+                let line = lines[i].trim();
+
+                if line == "}" {
+                    break;
+                }
+
+                if line.is_empty() || line.starts_with("//") {
+                    i += 1;
+                    continue;
+                }
+
+                // Parse field
+                let parts: Vec<&str> =
+                    line.trim_end_matches(';').split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let ty = parts[0].to_string();
+                    let name = parts[1].to_string();
+
+                    // Check for doc comment on previous line
+                    let doc_comment = if i > 0 {
+                        let prev_line = lines[i - 1].trim();
+                        if prev_line.starts_with("///") {
+                            Some(prev_line.to_string())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    fields.push(FieldInfo {
+                        name,
+                        ty,
+                        doc_comment,
+                    });
+                }
+
+                i += 1;
+            }
+        }
+    } else {
+        // No brace on struct line, check if it's multi-line starting from next line
+        let mut i = start_idx + 1;
+
+        // Skip to the opening brace
+        while i < lines.len() && !lines[i].trim().starts_with('{') {
+            i += 1;
+        }
+
+        if i < lines.len() {
+            i += 1; // Move past the opening brace
+
+            while i < lines.len() {
+                let line = lines[i].trim();
+
+                if line == "}" {
+                    break;
+                }
+
+                if line.is_empty() || line.starts_with("//") {
+                    i += 1;
+                    continue;
+                }
+
+                // Parse field
+                let parts: Vec<&str> =
+                    line.trim_end_matches(';').split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let ty = parts[0].to_string();
+                    let name = parts[1].to_string();
+
+                    // Check for doc comment on previous line
+                    let doc_comment = if i > 0 {
+                        let prev_line = lines[i - 1].trim();
+                        if prev_line.starts_with("///") {
+                            Some(prev_line.to_string())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    fields.push(FieldInfo {
+                        name,
+                        ty,
+                        doc_comment,
+                    });
+                }
+
+                i += 1;
+            }
+        }
+    }
+
+    Some(StructInfo {
+        name,
+        fields,
+        doc_comments,
+    })
+}
+
+fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
+    let mut code = String::new();
+
+    // Add doc comments
+    code.push_str("/// For Swift & Kotlin usage only.\n");
+    code.push_str("///\n");
+    for doc in &struct_info.doc_comments {
+        code.push_str(&format!("{}\n", doc));
+    }
+
+    // Add struct definition
+    code.push_str("#[derive(uniffi::Record, Debug)]\n");
+    code.push_str(&format!("pub struct Unparsed{} {{\n", struct_info.name));
+
+    // Add fields
+    for field in &struct_info.fields {
+        if let Some(doc) = &field.doc_comment {
+            code.push_str(&format!("    {}\n", doc));
+        }
+
+        // Check if this field type is another unparsed struct
+        let field_type = if is_sol_struct_type(&field.ty) {
+            format!("Unparsed{}", field.ty)
+        } else {
+            // Add Solidity type comment for primitive types
+            code.push_str(&format!("    /// Solidity type: `{}`\n", field.ty));
+            "String".to_string()
+        };
+
+        code.push_str(&format!("    pub {}: {},\n", field.name, field_type));
+    }
+
+    code.push_str("}");
+
+    code
+}
+
+fn generate_try_from_impl(
+    struct_info: &StructInfo,
+    all_structs: &[StructInfo],
+) -> String {
+    let mut code = String::new();
+
+    code.push_str(&format!(
+        "impl TryFrom<Unparsed{}> for {} {{\n",
+        struct_info.name, struct_info.name
+    ));
+    code.push_str("    type Error = crate::smart_account::SafeSmartAccountError;\n\n");
+    code.push_str(&format!(
+        "    fn try_from(value: Unparsed{}) -> Result<Self, Self::Error> {{\n",
+        struct_info.name
+    ));
+
+    // Generate field conversions
+    let mut field_conversions = Vec::new();
+
+    for field in &struct_info.fields {
+        let conversion = if is_sol_struct_type(&field.ty)
+            && all_structs.iter().any(|s| s.name == field.ty)
+        {
+            // Nested struct conversion
+            format!(
+                "            {}: value.{}.try_into()?",
+                field.name, field.name
+            )
+        } else {
+            // Primitive type conversion using parse_from_ffi
+            match field.ty.as_str() {
+                "address" => format!(
+                    "            {}: <alloy::primitives::Address as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&value.{}, \"{}\")?",
+                    field.name, field.name, field.name
+                ),
+                "uint256" => format!(
+                    "            {}: <alloy::primitives::U256 as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&value.{}, \"{}\")?",
+                    field.name, field.name, field.name
+                ),
+                "uint128" => format!(
+                    "            {}: <alloy::primitives::U128 as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&value.{}, \"{}\")?",
+                    field.name, field.name, field.name
+                ),
+                "bytes" => format!(
+                    "            {}: <alloy::primitives::Bytes as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&value.{}, \"{}\")?",
+                    field.name, field.name, field.name
+                ),
+                _ => format!(
+                    "            {}: value.{}.parse().map_err(|e| crate::smart_account::SafeSmartAccountError::InvalidInput {{ attribute: \"{}\", message: format!(\"failed to parse: {{}}\", e) }})?",
+                    field.name, field.name, field.name
+                ),
+            }
+        };
+
+        field_conversions.push(conversion);
+    }
+
+    code.push_str("        Ok(Self {\n");
+    code.push_str(&field_conversions.join(",\n"));
+    code.push_str(",\n");
+    code.push_str("        })\n");
+    code.push_str("    }\n");
+    code.push_str("}");
+
+    code
+}
+
+fn is_sol_struct_type(ty: &str) -> bool {
+    // Check if this is a known Solidity primitive type
+    !matches!(
+        ty,
+        "address"
+            | "uint256"
+            | "uint128"
+            | "uint64"
+            | "uint32"
+            | "uint16"
+            | "uint8"
+            | "int256"
+            | "int128"
+            | "int64"
+            | "int32"
+            | "int16"
+            | "int8"
+            | "bytes"
+            | "bytes32"
+            | "bytes16"
+            | "bytes8"
+            | "bytes4"
+            | "bytes1"
+            | "bool"
+            | "string"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
