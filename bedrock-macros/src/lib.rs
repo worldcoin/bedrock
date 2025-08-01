@@ -468,11 +468,13 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
                 if idx == 0 {
                     break;
                 }
+                // Only decrement if idx > 0
                 idx = idx.saturating_sub(1);
             } else if line.is_empty() {
                 if idx == 0 {
                     break;
                 }
+                // Only decrement if idx > 0
                 idx = idx.saturating_sub(1);
             } else {
                 break;
