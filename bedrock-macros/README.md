@@ -18,14 +18,14 @@ This macro:
 use bedrock::bedrock_sol;
 
 bedrock_sol! {
-    #[unparsed(TokenPermissions, PermitTransferFrom)]
-
     #[derive(serde::Serialize)]
+    #[unparsed]
     struct TokenPermissions {
         address token;
         uint256 amount;
     }
 
+    #[unparsed]
     struct PermitTransferFrom {
         TokenPermissions permitted;
         address spender;
@@ -99,16 +99,16 @@ Solidity primitive types are converted to `String` in unparsed variants:
 
 ### Nested Structs
 
-When a field references another struct that's also marked for unparsed generation, the unparsed variant uses the corresponding unparsed struct type:
+When a field references another struct that's also marked with `#[unparsed]`, the unparsed variant uses the corresponding unparsed struct type:
 
 ```rust
 bedrock_sol! {
-    #[unparsed(Parent, Child)]
-
+    #[unparsed]
     struct Child {
         uint256 value;
     }
 
+    #[unparsed]
     struct Parent {
         Child nested;
         address owner;
@@ -168,7 +168,7 @@ SafeSmartAccountError::InvalidInput {
 
 ## Best Practices
 
-1. **Mark only necessary structs**: Only include structs in the `#[unparsed(...)]` attribute that need foreign language bindings
+1. **Mark only necessary structs**: Only add `#[unparsed]` to structs that need foreign language bindings
 2. **Document your structs**: Doc comments on original structs are preserved in unparsed variants
 3. **Use descriptive field names**: Field names become part of the foreign language API
 4. **Validate early**: Convert from unparsed to typed structs as early as possible in your processing pipeline

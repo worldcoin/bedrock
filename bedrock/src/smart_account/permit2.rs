@@ -11,12 +11,11 @@ pub static PERMIT2_ADDRESS: Address =
     address!("0x000000000022d473030f116ddee9f6b43ac78ba3");
 
 bedrock_sol! {
-    #[unparsed(TokenPermissions, PermitTransferFrom)]
-
     /// The token and amount details for a transfer signed in the permit transfer signature.
     ///
     /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L22>
     #[derive(serde::Serialize)]
+    #[unparsed]
     struct TokenPermissions {
         // ERC20 token address
         address token;
@@ -28,6 +27,7 @@ bedrock_sol! {
     ///
     /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
     #[derive(serde::Serialize)]
+    #[unparsed]
     struct PermitTransferFrom {
         /// The token and amount details for a transfer signed in the permit transfer signature
         TokenPermissions permitted;

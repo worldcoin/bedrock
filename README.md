@@ -109,13 +109,14 @@ Extends `alloy::sol!` with automatic generation of unparsed struct variants for 
 use bedrock::bedrock_sol;
 
 bedrock_sol! {
-    #[unparsed(TokenPermissions, PermitTransferFrom)]
-
+    #[derive(serde::Serialize)]
+    #[unparsed]
     struct TokenPermissions {
         address token;
         uint256 amount;
     }
 
+    #[unparsed]
     struct PermitTransferFrom {
         TokenPermissions permitted;
         address spender;

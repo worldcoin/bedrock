@@ -281,7 +281,7 @@ fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
 ///
 /// This macro:
 /// 1. Forwards everything to `alloy::sol!`
-/// 2. For structs listed in the `unparsed` attribute, generates:
+/// 2. For structs marked with `#[unparsed]`, generates:
 ///    - An `Unparsed{StructName}` struct with all String fields
 ///    - A `TryFrom<Unparsed{StructName}>` implementation
 ///
@@ -289,15 +289,14 @@ fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
 ///
 /// ```rust,ignore
 /// bedrock_sol! {
-///     #[unparsed(TokenPermissions, PermitTransferFrom)]
-///     
 ///     #[derive(serde::Serialize)]
+///     #[unparsed]
 ///     struct TokenPermissions {
 ///         address token;
 ///         uint256 amount;
 ///     }
 ///     
-///     #[derive(serde::Serialize)]
+///     #[unparsed]
 ///     struct PermitTransferFrom {
 ///         TokenPermissions permitted;
 ///         address spender;
@@ -316,45 +315,63 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
     let input_str = input.to_string();
     let lines = input_str.lines().collect::<Vec<_>>();
 
-    // Find the #[unparsed(...)] attribute
+    // Find structs with #[unparsed] attributes and clean the input
     let mut unparsed_struct_names = Vec::new();
     let mut cleaned_lines = Vec::new();
-    let mut i = 0;
+    let mut next_struct_is_unparsed = false;
 
-    while i < lines.len() {
-        let line = lines[i];
+    for line in lines {
+        let trimmed_line = line.trim();
 
-        // Check if this line contains #[unparsed(...)]
-        if let Some(start) = line.find("#[unparsed(") {
-            if let Some(end_bracket) = line[start..].find(")]") {
-                let end = start + end_bracket;
-                // Extract the attribute content
-                let attr_start = start + "#[unparsed(".len();
-                let content = &line[attr_start..end];
+        // Check if this line contains #[unparsed]
+        if trimmed_line.contains("#[unparsed]") {
+            next_struct_is_unparsed = true;
 
-                unparsed_struct_names =
-                    content.split(',').map(|s| s.trim().to_string()).collect();
+            // Remove the #[unparsed] attribute from the line and add the cleaned version
+            let cleaned_line =
+                trimmed_line.replace("#[unparsed]", "").trim().to_string();
+            if !cleaned_line.is_empty() {
+                cleaned_lines.push(cleaned_line.clone());
 
-                // Remove the attribute from the line
-                let before = &line[..start];
-                let after = if end + 2 < line.len() {
-                    &line[end + 2..]
-                } else {
-                    ""
-                };
-                let cleaned_line = format!("{}{}", before, after);
-                let cleaned_line = cleaned_line.trim();
-
-                if !cleaned_line.is_empty() {
-                    cleaned_lines.push(cleaned_line.to_string());
+                // Check if this line also contains a struct definition
+                if cleaned_line.contains(" struct ") {
+                    // Extract struct name
+                    if let Some(struct_pos) = cleaned_line.find(" struct ") {
+                        let remaining = &cleaned_line[struct_pos + " struct ".len()..];
+                        if let Some(struct_name) = remaining
+                            .trim()
+                            .split_whitespace()
+                            .next()
+                            .map(|s| s.trim_end_matches('{'))
+                        {
+                            unparsed_struct_names.push(struct_name.to_string());
+                        }
+                    }
+                    next_struct_is_unparsed = false;
                 }
-                i += 1;
-                continue;
             }
+            continue;
         }
 
-        cleaned_lines.push(lines[i].to_string());
-        i += 1;
+        // Check if this is a struct definition and we're expecting one to be unparsed
+        if next_struct_is_unparsed && trimmed_line.contains(" struct ") {
+            // Extract struct name
+            if let Some(struct_pos) = trimmed_line.find(" struct ") {
+                let remaining = &trimmed_line[struct_pos + " struct ".len()..];
+                if let Some(struct_name) = remaining
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .map(|s| s.trim_end_matches('{'))
+                {
+                    unparsed_struct_names.push(struct_name.to_string());
+                }
+            }
+            next_struct_is_unparsed = false;
+        }
+
+        // Add all other lines to cleaned_lines
+        cleaned_lines.push(line.to_string());
     }
 
     // Parse all structs in the input
