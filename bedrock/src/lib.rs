@@ -14,7 +14,10 @@
 // Import and re-export the macros globally
 pub use bedrock_macros::{bedrock_error, bedrock_export, bedrock_sol};
 
-/// Module for signing messages, transactions and typed data on behalf of the Safe Smart Account.
+/// Introduces low level operations with the [Safe Smart Account](https://safe.global/), including
+/// signing messages (ERC-191) and typed data (EIP-712).
+///
+/// Reference: <https://github.com/safe-global/safe-smart-account>
 pub mod smart_account;
 
 /// Introduces low level primitives for the crypto wallet, including logging functionality.

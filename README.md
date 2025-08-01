@@ -101,6 +101,39 @@ debug!("Processing data: {}", value);       // Logs: [Bedrock][MyStruct] Process
 
 **Available macros:** `trace!`, `debug!`, `info!`, `warn!`, `error!`
 
+### `#[bedrock_sol]` Macro
+
+Extends `alloy::sol!` with automatic generation of unparsed struct variants for foreign language bindings:
+
+```rust
+use bedrock::bedrock_sol;
+
+bedrock_sol! {
+    #[unparsed(TokenPermissions, PermitTransferFrom)]
+
+    struct TokenPermissions {
+        address token;
+        uint256 amount;
+    }
+
+    struct PermitTransferFrom {
+        TokenPermissions permitted;
+        address spender;
+        uint256 nonce;
+        uint256 deadline;
+    }
+}
+```
+
+**Features:**
+
+- Full `alloy::sol!` compatibility for Solidity type definitions
+- Automatic generation of `Unparsed{StructName}` variants with String fields
+- `TryFrom` implementations for seamless conversion from unparsed to typed structs
+- Perfect for Swift and Kotlin foreign language bindings
+
+📖 **[Complete documentation and examples →](BEDROCK_SOL_MACRO.md)**
+
 ### Manual Context Management
 
 For fine-grained control over logging context:

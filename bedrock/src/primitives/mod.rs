@@ -17,15 +17,6 @@ pub mod config;
 #[cfg(feature = "tooling_tests")]
 pub mod tooling_tests;
 
-// Export sol macro test types and functions for foreign language testing
-/*
-#[cfg(feature = "tooling_tests")]
-pub use tooling_tests::sol_macro_tests::{
-    create_test_struct_a, create_test_struct_b, validate_test_struct_a,
-    validate_test_struct_b,
-};
-*/
-
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
 /// This is used to ensure that the hex string is properly formatted and the output is always prefixed with "0x".
