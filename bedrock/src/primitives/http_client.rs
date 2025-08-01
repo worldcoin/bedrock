@@ -20,6 +20,8 @@ pub trait AuthenticatedHttpClient: Send + Sync {
     ///
     /// # Arguments
     /// * `url` - The URL to fetch data from
+    /// * `method` - The HTTP method to use for the request
+    /// * `body` - Optional request body data for POST requests
     ///
     /// # Returns
     /// * `Result<Vec<u8>, HttpError>` - The response body as bytes on success, or an error
@@ -33,7 +35,21 @@ pub trait AuthenticatedHttpClient: Send + Sync {
     /// * `HttpError::SslError` - When SSL/TLS validation fails
     /// * `HttpError::Cancelled` - When the request is cancelled
     /// * `HttpError::Generic` - For other unexpected errors
-    async fn fetch_from_app_backend(&self, url: String) -> Result<Vec<u8>, HttpError>;
+    async fn fetch_from_app_backend(
+        &self,
+        url: String,
+        method: HttpMethod,
+        body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError>;
+}
+
+/// HTTP methods supported by the authenticated HTTP client.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum HttpMethod {
+    /// HTTP GET method for retrieving data
+    Get,
+    /// HTTP POST method for sending data
+    Post,
 }
 
 /// Represents HTTP-related errors that can occur during network requests.

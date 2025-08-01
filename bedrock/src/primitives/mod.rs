@@ -7,7 +7,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 // Re-export HTTP client types for external use
-pub use http_client::{AuthenticatedHttpClient, HttpError};
+pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;

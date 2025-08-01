@@ -9,13 +9,17 @@ final class BedrockHttpClientTests: XCTestCase {
     class TestAuthenticatedHttpClient: AuthenticatedHttpClient {
         var responses: [String: Result<Data, HttpError>] = [:]
         var requestHistory: [String] = []
+        var methodHistory: [HttpMethod] = []
+        var bodyHistory: [Data?] = []
         
         func setResponse(for url: String, result: Result<Data, HttpError>) {
             responses[url] = result
         }
         
-        func fetchFromAppBackend(url: String) async throws -> Data {
+        func fetchFromAppBackend(url: String, method: HttpMethod, body: Data?) async throws -> Data {
             requestHistory.append(url)
+            methodHistory.append(method)
+            bodyHistory.append(body)
             
             guard let response = responses[url] else {
                 throw HttpError.Generic(message: "No response configured for URL: \(url)")
@@ -30,18 +34,37 @@ final class BedrockHttpClientTests: XCTestCase {
         }
     }
     
-    func testSuccessfulRequest() async throws {
+    func testSuccessfulGetRequest() async throws {
         let client = TestAuthenticatedHttpClient()
         let testData = "Hello from backend!".data(using: .utf8)!
         let testUrl = "https://api.example.com/test"
         
         client.setResponse(for: testUrl, result: .success(testData))
         
-        let result = try await client.fetchFromAppBackend(url: testUrl)
+        let result = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
         
         XCTAssertEqual(result, testData)
         XCTAssertEqual(client.requestHistory.count, 1)
         XCTAssertEqual(client.requestHistory[0], testUrl)
+        XCTAssertEqual(client.methodHistory[0], .get)
+        XCTAssertNil(client.bodyHistory[0])
+    }
+
+    func testSuccessfulPostRequest() async throws {
+        let client = TestAuthenticatedHttpClient()
+        let testData = "Response from POST".data(using: .utf8)!
+        let requestBody = "Request body data".data(using: .utf8)!
+        let testUrl = "https://api.example.com/submit"
+        
+        client.setResponse(for: testUrl, result: .success(testData))
+        
+        let result = try await client.fetchFromAppBackend(url: testUrl, method: .post, body: requestBody)
+        
+        XCTAssertEqual(result, testData)
+        XCTAssertEqual(client.requestHistory.count, 1)
+        XCTAssertEqual(client.requestHistory[0], testUrl)
+        XCTAssertEqual(client.methodHistory[0], .post)
+        XCTAssertEqual(client.bodyHistory[0], requestBody)
     }
     
     func testBadStatusCodeError() async throws {
@@ -52,7 +75,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(error))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .BadStatusCode(let message) = httpError {
@@ -71,7 +94,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.NoConnectivity(message: "No internet connectivity")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .NoConnectivity(let message) = httpError {
@@ -89,7 +112,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.Timeout(message: "Request timed out after 30 seconds")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .Timeout(let message) = httpError {
@@ -108,7 +131,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(message: "DNS resolution failed for nonexistent.example.com")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .DnsResolutionFailed(let message) = httpError {
@@ -127,7 +150,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.SslError(message: "SSL certificate validation failed: Certificate validation failed")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .SslError(let message) = httpError {
@@ -153,12 +176,15 @@ final class BedrockHttpClientTests: XCTestCase {
         }
         
         for (index, url) in urls.enumerated() {
-            let result = try await client.fetchFromAppBackend(url: url)
+            let result = try await client.fetchFromAppBackend(url: url, method: .get, body: nil)
             let expectedData = "Response \(index + 1)".data(using: .utf8)!
             XCTAssertEqual(result, expectedData)
         }
         
         XCTAssertEqual(client.requestHistory.count, 3)
         XCTAssertEqual(client.requestHistory, urls)
+        // Verify all requests were GET with no body
+        XCTAssertEqual(client.methodHistory, [.get, .get, .get])
+        XCTAssertEqual(client.bodyHistory, [nil, nil, nil])
     }
 } 

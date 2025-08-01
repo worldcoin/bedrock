@@ -24,6 +24,6 @@ pub mod smart_account;
 pub mod primitives;
 
 // Re-export commonly used primitives at the crate root for convenience
-pub use primitives::{AuthenticatedHttpClient, HttpError};
+pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
 uniffi::setup_scaffolding!("bedrock");
