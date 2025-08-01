@@ -17,9 +17,6 @@ pub use bedrock_macros::{bedrock_error, bedrock_export, bedrock_sol};
 /// Module for signing messages, transactions and typed data on behalf of the Safe Smart Account.
 pub mod smart_account;
 
-// Re-export the unparsed types for uniffi
-pub use smart_account::{UnparsedPermitTransferFrom, UnparsedTokenPermissions};
-
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
