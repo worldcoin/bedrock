@@ -22,7 +22,10 @@
 ///         }
 ///         
 ///         guard 200...299 ~= httpResponse.statusCode else {
-///             throw HttpError.BadStatusCode(code: UInt64(httpResponse.statusCode))
+///             throw HttpError.BadStatusCode(
+///                 code: UInt64(httpResponse.statusCode),
+///                 responseBody: data // Include error response body
+///             )
 ///         }
 ///         
 ///         return data
@@ -40,7 +43,11 @@
 ///             val response = httpClient.newCall(request).execute()
 ///             
 ///             if (!response.isSuccessful) {
-///                 throw HttpError.BadStatusCode(response.code.toULong())
+///                 val errorBody = response.body?.bytes() ?: ByteArray(0)
+///                 throw HttpError.BadStatusCode(
+///                     code = response.code.toULong(),
+///                     responseBody = errorBody // Include error response body
+///                 )
 ///             }
 ///             
 ///             response.body?.bytes() ?: throw HttpError.Generic("Empty response body")
@@ -67,7 +74,7 @@ pub trait AuthenticatedHttpClient: Send + Sync {
     /// * `Result<Vec<u8>, HttpError>` - The response body as bytes on success, or an error
     ///
     /// # Errors
-    /// * `HttpError::BadStatusCode` - For HTTP error status codes (4xx, 5xx)
+    /// * `HttpError::BadStatusCode` - For HTTP error status codes (4xx, 5xx) with response body
     /// * `HttpError::NoConnectivity` - When no internet connection is available
     /// * `HttpError::Timeout` - When the request times out
     /// * `HttpError::DnsResolutionFailed` - When DNS lookup fails
@@ -86,6 +93,8 @@ pub enum HttpError {
     BadStatusCode {
         /// The HTTP status code that was returned
         code: u64,
+        /// The response body, which may contain error details
+        response_body: Vec<u8>,
     },
     /// No internet connectivity available
     #[error("No internet connectivity")]
@@ -117,6 +126,12 @@ pub enum HttpError {
     /// The request was cancelled before completion
     #[error("Request was cancelled")]
     Cancelled,
+    /// Generic error for unexpected errors
+    #[error("Generic error: {message}")]
+    Generic {
+        /// The error message
+        message: String,
+    },
 }
 
 /// Converts unexpected UniFFI callback errors to `HttpError`.
@@ -133,7 +148,10 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for HttpError {
             |_| Self::Generic {
                 message: error.to_string(),
             },
-            |code| Self::BadStatusCode { code },
+            |code| Self::BadStatusCode {
+                code,
+                response_body: Vec::new(), // No response body for unexpected UniFFI errors
+            },
         )
     }
 }
