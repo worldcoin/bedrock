@@ -119,29 +119,6 @@ pub enum HttpError {
     Cancelled,
 }
 
-impl Clone for HttpError {
-    fn clone(&self) -> Self {
-        match self {
-            Self::BadStatusCode { code } => Self::BadStatusCode { code: *code },
-            Self::NoConnectivity => Self::NoConnectivity,
-            Self::Timeout { seconds } => Self::Timeout { seconds: *seconds },
-            Self::DnsResolutionFailed { hostname } => Self::DnsResolutionFailed {
-                hostname: hostname.clone(),
-            },
-            Self::ConnectionRefused { host } => {
-                Self::ConnectionRefused { host: host.clone() }
-            }
-            Self::SslError { reason } => Self::SslError {
-                reason: reason.clone(),
-            },
-            Self::Cancelled => Self::Cancelled,
-            Self::Generic { message } => Self::Generic {
-                message: message.clone(),
-            },
-        }
-    }
-}
-
 impl From<uniffi::UnexpectedUniFFICallbackError> for HttpError {
     fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
         error.to_string().parse::<u64>().map_or_else(
