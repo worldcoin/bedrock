@@ -100,3 +100,16 @@ debug!("Processing data: {}", value);       // Logs: [Bedrock][MyStruct] Process
 ```
 
 **Available macros:** `trace!`, `debug!`, `info!`, `warn!`, `error!`
+
+### Manual Context Management
+
+For fine-grained control over logging context:
+
+```rust
+use bedrock::logger::LogContext;
+
+{
+    let _bedrock_logger_ctx = LogContext::new("CustomContext");
+    info!("This message has custom context");  // Logs: [Bedrock][CustomContext] This message has custom context
+} // Context automatically cleared when _bedrock_logger_ctx is dropped
+```
