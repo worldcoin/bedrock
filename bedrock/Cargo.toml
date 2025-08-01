@@ -38,13 +38,13 @@ hex = "0.4.3"
 log = "0.4.22"
 proc-macro2 = "1.0"
 quote = "1.0"
-rand = "0.9.1"
+rand = "0.9.2"
 ruint = { version = "1.15.0", default-features = false, features = ["serde"] }
 serde = "1.0.219"
 serde_json = "1.0"
 syn = { version = "2.0", features = ["full"] }
 thiserror = "2.0.12"
-tokio = { version = "1.45.1", features = ["time"], optional = true }
+tokio = { version = "1.47.1", features = ["time"], optional = true }
 uniffi = { workspace = true, features = ["build", "tokio"] }
 
 [dev-dependencies]
@@ -55,5 +55,5 @@ alloy = { version = "1.0.17", default-features = false, features = [
     "reqwest-rustls-tls",
 ] }
 dotenvy = "0.15.7"
-tokio = { version = "1.45.1", features = ["time"] }
+tokio = { version = "1.47.1", features = ["time"] }
 tokio-test = "0.4.4"
