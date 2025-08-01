@@ -312,30 +312,32 @@ fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
 /// - `TryFrom` implementations for converting from unparsed to sol structs
 #[proc_macro]
 pub fn bedrock_sol(input: TokenStream) -> TokenStream {
+    // 1: Initialize input processing
     let input_str = input.to_string();
     let lines = input_str.lines().collect::<Vec<_>>();
 
-    // Find structs with #[unparsed] attributes and clean the input
+    // 2: Find structs with #[unparsed] attributes and clean the input
     let mut unparsed_struct_names = Vec::new();
     let mut cleaned_lines = Vec::new();
     let mut next_struct_is_unparsed = false;
 
+    // 2.1: Process each input line to identify and clean unparsed attributes
     for line in lines {
         let trimmed_line = line.trim();
 
-        // Check if this line contains #[unparsed]
+        // 2.2: Handle lines containing #[unparsed] attribute
         if trimmed_line.contains("#[unparsed]") {
             next_struct_is_unparsed = true;
 
-            // Remove the #[unparsed] attribute from the line and add the cleaned version
+            // 2.3: Remove #[unparsed] attribute to clean the input for alloy::sol!
             let cleaned_line =
                 trimmed_line.replace("#[unparsed]", "").trim().to_string();
             if !cleaned_line.is_empty() {
                 cleaned_lines.push(cleaned_line.clone());
 
-                // Check if this line also contains a struct definition
+                // 2.4: Check if struct definition is on same line as #[unparsed]
                 if cleaned_line.contains(" struct ") {
-                    // Extract struct name
+                    // 2.5: Extract struct name for unparsed generation tracking
                     if let Some(struct_pos) = cleaned_line.find(" struct ") {
                         let remaining = &cleaned_line[struct_pos + " struct ".len()..];
                         if let Some(struct_name) = remaining
@@ -353,9 +355,9 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
             continue;
         }
 
-        // Check if this is a struct definition and we're expecting one to be unparsed
+        // 2.6: Handle struct definitions on subsequent lines after #[unparsed]
         if next_struct_is_unparsed && trimmed_line.contains(" struct ") {
-            // Extract struct name
+            // 2.7: Extract struct name for deferred unparsed generation tracking
             if let Some(struct_pos) = trimmed_line.find(" struct ") {
                 let remaining = &trimmed_line[struct_pos + " struct ".len()..];
                 if let Some(struct_name) = remaining
@@ -370,21 +372,23 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
             next_struct_is_unparsed = false;
         }
 
-        // Add all other lines to cleaned_lines
+        // 2.8: Include all lines in cleaned output for alloy::sol!
         cleaned_lines.push(line.to_string());
     }
 
-    // Parse all structs in the input
+    // 3: Parse all structs in the cleaned input
     let mut all_structs = Vec::new();
     let mut i = 0;
 
-    // Convert cleaned_lines to &[&str] for parse_struct_definition
+    // 3.1: Convert to slice format for parsing function
     let cleaned_lines_refs: Vec<&str> =
         cleaned_lines.iter().map(|s| s.as_str()).collect();
 
+    // 3.2: Scan lines to find and parse struct definitions
     while i < cleaned_lines_refs.len() {
         let line = cleaned_lines_refs[i].trim();
 
+        // 3.3: Parse struct when found and collect metadata
         if line.contains(" struct ") {
             if let Some(struct_info) = parse_struct_definition(&cleaned_lines_refs, i) {
                 all_structs.push(struct_info);
@@ -393,15 +397,16 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
         i += 1;
     }
 
-    // Filter to only the structs that should have unparsed versions
+    // 4: Filter to only the structs that should have unparsed versions
     let unparsed_structs: Vec<_> = all_structs
         .iter()
         .filter(|s| unparsed_struct_names.contains(&s.name))
         .collect();
 
-    // Generate the unparsed structs and TryFrom implementations
+    // 4.1: Generate the unparsed structs and TryFrom implementations
     let mut generated_code = String::new();
 
+    // 4.2: Create unparsed struct and conversion code for each marked struct
     for struct_info in &unparsed_structs {
         generated_code.push_str(&generate_unparsed_struct(struct_info));
         generated_code.push_str("\n\n");
@@ -409,7 +414,7 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
         generated_code.push_str("\n\n");
     }
 
-    // Combine the cleaned sol! invocation with the generated code
+    // 5: Combine the cleaned sol! invocation with the generated code
     let output = format!(
         r#"
 alloy::sol! {{
@@ -422,6 +427,7 @@ alloy::sol! {{
         generated_code
     );
 
+    // 5.1: Parse and return the final token stream
     output.parse().unwrap_or_else(|e| {
         panic!(
             "Failed to parse macro output: {}\nGenerated output:\n{}",
@@ -445,9 +451,10 @@ struct FieldInfo {
 }
 
 fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInfo> {
+    // 9: Parse struct definition from multiple line formats (single/multi-line)
     let struct_line = lines[start_idx].trim();
 
-    // Find the struct keyword and extract the name
+    // 9.1: Extract struct name from declaration line
     let struct_pos = struct_line.find(" struct ")? + " struct ".len();
     let remaining = &struct_line[struct_pos..];
     let name = remaining
@@ -646,28 +653,28 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
 fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
     let mut code = String::new();
 
-    // Add doc comments
+    // 6: Generate unparsed struct with String fields for foreign bindings
     code.push_str("/// For Swift & Kotlin usage only.\n");
     code.push_str("///\n");
     for doc in &struct_info.doc_comments {
         code.push_str(&format!("{}\n", doc));
     }
 
-    // Add struct definition
+    // 6.1: Add struct definition with uniffi Record derive
     code.push_str("#[derive(uniffi::Record, Debug, Clone)]\n");
     code.push_str(&format!("pub struct Unparsed{} {{\n", struct_info.name));
 
-    // Add fields
+    // 6.2: Convert each field to String type for safe foreign binding
     for field in &struct_info.fields {
         if let Some(doc) = &field.doc_comment {
             code.push_str(&format!("    {}\n", doc));
         }
 
-        // Check if this field type is another unparsed struct
+        // 6.3: Use nested unparsed struct for complex types, String for primitives
         let field_type = if is_sol_struct_type(&field.ty) {
             format!("Unparsed{}", field.ty)
         } else {
-            // Add Solidity type comment for primitive types
+            // 6.4: Add Solidity type comment for primitive types
             code.push_str(&format!("    /// Solidity type: `{}`\n", field.ty));
             "String".to_string()
         };
@@ -686,6 +693,7 @@ fn generate_try_from_impl(
 ) -> String {
     let mut code = String::new();
 
+    // 7: Generate TryFrom implementation for converting from unparsed to typed structs
     code.push_str(&format!(
         "impl TryFrom<Unparsed{}> for {} {{\n",
         struct_info.name, struct_info.name
@@ -696,20 +704,21 @@ fn generate_try_from_impl(
         struct_info.name
     ));
 
-    // Generate field conversions
+    // 7.1: Generate field conversions with appropriate parsing logic
     let mut field_conversions = Vec::new();
 
+    // 7.2: Process each field with type-specific conversion
     for field in &struct_info.fields {
         let conversion = if is_sol_struct_type(&field.ty)
             && all_structs.iter().any(|s| s.name == field.ty)
         {
-            // Nested struct conversion
+            // 7.3: Handle nested struct conversion via recursive TryFrom
             format!(
                 "            {}: value.{}.try_into()?",
                 field.name, field.name
             )
         } else {
-            // Primitive type conversion using parse_from_ffi
+            // 7.4: Handle primitive type conversion using specialized parsers
             match field.ty.as_str() {
                 "address" => format!(
                     "            {}: <alloy::primitives::Address as crate::primitives::ParseFromForeignBinding>::parse_from_ffi(&value.{}, \"{}\")?",
@@ -737,6 +746,7 @@ fn generate_try_from_impl(
         field_conversions.push(conversion);
     }
 
+    // 7.5: Combine all field conversions into struct constructor
     code.push_str("        Ok(Self {\n");
     code.push_str(&field_conversions.join(",\n"));
     code.push_str(",\n");
@@ -748,7 +758,7 @@ fn generate_try_from_impl(
 }
 
 fn is_sol_struct_type(ty: &str) -> bool {
-    // Check if this is a known Solidity primitive type
+    // 8: Determine if type is a custom struct (not a Solidity primitive)
     !matches!(
         ty,
         "address"
