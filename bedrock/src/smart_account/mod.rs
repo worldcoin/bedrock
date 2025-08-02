@@ -7,10 +7,7 @@ use alloy::{
 };
 pub use signer::SafeSmartAccountSigner;
 
-use crate::{
-    bedrock_export, debug, error, primitives::HexEncodedData,
-    smart_account::permit2::PermitTransferFrom,
-};
+use crate::{bedrock_export, debug, error, primitives::HexEncodedData};
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
 mod signer;
@@ -31,12 +28,15 @@ pub use transaction_4337::{
     GNOSIS_SAFE_4337_MODULE,
 };
 
+// Import the generated types from permit2 module
+pub use permit2::{
+    UnparsedPermitTransferFrom, UnparsedTokenPermissions, PERMIT2_ADDRESS,
+};
+
 const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[
     // Permit2 requires using the custom `sign_permit2_transfer` method which has additional validation and other permission verification.
     PERMIT2_ADDRESS,
 ];
-
-pub use permit2::PERMIT2_ADDRESS;
 
 /// Errors that can occur when working with Safe Smart Accounts.
 #[crate::bedrock_error]
@@ -285,9 +285,9 @@ impl SafeSmartAccount {
     pub fn sign_permit2_transfer(
         &self,
         chain_id: u32,
-        transfer: Permit2TransferFrom,
+        transfer: UnparsedPermitTransferFrom,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
-        let transfer_from: PermitTransferFrom = transfer.try_into()?;
+        let transfer_from: permit2::PermitTransferFrom = transfer.try_into()?;
 
         let signing_hash = transfer_from
             .as_typed_data(chain_id)
@@ -299,45 +299,6 @@ impl SafeSmartAccount {
         let signature = self.sign_message(signing_hash, chain_id)?;
         Ok(signature.into())
     }
-}
-
-/// For Swift & Kotlin usage only.
-///
-/// Allows foreign code to construct a signed permit message for a single token transfer.
-///
-/// [Permit2](https://docs.uniswap.org/contracts/permit2/overview) is an extension to EIP-2612 that allows for more efficient token approvals.
-///
-/// In World App, Permit2 is used to approve tokens for a Mini App spender to transfer on behalf of the user.
-///
-/// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
-#[derive(uniffi::Record, Debug)]
-pub struct Permit2TransferFrom {
-    /// The token and amount allowed for transfers.
-    pub permitted: Permit2TokenPermissions,
-    /// The address of the spender
-    /// Solidity type: `address`
-    pub spender: String,
-    /// A unique value for every token owner's signature to prevent signature replays
-    /// Solidity type: `uint256`
-    pub nonce: String,
-    /// The expiration timestamp on the permit signature
-    /// Solidity type: `uint256`
-    pub deadline: String,
-}
-
-/// For Swift & Kotlin usage only.
-///
-/// The token and amount details for a transfer signed in the permit transfer signature.
-///
-/// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L22>
-#[derive(uniffi::Record, Debug)]
-pub struct Permit2TokenPermissions {
-    /// ERC-20 token address
-    /// Solidity type: `address`
-    pub token: String,
-    /// The maximum amount of tokens that can be transferred
-    /// Solidity type: `uint256`
-    pub amount: String,
 }
 
 /// The type of operation to perform on behalf of the Safe Smart Account.
@@ -417,7 +378,7 @@ mod tests {
     use ruint::uint;
     use serde_json::json;
 
-    use crate::smart_account::permit2::TokenPermissions;
+    use crate::smart_account::permit2::{PermitTransferFrom, TokenPermissions};
 
     use super::*;
 
@@ -612,12 +573,12 @@ mod tests {
 
     #[test]
     fn test_cannot_sign_invalid_permit2_transfer() {
-        let permitted = Permit2TokenPermissions {
+        let permitted = UnparsedTokenPermissions {
             token: "123".to_string(), // note this is invalid
             amount: "1000000000000000000".to_string(),
         };
 
-        let transfer_from = Permit2TransferFrom {
+        let transfer_from = UnparsedPermitTransferFrom {
             permitted,
             spender: "0x3f1480266afef1ba51834cfef0a5d61841d57572".to_string(),
             nonce: "123".to_string(),
@@ -632,7 +593,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!("invalid input on permitted.token: odd number of digits")
+            format!("invalid input on token: odd number of digits")
         );
     }
 

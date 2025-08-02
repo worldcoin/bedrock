@@ -1,26 +1,21 @@
 use alloy::{
     dyn_abi::{Eip712Domain, TypedData},
-    primitives::{address, Address, U256},
-    sol,
+    primitives::{address, Address},
     sol_types::eip712_domain,
 };
 
-use crate::{
-    primitives::ParseFromForeignBinding,
-    smart_account::{Permit2TransferFrom, SafeSmartAccountError},
-};
+use crate::bedrock_sol;
 
 /// Reference: <https://docs.uniswap.org/contracts/v4/deployments#worldchain-480>
 pub static PERMIT2_ADDRESS: Address =
     address!("0x000000000022d473030f116ddee9f6b43ac78ba3");
 
-sol! {
+bedrock_sol! {
     /// The token and amount details for a transfer signed in the permit transfer signature.
-    ///
-    /// This Solidity struct is constructed from a `Permit2TokenPermissions` coming from foreign code.
     ///
     /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L22>
     #[derive(serde::Serialize)]
+    #[unparsed]
     struct TokenPermissions {
         // ERC20 token address
         address token;
@@ -30,10 +25,9 @@ sol! {
 
     /// The signed permit message for a single token transfer.
     ///
-    /// This Solidity struct is constructed from a `Permit2TransferFrom` coming from foreign code.
-    ///
     /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/ISignatureTransfer.sol#L30>
     #[derive(serde::Serialize)]
+    #[unparsed]
     struct PermitTransferFrom {
         /// The token and amount details for a transfer signed in the permit transfer signature
         TokenPermissions permitted;
@@ -59,24 +53,6 @@ impl PermitTransferFrom {
         );
 
         TypedData::from_struct(self, Some(domain))
-    }
-}
-
-impl TryFrom<Permit2TransferFrom> for PermitTransferFrom {
-    type Error = SafeSmartAccountError;
-
-    fn try_from(value: Permit2TransferFrom) -> Result<Self, Self::Error> {
-        let permitted = TokenPermissions {
-            token: Address::parse_from_ffi(&value.permitted.token, "permitted.token")?,
-            amount: U256::parse_from_ffi(&value.permitted.amount, "permitted.amount")?,
-        };
-
-        Ok(Self {
-            permitted,
-            spender: Address::parse_from_ffi(&value.spender, "spender")?,
-            nonce: U256::parse_from_ffi(&value.nonce, "nonce")?,
-            deadline: U256::parse_from_ffi(&value.deadline, "deadline")?,
-        })
     }
 }
 

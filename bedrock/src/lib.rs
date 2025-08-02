@@ -12,7 +12,7 @@
 //! More info about World App can be found here: <https://www.toolsforhumanity.com/world-app>
 
 // Import and re-export the macros globally
-pub use bedrock_macros::{bedrock_error, bedrock_export};
+pub use bedrock_macros::{bedrock_error, bedrock_export, bedrock_sol};
 
 /// Introduces low level operations with the [Safe Smart Account](https://safe.global/), including
 /// signing messages (ERC-191) and typed data (EIP-712).
