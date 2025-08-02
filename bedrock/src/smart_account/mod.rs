@@ -357,25 +357,6 @@ pub struct SafeTransaction {
     pub nonce: String,
 }
 
-impl SafeTransaction {
-    /// Creates a new `SafeTransaction` with default values.
-    #[must_use]
-    pub fn with_defaults(to: String, data: String, nonce: String) -> Self {
-        Self {
-            to,
-            value: "0".into(),
-            data,
-            operation: SafeOperation::Call,
-            safe_tx_gas: "0".into(),
-            base_gas: "0".into(),
-            gas_price: "0".into(),
-            gas_token: Address::ZERO.to_string(),
-            refund_receiver: Address::ZERO.to_string(),
-            nonce,
-        }
-    }
-}
-
 #[cfg(test)]
 impl SafeSmartAccount {
     /// Creates a new `SafeSmartAccount` instance with a random EOA signing key.

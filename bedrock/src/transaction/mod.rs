@@ -1,5 +1,4 @@
 use alloy::primitives::{Address, U256};
-use bedrock_macros::bedrock_export;
 
 use crate::{
     primitives::{HexEncodedData, ParseFromForeignBinding},
@@ -18,7 +17,7 @@ pub enum TransactionError {
     PrimitiveError(#[from] crate::primitives::PrimitiveError),
 }
 
-/// Extensions to SafeSmartAccount to enable high-level APIs for transactions.
+/// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 // FIXME: uncomment export once this functionality is ready
 // #[bedrock_export]
 impl SafeSmartAccount {
