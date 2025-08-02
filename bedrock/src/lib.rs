@@ -12,7 +12,7 @@
 //! More info about World App can be found here: <https://www.toolsforhumanity.com/world-app>
 
 // Import and re-export the macros globally
-pub use bedrock_macros::{bedrock_error, bedrock_export};
+pub use bedrock_macros::{bedrock_error, bedrock_export, bedrock_sol};
 
 /// Introduces low level operations with the [Safe Smart Account](https://safe.global/), including
 /// signing messages (ERC-191) and typed data (EIP-712).
@@ -25,5 +25,8 @@ pub mod contracts;
 
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
+
+// Re-export commonly used primitives at the crate root for convenience
+pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
 uniffi::setup_scaffolding!("bedrock");

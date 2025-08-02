@@ -1,0 +1,19 @@
+# Clippy configuration for bedrock
+
+# Words that don't need backticks in documentation
+doc-valid-idents = [
+    "UniFFI",
+    "Swift",
+    "Kotlin",
+    "Rust",
+    "iOS",
+    "Android",
+    "SSL",
+    "TLS",
+    "HTTP",
+    "HTTPS",
+    "DNS",
+    "URL",
+    "APIs",
+    "JSON",
+]

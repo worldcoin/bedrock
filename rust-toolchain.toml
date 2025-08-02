@@ -7,9 +7,9 @@ targets = [
     "aarch64-apple-ios-sim",
     "aarch64-apple-ios",
     "x86_64-apple-ios",
-
-    # Android
-    "armv7-linux-androideabi", # 32‑bit ARM (for device support on old devices, <1% active installs)
-    "x86_64-linux-android", # required by Play Store for desktop
-    "aarch64-linux-android" # 64-bit
+    "x86_64-unknown-linux-gnu",
+    # 32-bit ARM
+    "armv7-linux-androideabi",
+    # 64-bit ARM
+    "aarch64-linux-android",
 ]
