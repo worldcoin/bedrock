@@ -3,16 +3,15 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::{ParseFromForeignBinding, PrimitiveError};
+use crate::primitives::PrimitiveError;
 
-use super::SafeSmartAccountError;
 use alloy::hex::FromHex;
 use alloy::{
     primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes},
     sol,
     sol_types::SolValue,
 };
-use ruint::aliases::{U128, U256};
+use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
@@ -35,6 +34,7 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
 });
 
+/// Identifies a transaction that can be encoded as a 4337 `UserOperation`.
 pub trait Is4337Encodable {
     /// Converts the object into an `UserOperation` for use with the `Safe4337Module`.
     ///
@@ -125,23 +125,29 @@ sol! {
 }
 
 impl UserOperation {
+    /// Initializes a new `UserOperation` with default values.
+    ///
+    /// In particular, it sets default values for gas limits & fees, paymaster and sets a dummy signature.
     pub fn new_with_defaults(
         sender: Address,
         nonce: U256,
         call_data: Bytes,
         call_gas_limit: u128,
-    ) -> Result<Self, SafeSmartAccountError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             sender,
             nonce,
             call_data,
             call_gas_limit,
             signature: vec![0xff; 77].into(),
             ..Default::default()
-        })
+        }
     }
 }
 
+/// Converts a `UserOperation` into an `EncodedSafeOpStruct` to the 4337 user operation can be signed.
+///
+/// The `Safe4337Module` expects the hash of the `EncodedSafeOpStruct` to be signed.
 impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
     type Error = PrimitiveError;
 
@@ -160,7 +166,7 @@ impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
             pre_verification_gas: user_op.pre_verification_gas,
             max_priority_fee_per_gas: user_op.max_priority_fee_per_gas,
             max_fee_per_gas: user_op.max_fee_per_gas,
-            paymaster_and_data_hash: keccak256(get_paymaster_and_data(&user_op)),
+            paymaster_and_data_hash: keccak256(get_paymaster_and_data(user_op)),
             valid_after,
             valid_until,
             entry_point: *ENTRYPOINT_4337,
@@ -240,137 +246,93 @@ fn get_paymaster_and_data(user_op: &UserOperation) -> Bytes {
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::address;
+
     use super::*;
-    use crate::smart_account::SafeSmartAccount;
+    use crate::{
+        smart_account::SafeSmartAccount, transaction::foreign::UnparsedUserOperation,
+    };
 
-    // #[test]
-    // fn test_hash_user_op() {
-    //     let user_op = UserOperation {
-    //     sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
-    //     nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
-    //     call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
-    //     signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
-    //     call_gas_limit: "0xabb8".to_string(),
-    //     verification_gas_limit: "0xfa07".to_string(),
-    //     pre_verification_gas: "0x8e4d78".to_string(),
-    //     max_fee_per_gas: "0x1af6f".to_string(),
-    //     max_priority_fee_per_gas: "0x1adb0".to_string(),
-    //     paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
-    //     paymaster_verification_gas_limit: "0x7415".to_string(),
-    //     paymaster_post_op_gas_limit: "0x".to_string(),
-    //     paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
-    //     factory: None,
-    //     factory_data: None,
-    // };
+    #[test]
+    fn test_hash_user_op() {
+        let user_op = UnparsedUserOperation {
+        sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+        nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
+        call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
+        signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        call_gas_limit: "0xabb8".to_string(),
+        verification_gas_limit: "0xfa07".to_string(),
+        pre_verification_gas: "0x8e4d78".to_string(),
+        max_fee_per_gas: "0x1af6f".to_string(),
+        max_priority_fee_per_gas: "0x1adb0".to_string(),
+        paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
+        paymaster_verification_gas_limit: "0x7415".to_string(),
+        paymaster_post_op_gas_limit: "0x".to_string(),
+        paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
+        factory: None,
+        factory_data: None,
+    };
 
-    //     let encoded_safe_op = EncodedSafeOpStruct::try_from(&user_op).unwrap();
-    //     let hash = encoded_safe_op.into_transaction_hash();
+        let user_op: UserOperation = user_op.try_into().unwrap();
 
-    //     let smart_account = SafeSmartAccount::random();
+        let encoded_safe_op = EncodedSafeOpStruct::try_from(&user_op).unwrap();
+        let hash = encoded_safe_op.into_transaction_hash();
 
-    //     let safe_tx_hash =
-    //         smart_account.eip_712_hash(hash, 480, Some(*GNOSIS_SAFE_4337_MODULE));
+        let smart_account = SafeSmartAccount::random();
 
-    //     let expected_hash =
-    //         "f56239eeacb960d469a19f397dd6dce1b0ca6c9553aeff6fc72100cbddbfdb1a";
-    //     assert_eq!(hex::encode(safe_tx_hash), expected_hash);
-    // }
+        let safe_tx_hash =
+            smart_account.eip_712_hash(hash, 480, Some(*GNOSIS_SAFE_4337_MODULE));
 
-    // // Helper function to fill in the other fields of UserOperation so the test compiles
-    // fn dummy_user_op() -> UserOperation {
-    //     UserOperation {
-    //         sender: "0x0".into(),
-    //         nonce: "0".into(),
-    //         call_data: String::new(),
-    //         call_gas_limit: "0".into(),
-    //         verification_gas_limit: "0".into(),
-    //         pre_verification_gas: "0".into(),
-    //         max_fee_per_gas: "0".into(),
-    //         max_priority_fee_per_gas: "0".into(),
-    //         paymaster: None,
-    //         paymaster_verification_gas_limit: "0".into(),
-    //         paymaster_post_op_gas_limit: "0".into(),
-    //         paymaster_data: None,
-    //         signature: String::new(),
-    //         factory: None,
-    //         factory_data: None,
-    //     }
-    // }
+        let expected_hash =
+            "f56239eeacb960d469a19f397dd6dce1b0ca6c9553aeff6fc72100cbddbfdb1a";
+        assert_eq!(hex::encode(safe_tx_hash), expected_hash);
+    }
 
-    // #[test]
-    // fn test_get_init_code_allows_no_factory() {
-    //     let user_op_no_factory = UserOperation {
-    //         factory: None,
-    //         factory_data: None,
-    //         ..dummy_user_op()
-    //     };
-    //     let code = get_init_code(&user_op_no_factory).unwrap();
-    //     assert!(
-    //         code.is_empty(),
-    //         "Expected empty init code when factory=None"
-    //     );
-    // }
+    #[test]
+    fn test_get_init_code_allows_no_factory() {
+        let user_op_no_factory = UserOperation {
+            factory: Address::ZERO,
+            factory_data: Bytes::new(),
+            ..Default::default()
+        };
+        let code = get_init_code(&user_op_no_factory);
+        assert!(
+            code.is_empty(),
+            "Expected empty init code when factory=None"
+        );
+    }
 
-    // #[test]
-    // fn test_get_init_code_allows_0x_factory() {
-    //     let user_op_0x_factory = UserOperation {
-    //         factory: Some("0x".to_string()),
-    //         factory_data: None,
-    //         ..dummy_user_op()
-    //     };
-    //     let code = get_init_code(&user_op_0x_factory).unwrap();
-    //     assert!(
-    //         code.is_empty(),
-    //         "Expected empty init code when factory='0x'"
-    //     );
-    // }
+    #[test]
+    fn test_get_init_code_parse_valid_factory_no_data() {
+        let user_op_valid_factory = UserOperation {
+            factory: address!("0x1111111111111111111111111111111111111111"),
+            factory_data: Bytes::new(),
+            ..Default::default()
+        };
+        let code = get_init_code(&user_op_valid_factory);
+        assert_eq!(
+            code.len(),
+            20,
+            "Should have exactly 20 bytes from the address"
+        );
+    }
 
-    // #[test]
-    // fn test_get_init_code_parse_valid_factory_no_data() {
-    //     let user_op_valid_factory = UserOperation {
-    //         factory: Some("0x1111111111111111111111111111111111111111".to_string()),
-    //         factory_data: None,
-    //         ..dummy_user_op()
-    //     };
-    //     let code = get_init_code(&user_op_valid_factory).unwrap();
-    //     // Should be exactly 20 bytes of the parsed address.
-    //     assert_eq!(
-    //         code.len(),
-    //         20,
-    //         "Should have exactly 20 bytes from the address"
-    //     );
-    // }
+    #[test]
+    fn test_get_init_code_parse_valid_factory_and_data() {
+        let user_op_with_data = UserOperation {
+            factory: address!("0x2222222222222222222222222222222222222222"),
+            factory_data: Bytes::from_str("0x1234abcd").unwrap(),
+            ..Default::default()
+        };
+        let code = get_init_code(&user_op_with_data);
+        assert_eq!(
+            code.len(),
+            20 + 4,
+            "Should be 20 bytes + length of factory_data"
+        );
+        // The last 4 bytes should match 0x12, 0x34, 0xab, 0xcd
+        assert_eq!(&code[20..24], &[0x12, 0x34, 0xab, 0xcd]);
+    }
 
-    // #[test]
-    // fn test_get_init_code_parse_valid_factory_and_data() {
-    //     let user_op_with_data = UserOperation {
-    //         factory: Some("0x2222222222222222222222222222222222222222".to_string()),
-    //         factory_data: Some("0x1234abcd".to_string()),
-    //         ..dummy_user_op()
-    //     };
-    //     let code = get_init_code(&user_op_with_data).unwrap();
-    //     assert_eq!(
-    //         code.len(),
-    //         20 + 4,
-    //         "Should be 20 bytes + length of factory_data"
-    //     );
-    //     // The last 4 bytes should match 0x12,0x34,0xab,0xcd
-    //     assert_eq!(&code[20..24], &[0x12, 0x34, 0xab, 0xcd]);
-    // }
-
-    // #[test]
-    // fn test_get_init_code_invalid_factory() {
-    //     let user_op_invalid_factory = UserOperation {
-    //         factory: Some("0xZZZZZ...".to_string()), // obviously not valid hex
-    //         factory_data: None,
-    //         ..dummy_user_op()
-    //     };
-    //     let err = get_init_code(&user_op_invalid_factory).unwrap_err();
-    //     match err {
-    //         SafeSmartAccountError::InvalidInput { attribute, .. } => {
-    //             assert_eq!(attribute, "factory");
-    //         }
-    //         _ => panic!("Expected SafeSmartAccountError::InvalidInput"),
-    //     }
-    // }
+    // TODO: Add tests for get_paymaster_and_data and extract_validity_timestamps
 }

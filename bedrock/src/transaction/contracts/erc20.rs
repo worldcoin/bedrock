@@ -7,7 +7,7 @@ use alloy::{
 };
 
 use crate::{
-    primitives::{ParseFromForeignBinding, PrimitiveError},
+    primitives::PrimitiveError,
     smart_account::{ISafe4337Module, Is4337Encodable, SafeOperation, UserOperation},
 };
 
@@ -22,13 +22,14 @@ sol! {
     }
 }
 
-pub(crate) struct Erc20 {
+/// Enables operations with the ERC-20 token contract.
+pub struct Erc20 {
     call_data: Vec<u8>,
     token_address: Address,
 }
 
 impl Erc20 {
-    pub(crate) fn new(token_address: Address, to: Address, value: U256) -> Self {
+    pub fn new(token_address: Address, to: Address, value: U256) -> Self {
         let call_data = IErc20::transferCall { to, value }.abi_encode();
 
         Self {
