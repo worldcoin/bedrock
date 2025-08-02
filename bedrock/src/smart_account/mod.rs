@@ -9,8 +9,9 @@ pub use signer::SafeSmartAccountSigner;
 pub use transaction_4337::{ISafe4337Module, Is4337Encodable};
 
 use crate::{
-    bedrock_export, debug, error, primitives::HexEncodedData,
-    transaction::foreign::UnparsedUserOperation,
+    bedrock_export, debug, error,
+    primitives::HexEncodedData,
+    transaction::{foreign::UnparsedUserOperation, CommonTransaction},
 };
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
@@ -83,6 +84,8 @@ pub struct SafeSmartAccount {
     signer: LocalSigner<SigningKey>,
     /// The address of the Safe Smart Account (i.e. the deployed smart contract)
     wallet_address: Address,
+    /// Enables executing common transactions on behalf of the Safe Smart Account.
+    pub common_transaction: CommonTransaction,
 }
 
 #[bedrock_export]
@@ -124,9 +127,12 @@ impl SafeSmartAccount {
             wallet_address
         );
 
+        let common_transaction = CommonTransaction::new(wallet_address);
+
         Ok(Self {
             signer,
             wallet_address,
+            common_transaction,
         })
     }
 
@@ -392,6 +398,7 @@ impl SafeSmartAccount {
         Self {
             signer,
             wallet_address,
+            common_transaction: CommonTransaction::new(wallet_address),
         }
     }
 }

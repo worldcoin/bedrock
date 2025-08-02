@@ -36,11 +36,35 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
 
 /// Identifies a transaction that can be encoded as a 4337 `UserOperation`.
 pub trait Is4337Encodable {
-    /// Converts the object into an `UserOperation` for use with the `Safe4337Module`.
+    /// Converts the object into a `callData` for the `executeUserOp` method.
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn into_user_operation(self) -> Result<UserOperation, PrimitiveError>;
+    fn as_execute_user_op_call_data(&self) -> Bytes;
+
+    /// Converts the object into a preflight `UserOperation` for use with the `Safe4337Module`.
+    ///
+    /// A preflight operation is defined as having empty gas & paymaster data and a dummy signature.
+    ///
+    /// The preflight operation is sent to the RPC to request sponsorship.
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    fn as_preflight_user_operation(
+        &self,
+        sender: Address,
+        nonce: U256,
+        call_gas_limit: u128,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let call_data = self.as_execute_user_op_call_data();
+
+        Ok(UserOperation::new_with_defaults(
+            sender,
+            nonce,
+            call_data,
+            call_gas_limit,
+        ))
+    }
 }
 
 sol! {
@@ -62,7 +86,7 @@ sol! {
     ///
     /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation
     #[sol(rename_all = "camelcase")]
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct UserOperation {
         /// The Account making the UserOperation
         address sender;
