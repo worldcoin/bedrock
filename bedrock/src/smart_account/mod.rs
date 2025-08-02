@@ -181,7 +181,8 @@ impl SafeSmartAccount {
     ///
     /// # Examples
     /// ```rust
-    /// use bedrock::smart_account::{UserOperation, SafeSmartAccount};
+    /// use bedrock::smart_account::{SafeSmartAccount};
+    /// use bedrock::transaction::foreign::UnparsedUserOperation;
     ///
     /// let safe = SafeSmartAccount::new(
     ///     // this is Anvil's default private key, it is a test secret
@@ -191,7 +192,7 @@ impl SafeSmartAccount {
     /// .unwrap();
     ///
     /// // This would normally be crafted by the user, or requested by Mini Apps.
-    /// let user_op = UserOperation {
+    /// let user_op = UnparsedUserOperation {
     ///     sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
     ///     nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
     ///     call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
@@ -209,7 +210,7 @@ impl SafeSmartAccount {
     ///     factory_data: None,
     /// };
     ///
-    /// let signature = safe.sign_4337_op(480, &user_op).unwrap();
+    /// let signature = safe.sign_4337_op(480, user_op).unwrap();
     ///
     /// println!("Signature: {}", signature.to_hex_string());
     /// ```
