@@ -143,6 +143,72 @@ impl UserOperation {
             ..Default::default()
         }
     }
+
+    /// Gathers the factory+factoryData as `initCode`.
+    pub fn get_init_code(&self) -> Bytes {
+        // Check if `factory` is present
+        if self.factory.is_zero() {
+            return Bytes::new();
+        }
+
+        let mut out = Vec::new();
+        out.extend_from_slice(self.factory.as_slice());
+        out.extend_from_slice(&self.factory_data);
+        out.into()
+    }
+
+    /// Extract `validAfter` and `validUntil` from a signature as `U256` values.
+    ///
+    /// Expects at least 12 bytes additional bytes in the signature.
+    ///
+    /// # Errors
+    /// - Returns an error if the signature is too short.
+    pub fn extract_validity_timestamps(&self) -> Result<(U48, U48), PrimitiveError> {
+        // timestamp validity (12 bytes) + regular ECDSA signature (65 bytes)
+        if self.signature.len() != 77 {
+            return Err(PrimitiveError::InvalidInput {
+                attribute: "signature",
+                message: "signature does not have the correct length (77 bytes)"
+                    .to_string(),
+            });
+        }
+
+        let mut valid_after = [0u8; 6];
+        let mut valid_until = [0u8; 6];
+
+        valid_after.copy_from_slice(&self.signature[0..6]);
+        valid_until.copy_from_slice(&self.signature[6..12]);
+
+        // Extract 6-byte validAfter and validUntil slices and convert them to U256
+        let valid_after = U48::from_be_bytes(valid_after);
+        let valid_until = U48::from_be_bytes(valid_until);
+
+        Ok((valid_after, valid_until))
+    }
+
+    /// Merges all paymaster related data into a single `paymasterAndData` attribut.
+    pub fn get_paymaster_and_data(&self) -> Bytes {
+        if self.paymaster.is_zero() {
+            return Bytes::new();
+        }
+
+        let mut out = Vec::new();
+        // Append paymaster address (20 bytes)
+        out.extend_from_slice(self.paymaster.as_slice());
+
+        // Append paymasterVerificationGasLimit (16 bytes)
+        out.extend_from_slice(&self.paymaster_verification_gas_limit.to_be_bytes());
+
+        // Append paymasterPostOpGasLimit (16 bytes)
+        out.extend_from_slice(&self.paymaster_post_op_gas_limit.to_be_bytes());
+
+        // Append paymasterData if it exists
+        if !self.paymaster_data.is_empty() {
+            out.extend_from_slice(&self.paymaster_data);
+        }
+
+        out.into()
+    }
 }
 
 /// Converts a `UserOperation` into an `EncodedSafeOpStruct` to the 4337 user operation can be signed.
@@ -152,21 +218,20 @@ impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
     type Error = PrimitiveError;
 
     fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
-        let (valid_after, valid_until) =
-            extract_validity_timestamps(&user_op.signature)?;
+        let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
 
         Ok(Self {
             type_hash: *SAFE_OP_TYPEHASH,
             safe: user_op.sender,
             nonce: user_op.nonce,
-            init_code_hash: keccak256(get_init_code(user_op)),
+            init_code_hash: keccak256(user_op.get_init_code()),
             call_data_hash: keccak256(&user_op.call_data),
             verification_gas_limit: user_op.verification_gas_limit,
             call_gas_limit: user_op.call_gas_limit,
             pre_verification_gas: user_op.pre_verification_gas,
             max_priority_fee_per_gas: user_op.max_priority_fee_per_gas,
             max_fee_per_gas: user_op.max_fee_per_gas,
-            paymaster_and_data_hash: keccak256(get_paymaster_and_data(user_op)),
+            paymaster_and_data_hash: keccak256(user_op.get_paymaster_and_data()),
             valid_after,
             valid_until,
             entry_point: *ENTRYPOINT_4337,
@@ -180,68 +245,6 @@ impl EncodedSafeOpStruct {
     pub fn into_transaction_hash(self) -> FixedBytes<32> {
         keccak256(self.abi_encode())
     }
-}
-
-/// Extract validAfter and validUntil from a signature as `U256` values.
-/// Expects at least 12 bytes in the signature. Returns an error if the signature is too short.
-fn extract_validity_timestamps(signature: &[u8]) -> Result<(U48, U48), PrimitiveError> {
-    // timestamp validity (12 bytes) + regular ECDSA signature (65 bytes)
-    if signature.len() != 77 {
-        return Err(PrimitiveError::InvalidInput {
-            attribute: "signature",
-            message: "signature does not have the correct length (77 bytes)"
-                .to_string(),
-        });
-    }
-
-    let mut valid_after = [0u8; 6];
-    let mut valid_until = [0u8; 6];
-
-    valid_after.copy_from_slice(&signature[0..6]);
-    valid_until.copy_from_slice(&signature[6..12]);
-
-    // Extract 6-byte validAfter and validUntil slices and convert them to U256
-    let valid_after = U48::from_be_bytes(valid_after);
-    let valid_until = U48::from_be_bytes(valid_until);
-
-    Ok((valid_after, valid_until))
-}
-
-/// Gathers the factory+factoryData as `initCode`.
-fn get_init_code(user_op: &UserOperation) -> Bytes {
-    // Check if `factory` is present
-    if user_op.factory.is_zero() {
-        return Bytes::new();
-    }
-
-    let mut out = Vec::new();
-    out.extend_from_slice(user_op.factory.as_slice());
-    out.extend_from_slice(&user_op.factory_data);
-    out.into()
-}
-
-/// Merges Paymaster related data
-fn get_paymaster_and_data(user_op: &UserOperation) -> Bytes {
-    if user_op.paymaster.is_zero() {
-        return Bytes::new();
-    }
-
-    let mut out = Vec::new();
-    // Append paymaster address (20 bytes)
-    out.extend_from_slice(user_op.paymaster.as_slice());
-
-    // Append paymasterVerificationGasLimit (16 bytes)
-    out.extend_from_slice(&user_op.paymaster_verification_gas_limit.to_be_bytes());
-
-    // Append paymasterPostOpGasLimit (16 bytes)
-    out.extend_from_slice(&user_op.paymaster_post_op_gas_limit.to_be_bytes());
-
-    // Append paymasterData if it exists
-    if !user_op.paymaster_data.is_empty() {
-        out.extend_from_slice(&user_op.paymaster_data);
-    }
-
-    out.into()
 }
 
 #[cfg(test)]
@@ -295,7 +298,7 @@ mod tests {
             factory_data: Bytes::new(),
             ..Default::default()
         };
-        let code = get_init_code(&user_op_no_factory);
+        let code = user_op_no_factory.get_init_code();
         assert!(
             code.is_empty(),
             "Expected empty init code when factory=None"
@@ -309,7 +312,7 @@ mod tests {
             factory_data: Bytes::new(),
             ..Default::default()
         };
-        let code = get_init_code(&user_op_valid_factory);
+        let code = user_op_valid_factory.get_init_code();
         assert_eq!(
             code.len(),
             20,
@@ -324,7 +327,7 @@ mod tests {
             factory_data: Bytes::from_str("0x1234abcd").unwrap(),
             ..Default::default()
         };
-        let code = get_init_code(&user_op_with_data);
+        let code = user_op_with_data.get_init_code();
         assert_eq!(
             code.len(),
             20 + 4,

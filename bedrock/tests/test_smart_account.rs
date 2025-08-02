@@ -2,17 +2,20 @@ use alloy::{
     dyn_abi::TypedData,
     network::Ethereum,
     node_bindings::AnvilInstance,
-    primitives::{address, keccak256, Address, Bytes, U256},
+    primitives::{address, keccak256, Address, Bytes, FixedBytes, U256},
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
     sol_types::{SolCall, SolEvent},
 };
-use bedrock::smart_account::{
-    EncodedSafeOpStruct, PackedUserOperation, SafeOperation, SafeSmartAccount,
-    SafeSmartAccountSigner, SafeTransaction, UnparsedPermitTransferFrom,
-    UnparsedTokenPermissions, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
-    PERMIT2_ADDRESS,
+use bedrock::{
+    primitives::PrimitiveError,
+    smart_account::{
+        EncodedSafeOpStruct, SafeOperation, SafeSmartAccount, SafeSmartAccountSigner,
+        SafeTransaction, UnparsedPermitTransferFrom, UnparsedTokenPermissions,
+        UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE, PERMIT2_ADDRESS,
+    },
+    transaction::foreign::UnparsedUserOperation,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -81,23 +84,24 @@ sol! {
     ///
     ///
     /// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/interfaces/PackedUserOperation.sol#L18>
+    #[sol(rename_all = "camelCase")]
     struct PackedUserOperation {
         /// The address of the smart contract account to be called.
         address sender;
         /// Anti-replay nonce for the userOp.
         uint256 nonce;
         /// Optional initialization code for deploying the account if it doesn't exist.
-        bytes initCode;
+        bytes init_code;
         /// Calldata for the actual execution to be performed by the account.
-        bytes callData;
+        bytes call_data;
         /// Packed gas limits: first 16 bytes = `verificationGasLimit`, next 16 bytes = `callGasLimit`.
-        bytes32 accountGasLimits;
+        bytes32 account_gas_limits;
         /// The fixed gas to be paid before the verification step (covers calldata costs, etc.).
-        uint256 preVerificationGas;
+        uint256 pre_verification_gas;
         /// Packed fee fields: first 16 bytes = `maxPriorityFeePerGas`, next 16 bytes = `maxFeePerGas`.
-        bytes32 gasFees;
+        bytes32 gas_fees;
         /// Data and address for an optional paymaster sponsoring the transaction.
-        bytes paymasterAndData;
+        bytes paymaster_and_data;
         /// Signature over the operation (account-specific validation logic).
         bytes signature;
     }
@@ -106,7 +110,7 @@ sol! {
     #[sol(rpc)]
     interface IEntryPoint {
         function depositTo(address account) external payable;
-        function handleOps(PackedUserOperationStruct[] calldata ops, address payable beneficiary) external;
+        function handleOps(PackedUserOperation[] calldata ops, address payable beneficiary) external;
     }
 
     /// 4337 Module for Safe Smart Account
@@ -129,19 +133,35 @@ sol! {
     }
 }
 
-impl From<PackedUserOperation> for PackedUserOperationStruct {
-    fn from(packed: PackedUserOperation) -> Self {
-        PackedUserOperationStruct {
-            sender: packed.sender,
-            nonce: packed.nonce,
-            initCode: packed.init_code,
-            callData: packed.call_data,
-            accountGasLimits: packed.account_gas_limits.into(),
-            preVerificationGas: packed.pre_verification_gas,
-            gasFees: packed.gas_fees.into(),
-            paymasterAndData: packed.paymaster_and_data,
-            signature: packed.signature,
-        }
+/// Pack two U128 in 32 bytes
+fn pack_pair(a: &u128, b: &u128) -> FixedBytes<32> {
+    let mut out = [0u8; 32];
+    out[..16].copy_from_slice(a.to_be_bytes().as_slice());
+    out[16..].copy_from_slice(b.to_be_bytes().as_slice());
+    out.into()
+}
+
+impl TryFrom<&UserOperation> for PackedUserOperation {
+    type Error = PrimitiveError;
+
+    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
+        Ok(Self {
+            sender: user_op.sender,
+            nonce: user_op.nonce,
+            init_code: user_op.get_init_code(),
+            call_data: user_op.call_data.clone(),
+            account_gas_limits: pack_pair(
+                &user_op.verification_gas_limit,
+                &user_op.call_gas_limit,
+            ),
+            pre_verification_gas: user_op.pre_verification_gas,
+            gas_fees: pack_pair(
+                &user_op.max_priority_fee_per_gas,
+                &user_op.max_fee_per_gas,
+            ),
+            paymaster_and_data: user_op.get_paymaster_and_data(),
+            signature: user_op.signature.clone(),
+        })
     }
 }
 
@@ -489,7 +509,7 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     // Build the userOp
     let valid_after = &0u64.to_be_bytes()[2..]; // validAfter = 0  (immediately valid)
     let valid_until = &u64::MAX.to_be_bytes()[2..]; // validUntil = 0xFFFF_FFFF_FFFF (≈ forever)
-    let mut user_op = UserOperation {
+    let user_op = UnparsedUserOperation {
         sender: safe_address.to_string(),
         nonce: "0x0".to_string(),
         call_data: format!("0x{}", hex::encode(&call_data)),
@@ -513,6 +533,8 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         factory_data: None,
     };
 
+    let mut user_op: UserOperation = user_op.try_into().unwrap();
+
     // Sign the userOp and prepend validity timestamps
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
         .expect("Failed to create SafeSmartAccount");
@@ -526,11 +548,11 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     sig_with_timestamps.extend_from_slice(valid_after);
     sig_with_timestamps.extend_from_slice(valid_until);
     sig_with_timestamps.extend_from_slice(&sig);
-    user_op.signature = format!("0x{}", hex::encode(sig_with_timestamps));
+    user_op.signature = sig_with_timestamps.into();
 
     // Submit through the 4337 EntryPoint
     let _ = entry_point
-        .handleOps(vec![PackedUserOperation::try_from(&user_op)?.into()], owner)
+        .handleOps(vec![PackedUserOperation::try_from(&user_op)?], owner)
         .from(owner)
         .send()
         .await?;
