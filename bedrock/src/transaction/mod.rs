@@ -19,7 +19,8 @@ pub enum TransactionError {
 }
 
 /// Extensions to SafeSmartAccount to enable high-level APIs for transactions.
-#[bedrock_export]
+// FIXME: uncomment export once this functionality is ready
+// #[bedrock_export]
 impl SafeSmartAccount {
     /// Allows executing an ERC-20 token transfer.
     ///
@@ -51,7 +52,9 @@ impl SafeSmartAccount {
         // TODO: next step is to send the user op to the RPC for `wa_sponsorUserOperation`
         dbg!(&user_op);
 
+        todo!("this is not ready.");
+
         // simulated tx hash
-        Ok(HexEncodedData::new("0x123456")?)
+        // Ok(HexEncodedData::new("0x123456")?)
     }
 }
