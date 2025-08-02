@@ -5,24 +5,12 @@ use alloy::{
 use bedrock_macros::bedrock_export;
 
 use crate::{
-    contracts::erc20::IERC20,
-    primitives::ParseFromForeignBinding,
+    contracts::erc20::Erc20,
+    primitives::{HexEncodedData, ParseFromForeignBinding},
     smart_account::{EncodedSafeOpStruct, SafeTransaction},
 };
 
 mod erc20;
-
-#[derive(uniffi::Object)]
-struct ExecutableTx {
-    tx: EncodedSafeOpStruct,
-}
-
-#[bedrock_export]
-impl ExecutableTx {
-    pub fn as_signed_calldata(&self) -> Vec<u8> {
-        todo!("todo");
-    }
-}
 
 /// Exposes common operations for key smart contracts. This will return a `SafeTransaction` which can be then signed and executed.
 #[derive(uniffi::Object)]
@@ -47,23 +35,14 @@ impl CommonContracts {
         token_address: &str,
         to_address: &str,
         amount: &str,
-    ) -> Result<SafeTransaction, ContractsError> {
+    ) -> Result<HexEncodedData, ContractsError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?; // TODO: see if we type tokens
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
 
-        let calldata = IERC20::transferCall {
-            to: to_address,
-            value: amount,
-        }
-        .abi_encode();
+        let transaction = Erc20::new(token_address, to_address, amount);
 
-        let tx = SafeTransaction::with_defaults(
-            token_address.to_string(),
-            format!("0x{}", hex::encode(&calldata)),
-            "0".to_string(), // TODO: Implement correct nonce
-        );
-
-        Ok(tx)
+        // simulated tx hash
+        Ok(HexEncodedData::new("0x123456")?)
     }
 }

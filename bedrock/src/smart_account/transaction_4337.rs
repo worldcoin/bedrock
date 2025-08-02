@@ -3,7 +3,7 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::ParseFromForeignBinding;
+use crate::primitives::{ParseFromForeignBinding, PrimitiveError};
 
 use super::SafeSmartAccountError;
 use alloy::hex::FromHex;
@@ -14,47 +14,6 @@ use alloy::{
 };
 use ruint::aliases::{U128, U256};
 use std::{str::FromStr, sync::LazyLock};
-
-/// A pseudo-transaction object for EIP-4337. Used to execute transactions through the Safe Smart Account.
-///
-/// This object is expected to be initialized from foreign languages.
-///
-/// Reference: <https://www.erc4337.io/docs/understanding-ERC-4337/user-operation>
-///
-/// Note the types of this struct are types that can be lifted from foreign languages to be then parsed and validated.
-#[derive(uniffi::Record, Clone, Debug)]
-pub struct UserOperation {
-    /// The address of the smart contract account (Solidity type: `address`)
-    pub sender: String,
-    /// Anti-replay protection; also used as the salt for first-time account creation (Solidity type: `uint256`)
-    pub nonce: String,
-    /// Data that's passed to the sender for execution (Solidity type: `bytes`)
-    pub call_data: String,
-    /// Gas limit for execution phase (Solidity type: `uint128`)
-    pub call_gas_limit: String,
-    /// Gas limit for verification phase (Solidity type: `uint128`)
-    pub verification_gas_limit: String,
-    /// Gas to compensate the bundler (Solidity type: `uint256`)
-    pub pre_verification_gas: String,
-    /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559)'s `max_fee_per_gas`) (Solidity type: `uint256`)
-    pub max_fee_per_gas: String,
-    /// Maximum priority fee per gas (Solidity type: `uint128`)
-    pub max_priority_fee_per_gas: String,
-    /// Paymaster contact address (Solidity type: `address`)
-    pub paymaster: Option<String>,
-    /// Paymaster verification gas limit (Solidity type: `uint128`)
-    pub paymaster_verification_gas_limit: String,
-    /// Paymaster post-operation gas limit (Solidity type: `uint128`)
-    pub paymaster_post_op_gas_limit: String,
-    /// Paymaster additional data for verification (Solidity type: `bytes`)
-    pub paymaster_data: Option<String>,
-    /// Used to validate a `UserOperation` along with the nonce during verification (Solidity type: `bytes`)
-    pub signature: String,
-    /// Factory address (Solidity type: `address`)
-    pub factory: Option<String>,
-    /// Factory data (Solidity type: `bytes`)
-    pub factory_data: Option<String>,
-}
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
@@ -76,10 +35,70 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
 });
 
+pub trait Is4337Encodable {
+    /// Converts the object into an `EncodedSafeOpStruct` for use with the `Safe4337Module`.
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    fn into_user_operation(self) -> Result<EncodedSafeOpStruct, PrimitiveError>;
+}
+
 sol! {
+
+    /// Interface for the `Safe4337Module` contract.
+    ///
+    /// Reference: <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L172>
+    interface ISafe4337Module {
+        function executeUserOp(address to, uint256 value, bytes calldata data, uint8 operation) external;
+    }
+
+    /// The structure of a generic 4337 UserOperation.
+    ///
+    /// `UserOperation`s are not used on-chain, they are used by RPCs to bundle transactions as `PackedUserOperation`s.
+    ///
+    /// For the flow of World App:
+    /// - A `UserOperation` is created by the user and passed to the World App RPC to request sponsorship through the `wa_sponsorUserOperation` method.
+    /// - The final signed `UserOperation` is then passed to the World App RPC to be executed through the standard `eth_sendUserOperation` method.
+    ///
+    /// Reference: <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L172>
+    #[sol(rename_all = "camelcase")]
+    #[derive(Default)]
+    struct UserOperation1 {
+        /// The Account making the UserOperation
+        address sender;
+        /// Anti-replay protection
+        uint256 nonce;
+        /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
+        address factory;
+        /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
+        bytes factory_data;
+        /// The data to pass to the sender during the main execution call
+        bytes call_data;
+        /// Gas limit for the main execution call
+        uint256 call_gas_limit;
+        /// Gas limit for the verification call
+        uint256 verification_gas_limit;
+        /// Extra gas to pay the bundler
+        uint256 pre_verification_gas;
+        /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_fee_per_gas)
+        uint256 max_fee_per_gas;
+        /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_priority_fee_per_gas)
+        uint256 max_priority_fee_per_gas;
+        /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
+        address paymaster;
+        /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
+        uint256 paymaster_verification_gas_limit;
+        /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
+        uint256 paymaster_post_op_gas_limit;
+        /// Data for paymaster (only if paymaster exists)
+        bytes paymaster_data;
+        /// Data passed into the sender to verify authorization
+        bytes signature;
+    }
+
     /// The EIP-712 type-hash for a SafeOp, representing the structure of a User Operation for the Safe.
     ///
-    /// Reference: <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L58>
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
     #[sol(rename_all = "camelcase")]
     struct EncodedSafeOpStruct {
         bytes32 type_hash;
@@ -96,6 +115,24 @@ sol! {
         uint48 valid_after;
         uint48 valid_until;
         address entry_point;
+    }
+}
+
+impl UserOperation1 {
+    pub fn new_with_defaults(
+        sender: Address,
+        nonce: U256,
+        call_data: Bytes,
+        call_gas_limit: U256,
+    ) -> Result<Self, SafeSmartAccountError> {
+        Ok(Self {
+            sender,
+            nonce,
+            call_data,
+            call_gas_limit,
+            signature: vec![0xff; 77].into(),
+            ..Default::default()
+        })
     }
 }
 

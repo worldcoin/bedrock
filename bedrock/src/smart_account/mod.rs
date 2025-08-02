@@ -6,6 +6,7 @@ use alloy::{
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 pub use signer::SafeSmartAccountSigner;
+pub use transaction_4337::{ISafe4337Module, Is4337Encodable};
 
 use crate::{
     bedrock_export, debug, error, primitives::HexEncodedData,
