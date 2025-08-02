@@ -1,20 +1,14 @@
 use alloy::primitives::{Address, U256};
+use bedrock_macros::bedrock_export;
 
 use crate::{
     primitives::{HexEncodedData, ParseFromForeignBinding},
-    smart_account::Is4337Encodable,
+    smart_account::{Is4337Encodable, SafeSmartAccount},
     transaction::contracts::erc20::Erc20,
 };
 
 mod contracts;
 pub mod foreign;
-
-/// Exposes common transactions for key smart contracts.
-#[derive(Debug, uniffi::Object)]
-pub struct CommonTransaction {
-    /// The address of the Safe Smart Account
-    wallet_address: Address,
-}
 
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
@@ -24,18 +18,19 @@ pub enum TransactionError {
     PrimitiveError(#[from] crate::primitives::PrimitiveError),
 }
 
-impl CommonTransaction {
-    /// Creates a new `CommonTransaction` instance.
-    #[must_use]
-    pub const fn new(wallet_address: Address) -> Self {
-        Self { wallet_address }
-    }
-
+/// Extensions to SafeSmartAccount to enable high-level APIs for transactions.
+#[bedrock_export]
+impl SafeSmartAccount {
     /// Allows executing an ERC-20 token transfer.
+    ///
+    /// # Arguments
+    /// - `token_address`: The address of the ERC-20 token to transfer.
+    /// - `to_address`: The address of the recipient.
+    /// - `amount`: The amount of tokens to transfer.
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    pub fn transfer(
+    pub fn transaction_transfer(
         &self,
         token_address: &str,
         to_address: &str,
