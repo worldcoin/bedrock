@@ -8,7 +8,10 @@ use alloy::{
 pub use signer::SafeSmartAccountSigner;
 pub use transaction_4337::{ISafe4337Module, Is4337Encodable};
 
-use crate::{bedrock_export, debug, error, primitives::HexEncodedData};
+use crate::{
+    bedrock_export, debug, error, primitives::HexEncodedData,
+    transaction::foreign::UnparsedUserOperation,
+};
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
 mod signer;
@@ -25,8 +28,7 @@ mod transaction;
 mod permit2;
 
 pub use transaction_4337::{
-    EncodedSafeOpStruct, PackedUserOperation, UserOperation, ENTRYPOINT_4337,
-    GNOSIS_SAFE_4337_MODULE,
+    EncodedSafeOpStruct, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
 };
 
 // Import the generated types from permit2 module
@@ -214,12 +216,13 @@ impl SafeSmartAccount {
     pub fn sign_4337_op(
         &self,
         chain_id: u32,
-        user_operation: &UserOperation,
+        user_operation: UnparsedUserOperation,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
-        let user_op: EncodedSafeOpStruct = user_operation.try_into()?;
+        let user_op: UserOperation = user_operation.try_into()?;
+        let encoded_safe_op_struct: EncodedSafeOpStruct = (&user_op).try_into()?;
 
         let signature = self.sign_digest(
-            user_op.into_transaction_hash(),
+            encoded_safe_op_struct.into_transaction_hash(),
             chain_id,
             Some(*GNOSIS_SAFE_4337_MODULE),
         )?;
@@ -487,7 +490,7 @@ mod tests {
         .unwrap();
         let chain_id = 10;
         let safe_address = "0x4564420674EA68fcc61b463C0494807C759d47e6".to_string();
-        let user_op = UserOperation {
+        let user_op = UnparsedUserOperation {
           sender:safe_address,
           nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
           call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
@@ -505,7 +508,7 @@ mod tests {
           factory_data: None,
       };
 
-        assert_eq!(safe.sign_4337_op(chain_id, &user_op).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
+        assert_eq!(safe.sign_4337_op(chain_id, user_op).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
     }
 
     #[test]

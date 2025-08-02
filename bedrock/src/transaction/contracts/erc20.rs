@@ -1,3 +1,5 @@
+//! This module introduces the ERC-20 token contract interface.
+
 use alloy::{
     primitives::{Address, U256},
     sol,
@@ -6,7 +8,7 @@ use alloy::{
 
 use crate::{
     primitives::{ParseFromForeignBinding, PrimitiveError},
-    smart_account::{ISafe4337Module, Is4337Encodable, SafeOperation},
+    smart_account::{ISafe4337Module, Is4337Encodable, SafeOperation, UserOperation},
 };
 
 sol! {
@@ -37,7 +39,7 @@ impl Erc20 {
 }
 
 impl Is4337Encodable for Erc20 {
-    fn into_user_operation(self) -> Result<EncodedSafeOpStruct, PrimitiveError> {
+    fn into_user_operation(self) -> Result<UserOperation, PrimitiveError> {
         let user_op_call_data = ISafe4337Module::executeUserOpCall {
             to: self.token_address,
             value: U256::ZERO,
@@ -45,5 +47,7 @@ impl Is4337Encodable for Erc20 {
             operation: SafeOperation::Call as u8,
         }
         .abi_encode();
+
+        todo!("todo");
     }
 }

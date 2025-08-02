@@ -74,15 +74,31 @@ sol!(
 );
 
 sol! {
-    struct PackedUserOperationStruct {
+    /// A gas efficient representation of a `UserOperation` for use with the `EntryPoint` contract.
+    ///
+    /// Submitting transactions through the `EntryPoint` requires a `PackedUserOperation`,
+    /// see `handleOps` in the `EntryPoint` contract. Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol#L174>
+    ///
+    ///
+    /// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/interfaces/PackedUserOperation.sol#L18>
+    struct PackedUserOperation {
+        /// The address of the smart contract account to be called.
         address sender;
+        /// Anti-replay nonce for the userOp.
         uint256 nonce;
+        /// Optional initialization code for deploying the account if it doesn't exist.
         bytes initCode;
+        /// Calldata for the actual execution to be performed by the account.
         bytes callData;
+        /// Packed gas limits: first 16 bytes = `verificationGasLimit`, next 16 bytes = `callGasLimit`.
         bytes32 accountGasLimits;
+        /// The fixed gas to be paid before the verification step (covers calldata costs, etc.).
         uint256 preVerificationGas;
+        /// Packed fee fields: first 16 bytes = `maxPriorityFeePerGas`, next 16 bytes = `maxFeePerGas`.
         bytes32 gasFees;
+        /// Data and address for an optional paymaster sponsoring the transaction.
         bytes paymasterAndData;
+        /// Signature over the operation (account-specific validation logic).
         bytes signature;
     }
 
