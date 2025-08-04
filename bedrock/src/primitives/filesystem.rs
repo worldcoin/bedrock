@@ -8,7 +8,7 @@ pub enum FileSystemError {
     #[error("failed to read the file")]
     ReadFileError,
     /// Tried to read a file that doesn't exist
-    #[error("tried to read a file that doesn't exist")]
+    #[error("requested file does not exist")]
     FileDoesNotExist,
     /// Failed to write file
     #[error("failed to write file")]
