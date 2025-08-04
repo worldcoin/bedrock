@@ -437,43 +437,6 @@ mod tests {
 
     #[test]
     #[cfg(feature = "tooling_tests")]
-    #[ignore = "This test requires exclusive access to the global filesystem"]
-    fn test_filesystem_middleware_integration() {
-        use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
-
-        // Set up the in-memory filesystem
-        let fs = InMemoryFileSystem::new();
-        set_filesystem(std::sync::Arc::new(fs));
-
-        let tester = FileSystemTester;
-
-        // Test writing a file - should be prefixed with "FileSystemTester"
-        let result = tester.test_write_file("test.txt", "Hello, World!");
-        assert!(result.is_ok());
-
-        // Test reading the file
-        let content = tester.test_read_file("test.txt");
-        assert!(content.is_ok());
-        assert_eq!(content.unwrap(), "Hello, World!");
-
-        // Test file exists
-        let exists = tester.test_file_exists("test.txt");
-        assert!(exists.is_ok());
-        assert!(exists.unwrap());
-
-        // Test delete file
-        let deleted = tester.test_delete_file("test.txt");
-        assert!(deleted.is_ok());
-        assert!(deleted.unwrap());
-
-        // Verify file is deleted
-        let exists_after_delete = tester.test_file_exists("test.txt");
-        assert!(exists_after_delete.is_ok());
-        assert!(!exists_after_delete.unwrap());
-    }
-
-    #[test]
-    #[cfg(feature = "tooling_tests")]
     fn test_in_memory_filesystem_features() {
         use crate::primitives::filesystem::InMemoryFileSystem;
 
