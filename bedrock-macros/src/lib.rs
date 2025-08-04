@@ -302,14 +302,49 @@ fn has_async_functions_in_impl(impl_items: &[ImplItem]) -> bool {
     })
 }
 
+/// Convert a PascalCase string to snake_case
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut prev_was_uppercase = false;
+    let chars: Vec<char> = s.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch.is_uppercase() {
+            // Don't add underscore at the beginning
+            if !result.is_empty() {
+                // Add underscore if:
+                // 1. Previous char was lowercase (e.g., "aB" -> "a_b")
+                // 2. Current char is uppercase followed by lowercase (e.g., "ABc" -> "a_bc")
+                let prev_was_lowercase = i > 0 && chars[i - 1].is_lowercase();
+                let next_is_lowercase =
+                    i + 1 < chars.len() && chars[i + 1].is_lowercase();
+
+                if prev_was_lowercase || (prev_was_uppercase && next_is_lowercase) {
+                    result.push('_');
+                }
+            }
+            result.push(ch.to_lowercase().next().unwrap());
+            prev_was_uppercase = true;
+        } else {
+            result.push(ch);
+            prev_was_uppercase = false;
+        }
+    }
+
+    result
+}
+
 /// Inject logging context and filesystem middleware at the start of a function body
 fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &str) {
-    // Create the filesystem middleware statement
+    // Convert type name to snake_case for filesystem prefix
+    let snake_case_name = to_snake_case(type_name);
+
+    // Create the filesystem middleware statement with snake_case name
     let fs_stmt: Stmt = syn::parse_quote! {
-        let _bedrock_fs = crate::primitives::filesystem::create_middleware(#type_name);
+        let _bedrock_fs = crate::primitives::filesystem::create_middleware(#snake_case_name);
     };
 
-    // Create the logging context statement
+    // Create the logging context statement (keep original PascalCase for logging)
     let context_stmt: Stmt = syn::parse_quote! {
         let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new(#type_name);
     };
@@ -961,5 +996,44 @@ mod tests {
         } else {
             panic!("Expected enum");
         }
+    }
+
+    #[test]
+    fn test_to_snake_case() {
+        // Basic cases
+        assert_eq!(to_snake_case("MyStruct"), "my_struct");
+        assert_eq!(to_snake_case("TestModule"), "test_module");
+        assert_eq!(to_snake_case("SimpleTest"), "simple_test");
+
+        // Single word cases
+        assert_eq!(to_snake_case("Simple"), "simple");
+        assert_eq!(to_snake_case("SIMPLE"), "simple");
+
+        // Acronyms and complex cases
+        assert_eq!(to_snake_case("HTTPClient"), "http_client");
+        assert_eq!(to_snake_case("XMLParser"), "xml_parser");
+        assert_eq!(to_snake_case("IOError"), "io_error");
+        assert_eq!(to_snake_case("URLPath"), "url_path");
+
+        // Multiple uppercase in a row
+        assert_eq!(to_snake_case("XMLHTTPRequest"), "xmlhttp_request");
+        assert_eq!(to_snake_case("HTTPSConnection"), "https_connection");
+
+        // Already snake_case
+        assert_eq!(to_snake_case("already_snake_case"), "already_snake_case");
+
+        // Mixed cases
+        assert_eq!(
+            to_snake_case("getHTTPResponseCode"),
+            "get_http_response_code"
+        );
+        assert_eq!(to_snake_case("ParseHTMLString"), "parse_html_string");
+
+        // Edge cases
+        assert_eq!(to_snake_case(""), "");
+        assert_eq!(to_snake_case("A"), "a");
+        assert_eq!(to_snake_case("AB"), "ab");
+        assert_eq!(to_snake_case("ABC"), "abc");
+        assert_eq!(to_snake_case("ABc"), "a_bc");
     }
 }

@@ -88,10 +88,11 @@ impl MyStruct {
     pub fn some_method(&self) -> String {
         // LogContext automatically set to "MyStruct"
         info!("This will be prefixed with [Bedrock][MyStruct]");
-        
+
         // Filesystem middleware available as _bedrock_fs with automatic path prefixing
+        // Files will be prefixed with snake_case version of struct name: "my_struct/"
         _bedrock_fs.write_file("data.txt", b"content".to_vec()).ok();
-        
+
         "result".to_string()
     }
 }
