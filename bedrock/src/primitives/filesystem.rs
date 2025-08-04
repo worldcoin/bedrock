@@ -17,11 +17,14 @@ pub enum FileSystemError {
     #[error("failed to delete file")]
     DeleteFileError,
     /// Failed to list files
-    #[error("failed to list files")]
-    ListFilesError,
+    #[error("failed to list files: {0}")]
+    ListFilesError(String),
     /// Filesystem not initialized
     #[error("filesystem not initialized")]
     NotInitialized,
+    /// Unexpected UniFFI callback error
+    #[error("unexpected uniffi callback error: {0}")]
+    UnexpectedUniFFICallbackError(String),
 }
 
 /// Converts unexpected UniFFI callback errors to `FileSystemError`.
@@ -31,10 +34,13 @@ pub enum FileSystemError {
 /// errors (panics, unhandled exceptions), UniFFI converts them to this error type
 /// instead of causing Rust to panic.
 ///
+/// The error reason from the foreign implementation is preserved in the
+/// `UnexpectedUniFFICallbackError` variant for debugging purposes.
+///
 /// Without this implementation, unexpected foreign errors would panic the Rust code.
 impl From<uniffi::UnexpectedUniFFICallbackError> for FileSystemError {
-    fn from(_error: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        Self::ReadFileError // Default to ReadFileError for unexpected errors
+    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::UnexpectedUniFFICallbackError(error.reason)
     }
 }
 
