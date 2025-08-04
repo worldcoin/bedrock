@@ -280,41 +280,6 @@ impl FileSystem for InMemoryFileSystem {
 }
 
 /// Trait representing a filesystem that can be implemented by the native side
-///
-/// This trait should be implemented by the platform-specific filesystem handler.
-/// It is exported via `UniFFI` for use in foreign languages.
-///
-/// # Examples
-///
-/// ## Swift
-/// ```swift
-/// class BedrockFileSystemBridge: Bedrock.FileSystem {
-///     static let shared = BedrockFileSystemBridge()
-///     
-///     func fileExists(filePath: String) throws -> Bool {
-///         // Check if file exists, throw if error
-///     }
-///     
-///     func readFile(filePath: String) throws -> Data {
-///         // Read file contents
-///     }
-///     
-///     func writeFile(filePath: String, fileBuffer: Data) throws -> Bool {
-///         // Write file contents, throw if error
-///     }
-///     
-///     func deleteFile(filePath: String) throws -> Bool {
-///         // Delete file, throw if error
-///     }
-///     
-///     func listFiles(folderPath: String) throws -> [String] {
-///         // List files in directory, throw if error
-///     }
-/// }
-///
-/// // In app delegate
-/// setupBedrockFileSystem() // Call this only once!!!
-/// ```
 #[uniffi::export(with_foreign)]
 pub trait FileSystem: Send + Sync {
     /// Check if a file exists at the given path
