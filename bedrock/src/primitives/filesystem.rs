@@ -44,241 +44,6 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for FileSystemError {
     }
 }
 
-/// **This is intended exclusively for testing.**
-#[derive(Debug)]
-pub struct InMemoryFileSystem {
-    files: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>>,
-}
-
-#[allow(clippy::missing_panics_doc)]
-impl InMemoryFileSystem {
-    /// Creates a new empty in-memory filesystem
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            files: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        }
-    }
-
-    /// Creates a new in-memory filesystem with some initial files for testing
-    ///
-    /// # Arguments
-    /// * `initial_files` - A slice of tuples containing (path, content) pairs
-    ///
-    /// # Examples
-    /// ```rust
-    /// use bedrock::primitives::filesystem::InMemoryFileSystem;
-    ///
-    /// let fs = InMemoryFileSystem::with_files(&[
-    ///     ("config.json", r#"{"test": true}"#),
-    ///     ("data/users.txt", "alice\nbob\ncharlie"),
-    /// ]);
-    /// ```
-    #[must_use]
-    pub fn with_files(initial_files: &[(&str, &str)]) -> Self {
-        let fs = Self::new();
-        for (path, content) in initial_files {
-            fs.setup_file(path, content);
-        }
-        fs
-    }
-
-    /// Sets up a file in the filesystem for testing
-    ///
-    /// This is a convenience method for test setup that doesn't return errors.
-    /// Use this to prepare test data before running tests.
-    ///
-    /// # Arguments
-    /// * `path` - The file path
-    /// * `content` - The file content as a string
-    pub fn setup_file(&self, path: &str, content: &str) {
-        let normalized_path = Self::normalize_path(path);
-        self.files
-            .lock()
-            .unwrap()
-            .insert(normalized_path, content.as_bytes().to_vec());
-    }
-
-    /// Sets up a file in the filesystem with binary data
-    ///
-    /// # Arguments
-    /// * `path` - The file path
-    /// * `data` - The file content as bytes
-    pub fn setup_file_bytes(&self, path: &str, data: &[u8]) {
-        let normalized_path = Self::normalize_path(path);
-        self.files
-            .lock()
-            .unwrap()
-            .insert(normalized_path, data.to_vec());
-    }
-
-    /// Creates a directory in the filesystem
-    ///
-    /// In the in-memory filesystem, directories are represented by ensuring
-    /// that the directory path exists in our internal tracking.
-    ///
-    /// # Arguments
-    /// * `path` - The directory path
-    pub fn setup_directory(&self, path: &str) {
-        let normalized_path = Self::normalize_path(path);
-        let dir_path = if normalized_path.ends_with('/') {
-            normalized_path
-        } else {
-            format!("{normalized_path}/")
-        };
-
-        // Create a marker for the directory
-        self.files
-            .lock()
-            .unwrap()
-            .insert(format!("{dir_path}__DIR__"), Vec::new());
-    }
-
-    /// Clears all files from the filesystem
-    pub fn clear(&self) {
-        self.files.lock().unwrap().clear();
-    }
-
-    /// Returns the number of files in the filesystem
-    #[must_use]
-    pub fn file_count(&self) -> usize {
-        self.files
-            .lock()
-            .unwrap()
-            .keys()
-            .filter(|k| !k.ends_with("__DIR__"))
-            .count()
-    }
-
-    /// Returns all file paths currently in the filesystem
-    #[must_use]
-    pub fn all_file_paths(&self) -> Vec<String> {
-        self.files
-            .lock()
-            .unwrap()
-            .keys()
-            .filter(|k| !k.ends_with("__DIR__"))
-            .cloned()
-            .collect()
-    }
-
-    /// Checks if the filesystem contains a specific file
-    #[must_use]
-    pub fn contains_file(&self, path: &str) -> bool {
-        let normalized_path = Self::normalize_path(path);
-        self.files.lock().unwrap().contains_key(&normalized_path)
-    }
-
-    /// Gets the content of a file as a string (for testing convenience)
-    ///
-    /// # Errors
-    /// Returns `FileSystemError::FileDoesNotExist` if the file doesn't exist
-    pub fn get_file_content(&self, path: &str) -> Result<String, FileSystemError> {
-        let data = self.read_file(path.to_string())?;
-        String::from_utf8(data).map_err(|_| FileSystemError::ReadFileError)
-    }
-
-    /// Normalizes a file path by removing leading slashes and ensuring consistency
-    fn normalize_path(path: &str) -> String {
-        path.trim_start_matches('/').to_string()
-    }
-
-    /// Checks if a path represents a directory
-    #[allow(dead_code)]
-    fn is_directory(&self, path: &str) -> bool {
-        let normalized_path = Self::normalize_path(path);
-        let dir_marker = if normalized_path.ends_with('/') {
-            format!("{normalized_path}__DIR__")
-        } else {
-            format!("{normalized_path}/__DIR__")
-        };
-
-        self.files.lock().unwrap().contains_key(&dir_marker)
-    }
-}
-
-impl Default for InMemoryFileSystem {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for InMemoryFileSystem {
-    fn clone(&self) -> Self {
-        let files = self.files.lock().unwrap().clone();
-        Self {
-            files: Arc::new(std::sync::Mutex::new(files)),
-        }
-    }
-}
-
-impl FileSystem for InMemoryFileSystem {
-    fn file_exists(&self, file_path: String) -> Result<bool, FileSystemError> {
-        let normalized_path = Self::normalize_path(&file_path);
-        Ok(self.files.lock().unwrap().contains_key(&normalized_path))
-    }
-
-    fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError> {
-        let normalized_path = Self::normalize_path(&file_path);
-        self.files
-            .lock()
-            .unwrap()
-            .get(&normalized_path)
-            .cloned()
-            .ok_or(FileSystemError::FileDoesNotExist)
-    }
-
-    fn list_files(&self, folder_path: String) -> Result<Vec<String>, FileSystemError> {
-        let normalized_folder = Self::normalize_path(&folder_path);
-        let folder_prefix = if normalized_folder.is_empty() {
-            String::new()
-        } else if normalized_folder.ends_with('/') {
-            normalized_folder
-        } else {
-            format!("{normalized_folder}/")
-        };
-
-        let files: Vec<String> = self
-            .files
-            .lock()
-            .unwrap()
-            .keys()
-            .filter(|path| {
-                // Exclude directory markers
-                !path.ends_with("__DIR__") &&
-                // Include files in the specified folder
-                (folder_prefix.is_empty() || path.starts_with(&folder_prefix))
-            })
-            .cloned()
-            .collect();
-
-        Ok(files)
-    }
-
-    fn write_file(
-        &self,
-        file_path: String,
-        file_buffer: Vec<u8>,
-    ) -> Result<bool, FileSystemError> {
-        let normalized_path = Self::normalize_path(&file_path);
-        self.files
-            .lock()
-            .unwrap()
-            .insert(normalized_path, file_buffer);
-        Ok(true)
-    }
-
-    fn delete_file(&self, file_path: String) -> Result<bool, FileSystemError> {
-        let normalized_path = Self::normalize_path(&file_path);
-        Ok(self
-            .files
-            .lock()
-            .unwrap()
-            .remove(&normalized_path)
-            .is_some())
-    }
-}
-
 /// Trait representing a filesystem that can be implemented by the native side
 #[uniffi::export(with_foreign)]
 pub trait FileSystem: Send + Sync {
@@ -454,9 +219,255 @@ impl FileSystemMiddleware {
     }
 }
 
+// Re-export InMemoryFileSystem for tooling tests feature
+#[cfg(all(test, feature = "tooling_tests"))]
+pub use tests::InMemoryFileSystem;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **This is intended exclusively for testing.**
+    #[derive(Debug)]
+    pub struct InMemoryFileSystem {
+        files: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+        >,
+    }
+
+    #[allow(clippy::missing_panics_doc)]
+    impl InMemoryFileSystem {
+        /// Creates a new empty in-memory filesystem
+        #[must_use]
+        pub fn new() -> Self {
+            Self {
+                files: Arc::new(
+                    std::sync::Mutex::new(std::collections::HashMap::new()),
+                ),
+            }
+        }
+
+        /// Creates a new in-memory filesystem with some initial files for testing
+        ///
+        /// # Arguments
+        /// * `initial_files` - A slice of tuples containing (path, content) pairs
+        ///
+        /// # Examples
+        /// ```rust
+        /// use bedrock::primitives::filesystem::InMemoryFileSystem;
+        ///
+        /// let fs = InMemoryFileSystem::with_files(&[
+        ///     ("config.json", r#"{"test": true}"#),
+        ///     ("data/users.txt", "alice\nbob\ncharlie"),
+        /// ]);
+        /// ```
+        #[must_use]
+        pub fn with_files(initial_files: &[(&str, &str)]) -> Self {
+            let fs = Self::new();
+            for (path, content) in initial_files {
+                fs.setup_file(path, content);
+            }
+            fs
+        }
+
+        /// Sets up a file in the filesystem for testing
+        ///
+        /// This is a convenience method for test setup that doesn't return errors.
+        /// Use this to prepare test data before running tests.
+        ///
+        /// # Arguments
+        /// * `path` - The file path
+        /// * `content` - The file content as a string
+        pub fn setup_file(&self, path: &str, content: &str) {
+            let normalized_path = Self::normalize_path(path);
+            self.files
+                .lock()
+                .unwrap()
+                .insert(normalized_path, content.as_bytes().to_vec());
+        }
+
+        /// Sets up a file in the filesystem with binary data
+        ///
+        /// # Arguments
+        /// * `path` - The file path
+        /// * `data` - The file content as bytes
+        pub fn setup_file_bytes(&self, path: &str, data: &[u8]) {
+            let normalized_path = Self::normalize_path(path);
+            self.files
+                .lock()
+                .unwrap()
+                .insert(normalized_path, data.to_vec());
+        }
+
+        /// Creates a directory in the filesystem
+        ///
+        /// In the in-memory filesystem, directories are represented by ensuring
+        /// that the directory path exists in our internal tracking.
+        ///
+        /// # Arguments
+        /// * `path` - The directory path
+        pub fn setup_directory(&self, path: &str) {
+            let normalized_path = Self::normalize_path(path);
+            let dir_path = if normalized_path.ends_with('/') {
+                normalized_path
+            } else {
+                format!("{normalized_path}/")
+            };
+
+            // Create a marker for the directory
+            self.files
+                .lock()
+                .unwrap()
+                .insert(format!("{dir_path}__DIR__"), Vec::new());
+        }
+
+        /// Clears all files from the filesystem
+        pub fn clear(&self) {
+            self.files.lock().unwrap().clear();
+        }
+
+        /// Returns the number of files in the filesystem
+        #[must_use]
+        pub fn file_count(&self) -> usize {
+            self.files
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|k| !k.ends_with("__DIR__"))
+                .count()
+        }
+
+        /// Returns all file paths currently in the filesystem
+        #[must_use]
+        pub fn all_file_paths(&self) -> Vec<String> {
+            self.files
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|k| !k.ends_with("__DIR__"))
+                .cloned()
+                .collect()
+        }
+
+        /// Checks if the filesystem contains a specific file
+        #[must_use]
+        pub fn contains_file(&self, path: &str) -> bool {
+            let normalized_path = Self::normalize_path(path);
+            self.files.lock().unwrap().contains_key(&normalized_path)
+        }
+
+        /// Gets the content of a file as a string (for testing convenience)
+        ///
+        /// # Errors
+        /// Returns `FileSystemError::FileDoesNotExist` if the file doesn't exist
+        pub fn get_file_content(&self, path: &str) -> Result<String, FileSystemError> {
+            let data = self.read_file(path.to_string())?;
+            String::from_utf8(data).map_err(|_| FileSystemError::ReadFileError)
+        }
+
+        /// Normalizes a file path by removing leading slashes and ensuring consistency
+        fn normalize_path(path: &str) -> String {
+            path.trim_start_matches('/').to_string()
+        }
+
+        /// Checks if a path represents a directory
+        #[allow(dead_code)]
+        fn is_directory(&self, path: &str) -> bool {
+            let normalized_path = Self::normalize_path(path);
+            let dir_marker = if normalized_path.ends_with('/') {
+                format!("{normalized_path}__DIR__")
+            } else {
+                format!("{normalized_path}/__DIR__")
+            };
+
+            self.files.lock().unwrap().contains_key(&dir_marker)
+        }
+    }
+
+    impl Default for InMemoryFileSystem {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Clone for InMemoryFileSystem {
+        fn clone(&self) -> Self {
+            let files = self.files.lock().unwrap().clone();
+            Self {
+                files: Arc::new(std::sync::Mutex::new(files)),
+            }
+        }
+    }
+
+    impl FileSystem for InMemoryFileSystem {
+        fn file_exists(&self, file_path: String) -> Result<bool, FileSystemError> {
+            let normalized_path = Self::normalize_path(&file_path);
+            Ok(self.files.lock().unwrap().contains_key(&normalized_path))
+        }
+
+        fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError> {
+            let normalized_path = Self::normalize_path(&file_path);
+            self.files
+                .lock()
+                .unwrap()
+                .get(&normalized_path)
+                .cloned()
+                .ok_or(FileSystemError::FileDoesNotExist)
+        }
+
+        fn list_files(
+            &self,
+            folder_path: String,
+        ) -> Result<Vec<String>, FileSystemError> {
+            let normalized_folder = Self::normalize_path(&folder_path);
+            let folder_prefix = if normalized_folder.is_empty() {
+                String::new()
+            } else if normalized_folder.ends_with('/') {
+                normalized_folder
+            } else {
+                format!("{normalized_folder}/")
+            };
+
+            let files: Vec<String> = self
+                .files
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|path| {
+                    // Exclude directory markers
+                    !path.ends_with("__DIR__") &&
+                    // Include files in the specified folder
+                    (folder_prefix.is_empty() || path.starts_with(&folder_prefix))
+                })
+                .cloned()
+                .collect();
+
+            Ok(files)
+        }
+
+        fn write_file(
+            &self,
+            file_path: String,
+            file_buffer: Vec<u8>,
+        ) -> Result<bool, FileSystemError> {
+            let normalized_path = Self::normalize_path(&file_path);
+            self.files
+                .lock()
+                .unwrap()
+                .insert(normalized_path, file_buffer);
+            Ok(true)
+        }
+
+        fn delete_file(&self, file_path: String) -> Result<bool, FileSystemError> {
+            let normalized_path = Self::normalize_path(&file_path);
+            Ok(self
+                .files
+                .lock()
+                .unwrap()
+                .remove(&normalized_path)
+                .is_some())
+        }
+    }
 
     #[test]
     fn test_filesystem_middleware_prefixing() {
