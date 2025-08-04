@@ -11,8 +11,8 @@ pub enum FileSystemError {
     #[error("requested file does not exist")]
     FileDoesNotExist,
     /// Failed to write file
-    #[error("failed to write file")]
-    WriteFileError,
+    #[error("failed to write file: {0}")]
+    WriteFileError(String),
     /// Failed to delete file
     #[error("failed to delete file")]
     DeleteFileError,
@@ -304,7 +304,7 @@ pub trait FileSystem: Send + Sync {
     /// Write file contents
     ///
     /// # Errors
-    /// - `FileSystemError::WriteFileError` if the file cannot be written
+    /// - `FileSystemError::WriteFileError` if the file cannot be written, with details about the failure
     fn write_file(
         &self,
         file_path: String,
