@@ -37,14 +37,7 @@ final class BedrockFilesystemTests: XCTestCase {
         XCTAssertFalse(notExists, "Non-existent file should not exist")
     }
     
-    func testFileSystemTesterUserDirectory() throws {
-        let tester = FileSystemTester()
-        
-        // Test getting user directory with automatic prefix
-        let userDir = try tester.testGetUserDirectory()
-        XCTAssertTrue(userDir.contains("FileSystemTester"), "User directory should contain struct name prefix")
-        XCTAssertTrue(userDir.hasPrefix("/mock/documents/"), "User directory should start with mock documents path")
-    }
+
     
     func testFileSystemTesterListFiles() throws {
         let tester = FileSystemTester()
@@ -112,15 +105,10 @@ final class BedrockFilesystemTests: XCTestCase {
 class MockFileSystemBridge: Bedrock.FileSystem {
     static let shared = MockFileSystemBridge()
     private var files: [String: Data] = [:]
-    private let baseDirectory = "/mock/documents"
     
     private init() {}
     
-    func getUserDataDirectory() -> String {
-        return baseDirectory
-    }
-    
-    func fileExists(filePath: String) -> Bool {
+    func fileExists(filePath: String) throws -> Bool {
         return files[filePath] != nil
     }
     
@@ -131,17 +119,17 @@ class MockFileSystemBridge: Bedrock.FileSystem {
         return data
     }
     
-    func writeFile(filePath: String, fileBuffer: Data) -> Bool {
+    func writeFile(filePath: String, fileBuffer: Data) throws -> Bool {
         // Create any necessary parent directories in our mock
         files[filePath] = fileBuffer
         return true
     }
     
-    func deleteFile(filePath: String) -> Bool {
+    func deleteFile(filePath: String) throws -> Bool {
         return files.removeValue(forKey: filePath) != nil
     }
     
-    func listFiles(folderPath: String) -> [String] {
+    func listFiles(folderPath: String) throws -> [String] {
         // Normalize the folder path by removing trailing "/."
         let normalizedFolderPath = folderPath.hasSuffix("/.") ? String(folderPath.dropLast(2)) : folderPath
         

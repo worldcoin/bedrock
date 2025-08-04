@@ -112,12 +112,8 @@ mod tests {
     }
 
     impl FileSystem for MockFileSystem {
-        fn get_user_data_directory(&self) -> String {
-            "/test".to_string()
-        }
-
-        fn file_exists(&self, file_path: String) -> bool {
-            self.files.lock().unwrap().contains_key(&file_path)
+        fn file_exists(&self, file_path: String) -> Result<bool, FileSystemError> {
+            Ok(self.files.lock().unwrap().contains_key(&file_path))
         }
 
         fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError> {
@@ -129,17 +125,24 @@ mod tests {
                 .ok_or(FileSystemError::FileDoesNotExist)
         }
 
-        fn list_files(&self, _folder_path: String) -> Vec<String> {
-            vec![]
+        fn list_files(
+            &self,
+            _folder_path: String,
+        ) -> Result<Vec<String>, FileSystemError> {
+            Ok(vec![])
         }
 
-        fn write_file(&self, file_path: String, file_buffer: Vec<u8>) -> bool {
+        fn write_file(
+            &self,
+            file_path: String,
+            file_buffer: Vec<u8>,
+        ) -> Result<bool, FileSystemError> {
             self.files.lock().unwrap().insert(file_path, file_buffer);
-            true
+            Ok(true)
         }
 
-        fn delete_file(&self, file_path: String) -> bool {
-            self.files.lock().unwrap().remove(&file_path).is_some()
+        fn delete_file(&self, file_path: String) -> Result<bool, FileSystemError> {
+            Ok(self.files.lock().unwrap().remove(&file_path).is_some())
         }
     }
 

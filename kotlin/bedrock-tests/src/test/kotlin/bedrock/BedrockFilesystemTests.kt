@@ -48,15 +48,7 @@ class BedrockFilesystemTests {
         assertFalse(notExists, "Non-existent file should not exist")
     }
     
-    @Test
-    fun testFileSystemTesterUserDirectory() {
-        val tester = FileSystemTester()
-        
-        // Test getting user directory with automatic prefix
-        val userDir = tester.testGetUserDirectory()
-        assertTrue(userDir.contains("FileSystemTester"), "User directory should contain struct name prefix")
-        assertTrue(userDir.startsWith("/mock/documents/"), "User directory should start with mock documents path")
-    }
+
     
     @Test
     fun testFileSystemTesterListFiles() {
@@ -127,11 +119,6 @@ class BedrockFilesystemTests {
 /// Mock filesystem implementation for testing
 object MockFileSystemBridge : FileSystem {
     private val files = mutableMapOf<String, ByteArray>()
-    private const val baseDirectory = "/mock/documents"
-    
-    override fun getUserDataDirectory(): String {
-        return baseDirectory
-    }
     
     override fun fileExists(filePath: String): Boolean {
         return files.containsKey(filePath)

@@ -17,12 +17,19 @@ pub enum FileSystemTestError {
 
 /// Test struct to verify filesystem middleware injection
 #[cfg(feature = "tooling_tests")]
-#[derive(uniffi::Object)]
+#[derive(Default, uniffi::Object)]
 pub struct FileSystemTester;
 
 #[cfg(feature = "tooling_tests")]
 #[bedrock_export]
 impl FileSystemTester {
+    /// Creates a new FileSystemTester instance
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
     /// Tests writing a file using the injected filesystem middleware
     ///
     /// # Errors
@@ -58,14 +65,6 @@ impl FileSystemTester {
     /// - `FileSystemError` if filesystem operations fail
     pub fn test_list_files(&self) -> Result<Vec<String>, FileSystemError> {
         _bedrock_fs.list_files(".")
-    }
-
-    /// Tests getting the user data directory with prefix
-    ///
-    /// # Errors
-    /// - `FileSystemError` if filesystem operations fail
-    pub fn test_get_user_directory(&self) -> Result<String, FileSystemError> {
-        _bedrock_fs.get_user_data_directory()
     }
 
     /// Tests file existence check
@@ -106,12 +105,8 @@ mod tests {
     }
 
     impl FileSystem for MockFileSystem {
-        fn get_user_data_directory(&self) -> String {
-            "/mock/user/data".to_string()
-        }
-
-        fn file_exists(&self, file_path: String) -> bool {
-            self.files.lock().unwrap().contains_key(&file_path)
+        fn file_exists(&self, file_path: String) -> Result<bool, FileSystemError> {
+            Ok(self.files.lock().unwrap().contains_key(&file_path))
         }
 
         fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError> {
@@ -129,24 +124,32 @@ mod tests {
             result
         }
 
-        fn list_files(&self, folder_path: String) -> Vec<String> {
-            self.files
+        fn list_files(
+            &self,
+            folder_path: String,
+        ) -> Result<Vec<String>, FileSystemError> {
+            Ok(self
+                .files
                 .lock()
                 .unwrap()
                 .keys()
                 .filter(|k| k.starts_with(&folder_path))
                 .cloned()
-                .collect()
+                .collect())
         }
 
-        fn write_file(&self, file_path: String, file_buffer: Vec<u8>) -> bool {
+        fn write_file(
+            &self,
+            file_path: String,
+            file_buffer: Vec<u8>,
+        ) -> Result<bool, FileSystemError> {
             println!("MockFS: Writing to path: {file_path}");
             self.files.lock().unwrap().insert(file_path, file_buffer);
-            true
+            Ok(true)
         }
 
-        fn delete_file(&self, file_path: String) -> bool {
-            self.files.lock().unwrap().remove(&file_path).is_some()
+        fn delete_file(&self, file_path: String) -> Result<bool, FileSystemError> {
+            Ok(self.files.lock().unwrap().remove(&file_path).is_some())
         }
     }
 
@@ -171,11 +174,6 @@ mod tests {
         let exists = tester.test_file_exists("test.txt");
         assert!(exists.is_ok());
         assert!(exists.unwrap());
-
-        // Test user directory - should include the prefix
-        let user_dir = tester.test_get_user_directory();
-        assert!(user_dir.is_ok());
-        assert_eq!(user_dir.unwrap(), "/mock/user/data/FileSystemTester");
 
         // Test delete file
         let deleted = tester.test_delete_file("test.txt");

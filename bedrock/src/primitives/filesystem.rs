@@ -24,6 +24,20 @@ pub enum FileSystemError {
     NotInitialized,
 }
 
+/// Converts unexpected UniFFI callback errors to `FileSystemError`.
+///
+/// This implementation is required for foreign trait support. When native apps
+/// (Swift/Kotlin) implement `FileSystem` and encounter unexpected
+/// errors (panics, unhandled exceptions), UniFFI converts them to this error type
+/// instead of causing Rust to panic.
+///
+/// Without this implementation, unexpected foreign errors would panic the Rust code.
+impl From<uniffi::UnexpectedUniFFICallbackError> for FileSystemError {
+    fn from(_error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::ReadFileError // Default to ReadFileError for unexpected errors
+    }
+}
+
 /// Trait representing a filesystem that can be implemented by the native side
 ///
 /// This trait should be implemented by the platform-specific filesystem handler.
@@ -36,28 +50,24 @@ pub enum FileSystemError {
 /// class BedrockFileSystemBridge: Bedrock.FileSystem {
 ///     static let shared = BedrockFileSystemBridge()
 ///     
-///     func getUserDataDirectory() -> String {
-///         // Return platform-specific user data directory
-///     }
-///     
-///     func fileExists(filePath: String) -> Bool {
-///         // Check if file exists
+///     func fileExists(filePath: String) throws -> Bool {
+///         // Check if file exists, throw if error
 ///     }
 ///     
 ///     func readFile(filePath: String) throws -> Data {
 ///         // Read file contents
 ///     }
 ///     
-///     func writeFile(filePath: String, fileBuffer: Data) -> Bool {
-///         // Write file contents
+///     func writeFile(filePath: String, fileBuffer: Data) throws -> Bool {
+///         // Write file contents, throw if error
 ///     }
 ///     
-///     func deleteFile(filePath: String) -> Bool {
-///         // Delete file
+///     func deleteFile(filePath: String) throws -> Bool {
+///         // Delete file, throw if error
 ///     }
 ///     
-///     func listFiles(folderPath: String) -> [String] {
-///         // List files in directory
+///     func listFiles(folderPath: String) throws -> [String] {
+///         // List files in directory, throw if error
 ///     }
 /// }
 ///
@@ -66,11 +76,11 @@ pub enum FileSystemError {
 /// ```
 #[uniffi::export(with_foreign)]
 pub trait FileSystem: Send + Sync {
-    /// Get the user data directory path
-    fn get_user_data_directory(&self) -> String;
-
     /// Check if a file exists at the given path
-    fn file_exists(&self, file_path: String) -> bool;
+    ///
+    /// # Errors
+    /// - `FileSystemError` if the operation fails
+    fn file_exists(&self, file_path: String) -> Result<bool, FileSystemError>;
 
     /// Read file contents
     ///
@@ -80,13 +90,26 @@ pub trait FileSystem: Send + Sync {
     fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError>;
 
     /// List files in a directory
-    fn list_files(&self, folder_path: String) -> Vec<String>;
+    ///
+    /// # Errors
+    /// - `FileSystemError::ListFilesError` if the directory cannot be listed
+    fn list_files(&self, folder_path: String) -> Result<Vec<String>, FileSystemError>;
 
     /// Write file contents
-    fn write_file(&self, file_path: String, file_buffer: Vec<u8>) -> bool;
+    ///
+    /// # Errors
+    /// - `FileSystemError::WriteFileError` if the file cannot be written
+    fn write_file(
+        &self,
+        file_path: String,
+        file_buffer: Vec<u8>,
+    ) -> Result<bool, FileSystemError>;
 
     /// Delete a file
-    fn delete_file(&self, file_path: String) -> bool;
+    ///
+    /// # Errors
+    /// - `FileSystemError::DeleteFileError` if the file cannot be deleted
+    fn delete_file(&self, file_path: String) -> Result<bool, FileSystemError>;
 }
 
 /// A global instance of the user-provided filesystem
@@ -156,24 +179,15 @@ impl FileSystemMiddleware {
         }
     }
 
-    /// Get the user data directory with the prefix
-    ///
-    /// # Errors
-    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    pub fn get_user_data_directory(&self) -> Result<String, FileSystemError> {
-        let fs = get_filesystem()?;
-        let base_dir = fs.get_user_data_directory();
-        Ok(format!("{}/{}", base_dir, self.prefix))
-    }
-
     /// Check if a file exists at the given path (with prefix)
     ///
     /// # Errors
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
+    /// - Any error from the underlying filesystem implementation
     pub fn file_exists(&self, file_path: &str) -> Result<bool, FileSystemError> {
         let fs = get_filesystem()?;
         let prefixed_path = self.prefix_path(file_path);
-        Ok(fs.file_exists(prefixed_path))
+        fs.file_exists(prefixed_path)
     }
 
     /// Read file contents (with prefix)
@@ -191,19 +205,21 @@ impl FileSystemMiddleware {
     ///
     /// # Errors
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
+    /// - Any error from the underlying filesystem implementation
     pub fn list_files(
         &self,
         folder_path: &str,
     ) -> Result<Vec<String>, FileSystemError> {
         let fs = get_filesystem()?;
         let prefixed_path = self.prefix_path(folder_path);
-        Ok(fs.list_files(prefixed_path))
+        fs.list_files(prefixed_path)
     }
 
     /// Write file contents (with prefix)
     ///
     /// # Errors
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
+    /// - Any error from the underlying filesystem implementation
     pub fn write_file(
         &self,
         file_path: &str,
@@ -211,17 +227,18 @@ impl FileSystemMiddleware {
     ) -> Result<bool, FileSystemError> {
         let fs = get_filesystem()?;
         let prefixed_path = self.prefix_path(file_path);
-        Ok(fs.write_file(prefixed_path, file_buffer))
+        fs.write_file(prefixed_path, file_buffer)
     }
 
     /// Delete a file (with prefix)
     ///
     /// # Errors
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
+    /// - Any error from the underlying filesystem implementation
     pub fn delete_file(&self, file_path: &str) -> Result<bool, FileSystemError> {
         let fs = get_filesystem()?;
         let prefixed_path = self.prefix_path(file_path);
-        Ok(fs.delete_file(prefixed_path))
+        fs.delete_file(prefixed_path)
     }
 }
 
@@ -232,28 +249,31 @@ mod tests {
     struct MockFileSystem;
 
     impl FileSystem for MockFileSystem {
-        fn get_user_data_directory(&self) -> String {
-            "/mock/user/data".to_string()
-        }
-
-        fn file_exists(&self, _file_path: String) -> bool {
-            true
+        fn file_exists(&self, _file_path: String) -> Result<bool, FileSystemError> {
+            Ok(true)
         }
 
         fn read_file(&self, _file_path: String) -> Result<Vec<u8>, FileSystemError> {
             Ok(b"mock content".to_vec())
         }
 
-        fn list_files(&self, _folder_path: String) -> Vec<String> {
-            vec!["file1.txt".to_string(), "file2.txt".to_string()]
+        fn list_files(
+            &self,
+            _folder_path: String,
+        ) -> Result<Vec<String>, FileSystemError> {
+            Ok(vec!["file1.txt".to_string(), "file2.txt".to_string()])
         }
 
-        fn write_file(&self, _file_path: String, _file_buffer: Vec<u8>) -> bool {
-            true
+        fn write_file(
+            &self,
+            _file_path: String,
+            _file_buffer: Vec<u8>,
+        ) -> Result<bool, FileSystemError> {
+            Ok(true)
         }
 
-        fn delete_file(&self, _file_path: String) -> bool {
-            true
+        fn delete_file(&self, _file_path: String) -> Result<bool, FileSystemError> {
+            Ok(true)
         }
     }
 
@@ -271,9 +291,5 @@ mod tests {
             middleware.prefix_path("TestModule/file.txt"),
             "TestModule/file.txt"
         );
-
-        // Test get_user_data_directory includes prefix
-        let user_dir = middleware.get_user_data_directory().unwrap();
-        assert_eq!(user_dir, "/mock/user/data/TestModule");
     }
 }
