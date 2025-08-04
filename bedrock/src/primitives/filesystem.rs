@@ -265,38 +265,10 @@ mod tests {
         pub fn with_files(initial_files: &[(&str, &str)]) -> Self {
             let fs = Self::new();
             for (path, content) in initial_files {
-                fs.setup_file(path, content);
+                // Use write_file directly instead of setup_file
+                let _ = fs.write_file((*path).to_string(), content.as_bytes().to_vec());
             }
             fs
-        }
-
-        /// Sets up a file in the filesystem for testing
-        ///
-        /// This is a convenience method for test setup that doesn't return errors.
-        /// Use this to prepare test data before running tests.
-        ///
-        /// # Arguments
-        /// * `path` - The file path
-        /// * `content` - The file content as a string
-        pub fn setup_file(&self, path: &str, content: &str) {
-            let normalized_path = Self::normalize_path(path);
-            self.files
-                .lock()
-                .unwrap()
-                .insert(normalized_path, content.as_bytes().to_vec());
-        }
-
-        /// Sets up a file in the filesystem with binary data
-        ///
-        /// # Arguments
-        /// * `path` - The file path
-        /// * `data` - The file content as bytes
-        pub fn setup_file_bytes(&self, path: &str, data: &[u8]) {
-            let normalized_path = Self::normalize_path(path);
-            self.files
-                .lock()
-                .unwrap()
-                .insert(normalized_path, data.to_vec());
         }
 
         /// Creates a directory in the filesystem
@@ -354,15 +326,6 @@ mod tests {
         pub fn contains_file(&self, path: &str) -> bool {
             let normalized_path = Self::normalize_path(path);
             self.files.lock().unwrap().contains_key(&normalized_path)
-        }
-
-        /// Gets the content of a file as a string (for testing convenience)
-        ///
-        /// # Errors
-        /// Returns `FileSystemError::FileDoesNotExist` if the file doesn't exist
-        pub fn get_file_content(&self, path: &str) -> Result<String, FileSystemError> {
-            let data = self.read_file(path.to_string())?;
-            String::from_utf8(data).map_err(|_| FileSystemError::ReadFileError)
         }
 
         /// Normalizes a file path by removing leading slashes and ensuring consistency

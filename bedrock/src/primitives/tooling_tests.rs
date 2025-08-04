@@ -438,7 +438,7 @@ mod tests {
     #[test]
     #[cfg(feature = "tooling_tests")]
     fn test_in_memory_filesystem_features() {
-        use crate::primitives::filesystem::InMemoryFileSystem;
+        use crate::primitives::filesystem::{FileSystem, InMemoryFileSystem};
 
         // Test creating filesystem with initial files
         let fs = InMemoryFileSystem::with_files(&[
@@ -457,12 +457,14 @@ mod tests {
 
         // Test reading file content
         assert_eq!(
-            fs.get_file_content("config.json").unwrap(),
+            String::from_utf8(fs.read_file("config.json".to_string()).unwrap())
+                .unwrap(),
             r#"{"app": "bedrock"}"#
         );
 
         // Test setting up additional files
-        fs.setup_file("temp/test.txt", "temporary data");
+        fs.write_file("temp/test.txt".to_string(), b"temporary data".to_vec())
+            .unwrap();
         assert_eq!(fs.file_count(), 4);
 
         // Test directory setup
