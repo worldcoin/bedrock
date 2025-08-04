@@ -378,10 +378,16 @@ pub fn set_filesystem(filesystem: Arc<dyn FileSystem>) {
 
 /// Gets a reference to the global filesystem instance
 ///
+/// # ⚠️ WARNING
+/// This function bypasses the `FileSystemMiddleware` and should only be used internally
+/// by the middleware itself. Direct usage skips important path prefixing and scoping.
+///
+/// For normal filesystem operations, use `FileSystemMiddleware` created via `create_middleware()`.
+///
 /// # Errors
 /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized via `set_filesystem`
-pub(crate) fn get_filesystem() -> Result<&'static Arc<dyn FileSystem>, FileSystemError>
-{
+pub(crate) fn get_filesystem_raw(
+) -> Result<&'static Arc<dyn FileSystem>, FileSystemError> {
     FILESYSTEM_INSTANCE
         .get()
         .ok_or(FileSystemError::NotInitialized)
@@ -426,7 +432,7 @@ impl FileSystemMiddleware {
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
     /// - Any error from the underlying filesystem implementation
     pub fn file_exists(&self, file_path: &str) -> Result<bool, FileSystemError> {
-        let fs = get_filesystem()?;
+        let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
         fs.file_exists(prefixed_path)
     }
@@ -437,7 +443,7 @@ impl FileSystemMiddleware {
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
     /// - Any error from the underlying filesystem implementation
     pub fn read_file(&self, file_path: &str) -> Result<Vec<u8>, FileSystemError> {
-        let fs = get_filesystem()?;
+        let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
         fs.read_file(prefixed_path)
     }
@@ -451,7 +457,7 @@ impl FileSystemMiddleware {
         &self,
         folder_path: &str,
     ) -> Result<Vec<String>, FileSystemError> {
-        let fs = get_filesystem()?;
+        let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(folder_path);
         fs.list_files(prefixed_path)
     }
@@ -466,7 +472,7 @@ impl FileSystemMiddleware {
         file_path: &str,
         file_buffer: Vec<u8>,
     ) -> Result<bool, FileSystemError> {
-        let fs = get_filesystem()?;
+        let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
         fs.write_file(prefixed_path, file_buffer)
     }
@@ -477,7 +483,7 @@ impl FileSystemMiddleware {
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
     /// - Any error from the underlying filesystem implementation
     pub fn delete_file(&self, file_path: &str) -> Result<bool, FileSystemError> {
-        let fs = get_filesystem()?;
+        let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
         fs.delete_file(prefixed_path)
     }
