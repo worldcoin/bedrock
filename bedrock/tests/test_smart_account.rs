@@ -9,9 +9,9 @@ use alloy::{
     sol_types::{SolCall, SolEvent},
 };
 use bedrock::smart_account::{
-    EncodedSafeOpStruct, PackedUserOperation, Permit2TokenPermissions,
-    Permit2TransferFrom, SafeOperation, SafeSmartAccount, SafeSmartAccountSigner,
-    SafeTransaction, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
+    EncodedSafeOpStruct, PackedUserOperation, SafeOperation, SafeSmartAccount,
+    SafeSmartAccountSigner, SafeTransaction, UnparsedPermitTransferFrom,
+    UnparsedTokenPermissions, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
     PERMIT2_ADDRESS,
 };
 use chrono::Utc;
@@ -798,14 +798,14 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
         .await?;
 
     // Step 6: Execute a `permitTransferFrom` call on the Permit2 contract
-    let permitted = Permit2TokenPermissions {
+    let permitted = UnparsedTokenPermissions {
         token: wld_token_address.to_string(),
         amount: "1000000000000000000".to_string(), // 1 WLD
     };
 
     let deadline = Utc::now().timestamp() + 180; // 3 minutes from now
 
-    let transfer_from = Permit2TransferFrom {
+    let transfer_from = UnparsedPermitTransferFrom {
         permitted,
         spender: mini_app_signer.address().to_string(),
         nonce: "0".to_string(),
