@@ -4,6 +4,8 @@
 //!
 
 use crate::primitives::PrimitiveError;
+use crate::smart_account::SafeSmartAccountSigner;
+use crate::transaction::rpc::{RpcClient, RpcError, WORLDCHAIN_CHAIN_ID};
 
 use alloy::hex::FromHex;
 use alloy::{
@@ -40,6 +42,7 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
 const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
 
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
+#[allow(async_fn_in_trait)]
 pub trait Is4337Operable {
     /// Gas limit for the main execution call.
     const CALL_GAS_LIMIT: u128;
@@ -71,6 +74,78 @@ pub trait Is4337Operable {
             call_data,
             Self::CALL_GAS_LIMIT,
         ))
+    }
+
+    /// Signs and executes a 4337 `UserOperation` by:
+    /// 1. Creating a preflight `UserOperation`
+    /// 2. Requesting sponsorship via `wa_sponsorUserOperation`
+    /// 3. Merging paymaster data into the `UserOperation`
+    /// 4. Signing the `UserOperation`
+    /// 5. Submitting via `eth_sendUserOperation`
+    ///
+    /// # Arguments
+    /// * `safe_account` - The Safe Smart Account to sign with
+    /// * `rpc_client` - The RPC client to use for submitting the transaction
+    /// * `self_sponsor_token` - Optional token address for self-sponsorship
+    ///
+    /// # Returns
+    /// * `Result<FixedBytes<32>, RpcError>` - The `userOpHash` on success
+    ///
+    /// # Errors
+    /// * Returns `RpcError` if any RPC operation fails
+    /// * Returns `RpcError` if signing fails
+    async fn sign_and_execute(
+        &self,
+        safe_account: &crate::smart_account::SafeSmartAccount,
+        rpc_client: &RpcClient<'_>,
+        self_sponsor_token: Option<Address>,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        // 1. Create preflight UserOperation
+        let mut user_operation =
+            self.as_preflight_user_operation()
+                .map_err(|e| RpcError::Generic {
+                    message: format!("Failed to create preflight UserOperation: {e}"),
+                })?;
+
+        // 2. Request sponsorship
+        let sponsor_response = rpc_client
+            .sponsor_user_operation(&user_operation, self_sponsor_token)
+            .await?;
+
+        // 3. Merge paymaster data
+        user_operation = user_operation.with_paymaster_data(sponsor_response);
+
+        // 4. Sign the UserOperation
+        let encoded_safe_op: EncodedSafeOpStruct = (&user_operation)
+            .try_into()
+            .map_err(|e| RpcError::Generic {
+                message: format!("Failed to encode SafeOp: {e}"),
+            })?;
+
+        let signature = safe_account
+            .sign_digest(
+                encoded_safe_op.into_transaction_hash(),
+                WORLDCHAIN_CHAIN_ID,
+                Some(*GNOSIS_SAFE_4337_MODULE),
+            )
+            .map_err(|e| RpcError::Generic {
+                message: format!("Failed to sign UserOperation: {e}"),
+            })?;
+
+        // Add validity timestamps to signature (12 bytes = 6 bytes validAfter + 6 bytes validUntil)
+        let mut full_signature = Vec::with_capacity(77);
+        full_signature.extend_from_slice(&[0u8; 6]); // validAfter = 0
+        full_signature.extend_from_slice(&[0xff; 6]); // validUntil = max
+        full_signature.extend_from_slice(&signature.as_bytes()[..]);
+
+        user_operation.signature = full_signature.into();
+
+        // 5. Submit UserOperation
+        let user_op_hash = rpc_client
+            .send_user_operation(&user_operation, *ENTRYPOINT_4337)
+            .await?;
+
+        Ok(user_op_hash)
     }
 }
 

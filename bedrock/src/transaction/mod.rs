@@ -2,12 +2,15 @@ use alloy::primitives::{Address, U256};
 
 use crate::{
     primitives::{HexEncodedData, ParseFromForeignBinding},
-    smart_account::SafeSmartAccount,
+    smart_account::{Is4337Operable, SafeSmartAccount},
     transaction::contracts::erc20::Erc20,
 };
 
 mod contracts;
 pub mod foreign;
+pub mod rpc;
+
+pub use rpc::{RpcClient, RpcError, SponsorUserOperationResponse, WORLDCHAIN_CHAIN_ID};
 
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
@@ -21,31 +24,54 @@ pub enum TransactionError {
 // FIXME: uncomment export once this functionality is ready
 // #[bedrock_export]
 impl SafeSmartAccount {
-    /// Allows executing an ERC-20 token transfer.
+    /// Allows executing an ERC-20 token transfer on World Chain.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
     /// - `to_address`: The address of the recipient.
     /// - `amount`: The amount of tokens to transfer.
+    /// - `http_client`: The authenticated HTTP client for making RPC requests.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Transfer USDC on World Chain
+    /// let tx_hash = safe_account.transaction_transfer(
+    ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
+    ///     "0x1234567890123456789012345678901234567890",
+    ///     "1000000", // 1 USDC (6 decimals)
+    ///     http_client,
+    /// ).await?;
+    /// ```
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    pub fn transaction_transfer(
+    /// - Will throw an RPC error if the transaction submission fails.
+    pub async fn transaction_transfer(
         &self,
         token_address: &str,
         to_address: &str,
         amount: &str,
+        http_client: &dyn crate::primitives::AuthenticatedHttpClient,
     ) -> Result<HexEncodedData, TransactionError> {
-        let token_address = Address::parse_from_ffi(token_address, "token_address")?; // TODO: see if we type tokens
+        let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
 
         let transaction =
             Erc20::new(token_address, to_address, amount, self.wallet_address);
 
-        todo!("this is not ready.");
+        // Create RPC client for World Chain
+        let rpc_client = RpcClient::new(http_client);
 
-        // simulated tx hash
-        // Ok(HexEncodedData::new("0x123456")?)
+        // Sign and execute the transaction
+        let user_op_hash = transaction
+            .sign_and_execute(self, &rpc_client, None)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&format!("0x{user_op_hash}"))?)
     }
 }
