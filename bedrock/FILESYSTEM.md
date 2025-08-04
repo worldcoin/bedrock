@@ -13,68 +13,19 @@ The Bedrock filesystem middleware provides a secure, isolated filesystem access 
 
 ### Native Side Setup
 
-First, the native application must provide a filesystem implementation:
+First, the native application must provide a filesystem implementation. See complete examples in our foreign tests:
 
-#### Swift Example
-```swift
-class BedrockFileSystemBridge: Bedrock.FileSystem {
-    static let shared = BedrockFileSystemBridge()
-    
-    func getUserDataDirectory() -> String {
-        // Return platform-specific user data directory
-        return NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
-    }
-    
-    func fileExists(filePath: String) -> Bool {
-        return FileManager.default.fileExists(atPath: filePath)
-    }
-    
-    func readFile(filePath: String) throws -> Data {
-        guard let data = FileManager.default.contents(atPath: filePath) else {
-            throw Bedrock.FileSystemError.fileDoesNotExist
-        }
-        return data
-    }
-    
-    func writeFile(filePath: String, fileBuffer: Data) -> Bool {
-        do {
-            // Create directory if needed
-            let url = URL(fileURLWithPath: filePath)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), 
-                                                   withIntermediateDirectories: true)
-            try fileBuffer.write(to: url)
-            return true
-        } catch {
-            return false
-        }
-    }
-    
-    func deleteFile(filePath: String) -> Bool {
-        do {
-            try FileManager.default.removeItem(atPath: filePath)
-            return true
-        } catch {
-            return false
-        }
-    }
-    
-    func listFiles(folderPath: String) -> [String] {
-        do {
-            return try FileManager.default.contentsOfDirectory(atPath: folderPath)
-        } catch {
-            return []
-        }
-    }
-}
+- **Swift Implementation**: [`swift/tests/BedrockTests/BedrockFilesystemTests.swift`](../swift/tests/BedrockTests/BedrockFilesystemTests.swift)
+- **Kotlin Implementation**: [`kotlin/bedrock-tests/src/test/kotlin/bedrock/BedrockFilesystemTests.kt`](../kotlin/bedrock-tests/src/test/kotlin/bedrock/BedrockFilesystemTests.kt)
 
-// In app delegate
-func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-    // Initialize Bedrock filesystem (call only once!)
-    Bedrock.setFilesystem(filesystem: BedrockFileSystemBridge.shared)
-    
-    // Initialize other Bedrock components...
-    return true
-}
+These tests include both mock filesystem implementations for testing and examples of how to set up the filesystem bridge in real applications. Run the tests to verify your setup:
+
+```bash
+# Test Swift implementation
+./swift/test_swift.sh
+
+# Test Kotlin implementation
+./kotlin/test_kotlin.sh
 ```
 
 ### Rust Side Usage
@@ -94,22 +45,22 @@ impl ConfigManager {
         // _bedrock_fs is automatically available
         // This will save to "ConfigManager/configs/{name}.json"
         info!("Saving config: {}", name);
-        
+
         _bedrock_fs.write_file(
             &format!("configs/{}.json", name),
             data.as_bytes().to_vec()
         )?;
-        
+
         Ok(())
     }
-    
+
     pub fn load_config(&self, name: &str) -> Result<String, FileSystemError> {
         // This will read from "ConfigManager/configs/{name}.json"
         let data = _bedrock_fs.read_file(&format!("configs/{}.json", name))?;
         String::from_utf8(data)
             .map_err(|_| FileSystemError::ReadFileError)
     }
-    
+
     pub fn list_configs(&self) -> Result<Vec<String>, FileSystemError> {
         // List all files in "ConfigManager/configs/"
         _bedrock_fs.list_files("configs")
@@ -143,6 +94,7 @@ The filesystem middleware automatically enforces path isolation:
 - No struct can access another struct's files
 
 Example paths:
+
 ```
 /user/data/directory/
 ├── ConfigManager/
@@ -215,6 +167,7 @@ pub fn read_config(&self) -> Result<String, MyError> {
 ```
 
 The `#[bedrock_error]` macro automatically adds:
+
 - A `FileSystem(FileSystemError)` variant
 - `impl From<FileSystemError>` for automatic conversion with `?`
 
@@ -228,7 +181,9 @@ The `#[bedrock_error]` macro automatically adds:
 
 ## Testing
 
-For unit tests, you can provide a mock filesystem implementation:
+### Rust Unit Tests
+
+For Rust unit tests, you can provide a mock filesystem implementation:
 
 ```rust
 #[cfg(test)]
@@ -236,20 +191,37 @@ mod tests {
     use bedrock::primitives::filesystem::{set_filesystem, FileSystem, FileSystemError};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    
+
     struct MockFileSystem {
         files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     }
-    
+
     impl FileSystem for MockFileSystem {
         // Implement the trait methods...
     }
-    
+
     #[test]
     fn test_my_feature() {
         set_filesystem(Arc::new(MockFileSystem::new()));
-        
+
         // Your test code here
     }
 }
-``` 
+```
+
+### Foreign Function Interface Tests
+
+Complete foreign tests demonstrating filesystem usage are available and can be run:
+
+- **Swift Tests**: Run `./swift/test_swift.sh` to execute Swift filesystem tests
+- **Kotlin Tests**: Run `./kotlin/test_kotlin.sh` to execute Kotlin filesystem tests
+
+These tests validate:
+
+- File reading/writing operations
+- Directory listing and file existence checks
+- Error handling and edge cases
+- Path isolation between different struct namespaces
+- Mock filesystem implementations for testing
+
+The foreign tests serve as both validation of the filesystem middleware and practical examples of how to implement filesystem bridges in your applications.
