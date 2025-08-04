@@ -16,6 +16,46 @@ use crate::{
     smart_account::UserOperation,
 };
 
+/// JSON-RPC request ID
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Id {
+    /// Numeric ID
+    Number(u64),
+    /// String ID
+    String(String),
+}
+
+/// JSON-RPC request
+#[derive(Debug, Serialize)]
+struct JsonRpcRequest<T> {
+    jsonrpc: &'static str,
+    id: Id,
+    method: String,
+    params: T,
+}
+
+impl<T> JsonRpcRequest<T> {
+    /// Create a new JSON-RPC request
+    fn new(method: impl Into<String>, id: Id, params: T) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            method: method.into(),
+            params,
+        }
+    }
+}
+
+/// JSON-RPC error payload
+#[derive(Debug, Deserialize)]
+struct ErrorPayload {
+    code: i64,
+    message: String,
+    #[serde(default, rename = "data")]
+    _data: Option<Value>,
+}
+
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
 pub enum RpcError {
@@ -31,8 +71,10 @@ pub enum RpcError {
     },
 
     /// RPC returned an error response
-    #[error("RPC error: {message}")]
+    #[error("RPC error {code}: {message}")]
     RpcResponseError {
+        /// The error code from the RPC response
+        code: i64,
         /// The error message from the RPC response
         message: String,
     },
@@ -43,44 +85,6 @@ pub enum RpcError {
         /// The error message describing the format issue
         message: String,
     },
-}
-
-/// JSON-RPC request structure
-#[derive(Debug, Serialize)]
-struct JsonRpcRequest<T> {
-    jsonrpc: &'static str,
-    id: String,
-    method: String,
-    params: T,
-}
-
-/// JSON-RPC response structure
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum JsonRpcResponse<T> {
-    Success {
-        #[serde(rename = "jsonrpc")]
-        _jsonrpc: String,
-        #[serde(rename = "id")]
-        _id: String,
-        result: T,
-    },
-    Error {
-        #[serde(rename = "jsonrpc")]
-        _jsonrpc: String,
-        #[serde(rename = "id")]
-        _id: String,
-        error: JsonRpcError,
-    },
-}
-
-/// JSON-RPC error structure
-#[derive(Debug, Deserialize)]
-struct JsonRpcError {
-    code: i64,
-    message: String,
-    #[serde(rename = "data")]
-    _data: Option<Value>,
 }
 
 /// Response from `wa_sponsorUserOperation`
@@ -246,6 +250,73 @@ impl<'a> RpcClient<'a> {
         format!("/v1/rpc/{WORLDCHAIN_NETWORK}")
     }
 
+    /// Makes a generic RPC call with typed parameters and result
+    async fn rpc_call<P, R>(&self, method: &str, params: P) -> Result<R, RpcError>
+    where
+        P: Serialize,
+        R: for<'de> Deserialize<'de>,
+    {
+        // Generate a unique request ID
+        let id = Id::String(format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())));
+
+        // Create the JSON-RPC request using Alloy's Request type
+        let request = JsonRpcRequest::new(method, id, params);
+
+        // Serialize the request
+        let request_body =
+            serde_json::to_vec(&request).map_err(|e| RpcError::JsonError {
+                message: format!("Failed to serialize request: {e}"),
+            })?;
+
+        // Send the HTTP request
+        let response_bytes = self
+            .http_client
+            .fetch_from_app_backend(
+                Self::rpc_endpoint(),
+                HttpMethod::Post,
+                Some(request_body),
+            )
+            .await?;
+
+        // Parse the response as a generic JSON value first to handle both success and error cases
+        let json_response: Value =
+            serde_json::from_slice(&response_bytes).map_err(|e| {
+                RpcError::JsonError {
+                    message: format!("Failed to parse response as JSON: {e}"),
+                }
+            })?;
+
+        // Check if it's an error response
+        if let Some(error) = json_response.get("error") {
+            let error_payload: ErrorPayload = serde_json::from_value(error.clone())
+                .map_err(|e| RpcError::JsonError {
+                    message: format!("Failed to parse error payload: {e}"),
+                })?;
+
+            return Err(RpcError::RpcResponseError {
+                code: error_payload.code,
+                message: error_payload.message,
+            });
+        }
+
+        // Try to parse as a successful response
+        json_response.get("result").map_or_else(
+            || {
+                Err(RpcError::InvalidResponse {
+                    message: "Response missing both 'result' and 'error' fields"
+                        .to_string(),
+                })
+            },
+            |result| {
+                serde_json::from_value(result.clone()).map_err(|e| {
+                    RpcError::JsonError {
+                        message: format!("Failed to parse result: {e}"),
+                    }
+                })
+            },
+        )
+    }
+
     /// Requests sponsorship for a `UserOperation` via `wa_sponsorUserOperation`
     ///
     /// # Errors
@@ -270,40 +341,7 @@ impl<'a> RpcClient<'a> {
             self_sponsor_token.map(|token| TokenInfo { token }),
         );
 
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0",
-            id: format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())),
-            method: "wa_sponsorUserOperation".to_string(),
-            params,
-        };
-
-        let request_body =
-            serde_json::to_vec(&request).map_err(|e| RpcError::JsonError {
-                message: format!("Failed to serialize request: {e}"),
-            })?;
-
-        let response_bytes = self
-            .http_client
-            .fetch_from_app_backend(
-                Self::rpc_endpoint(),
-                HttpMethod::Post,
-                Some(request_body),
-            )
-            .await?;
-
-        let response: JsonRpcResponse<SponsorUserOperationResponse> =
-            serde_json::from_slice(&response_bytes).map_err(|e| {
-                RpcError::JsonError {
-                    message: format!("Failed to parse response: {e}"),
-                }
-            })?;
-
-        match response {
-            JsonRpcResponse::Success { result, .. } => Ok(result),
-            JsonRpcResponse::Error { error, .. } => Err(RpcError::RpcResponseError {
-                message: format!("RPC error {}: {}", error.code, error.message),
-            }),
-        }
+        self.rpc_call("wa_sponsorUserOperation", params).await
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
@@ -330,41 +368,11 @@ impl<'a> RpcClient<'a> {
             serde_json::Value::String(format!("{entrypoint:?}")),
         ];
 
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0",
-            id: format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())),
-            method: "eth_sendUserOperation".to_string(),
-            params,
-        };
+        let result: String = self.rpc_call("eth_sendUserOperation", params).await?;
 
-        let request_body =
-            serde_json::to_vec(&request).map_err(|e| RpcError::JsonError {
-                message: format!("Failed to serialize request: {e}"),
-            })?;
-
-        let response_bytes = self
-            .http_client
-            .fetch_from_app_backend(
-                Self::rpc_endpoint(),
-                HttpMethod::Post,
-                Some(request_body),
-            )
-            .await?;
-
-        let response: JsonRpcResponse<String> = serde_json::from_slice(&response_bytes)
-            .map_err(|e| RpcError::JsonError {
-                message: format!("Failed to parse response: {e}"),
-            })?;
-
-        match response {
-            JsonRpcResponse::Success { result, .. } => FixedBytes::from_hex(&result)
-                .map_err(|e| RpcError::InvalidResponse {
-                    message: format!("Invalid userOpHash format: {e}"),
-                }),
-            JsonRpcResponse::Error { error, .. } => Err(RpcError::RpcResponseError {
-                message: format!("RPC error {}: {}", error.code, error.message),
-            }),
-        }
+        FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            message: format!("Invalid userOpHash format: {e}"),
+        })
     }
 }
 
@@ -461,56 +469,38 @@ mod tests {
     #[test]
     fn test_sponsor_response_parsing() {
         let json_response = json!({
-            "jsonrpc": "2.0",
-            "result": {
-                "paymaster": "0x0000000000000039cd5e8aE05257CE51C473ddd1",
-                "paymasterData": "0x01000066d1a1a4",
-                "preVerificationGas": "0x350f7",
-                "verificationGasLimit": "0x501ab",
-                "callGasLimit": "0x212df",
-                "paymasterVerificationGasLimit": "0x6dae",
-                "paymasterPostOpGasLimit": "0x706e",
-                "maxPriorityFeePerGas": "0x3B9ACA00",
-                "maxFeePerGas": "0x7A5CF70D5",
-            },
-            "id": "tx_123"
+            "paymaster": "0x0000000000000039cd5e8aE05257CE51C473ddd1",
+            "paymasterData": "0x01000066d1a1a4",
+            "preVerificationGas": "0x350f7",
+            "verificationGasLimit": "0x501ab",
+            "callGasLimit": "0x212df",
+            "paymasterVerificationGasLimit": "0x6dae",
+            "paymasterPostOpGasLimit": "0x706e",
+            "maxPriorityFeePerGas": "0x3B9ACA00",
+            "maxFeePerGas": "0x7A5CF70D5",
         });
 
-        let response: JsonRpcResponse<SponsorUserOperationResponse> =
+        let response: SponsorUserOperationResponse =
             serde_json::from_value(json_response).unwrap();
 
-        match response {
-            JsonRpcResponse::Success { result, .. } => {
-                assert_eq!(
-                    result.paymaster,
-                    address!("0000000000000039cd5e8aE05257CE51C473ddd1")
-                );
-                assert_eq!(result.call_gas_limit, U128::from(0x212df));
-            }
-            JsonRpcResponse::Error { .. } => panic!("Expected success response"),
-        }
+        assert_eq!(
+            response.paymaster,
+            address!("0000000000000039cd5e8aE05257CE51C473ddd1")
+        );
+        assert_eq!(response.call_gas_limit, U128::from(0x212df));
     }
 
     #[test]
-    fn test_error_response_parsing() {
-        let json_response = json!({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": -32000,
-                "message": "execution reverted"
-            },
-            "id": "tx_123"
+    fn test_error_payload_parsing() {
+        let error_json = json!({
+            "code": -32000,
+            "message": "execution reverted",
+            "data": null
         });
 
-        let response: JsonRpcResponse<String> =
-            serde_json::from_value(json_response).unwrap();
+        let error_payload: ErrorPayload = serde_json::from_value(error_json).unwrap();
 
-        match response {
-            JsonRpcResponse::Error { error, .. } => {
-                assert_eq!(error.code, -32000);
-                assert_eq!(error.message, "execution reverted");
-            }
-            JsonRpcResponse::Success { .. } => panic!("Expected error response"),
-        }
+        assert_eq!(error_payload.code, -32000);
+        assert_eq!(error_payload.message, "execution reverted");
     }
 }
