@@ -16,6 +16,26 @@ use alloy::{
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
 
+/// Helper function to check if an `Address` is zero for serde `skip_serializing_if`
+fn is_zero_address(addr: &Address) -> bool {
+    addr.is_zero()
+}
+
+/// Helper function to check if `Bytes` is empty for serde `skip_serializing_if`
+fn is_empty_bytes(bytes: &Bytes) -> bool {
+    bytes.is_empty()
+}
+
+/// Helper function to check if `u128` is zero for serde `skip_serializing_if`
+const fn is_zero_u128(value: &u128) -> bool {
+    *value == 0
+}
+
+/// Helper function to check if `U256` is zero for serde `skip_serializing_if`
+fn is_zero_u256(value: &U256) -> bool {
+    value.is_zero()
+}
+
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
     FixedBytes::from_hex(
@@ -168,43 +188,56 @@ sol! {
     ///
     /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
     #[sol(rename_all = "camelcase")]
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct UserOperation {
         /// The Account making the UserOperation
         address sender;
         /// Anti-replay protection
         uint256 nonce;
         /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
+        #[serde(skip_serializing_if = "is_zero_address")]
         address factory;
         /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
+        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes factory_data;
         /// The data to pass to the sender during the main execution call
         bytes call_data;
         /// Gas limit for the main execution call.
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 call_gas_limit;
         /// Gas limit for the verification call
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 verification_gas_limit;
         /// Extra gas to pay the bundler
+        #[serde(skip_serializing_if = "is_zero_u256")]
         uint256 pre_verification_gas;
         /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_fee_per_gas)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 max_fee_per_gas;
         /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_priority_fee_per_gas)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 max_priority_fee_per_gas;
         /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
+        #[serde(skip_serializing_if = "is_zero_address")]
         address paymaster;
         /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 paymaster_verification_gas_limit;
         /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 paymaster_post_op_gas_limit;
         /// Data for paymaster (only if paymaster exists)
+        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes paymaster_data;
         /// Data passed into the sender to verify authorization
+        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes signature;
     }
 
