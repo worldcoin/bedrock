@@ -23,8 +23,7 @@ class BedrockFilesystemTests {
         val tester = FileSystemTester()
         
         // Test writing a file
-        val writeResult = tester.testWriteFile("test.txt", "Hello, World!")
-        assertTrue(writeResult, "Write operation should succeed")
+        tester.testWriteFile("test.txt", "Hello, World!")
         
         // Test reading the file back
         val readContent = tester.testReadFile("test.txt")
@@ -36,8 +35,7 @@ class BedrockFilesystemTests {
         val tester = FileSystemTester()
         
         // Write a file
-        val writeResult = tester.testWriteFile("exists.txt", "content")
-        assertTrue(writeResult, "Write operation should succeed")
+        tester.testWriteFile("exists.txt", "content")
         
         // Test file exists
         val exists = tester.testFileExists("exists.txt")
@@ -78,8 +76,7 @@ class BedrockFilesystemTests {
         assertTrue(existsBefore, "File should exist before deletion")
         
         // Delete the file
-        val deleteResult = tester.testDeleteFile("delete_me.txt")
-        assertTrue(deleteResult, "Delete operation should succeed")
+        tester.testDeleteFile("delete_me.txt")
         
         // Verify it's deleted
         val existsAfter = tester.testFileExists("delete_me.txt")
@@ -94,8 +91,7 @@ class BedrockFilesystemTests {
         val binaryContent = "Hello 🌍 World! 🚀"
         
         // Write binary content
-        val writeResult = tester.testWriteFile("binary.txt", binaryContent)
-        assertTrue(writeResult, "Write operation should succeed")
+        tester.testWriteFile("binary.txt", binaryContent)
         
         // Read it back
         val readContent = tester.testReadFile("binary.txt")
@@ -107,8 +103,7 @@ class BedrockFilesystemTests {
         val tester = FileSystemTester()
         
         // Test writing to subdirectories
-        val writeResult = tester.testWriteFile("configs/app.json", "{\"theme\": \"dark\"}")
-        assertTrue(writeResult, "Write to subdirectory should succeed")
+        tester.testWriteFile("configs/app.json", "{\"theme\": \"dark\"}")
         
         // Read from subdirectory
         val readContent = tester.testReadFile("configs/app.json")
@@ -128,14 +123,13 @@ object MockFileSystemBridge : FileSystem {
         return files[filePath] ?: throw FileSystemException.FileDoesNotExist()
     }
     
-    override fun writeFile(filePath: String, fileBuffer: ByteArray): Boolean {
+    override fun writeFile(filePath: String, fileBuffer: ByteArray) {
         // Create any necessary parent directories in our mock
         files[filePath] = fileBuffer
-        return true
     }
     
-    override fun deleteFile(filePath: String): Boolean {
-        return files.remove(filePath) != null
+    override fun deleteFile(filePath: String) {
+        files.remove(filePath)
     }
     
     override fun listFiles(folderPath: String): List<String> {

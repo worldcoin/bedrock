@@ -13,8 +13,7 @@ final class BedrockFilesystemTests: XCTestCase {
         let tester = FileSystemTester()
         
         // Test writing a file
-        let writeResult = try tester.testWriteFile(filename: "test.txt", content: "Hello, World!")
-        XCTAssertTrue(writeResult, "Write operation should succeed")
+        try tester.testWriteFile(filename: "test.txt", content: "Hello, World!")
         
         // Test reading the file back
         let readContent = try tester.testReadFile(filename: "test.txt")
@@ -25,8 +24,7 @@ final class BedrockFilesystemTests: XCTestCase {
         let tester = FileSystemTester()
         
         // Write a file
-        let writeResult = try tester.testWriteFile(filename: "exists.txt", content: "content")
-        XCTAssertTrue(writeResult, "Write operation should succeed")
+        try tester.testWriteFile(filename: "exists.txt", content: "content")
         
         // Test file exists
         let exists = try tester.testFileExists(filename: "exists.txt")
@@ -43,9 +41,9 @@ final class BedrockFilesystemTests: XCTestCase {
         let tester = FileSystemTester()
         
         // Write multiple files
-        _ = try tester.testWriteFile(filename: "file1.txt", content: "content1")
-        _ = try tester.testWriteFile(filename: "file2.txt", content: "content2")
-        _ = try tester.testWriteFile(filename: "subdir/file3.txt", content: "content3")
+        try tester.testWriteFile(filename: "file1.txt", content: "content1")
+        try tester.testWriteFile(filename: "file2.txt", content: "content2")
+        try tester.testWriteFile(filename: "subdir/file3.txt", content: "content3")
         
         // List files in current directory
         let files = try tester.testListFiles()
@@ -58,15 +56,14 @@ final class BedrockFilesystemTests: XCTestCase {
         let tester = FileSystemTester()
         
         // Write a file
-        _ = try tester.testWriteFile(filename: "delete_me.txt", content: "temporary content")
+        try tester.testWriteFile(filename: "delete_me.txt", content: "temporary content")
         
         // Verify it exists
         let existsBefore = try tester.testFileExists(filename: "delete_me.txt")
         XCTAssertTrue(existsBefore, "File should exist before deletion")
         
         // Delete the file
-        let deleteResult = try tester.testDeleteFile(filename: "delete_me.txt")
-        XCTAssertTrue(deleteResult, "Delete operation should succeed")
+        try tester.testDeleteFile(filename: "delete_me.txt")
         
         // Verify it's deleted
         let existsAfter = try tester.testFileExists(filename: "delete_me.txt")
@@ -80,8 +77,7 @@ final class BedrockFilesystemTests: XCTestCase {
         let binaryContent = "Hello 🌍 World! 🚀"
         
         // Write binary content
-        let writeResult = try tester.testWriteFile(filename: "binary.txt", content: binaryContent)
-        XCTAssertTrue(writeResult, "Write operation should succeed")
+        try tester.testWriteFile(filename: "binary.txt", content: binaryContent)
         
         // Read it back
         let readContent = try tester.testReadFile(filename: "binary.txt")
@@ -92,8 +88,7 @@ final class BedrockFilesystemTests: XCTestCase {
         let tester = FileSystemTester()
         
         // Test writing to subdirectories
-        let writeResult = try tester.testWriteFile(filename: "configs/app.json", content: "{\"theme\": \"dark\"}")
-        XCTAssertTrue(writeResult, "Write to subdirectory should succeed")
+        try tester.testWriteFile(filename: "configs/app.json", content: "{\"theme\": \"dark\"}")
         
         // Read from subdirectory
         let readContent = try tester.testReadFile(filename: "configs/app.json")
@@ -119,14 +114,13 @@ class MockFileSystemBridge: Bedrock.FileSystem {
         return data
     }
     
-    func writeFile(filePath: String, fileBuffer: Data) throws -> Bool {
+    func writeFile(filePath: String, fileBuffer: Data) throws {
         // Create any necessary parent directories in our mock
         files[filePath] = fileBuffer
-        return true
     }
     
-    func deleteFile(filePath: String) throws -> Bool {
-        return files.removeValue(forKey: filePath) != nil
+    func deleteFile(filePath: String) throws {
+        files.removeValue(forKey: filePath)
     }
     
     func listFiles(folderPath: String) throws -> [String] {

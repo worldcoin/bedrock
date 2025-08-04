@@ -287,7 +287,7 @@ impl FileSystemTester {
         &self,
         filename: &str,
         content: &str,
-    ) -> Result<bool, FileSystemTestError> {
+    ) -> Result<(), FileSystemTestError> {
         // _bedrock_fs is automatically injected by the macro
         // FileSystemError automatically converts to FileSystemTestError::FileSystem
         Ok(_bedrock_fs.write_file(filename, content.as_bytes().to_vec())?)
@@ -328,7 +328,7 @@ impl FileSystemTester {
     ///
     /// # Errors
     /// - `FileSystemError` if filesystem operations fail
-    pub fn test_delete_file(&self, filename: &str) -> Result<bool, FileSystemError> {
+    pub fn test_delete_file(&self, filename: &str) -> Result<(), FileSystemError> {
         _bedrock_fs.delete_file(filename)
     }
 }

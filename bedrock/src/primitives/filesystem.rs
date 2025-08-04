@@ -74,13 +74,13 @@ pub trait FileSystem: Send + Sync {
         &self,
         file_path: String,
         file_buffer: Vec<u8>,
-    ) -> Result<bool, FileSystemError>;
+    ) -> Result<(), FileSystemError>;
 
     /// Delete a file
     ///
     /// # Errors
     /// - `FileSystemError::DeleteFileError` if the file cannot be deleted
-    fn delete_file(&self, file_path: String) -> Result<bool, FileSystemError>;
+    fn delete_file(&self, file_path: String) -> Result<(), FileSystemError>;
 }
 
 /// A global instance of the user-provided filesystem
@@ -201,7 +201,7 @@ impl FileSystemMiddleware {
         &self,
         file_path: &str,
         file_buffer: Vec<u8>,
-    ) -> Result<bool, FileSystemError> {
+    ) -> Result<(), FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
         fs.write_file(prefixed_path, file_buffer)
@@ -212,7 +212,7 @@ impl FileSystemMiddleware {
     /// # Errors
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
     /// - Any error from the underlying filesystem implementation
-    pub fn delete_file(&self, file_path: &str) -> Result<bool, FileSystemError> {
+    pub fn delete_file(&self, file_path: &str) -> Result<(), FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
         fs.delete_file(prefixed_path)
@@ -412,23 +412,19 @@ mod tests {
             &self,
             file_path: String,
             file_buffer: Vec<u8>,
-        ) -> Result<bool, FileSystemError> {
+        ) -> Result<(), FileSystemError> {
             let normalized_path = Self::normalize_path(&file_path);
             self.files
                 .lock()
                 .unwrap()
                 .insert(normalized_path, file_buffer);
-            Ok(true)
+            Ok(())
         }
 
-        fn delete_file(&self, file_path: String) -> Result<bool, FileSystemError> {
+        fn delete_file(&self, file_path: String) -> Result<(), FileSystemError> {
             let normalized_path = Self::normalize_path(&file_path);
-            Ok(self
-                .files
-                .lock()
-                .unwrap()
-                .remove(&normalized_path)
-                .is_some())
+            self.files.lock().unwrap().remove(&normalized_path);
+            Ok(())
         }
     }
 
