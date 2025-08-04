@@ -249,7 +249,7 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
                 if matches!(method.vis, Visibility::Public(_)) {
                     // Inject logging context at the start of the function body
                     let mut new_method = method.clone();
-                    inject_logging_context(&mut new_method, &type_name);
+                    inject_logging_and_filesystem_context(&mut new_method, &type_name);
                     new_items.push(ImplItem::Fn(new_method));
                 } else {
                     // Keep private methods unchanged
@@ -303,7 +303,7 @@ fn has_async_functions_in_impl(impl_items: &[ImplItem]) -> bool {
 }
 
 /// Inject logging context and filesystem middleware at the start of a function body
-fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
+fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &str) {
     // Create the filesystem middleware statement
     let fs_stmt: Stmt = syn::parse_quote! {
         let _bedrock_fs = crate::primitives::filesystem::create_middleware(#type_name);
