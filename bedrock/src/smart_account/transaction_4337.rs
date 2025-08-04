@@ -39,9 +39,16 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
 /// This is the length of a regular ECDSA signature with r,s,v (32 + 32 + 1 = 65 bytes) + 12 bytes for the validity timestamps.
 const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
 
-/// Identifies a transaction that can be encoded as a 4337 `UserOperation`.
-pub trait Is4337Encodable {
-    /// Converts the object into a `callData` for the `executeUserOp` method.
+/// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
+pub trait Is4337Operable {
+    /// Gas limit for the main execution call.
+    const CALL_GAS_LIMIT: u128;
+
+    // FIXME: full access to SafeSmartAccount is required to sign the transaction
+    /// The address of the wallet that will be used to execute the transaction (i.e. the Safe Smart Account).
+    fn wallet_address(&self) -> &Address;
+
+    /// Converts the object into a `callData` for the `executeUserOp` method. This is the inner-most `calldata`.
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
@@ -55,19 +62,14 @@ pub trait Is4337Encodable {
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn as_preflight_user_operation(
-        &self,
-        sender: Address,
-        nonce: U256,
-        call_gas_limit: u128,
-    ) -> Result<UserOperation, PrimitiveError> {
+    fn as_preflight_user_operation(&self) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
         Ok(UserOperation::new_with_defaults(
-            sender,
-            nonce,
+            *self.wallet_address(),
+            U256::ZERO, // FIXME: add proper nonce computation (generalizing)
             call_data,
-            call_gas_limit,
+            Self::CALL_GAS_LIMIT,
         ))
     }
 }

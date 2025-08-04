@@ -2,7 +2,7 @@ use alloy::primitives::{Address, U256};
 
 use crate::{
     primitives::{HexEncodedData, ParseFromForeignBinding},
-    smart_account::{Is4337Encodable, SafeSmartAccount},
+    smart_account::SafeSmartAccount,
     transaction::contracts::erc20::Erc20,
 };
 
@@ -40,16 +40,8 @@ impl SafeSmartAccount {
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
 
-        let transaction = Erc20::new(token_address, to_address, amount);
-
-        let user_op = transaction.as_preflight_user_operation(
-            self.wallet_address,
-            U256::ZERO, // FIXME: compute proper nonce
-            65_000,     // sensible gas limit for ERC-20 transfer
-        )?;
-
-        // TODO: next step is to send the user op to the RPC for `wa_sponsorUserOperation`
-        dbg!(&user_op);
+        let transaction =
+            Erc20::new(token_address, to_address, amount, self.wallet_address);
 
         todo!("this is not ready.");
 
