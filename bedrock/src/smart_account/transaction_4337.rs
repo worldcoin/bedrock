@@ -34,6 +34,11 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
 });
 
+/// The length of a 4337 `UserOperation` signature.
+///
+/// This is the length of a regular ECDSA signature with r,s,v (32 + 32 + 1 = 65 bytes) + 12 bytes for the validity timestamps.
+const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
+
 /// Identifies a transaction that can be encoded as a 4337 `UserOperation`.
 pub trait Is4337Encodable {
     /// Converts the object into a `callData` for the `executeUserOp` method.
@@ -84,7 +89,7 @@ sol! {
     /// - A `UserOperation` is created by the user and passed to the World App RPC to request sponsorship through the `wa_sponsorUserOperation` method.
     /// - The final signed `UserOperation` is then passed to the World App RPC to be executed through the standard `eth_sendUserOperation` method.
     ///
-    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
     #[sol(rename_all = "camelcase")]
     #[derive(Debug, Default)]
     struct UserOperation {
@@ -163,7 +168,7 @@ impl UserOperation {
             nonce,
             call_data,
             call_gas_limit,
-            signature: vec![0xff; 77].into(),
+            signature: vec![0xff; USER_OPERATION_SIGNATURE_LENGTH].into(),
             ..Default::default()
         }
     }
@@ -210,7 +215,7 @@ impl UserOperation {
         Ok((valid_after, valid_until))
     }
 
-    /// Merges all paymaster related data into a single `paymasterAndData` attribut.
+    /// Merges all paymaster related data into a single `paymasterAndData` attribute.
     pub fn get_paymaster_and_data(&self) -> Bytes {
         if self.paymaster.is_zero() {
             return Bytes::new();
