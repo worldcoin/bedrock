@@ -23,6 +23,50 @@ pub mod http_client;
 #[cfg(feature = "tooling_tests")]
 pub mod tooling_tests;
 
+/// Supported blockchain networks for Bedrock operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Network {
+    /// World Chain (chain ID: 480)
+    WorldChain,
+    /// Optimism (chain ID: 10)
+    Optimism,
+}
+
+impl Network {
+    /// Returns the chain ID for the network
+    #[must_use]
+    pub const fn chain_id(&self) -> u32 {
+        match self {
+            Self::WorldChain => 480,
+            Self::Optimism => 10,
+        }
+    }
+
+    /// Returns the network name for RPC endpoint construction
+    #[must_use]
+    pub const fn network_name(&self) -> &'static str {
+        match self {
+            Self::WorldChain => "worldchain",
+            Self::Optimism => "optimism",
+        }
+    }
+
+    /// Returns the display name for the network
+    #[must_use]
+    pub const fn display_name(&self) -> &'static str {
+        match self {
+            Self::WorldChain => "World Chain",
+            Self::Optimism => "Optimism",
+        }
+    }
+}
+
+impl Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display_name())
+    }
+}
+
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
 /// This is used to ensure that the hex string is properly formatted and the output is always prefixed with "0x".

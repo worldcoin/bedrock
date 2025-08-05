@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, U256};
 
 use crate::{
-    primitives::{HexEncodedData, ParseFromForeignBinding},
+    primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Operable, SafeSmartAccount},
     transaction::contracts::erc20::Erc20,
 };
@@ -60,6 +60,7 @@ impl SafeSmartAccount {
     /// - Will throw an error if the global HTTP client has not been initialized.
     pub async fn transaction_transfer(
         &self,
+        network: Network,
         token_address: &str,
         to_address: &str,
         amount: &str,
@@ -72,13 +73,12 @@ impl SafeSmartAccount {
             Erc20::new(token_address, to_address, amount, self.wallet_address);
 
         // Sign and execute the transaction (uses global RPC client automatically)
-        let user_op_hash =
-            transaction
-                .sign_and_execute(self, None)
-                .await
-                .map_err(|e| TransactionError::Generic {
-                    message: format!("Failed to execute transaction: {e}"),
-                })?;
+        let user_op_hash = transaction
+            .sign_and_execute(network, self, None)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                message: format!("Failed to execute transaction: {e}"),
+            })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }

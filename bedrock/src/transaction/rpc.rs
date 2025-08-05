@@ -8,7 +8,7 @@
 
 use crate::{
     primitives::http_client::get_http_client,
-    primitives::{AuthenticatedHttpClient, HttpError, HttpMethod},
+    primitives::{AuthenticatedHttpClient, HttpError, HttpMethod, Network},
     smart_account::UserOperation,
 };
 use alloy::hex::FromHex;
@@ -152,20 +152,16 @@ struct TokenInfo {
 
 /// RPC client for handling 4337 `UserOperation` requests
 ///
-/// This client communicates with the app-backend's RPC endpoint at `/v1/rpc/worldchain`.
-/// All operations are performed on World Chain (chain ID: 480).
+/// This client communicates with the app-backend's RPC endpoint at `/v1/rpc/{network}`.
 pub struct RpcClient {
     http_client: Arc<dyn AuthenticatedHttpClient>,
 }
 
-/// World Chain constants
-const WORLDCHAIN_NETWORK: &str = "worldchain";
-
-/// World Chain's chain ID
+/// World Chain's chain ID (kept for backward compatibility)
 pub const WORLDCHAIN_CHAIN_ID: u32 = 480;
 
 impl RpcClient {
-    /// Creates a new RPC client for World Chain
+    /// Creates a new RPC client
     ///
     /// # Arguments
     /// * `http_client` - The authenticated HTTP client for making requests
@@ -173,13 +169,18 @@ impl RpcClient {
         Self { http_client }
     }
 
-    /// Constructs the RPC endpoint URL for World Chain
-    fn rpc_endpoint() -> String {
-        format!("/v1/rpc/{WORLDCHAIN_NETWORK}")
+    /// Constructs the RPC endpoint URL for the specified network
+    fn rpc_endpoint(network: Network) -> String {
+        format!("/v1/rpc/{}", network.network_name())
     }
 
     /// Makes a generic RPC call with typed parameters and result
-    async fn rpc_call<P, R>(&self, method: RpcMethod, params: P) -> Result<R, RpcError>
+    async fn rpc_call<P, R>(
+        &self,
+        network: Network,
+        method: RpcMethod,
+        params: P,
+    ) -> Result<R, RpcError>
     where
         P: Serialize,
         R: for<'de> Deserialize<'de>,
@@ -199,7 +200,7 @@ impl RpcClient {
             .http_client
             .as_ref()
             .fetch_from_app_backend(
-                Self::rpc_endpoint(),
+                Self::rpc_endpoint(network),
                 HttpMethod::Post,
                 Some(request_body),
             )
@@ -250,6 +251,7 @@ impl RpcClient {
     /// As of now, this handler is not yet implemented and will return a "method not found" error.
     pub async fn sponsor_user_operation(
         &self,
+        network: Network,
         user_operation: &UserOperation,
         self_sponsor_token: Option<Address>,
     ) -> Result<SponsorUserOperationResponse, RpcError> {
@@ -258,7 +260,8 @@ impl RpcClient {
             self_sponsor_token.map(|token| TokenInfo { token }),
         );
 
-        self.rpc_call(RpcMethod::SponsorUserOperation, params).await
+        self.rpc_call(network, RpcMethod::SponsorUserOperation, params)
+            .await
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
@@ -273,6 +276,7 @@ impl RpcClient {
     /// - The returned user operation hash is invalid
     pub async fn send_user_operation(
         &self,
+        network: Network,
         user_operation: &UserOperation,
         entrypoint: Address,
     ) -> Result<FixedBytes<32>, RpcError> {
@@ -281,8 +285,9 @@ impl RpcClient {
             serde_json::Value::String(format!("{entrypoint:?}")),
         ];
 
-        let result: String =
-            self.rpc_call(RpcMethod::SendUserOperation, params).await?;
+        let result: String = self
+            .rpc_call(network, RpcMethod::SendUserOperation, params)
+            .await?;
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
             message: format!("Invalid userOpHash format: {e}"),
@@ -303,11 +308,11 @@ impl UserOperation {
         self.paymaster_verification_gas_limit = sponsor_response
             .paymaster_verification_gas_limit
             .try_into()
-            .map_err(|e| HttpError::Other(format!("Failed to convert paymaster_verification_gas_limit: {e}")))?;
+            .unwrap_or(0);
         self.paymaster_post_op_gas_limit = sponsor_response
             .paymaster_post_op_gas_limit
             .try_into()
-            .map_err(|e| HttpError::Other(format!("Failed to convert paymaster_post_op_gas_limit: {e}")))?;
+            .unwrap_or(0);
 
         // Update gas fields if they were estimated by the RPC
         if self.pre_verification_gas.is_zero() {
@@ -334,7 +339,7 @@ impl UserOperation {
                 .unwrap_or(0);
         }
 
-        self
+        Ok(self)
     }
 }
 

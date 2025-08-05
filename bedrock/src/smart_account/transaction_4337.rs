@@ -3,7 +3,7 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::PrimitiveError;
+use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
 use crate::transaction::rpc::{RpcError, WORLDCHAIN_CHAIN_ID};
 
@@ -107,6 +107,7 @@ pub trait Is4337Operable {
     /// Uses the global RPC client automatically.
     ///
     /// # Arguments
+    /// * `network` - The network to use for the operation
     /// * `safe_account` - The Safe Smart Account to sign with
     /// * `self_sponsor_token` - Optional token address for self-sponsorship
     ///
@@ -119,6 +120,7 @@ pub trait Is4337Operable {
     /// * Returns `RpcError` if the global HTTP client has not been initialized
     async fn sign_and_execute(
         &self,
+        network: Network,
         safe_account: &crate::smart_account::SafeSmartAccount,
         self_sponsor_token: Option<Address>,
     ) -> Result<FixedBytes<32>, RpcError> {
@@ -134,11 +136,11 @@ pub trait Is4337Operable {
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
-            .sponsor_user_operation(&user_operation, self_sponsor_token)
+            .sponsor_user_operation(network, &user_operation, self_sponsor_token)
             .await?;
 
         // 3. Merge paymaster data
-        user_operation = user_operation.with_paymaster_data(sponsor_response);
+        user_operation = user_operation.with_paymaster_data(sponsor_response)?;
 
         // 4. Sign the UserOperation
         let encoded_safe_op: EncodedSafeOpStruct = (&user_operation)
@@ -176,7 +178,7 @@ pub trait Is4337Operable {
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
-            .send_user_operation(&user_operation, *ENTRYPOINT_4337)
+            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337)
             .await?;
 
         Ok(user_op_hash)
