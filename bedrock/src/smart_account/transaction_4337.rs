@@ -3,9 +3,11 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::{Network, PrimitiveError};
+use crate::primitives::{HttpError, Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{RpcError, WORLDCHAIN_CHAIN_ID};
+use crate::transaction::rpc::{
+    RpcError, SponsorUserOperationResponse, WORLDCHAIN_CHAIN_ID,
+};
 
 use alloy::hex::FromHex;
 use alloy::{
@@ -363,6 +365,53 @@ impl UserOperation {
         }
 
         out.into()
+    }
+
+    /// Merges paymaster data from sponsorship response into the `UserOperation`
+    ///
+    /// # Errors
+    /// Returns an error if any U128 to u128 conversion fails
+    pub fn with_paymaster_data(
+        mut self,
+        sponsor_response: SponsorUserOperationResponse,
+    ) -> Result<Self, HttpError> {
+        self.paymaster = sponsor_response.paymaster;
+        self.paymaster_data = sponsor_response.paymaster_data;
+        self.paymaster_verification_gas_limit = sponsor_response
+            .paymaster_verification_gas_limit
+            .try_into()
+            .unwrap_or(0);
+        self.paymaster_post_op_gas_limit = sponsor_response
+            .paymaster_post_op_gas_limit
+            .try_into()
+            .unwrap_or(0);
+
+        // Update gas fields if they were estimated by the RPC
+        if self.pre_verification_gas.is_zero() {
+            self.pre_verification_gas = sponsor_response.pre_verification_gas;
+        }
+        if self.verification_gas_limit == 0 {
+            self.verification_gas_limit = sponsor_response
+                .verification_gas_limit
+                .try_into()
+                .unwrap_or(0);
+        }
+        if self.call_gas_limit == 0 {
+            self.call_gas_limit =
+                sponsor_response.call_gas_limit.try_into().unwrap_or(0);
+        }
+        if self.max_fee_per_gas == 0 {
+            self.max_fee_per_gas =
+                sponsor_response.max_fee_per_gas.try_into().unwrap_or(0);
+        }
+        if self.max_priority_fee_per_gas == 0 {
+            self.max_priority_fee_per_gas = sponsor_response
+                .max_priority_fee_per_gas
+                .try_into()
+                .unwrap_or(0);
+        }
+
+        Ok(self)
     }
 }
 
