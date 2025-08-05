@@ -92,11 +92,8 @@ pub enum RpcError {
     HttpError(#[from] HttpError),
 
     /// JSON parsing error
-    #[error("JSON parsing error: {message}")]
-    JsonError {
-        /// The error message describing the JSON parsing issue
-        message: String,
-    },
+    #[error("JSON parsing error")]
+    JsonError,
 
     /// RPC returned an error response
     #[error("RPC error {code}: {message}")]
@@ -195,9 +192,7 @@ impl RpcClient {
 
         // Serialize the request
         let request_body =
-            serde_json::to_vec(&request).map_err(|e| RpcError::JsonError {
-                message: format!("Failed to serialize request: {e}"),
-            })?;
+            serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
         // Send the HTTP request
         let response_bytes = self
@@ -212,18 +207,12 @@ impl RpcClient {
 
         // Parse the response as a generic JSON value first to handle both success and error cases
         let json_response: Value =
-            serde_json::from_slice(&response_bytes).map_err(|e| {
-                RpcError::JsonError {
-                    message: format!("Failed to parse response as JSON: {e}"),
-                }
-            })?;
+            serde_json::from_slice(&response_bytes).map_err(|_| RpcError::JsonError)?;
 
         // Check if it's an error response
         if let Some(error) = json_response.get("error") {
             let error_payload: ErrorPayload = serde_json::from_value(error.clone())
-                .map_err(|e| RpcError::JsonError {
-                    message: format!("Failed to parse error payload: {e}"),
-                })?;
+                .map_err(|_| RpcError::JsonError)?;
 
             return Err(RpcError::RpcResponseError {
                 code: error_payload.code,
@@ -240,11 +229,7 @@ impl RpcClient {
                 })
             },
             |result| {
-                serde_json::from_value(result.clone()).map_err(|e| {
-                    RpcError::JsonError {
-                        message: format!("Failed to parse result: {e}"),
-                    }
-                })
+                serde_json::from_value(result.clone()).map_err(|_| RpcError::JsonError)
             },
         )
     }
@@ -292,9 +277,7 @@ impl RpcClient {
         entrypoint: Address,
     ) -> Result<FixedBytes<32>, RpcError> {
         let params = vec![
-            serde_json::to_value(user_operation).map_err(|e| RpcError::JsonError {
-                message: format!("Failed to serialize UserOperation: {e}"),
-            })?,
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
             serde_json::Value::String(format!("{entrypoint:?}")),
         ];
 
