@@ -64,7 +64,7 @@ struct JsonRpcRequest<T> {
 
 impl<T> JsonRpcRequest<T> {
     /// Create a new JSON-RPC request
-    fn new(method: RpcMethod, id: Id, params: T) -> Self {
+    const fn new(method: RpcMethod, id: Id, params: T) -> Self {
         Self {
             jsonrpc: "2.0",
             id,
