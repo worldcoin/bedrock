@@ -30,22 +30,45 @@ pub enum Id {
     String(String),
 }
 
+/// Supported RPC methods in Bedrock
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RpcMethod {
+    /// Request sponsorship for a `UserOperation`
+    #[serde(rename = "wa_sponsorUserOperation")]
+    SponsorUserOperation,
+    /// Submit a signed `UserOperation`
+    #[serde(rename = "eth_sendUserOperation")]
+    SendUserOperation,
+}
+
+impl RpcMethod {
+    /// Get the string representation of the RPC method
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::SponsorUserOperation => "wa_sponsorUserOperation",
+            Self::SendUserOperation => "eth_sendUserOperation",
+        }
+    }
+}
+
 /// JSON-RPC request
 #[derive(Debug, Serialize)]
 struct JsonRpcRequest<T> {
     jsonrpc: &'static str,
     id: Id,
-    method: String,
+    method: RpcMethod,
     params: T,
 }
 
 impl<T> JsonRpcRequest<T> {
     /// Create a new JSON-RPC request
-    fn new(method: impl Into<String>, id: Id, params: T) -> Self {
+    fn new(method: RpcMethod, id: Id, params: T) -> Self {
         Self {
             jsonrpc: "2.0",
             id,
-            method: method.into(),
+            method,
             params,
         }
     }
@@ -158,7 +181,7 @@ impl RpcClient {
     }
 
     /// Makes a generic RPC call with typed parameters and result
-    async fn rpc_call<P, R>(&self, method: &str, params: P) -> Result<R, RpcError>
+    async fn rpc_call<P, R>(&self, method: RpcMethod, params: P) -> Result<R, RpcError>
     where
         P: Serialize,
         R: for<'de> Deserialize<'de>,
@@ -249,7 +272,7 @@ impl RpcClient {
             self_sponsor_token.map(|token| TokenInfo { token }),
         );
 
-        self.rpc_call("wa_sponsorUserOperation", params).await
+        self.rpc_call(RpcMethod::SponsorUserOperation, params).await
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
@@ -274,7 +297,8 @@ impl RpcClient {
             serde_json::Value::String(format!("{entrypoint:?}")),
         ];
 
-        let result: String = self.rpc_call("eth_sendUserOperation", params).await?;
+        let result: String =
+            self.rpc_call(RpcMethod::SendUserOperation, params).await?;
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
             message: format!("Invalid userOpHash format: {e}"),
