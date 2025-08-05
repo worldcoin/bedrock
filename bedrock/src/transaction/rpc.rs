@@ -79,8 +79,9 @@ impl<T> JsonRpcRequest<T> {
 struct ErrorPayload {
     code: i64,
     message: String,
-    #[serde(default, rename = "data")]
-    _data: Option<Value>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    data: Option<Value>,
 }
 
 /// Errors that can occur when interacting with RPC operations.
