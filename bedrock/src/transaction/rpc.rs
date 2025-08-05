@@ -7,6 +7,7 @@
 //! All operations are performed on World Chain (chain ID: 480).
 
 use crate::{
+    primitives::http_client::get_http_client,
     primitives::{AuthenticatedHttpClient, HttpError, HttpMethod},
     smart_account::UserOperation,
 };
@@ -344,8 +345,7 @@ pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
     }
 
     // RPC client not initialized yet - try to initialize it now
-    let http_client = crate::primitives::get_http_client()
-        .ok_or(RpcError::HttpClientNotInitialized)?;
+    let http_client = get_http_client().ok_or(RpcError::HttpClientNotInitialized)?;
 
     let rpc_client = RpcClient::new(http_client);
 
