@@ -47,12 +47,12 @@ impl SafeSmartAccount {
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if the transaction submission fails.
+    /// - Will throw an error if the global HTTP client has not been initialized.
     pub async fn transaction_transfer(
         &self,
         token_address: &str,
         to_address: &str,
         amount: &str,
-        http_client: &dyn crate::primitives::AuthenticatedHttpClient,
     ) -> Result<HexEncodedData, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
@@ -61,16 +61,14 @@ impl SafeSmartAccount {
         let transaction =
             Erc20::new(token_address, to_address, amount, self.wallet_address);
 
-        // Create RPC client for World Chain
-        let rpc_client = RpcClient::new(http_client);
-
-        // Sign and execute the transaction
-        let user_op_hash = transaction
-            .sign_and_execute(self, &rpc_client, None)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                message: format!("Failed to execute transaction: {e}"),
-            })?;
+        // Sign and execute the transaction (uses global RPC client automatically)
+        let user_op_hash =
+            transaction
+                .sign_and_execute(self, None)
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    message: format!("Failed to execute transaction: {e}"),
+                })?;
 
         Ok(HexEncodedData::new(&format!("0x{user_op_hash}"))?)
     }

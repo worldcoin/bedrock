@@ -6,15 +6,18 @@
 //!
 //! All operations are performed on World Chain (chain ID: 480).
 
-use alloy::hex::FromHex;
-use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
 use crate::{
     primitives::{AuthenticatedHttpClient, HttpError, HttpMethod},
     smart_account::UserOperation,
 };
+use alloy::hex::FromHex;
+use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::{Arc, OnceLock};
+
+/// Global RPC client instance for Bedrock operations
+static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
 
 /// JSON-RPC request ID
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +88,10 @@ pub enum RpcError {
         /// The error message describing the format issue
         message: String,
     },
+
+    /// HTTP client has not been initialized
+    #[error("HTTP client not initialized. Call set_http_client() first.")]
+    HttpClientNotInitialized,
 }
 
 /// Response from `wa_sponsorUserOperation`
@@ -125,8 +132,8 @@ struct TokenInfo {
 ///
 /// This client communicates with the app-backend's RPC endpoint at `/v1/rpc/worldchain`.
 /// All operations are performed on World Chain (chain ID: 480).
-pub struct RpcClient<'a> {
-    http_client: &'a dyn AuthenticatedHttpClient,
+pub struct RpcClient {
+    http_client: Arc<dyn AuthenticatedHttpClient>,
 }
 
 /// World Chain constants
@@ -135,12 +142,12 @@ const WORLDCHAIN_NETWORK: &str = "worldchain";
 /// World Chain's chain ID
 pub const WORLDCHAIN_CHAIN_ID: u32 = 480;
 
-impl<'a> RpcClient<'a> {
+impl RpcClient {
     /// Creates a new RPC client for World Chain
     ///
     /// # Arguments
     /// * `http_client` - The authenticated HTTP client for making requests
-    pub fn new(http_client: &'a dyn AuthenticatedHttpClient) -> Self {
+    pub fn new(http_client: Arc<dyn AuthenticatedHttpClient>) -> Self {
         Self { http_client }
     }
 
@@ -170,6 +177,7 @@ impl<'a> RpcClient<'a> {
         // Send the HTTP request
         let response_bytes = self
             .http_client
+            .as_ref()
             .fetch_from_app_backend(
                 Self::rpc_endpoint(),
                 HttpMethod::Post,
@@ -319,6 +327,35 @@ impl UserOperation {
 
         self
     }
+}
+
+/// Gets the global RPC client, initializing it on first access.
+///
+/// This function will automatically initialize the global RPC client using the global HTTP client
+/// if it hasn't been initialized yet. This provides a seamless experience where users only need
+/// to set up the HTTP client and the RPC client will be created automatically as needed.
+///
+/// # Errors
+/// Returns an error if the global HTTP client has not been initialized.
+pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
+    // Try to get the already-initialized global RPC client
+    if let Some(rpc_client) = RPC_CLIENT_INSTANCE.get() {
+        return Ok(rpc_client);
+    }
+
+    // RPC client not initialized yet - try to initialize it now
+    let http_client = crate::primitives::get_http_client()
+        .ok_or(RpcError::HttpClientNotInitialized)?;
+
+    let rpc_client = RpcClient::new(http_client);
+
+    // Try to set the global RPC client (ignore if already set by another thread)
+    let _ = RPC_CLIENT_INSTANCE.set(rpc_client);
+
+    // Get the RPC client (either the one we just set or one set by another thread)
+    RPC_CLIENT_INSTANCE
+        .get()
+        .ok_or(RpcError::HttpClientNotInitialized)
 }
 
 #[cfg(test)]

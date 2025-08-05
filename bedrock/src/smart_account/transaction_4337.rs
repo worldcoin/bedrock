@@ -5,7 +5,7 @@
 
 use crate::primitives::PrimitiveError;
 use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{RpcClient, RpcError, WORLDCHAIN_CHAIN_ID};
+use crate::transaction::rpc::{RpcError, WORLDCHAIN_CHAIN_ID};
 
 use alloy::hex::FromHex;
 use alloy::{
@@ -13,6 +13,7 @@ use alloy::{
     sol,
     sol_types::SolValue,
 };
+use chrono::{Duration, Utc};
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
 
@@ -103,9 +104,10 @@ pub trait Is4337Operable {
     /// 4. Signing the `UserOperation`
     /// 5. Submitting via `eth_sendUserOperation`
     ///
+    /// Uses the global RPC client automatically.
+    ///
     /// # Arguments
     /// * `safe_account` - The Safe Smart Account to sign with
-    /// * `rpc_client` - The RPC client to use for submitting the transaction
     /// * `self_sponsor_token` - Optional token address for self-sponsorship
     ///
     /// # Returns
@@ -114,18 +116,21 @@ pub trait Is4337Operable {
     /// # Errors
     /// * Returns `RpcError` if any RPC operation fails
     /// * Returns `RpcError` if signing fails
+    /// * Returns `RpcError` if the global HTTP client has not been initialized
     async fn sign_and_execute(
         &self,
         safe_account: &crate::smart_account::SafeSmartAccount,
-        rpc_client: &RpcClient<'_>,
         self_sponsor_token: Option<Address>,
     ) -> Result<FixedBytes<32>, RpcError> {
+        // Get the global RPC client
+        let rpc_client = crate::transaction::rpc::get_rpc_client()?;
+
         // 1. Create preflight UserOperation
-        let mut user_operation =
-            self.as_preflight_user_operation()
-                .map_err(|e| RpcError::Generic {
-                    message: format!("Failed to create preflight UserOperation: {e}"),
-                })?;
+        let mut user_operation = self.as_preflight_user_operation().map_err(|e| {
+            RpcError::InvalidResponse {
+                message: format!("Failed to create preflight UserOperation: {e}"),
+            }
+        })?;
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
@@ -138,7 +143,7 @@ pub trait Is4337Operable {
         // 4. Sign the UserOperation
         let encoded_safe_op: EncodedSafeOpStruct = (&user_operation)
             .try_into()
-            .map_err(|e| RpcError::Generic {
+            .map_err(|e| RpcError::InvalidResponse {
                 message: format!("Failed to encode SafeOp: {e}"),
             })?;
 
@@ -148,14 +153,23 @@ pub trait Is4337Operable {
                 WORLDCHAIN_CHAIN_ID,
                 Some(*GNOSIS_SAFE_4337_MODULE),
             )
-            .map_err(|e| RpcError::Generic {
+            .map_err(|e| RpcError::InvalidResponse {
                 message: format!("Failed to sign UserOperation: {e}"),
             })?;
 
         // Add validity timestamps to signature (12 bytes = 6 bytes validAfter + 6 bytes validUntil)
         let mut full_signature = Vec::with_capacity(77);
         full_signature.extend_from_slice(&[0u8; 6]); // validAfter = 0
-        full_signature.extend_from_slice(&[0xff; 6]); // validUntil = max
+
+        // Set validUntil to 12 hours from now
+        let valid_until_timestamp = Utc::now() + Duration::hours(12);
+        let valid_until_seconds = valid_until_timestamp.timestamp();
+        // Convert to u64, ensuring we handle the sign properly
+        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0); // Fallback to 0 if conversion fails
+                                                                                    // Convert to 6-byte big-endian representation (48-bit timestamp)
+        let valid_until_bytes = valid_until_seconds.to_be_bytes();
+        full_signature.extend_from_slice(&valid_until_bytes[2..8]); // Take last 6 bytes (48 bits)
+
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
         user_operation.signature = full_signature.into();

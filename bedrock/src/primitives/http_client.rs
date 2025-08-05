@@ -1,3 +1,9 @@
+use std::sync::{Arc, OnceLock};
+
+/// Global HTTP client instance for Bedrock operations
+static HTTP_CLIENT_INSTANCE: OnceLock<Arc<dyn AuthenticatedHttpClient>> =
+    OnceLock::new();
+
 /// Authenticated HTTP client interface that native applications must implement for bedrock to make backend requests.
 ///
 /// This trait allows bedrock to make HTTP requests through the native app's networking stack,
@@ -120,5 +126,113 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for HttpError {
                 response_body: Vec::new(), // No response body for unexpected UniFFI errors
             },
         )
+    }
+}
+
+/// Sets the global HTTP client instance.
+///
+/// This function allows you to provide your own implementation of the `AuthenticatedHttpClient` trait.
+/// It should be called once at application startup before any HTTP operations.
+///
+/// # Arguments
+///
+/// * `http_client` - An `Arc` containing your HTTP client implementation.
+///
+/// # Note
+///
+/// If the HTTP client has already been set, this function will do nothing and return false.
+///
+/// # Examples
+///
+/// ## Swift
+///
+/// ```swift
+/// let httpClient = MyHttpClient()
+/// let success = setHttpClient(httpClient: httpClient)
+/// ```
+#[uniffi::export]
+pub fn set_http_client(http_client: Arc<dyn AuthenticatedHttpClient>) -> bool {
+    if HTTP_CLIENT_INSTANCE.set(http_client).is_err() {
+        crate::warn!("HTTP client already initialized, ignoring");
+        false
+    } else {
+        crate::info!("HTTP client initialized successfully");
+        true
+    }
+}
+
+/// Gets a reference to the global HTTP client instance.
+///
+/// # Returns
+/// An Option containing a reference to the HTTP client if initialized, None otherwise.
+///
+/// # Examples
+///
+/// ## Swift
+///
+/// ```swift
+/// if let httpClient = getHttpClient() {
+///     // Use the HTTP client
+/// }
+/// ```
+#[uniffi::export]
+#[must_use]
+pub fn get_http_client() -> Option<Arc<dyn AuthenticatedHttpClient>> {
+    HTTP_CLIENT_INSTANCE.get().cloned()
+}
+
+/// Checks if the HTTP client has been initialized.
+///
+/// # Returns
+/// true if the HTTP client has been initialized, false otherwise.
+#[uniffi::export]
+#[must_use]
+pub fn is_http_client_initialized() -> bool {
+    HTTP_CLIENT_INSTANCE.get().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    // Mock HTTP client for testing
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl AuthenticatedHttpClient for MockHttpClient {
+        async fn fetch_from_app_backend(
+            &self,
+            _url: String,
+            _method: HttpMethod,
+            _body: Option<Vec<u8>>,
+        ) -> Result<Vec<u8>, HttpError> {
+            Ok(b"mock response".to_vec())
+        }
+    }
+
+    #[test]
+    fn test_global_http_client_lifecycle() {
+        // Initially, no HTTP client should be set
+        assert!(!is_http_client_initialized());
+        assert!(get_http_client().is_none());
+
+        // Set the HTTP client
+        let mock_client = Arc::new(MockHttpClient);
+        let success = set_http_client(mock_client);
+        assert!(success);
+
+        // Verify the HTTP client is now initialized
+        assert!(is_http_client_initialized());
+        assert!(get_http_client().is_some());
+
+        // Verify that trying to set it again fails
+        let another_mock_client = Arc::new(MockHttpClient);
+        let success = set_http_client(another_mock_client);
+        assert!(!success); // Should return false since already set
+
+        // The original client should still be there
+        assert!(is_http_client_initialized());
+        assert!(get_http_client().is_some());
     }
 }
