@@ -70,6 +70,6 @@ impl SafeSmartAccount {
                     message: format!("Failed to execute transaction: {e}"),
                 })?;
 
-        Ok(HexEncodedData::new(&format!("0x{user_op_hash}"))?)
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 }
