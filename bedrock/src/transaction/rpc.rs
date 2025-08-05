@@ -297,17 +297,17 @@ impl UserOperation {
     pub fn with_paymaster_data(
         mut self,
         sponsor_response: SponsorUserOperationResponse,
-    ) -> Self {
+    ) -> Result<Self, HttpError> {
         self.paymaster = sponsor_response.paymaster;
         self.paymaster_data = sponsor_response.paymaster_data;
         self.paymaster_verification_gas_limit = sponsor_response
             .paymaster_verification_gas_limit
             .try_into()
-            .unwrap_or(0);
+            .map_err(|e| HttpError::Other(format!("Failed to convert paymaster_verification_gas_limit: {e}")))?;
         self.paymaster_post_op_gas_limit = sponsor_response
             .paymaster_post_op_gas_limit
             .try_into()
-            .unwrap_or(0);
+            .map_err(|e| HttpError::Other(format!("Failed to convert paymaster_post_op_gas_limit: {e}")))?;
 
         // Update gas fields if they were estimated by the RPC
         if self.pre_verification_gas.is_zero() {
