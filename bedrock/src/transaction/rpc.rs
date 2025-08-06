@@ -140,7 +140,7 @@ pub struct SponsorUserOperationResponse {
 
 /// Parameters for `wa_sponsorUserOperation` request
 #[derive(Debug, Serialize)]
-struct SponsorUserOperationParams(UserOperation, Option<TokenInfo>);
+struct SponsorUserOperationParams<'a>(&'a UserOperation, Option<TokenInfo>);
 
 /// Token information for self-sponsorship
 #[derive(Debug, Serialize)]
@@ -251,7 +251,7 @@ impl RpcClient {
         self_sponsor_token: Option<Address>,
     ) -> Result<SponsorUserOperationResponse, RpcError> {
         let params = SponsorUserOperationParams(
-            user_operation.clone(),
+            user_operation,
             self_sponsor_token.map(|token| TokenInfo { token }),
         );
 
