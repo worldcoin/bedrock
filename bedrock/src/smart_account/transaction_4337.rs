@@ -53,13 +53,6 @@ const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
 pub trait Is4337Encodable {
-    /// Gas limit for the main execution call.
-    const CALL_GAS_LIMIT: u128;
-
-    // FIXME: full access to SafeSmartAccount is required to sign the transaction
-    /// The address of the wallet that will be used to execute the transaction (i.e. the Safe Smart Account).
-    fn wallet_address(&self) -> &Address;
-
     /// Converts the object into a `callData` for the `executeUserOp` method. This is the inner-most `calldata`.
     ///
     /// # Errors
@@ -74,14 +67,16 @@ pub trait Is4337Encodable {
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn as_preflight_user_operation(&self) -> Result<UserOperation, PrimitiveError> {
+    fn as_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+    ) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
         Ok(UserOperation::new_with_defaults(
-            *self.wallet_address(),
+            wallet_address,
             U256::ZERO, // FIXME: add proper nonce computation (generalizing)
             call_data,
-            Self::CALL_GAS_LIMIT,
         ))
     }
 
@@ -116,7 +111,8 @@ pub trait Is4337Encodable {
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
 
         // 1. Create preflight UserOperation
-        let mut user_operation = self.as_preflight_user_operation()?;
+        let mut user_operation =
+            self.as_preflight_user_operation(safe_account.wallet_address)?;
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
@@ -260,17 +256,11 @@ impl UserOperation {
     /// Initializes a new `UserOperation` with default values.
     ///
     /// In particular, it sets default values for gas limits & fees, paymaster and sets a dummy signature.
-    pub fn new_with_defaults(
-        sender: Address,
-        nonce: U256,
-        call_data: Bytes,
-        call_gas_limit: u128,
-    ) -> Self {
+    pub fn new_with_defaults(sender: Address, nonce: U256, call_data: Bytes) -> Self {
         Self {
             sender,
             nonce,
             call_data,
-            call_gas_limit,
             signature: vec![0xff; USER_OPERATION_SIGNATURE_LENGTH].into(),
             ..Default::default()
         }
@@ -428,7 +418,7 @@ impl EncodedSafeOpStruct {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::address;
+    use alloy::primitives::{address, U128};
 
     use super::*;
     use crate::{
@@ -519,5 +509,222 @@ mod tests {
         assert_eq!(&code[20..24], &[0x12, 0x34, 0xab, 0xcd]);
     }
 
-    // TODO: Add tests for get_paymaster_and_data and extract_validity_timestamps
+    #[test]
+    fn test_with_paymaster_data() {
+        let mut user_op = UserOperation::new_with_defaults(
+            address!("0x1111111111111111111111111111111111111111"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+
+        // Set some initial values
+        user_op.call_gas_limit = 100;
+        user_op.verification_gas_limit = 200;
+
+        let sponsor_response = SponsorUserOperationResponse {
+            paymaster: address!("0x2222222222222222222222222222222222222222"),
+            paymaster_data: Bytes::from_str("0xabcd").unwrap(),
+            pre_verification_gas: U256::from(300),
+            verification_gas_limit: U128::from(400),
+            call_gas_limit: U128::from(500),
+            paymaster_verification_gas_limit: U128::from(600),
+            paymaster_post_op_gas_limit: U128::from(700),
+            max_priority_fee_per_gas: U128::from(800),
+            max_fee_per_gas: U128::from(900),
+        };
+
+        let result = user_op.with_paymaster_data(sponsor_response);
+        assert!(result.is_ok());
+
+        let updated_user_op = result.unwrap();
+        assert_eq!(
+            updated_user_op.paymaster,
+            address!("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            updated_user_op.paymaster_data,
+            Bytes::from_str("0xabcd").unwrap()
+        );
+        assert_eq!(updated_user_op.pre_verification_gas, U256::from(300));
+        assert_eq!(updated_user_op.paymaster_verification_gas_limit, 600);
+        assert_eq!(updated_user_op.paymaster_post_op_gas_limit, 700);
+        assert_eq!(updated_user_op.max_priority_fee_per_gas, 800);
+        assert_eq!(updated_user_op.max_fee_per_gas, 900);
+    }
+
+    #[test]
+    fn test_with_paymaster_data_does_not_overwrite_existing_gas_values() {
+        let mut user_op = UserOperation::new_with_defaults(
+            address!("0x1111111111111111111111111111111111111111"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+
+        // Set existing non-zero values that should NOT be overwritten
+        user_op.pre_verification_gas = U256::from(1000);
+        user_op.verification_gas_limit = 2000;
+        user_op.call_gas_limit = 3000;
+        user_op.max_fee_per_gas = 4000;
+        user_op.max_priority_fee_per_gas = 5000;
+
+        let sponsor_response = SponsorUserOperationResponse {
+            paymaster: address!("0x2222222222222222222222222222222222222222"),
+            paymaster_data: Bytes::from_str("0xabcd").unwrap(),
+            pre_verification_gas: U256::from(300),
+            verification_gas_limit: U128::from(400),
+            call_gas_limit: U128::from(500),
+            paymaster_verification_gas_limit: U128::from(600),
+            paymaster_post_op_gas_limit: U128::from(700),
+            max_priority_fee_per_gas: U128::from(800),
+            max_fee_per_gas: U128::from(900),
+        };
+
+        let result = user_op.with_paymaster_data(sponsor_response);
+        assert!(result.is_ok());
+
+        let updated_user_op = result.unwrap();
+
+        // Paymaster fields should always be updated
+        assert_eq!(
+            updated_user_op.paymaster,
+            address!("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            updated_user_op.paymaster_data,
+            Bytes::from_str("0xabcd").unwrap()
+        );
+        assert_eq!(updated_user_op.paymaster_verification_gas_limit, 600);
+        assert_eq!(updated_user_op.paymaster_post_op_gas_limit, 700);
+
+        // Existing non-nil values should NOT be overwritten
+        assert_eq!(updated_user_op.pre_verification_gas, U256::from(1000));
+        assert_eq!(updated_user_op.verification_gas_limit, 2000);
+        assert_eq!(updated_user_op.call_gas_limit, 3000);
+        assert_eq!(updated_user_op.max_fee_per_gas, 4000);
+        assert_eq!(updated_user_op.max_priority_fee_per_gas, 5000);
+    }
+
+    #[test]
+    fn test_get_paymaster_and_data_no_paymaster() {
+        let user_op = UserOperation {
+            paymaster: Address::ZERO,
+            ..Default::default()
+        };
+        let data = user_op.get_paymaster_and_data();
+        assert!(
+            data.is_empty(),
+            "Expected empty data when paymaster is zero"
+        );
+    }
+
+    #[test]
+    fn test_get_paymaster_and_data_with_paymaster_when_there_is_no_additional_paymaster_data(
+    ) {
+        let user_op = UserOperation {
+            paymaster: address!("0x1111111111111111111111111111111111111111"),
+            paymaster_verification_gas_limit: 1000,
+            paymaster_post_op_gas_limit: 2000,
+            paymaster_data: Bytes::new(),
+            ..Default::default()
+        };
+        let data = user_op.get_paymaster_and_data();
+
+        // Should be 20 bytes (address) + 16 bytes (verification gas) + 16 bytes (post-op gas) = 52 bytes
+        assert_eq!(data.len(), 52);
+
+        // First 20 bytes should be the paymaster address
+        assert_eq!(
+            &data[0..20],
+            address!("0x1111111111111111111111111111111111111111").as_slice()
+        );
+
+        // Next 16 bytes should be verification gas limit (1000 as big-endian u128)
+        let expected_verification_gas = 1000u128.to_be_bytes();
+        assert_eq!(&data[20..36], &expected_verification_gas);
+
+        // Last 16 bytes should be post-op gas limit (2000 as big-endian u128)
+        let expected_post_op_gas = 2000u128.to_be_bytes();
+        assert_eq!(&data[36..52], &expected_post_op_gas);
+    }
+
+    #[test]
+    fn test_get_paymaster_and_data_full() {
+        let paymaster_data = Bytes::from_str("0x1234abcd").unwrap();
+        let user_op = UserOperation {
+            paymaster: address!("0x2222222222222222222222222222222222222222"),
+            paymaster_verification_gas_limit: 3000,
+            paymaster_post_op_gas_limit: 4000,
+            paymaster_data,
+            ..Default::default()
+        };
+        let data = user_op.get_paymaster_and_data();
+
+        // Should be 20 bytes (address) + 16 bytes (verification gas) + 16 bytes (post-op gas) + 4 bytes (data) = 56 bytes
+        assert_eq!(data.len(), 56);
+
+        // First 20 bytes should be the paymaster address
+        assert_eq!(
+            &data[0..20],
+            address!("0x2222222222222222222222222222222222222222").as_slice()
+        );
+
+        // Next 16 bytes should be verification gas limit
+        let expected_verification_gas = 3000u128.to_be_bytes();
+        assert_eq!(&data[20..36], &expected_verification_gas);
+
+        // Next 16 bytes should be post-op gas limit
+        let expected_post_op_gas = 4000u128.to_be_bytes();
+        assert_eq!(&data[36..52], &expected_post_op_gas);
+
+        // Last 4 bytes should be the paymaster data
+        assert_eq!(&data[52..56], &[0x12, 0x34, 0xab, 0xcd]);
+    }
+
+    #[test]
+    fn test_extract_validity_timestamps_valid_signature() {
+        let mut signature = Vec::with_capacity(77);
+
+        // Add validAfter (6 bytes)
+        #[allow(clippy::unreadable_literal)]
+        let valid_after_timestamp: u64 = 1704067200;
+        let valid_after_bytes = valid_after_timestamp.to_be_bytes();
+        signature.extend_from_slice(&valid_after_bytes[2..8]);
+
+        // Add validUntil (6 bytes)
+        #[allow(clippy::unreadable_literal)]
+        let valid_until_timestamp: u64 = 1735689600;
+        let valid_until_bytes = valid_until_timestamp.to_be_bytes();
+        signature.extend_from_slice(&valid_until_bytes[2..8]);
+
+        // Add dummy ECDSA signature
+        signature.extend_from_slice(&[0xff; 65]);
+
+        let user_op = UserOperation {
+            signature: signature.into(),
+            ..Default::default()
+        };
+
+        let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
+
+        assert_eq!(valid_after, U48::from(valid_after_timestamp));
+        assert_eq!(valid_until, U48::from(valid_until_timestamp));
+    }
+
+    #[test]
+    fn test_extract_validity_timestamps_invalid_signature_length() {
+        let user_op = UserOperation {
+            signature: vec![0xFF; 65].into(), // Too short - missing timestamp data
+            ..Default::default()
+        };
+
+        let result = user_op.extract_validity_timestamps();
+        assert!(result.is_err());
+
+        if let Err(PrimitiveError::InvalidInput { attribute, message }) = result {
+            assert_eq!(attribute, "signature");
+            assert!(message.contains("signature does not have the correct length"));
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
 }

@@ -1,4 +1,5 @@
 use alloy::primitives::{Address, U256};
+use bedrock_macros::bedrock_export;
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
@@ -21,8 +22,7 @@ pub enum TransactionError {
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
-// FIXME: uncomment export once this functionality is ready
-// #[bedrock_export]
+#[bedrock_export]
 impl SafeSmartAccount {
     /// Allows executing an ERC-20 token transfer on World Chain.
     ///
@@ -71,8 +71,7 @@ impl SafeSmartAccount {
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
 
-        let transaction =
-            Erc20::new(token_address, to_address, amount, self.wallet_address);
+        let transaction = Erc20::new(token_address, to_address, amount);
 
         // Sign and execute the transaction (uses global RPC client automatically)
         let user_op_hash = transaction
