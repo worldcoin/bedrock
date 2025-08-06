@@ -32,7 +32,6 @@ pub enum Id {
 
 /// Supported RPC methods in Bedrock
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub enum RpcMethod {
     /// Request sponsorship for a `UserOperation`
     #[serde(rename = "wa_sponsorUserOperation")]
