@@ -9,6 +9,32 @@ use std::str::FromStr;
 // Re-export HTTP client types for external use
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
+// Serde helper functions for skip_serializing_if
+
+/// Helper function to check if an `Address` is zero for serde `skip_serializing_if`
+#[must_use]
+pub fn is_zero_address(addr: &Address) -> bool {
+    addr.is_zero()
+}
+
+/// Helper function to check if `Bytes` is empty for serde `skip_serializing_if`
+#[must_use]
+pub fn is_empty_bytes(bytes: &Bytes) -> bool {
+    bytes.is_empty()
+}
+
+/// Helper function to check if `u128` is zero for serde `skip_serializing_if`
+#[must_use]
+pub const fn is_zero_u128(value: &u128) -> bool {
+    *value == 0
+}
+
+/// Helper function to check if `U256` is zero for serde `skip_serializing_if`
+#[must_use]
+pub fn is_zero_u256(value: &U256) -> bool {
+    value.is_zero()
+}
+
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
 

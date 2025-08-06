@@ -3,7 +3,10 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::{HttpError, Network, PrimitiveError};
+use crate::primitives::{
+    is_empty_bytes, is_zero_address, is_zero_u128, is_zero_u256, HttpError, Network,
+    PrimitiveError,
+};
 use crate::smart_account::SafeSmartAccountSigner;
 use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
 
@@ -16,26 +19,6 @@ use alloy::{
 use chrono::{Duration, Utc};
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
-
-/// Helper function to check if an `Address` is zero for serde `skip_serializing_if`
-fn is_zero_address(addr: &Address) -> bool {
-    addr.is_zero()
-}
-
-/// Helper function to check if `Bytes` is empty for serde `skip_serializing_if`
-fn is_empty_bytes(bytes: &Bytes) -> bool {
-    bytes.is_empty()
-}
-
-/// Helper function to check if `u128` is zero for serde `skip_serializing_if`
-const fn is_zero_u128(value: &u128) -> bool {
-    *value == 0
-}
-
-/// Helper function to check if `U256` is zero for serde `skip_serializing_if`
-fn is_zero_u256(value: &U256) -> bool {
-    value.is_zero()
-}
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
