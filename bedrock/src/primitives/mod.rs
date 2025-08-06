@@ -166,12 +166,15 @@ impl ParseFromForeignBinding for U256 {
     }
 }
 
-impl ParseFromForeignBinding for U128 {
+impl ParseFromForeignBinding for u128 {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
-        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+        let number = U128::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
             attribute: attr,
             message: e.to_string(),
-        })
+        })?;
+
+        // This is safe because we know the number is within the range of u128
+        Ok(number.to::<Self>())
     }
 }
 

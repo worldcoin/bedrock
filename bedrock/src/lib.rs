@@ -15,10 +15,17 @@
 pub use bedrock_macros::{bedrock_error, bedrock_export, bedrock_sol};
 
 /// Introduces low level operations with the [Safe Smart Account](https://safe.global/), including
-/// signing messages (ERC-191) and typed data (EIP-712).
+/// signing user operations (ERC-4337), messages (ERC-191) and typed data (EIP-712).
 ///
 /// Reference: <https://github.com/safe-global/safe-smart-account>
 pub mod smart_account;
+
+/// A high level API to perform transactions from the crypto wallet.
+///
+/// We call this transactions for the sake of clarity, but all transactions are executed as ERC-4337 user operations.
+///
+/// Examples include: ERC-20 token transfers, swaps, etc.
+pub mod transaction;
 
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;

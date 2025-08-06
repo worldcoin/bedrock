@@ -3,58 +3,16 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::ParseFromForeignBinding;
+use crate::primitives::PrimitiveError;
 
-use super::SafeSmartAccountError;
 use alloy::hex::FromHex;
 use alloy::{
     primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes},
     sol,
     sol_types::SolValue,
 };
-use ruint::aliases::{U128, U256};
+use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
-
-/// A pseudo-transaction object for EIP-4337. Used to execute transactions through the Safe Smart Account.
-///
-/// This object is expected to be initialized from foreign languages.
-///
-/// Reference: <https://www.erc4337.io/docs/understanding-ERC-4337/user-operation>
-///
-/// Note the types of this struct are types that can be lifted from foreign languages to be then parsed and validated.
-#[derive(uniffi::Record, Clone, Debug)]
-pub struct UserOperation {
-    /// The address of the smart contract account (Solidity type: `address`)
-    pub sender: String,
-    /// Anti-replay protection; also used as the salt for first-time account creation (Solidity type: `uint256`)
-    pub nonce: String,
-    /// Data that's passed to the sender for execution (Solidity type: `bytes`)
-    pub call_data: String,
-    /// Gas limit for execution phase (Solidity type: `uint128`)
-    pub call_gas_limit: String,
-    /// Gas limit for verification phase (Solidity type: `uint128`)
-    pub verification_gas_limit: String,
-    /// Gas to compensate the bundler (Solidity type: `uint256`)
-    pub pre_verification_gas: String,
-    /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559)'s `max_fee_per_gas`) (Solidity type: `uint256`)
-    pub max_fee_per_gas: String,
-    /// Maximum priority fee per gas (Solidity type: `uint128`)
-    pub max_priority_fee_per_gas: String,
-    /// Paymaster contact address (Solidity type: `address`)
-    pub paymaster: Option<String>,
-    /// Paymaster verification gas limit (Solidity type: `uint128`)
-    pub paymaster_verification_gas_limit: String,
-    /// Paymaster post-operation gas limit (Solidity type: `uint128`)
-    pub paymaster_post_op_gas_limit: String,
-    /// Paymaster additional data for verification (Solidity type: `bytes`)
-    pub paymaster_data: Option<String>,
-    /// Used to validate a `UserOperation` along with the nonce during verification (Solidity type: `bytes`)
-    pub signature: String,
-    /// Factory address (Solidity type: `address`)
-    pub factory: Option<String>,
-    /// Factory data (Solidity type: `bytes`)
-    pub factory_data: Option<String>,
-}
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
@@ -76,10 +34,106 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
 });
 
+/// The length of a 4337 `UserOperation` signature.
+///
+/// This is the length of a regular ECDSA signature with r,s,v (32 + 32 + 1 = 65 bytes) + 12 bytes for the validity timestamps.
+const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
+
+/// Identifies a transaction that can be encoded as a 4337 `UserOperation`.
+pub trait Is4337Encodable {
+    /// Converts the object into a `callData` for the `executeUserOp` method.
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    fn as_execute_user_op_call_data(&self) -> Bytes;
+
+    /// Converts the object into a preflight `UserOperation` for use with the `Safe4337Module`.
+    ///
+    /// A preflight operation is defined as having empty gas & paymaster data and a dummy signature.
+    ///
+    /// The preflight operation is sent to the RPC to request sponsorship.
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    fn as_preflight_user_operation(
+        &self,
+        sender: Address,
+        nonce: U256,
+        call_gas_limit: u128,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let call_data = self.as_execute_user_op_call_data();
+
+        Ok(UserOperation::new_with_defaults(
+            sender,
+            nonce,
+            call_data,
+            call_gas_limit,
+        ))
+    }
+}
+
 sol! {
+
+    /// Interface for the `Safe4337Module` contract.
+    ///
+    /// Reference: <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L172>
+    interface ISafe4337Module {
+        function executeUserOp(address to, uint256 value, bytes calldata data, uint8 operation) external;
+    }
+
+    /// The structure of a generic 4337 UserOperation.
+    ///
+    /// `UserOperation`s are not used on-chain, they are used by RPCs to bundle transactions as `PackedUserOperation`s.
+    ///
+    /// For the flow of World App:
+    /// - A `UserOperation` is created by the user and passed to the World App RPC to request sponsorship through the `wa_sponsorUserOperation` method.
+    /// - The final signed `UserOperation` is then passed to the World App RPC to be executed through the standard `eth_sendUserOperation` method.
+    ///
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
+    #[sol(rename_all = "camelcase")]
+    #[derive(Debug, Default)]
+    struct UserOperation {
+        /// The Account making the UserOperation
+        address sender;
+        /// Anti-replay protection
+        uint256 nonce;
+        /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
+        address factory;
+        /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
+        bytes factory_data;
+        /// The data to pass to the sender during the main execution call
+        bytes call_data;
+        /// Gas limit for the main execution call.
+        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        uint128 call_gas_limit;
+        /// Gas limit for the verification call
+        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        uint128 verification_gas_limit;
+        /// Extra gas to pay the bundler
+        uint256 pre_verification_gas;
+        /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_fee_per_gas)
+        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        uint128 max_fee_per_gas;
+        /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_priority_fee_per_gas)
+        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        uint128 max_priority_fee_per_gas;
+        /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
+        address paymaster;
+        /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
+        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        uint128 paymaster_verification_gas_limit;
+        /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
+        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        uint128 paymaster_post_op_gas_limit;
+        /// Data for paymaster (only if paymaster exists)
+        bytes paymaster_data;
+        /// Data passed into the sender to verify authorization
+        bytes signature;
+    }
+
     /// The EIP-712 type-hash for a SafeOp, representing the structure of a User Operation for the Safe.
     ///
-    /// Reference: <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L58>
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
     #[sol(rename_all = "camelcase")]
     struct EncodedSafeOpStruct {
         bytes32 type_hash;
@@ -99,59 +153,114 @@ sol! {
     }
 }
 
+impl UserOperation {
+    /// Initializes a new `UserOperation` with default values.
+    ///
+    /// In particular, it sets default values for gas limits & fees, paymaster and sets a dummy signature.
+    pub fn new_with_defaults(
+        sender: Address,
+        nonce: U256,
+        call_data: Bytes,
+        call_gas_limit: u128,
+    ) -> Self {
+        Self {
+            sender,
+            nonce,
+            call_data,
+            call_gas_limit,
+            signature: vec![0xff; USER_OPERATION_SIGNATURE_LENGTH].into(),
+            ..Default::default()
+        }
+    }
+
+    /// Gathers the factory+factoryData as `initCode`.
+    pub fn get_init_code(&self) -> Bytes {
+        // Check if `factory` is present
+        if self.factory.is_zero() {
+            return Bytes::new();
+        }
+
+        let mut out = Vec::new();
+        out.extend_from_slice(self.factory.as_slice());
+        out.extend_from_slice(&self.factory_data);
+        out.into()
+    }
+
+    /// Extract `validAfter` and `validUntil` from a signature as `U256` values.
+    ///
+    /// Expects at least 12 bytes additional bytes in the signature.
+    ///
+    /// # Errors
+    /// - Returns an error if the signature is too short.
+    pub fn extract_validity_timestamps(&self) -> Result<(U48, U48), PrimitiveError> {
+        // timestamp validity (12 bytes) + regular ECDSA signature (65 bytes)
+        if self.signature.len() != 77 {
+            return Err(PrimitiveError::InvalidInput {
+                attribute: "signature",
+                message: "signature does not have the correct length (77 bytes)"
+                    .to_string(),
+            });
+        }
+
+        let mut valid_after = [0u8; 6];
+        let mut valid_until = [0u8; 6];
+
+        valid_after.copy_from_slice(&self.signature[0..6]);
+        valid_until.copy_from_slice(&self.signature[6..12]);
+
+        // Extract 6-byte validAfter and validUntil slices and convert them to U256
+        let valid_after = U48::from_be_bytes(valid_after);
+        let valid_until = U48::from_be_bytes(valid_until);
+
+        Ok((valid_after, valid_until))
+    }
+
+    /// Merges all paymaster related data into a single `paymasterAndData` attribute.
+    pub fn get_paymaster_and_data(&self) -> Bytes {
+        if self.paymaster.is_zero() {
+            return Bytes::new();
+        }
+
+        let mut out = Vec::new();
+        // Append paymaster address (20 bytes)
+        out.extend_from_slice(self.paymaster.as_slice());
+
+        // Append paymasterVerificationGasLimit (16 bytes)
+        out.extend_from_slice(&self.paymaster_verification_gas_limit.to_be_bytes());
+
+        // Append paymasterPostOpGasLimit (16 bytes)
+        out.extend_from_slice(&self.paymaster_post_op_gas_limit.to_be_bytes());
+
+        // Append paymasterData if it exists
+        if !self.paymaster_data.is_empty() {
+            out.extend_from_slice(&self.paymaster_data);
+        }
+
+        out.into()
+    }
+}
+
+/// Converts a `UserOperation` into an `EncodedSafeOpStruct` to the 4337 user operation can be signed.
+///
+/// The `Safe4337Module` expects the hash of the `EncodedSafeOpStruct` to be signed.
 impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
-    type Error = SafeSmartAccountError;
+    type Error = PrimitiveError;
 
     fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
-        let sender = Address::parse_from_ffi(&user_op.sender, "sender")?;
-
-        let nonce = U256::parse_from_ffi(&user_op.nonce, "nonce")?;
-
-        let call_data = Bytes::parse_from_ffi(&user_op.call_data, "call_data")?;
-
-        let verification_gas_limit = U128::parse_from_ffi(
-            &user_op.verification_gas_limit,
-            "verification_gas_limit",
-        )?
-        .to::<u128>();
-
-        let call_gas_limit =
-            U128::parse_from_ffi(&user_op.call_gas_limit, "call_gas_limit")?
-                .to::<u128>();
-
-        let pre_verification_gas = U256::parse_from_ffi(
-            &user_op.pre_verification_gas,
-            "pre_verification_gas",
-        )?;
-
-        let max_priority_fee_per_gas = U128::parse_from_ffi(
-            &user_op.max_priority_fee_per_gas,
-            "max_priority_fee_per_gas",
-        )?
-        .to::<u128>();
-
-        let max_fee_per_gas =
-            U128::parse_from_ffi(&user_op.max_fee_per_gas, "max_fee_per_gas")?
-                .to::<u128>();
-
-        let paymaster_and_data = get_paymaster_and_data(user_op)?;
-
-        let signature = Bytes::parse_from_ffi(&user_op.signature, "signature")?;
-
-        let (valid_after, valid_until) = extract_validity_timestamps(&signature)?;
+        let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
 
         Ok(Self {
             type_hash: *SAFE_OP_TYPEHASH,
-            safe: sender,
-            nonce,
-            init_code_hash: keccak256(&get_init_code(user_op)?),
-            call_data_hash: keccak256(&call_data),
-            verification_gas_limit,
-            call_gas_limit,
-            pre_verification_gas,
-            max_priority_fee_per_gas,
-            max_fee_per_gas,
-            paymaster_and_data_hash: keccak256(&paymaster_and_data),
+            safe: user_op.sender,
+            nonce: user_op.nonce,
+            init_code_hash: keccak256(user_op.get_init_code()),
+            call_data_hash: keccak256(&user_op.call_data),
+            verification_gas_limit: user_op.verification_gas_limit,
+            call_gas_limit: user_op.call_gas_limit,
+            pre_verification_gas: user_op.pre_verification_gas,
+            max_priority_fee_per_gas: user_op.max_priority_fee_per_gas,
+            max_fee_per_gas: user_op.max_fee_per_gas,
+            paymaster_and_data_hash: keccak256(user_op.get_paymaster_and_data()),
             valid_after,
             valid_until,
             entry_point: *ENTRYPOINT_4337,
@@ -167,207 +276,18 @@ impl EncodedSafeOpStruct {
     }
 }
 
-/// Extract validAfter and validUntil from a signature as `U256` values.
-/// Expects at least 12 bytes in the signature. Returns an error if the signature is too short.
-fn extract_validity_timestamps(
-    signature: &[u8],
-) -> Result<(U48, U48), SafeSmartAccountError> {
-    // timestamp validity (12 bytes) + regular ECDSA signature (65 bytes)
-    if signature.len() != 77 {
-        return Err(SafeSmartAccountError::InvalidInput {
-            attribute: "signature",
-            message: "signature does not have the correct length (77 bytes)"
-                .to_string(),
-        });
-    }
-
-    let mut valid_after = [0u8; 6];
-    let mut valid_until = [0u8; 6];
-
-    valid_after.copy_from_slice(&signature[0..6]);
-    valid_until.copy_from_slice(&signature[6..12]);
-
-    // Extract 6-byte validAfter and validUntil slices and convert them to U256
-    let valid_after = U48::from_be_bytes(valid_after);
-    let valid_until = U48::from_be_bytes(valid_until);
-
-    Ok((valid_after, valid_until))
-}
-
-/// Gathers the factory+factoryData as `initCode`.
-fn get_init_code(user_op: &UserOperation) -> Result<Bytes, SafeSmartAccountError> {
-    // Check if `factory` is present. If None, or "0x", or empty string -> treat as no factory.
-    let factory_str = match user_op.factory.as_deref() {
-        None | Some("0x" | "") => {
-            // No factory -> return empty bytes
-            return Ok(Bytes::new());
-        }
-        Some(addr) => addr,
-    };
-
-    // At this point, we have a non-empty factory string that is not just "0x"
-    let factory_addr = Address::from_str(factory_str).map_err(|e| {
-        SafeSmartAccountError::InvalidInput {
-            attribute: "factory",
-            message: e.to_string(),
-        }
-    })?;
-
-    let mut out = Vec::new();
-    out.extend_from_slice(factory_addr.as_slice());
-
-    // If factory_data is present and not empty, parse it as hex and append
-    if let Some(factory_data) = &user_op.factory_data {
-        if !factory_data.is_empty() && factory_data != "0x" {
-            let raw_factory_data =
-                hex::decode(factory_data.strip_prefix("0x").unwrap_or(factory_data))
-                    .map_err(|e| SafeSmartAccountError::InvalidInput {
-                        attribute: "factory_data",
-                        message: e.to_string(),
-                    })?;
-            out.extend_from_slice(&raw_factory_data);
-        }
-    }
-
-    Ok(out.into())
-}
-
-/// Merges Paymaster related data
-fn get_paymaster_and_data(
-    user_op: &UserOperation,
-) -> Result<Bytes, SafeSmartAccountError> {
-    user_op.paymaster.as_ref().map_or_else(
-        || Ok(Bytes::new()),
-        |pm| {
-            let mut out = Vec::new();
-
-            // Append paymaster address (20 bytes)
-            out.extend_from_slice(
-                Address::from_str(pm)
-                    .map_err(|e| SafeSmartAccountError::InvalidInput {
-                        attribute: "paymaster",
-                        message: e.to_string(),
-                    })?
-                    .as_slice(),
-            );
-
-            // Append paymasterVerificationGasLimit (16 bytes)
-            let paymaster_verification_gas_limit = U128::from_str(
-                &user_op.paymaster_verification_gas_limit,
-            )
-            .map_err(|e| SafeSmartAccountError::InvalidInput {
-                attribute: "paymaster_verification_gas_limit",
-                message: e.to_string(),
-            })?;
-            out.extend_from_slice(
-                &paymaster_verification_gas_limit.to_be_bytes::<16>(),
-            );
-
-            // Append paymasterPostOpGasLimit (16 bytes)
-            let paymaster_post_op_gas_limit =
-                U128::from_str(&user_op.paymaster_post_op_gas_limit).map_err(|e| {
-                    SafeSmartAccountError::InvalidInput {
-                        attribute: "paymaster_post_op_gas_limit",
-                        message: e.to_string(),
-                    }
-                })?;
-            out.extend_from_slice(&paymaster_post_op_gas_limit.to_be_bytes::<16>());
-
-            // Append paymasterData if it exists
-            if let Some(data) = &user_op.paymaster_data {
-                out.extend_from_slice(
-                    &hex::decode(data.strip_prefix("0x").unwrap_or(data)).map_err(
-                        |e| SafeSmartAccountError::InvalidInput {
-                            attribute: "paymaster_data",
-                            message: e.to_string(),
-                        },
-                    )?,
-                );
-            }
-
-            Ok(out.into())
-        },
-    )
-}
-
-/// A gas efficient representation of a `UserOperation` for use with the `EntryPoint` contract.
-///
-/// Submitting transactions through the `EntryPoint` requires a `PackedUserOperation`,
-/// see `handleOps` in the `EntryPoint` contract. Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol#L174>
-///
-///
-/// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/interfaces/PackedUserOperation.sol#L18>
-#[derive(Clone, Debug)]
-pub struct PackedUserOperation {
-    /// The address of the smart contract account to be called.
-    pub sender: Address,
-    /// Anti-replay nonce for the userOp.
-    pub nonce: U256,
-    /// Optional initialization code for deploying the account if it doesn't exist.
-    pub init_code: Bytes,
-    /// Calldata for the actual execution to be performed by the account.
-    pub call_data: Bytes,
-    /// Packed gas limits: first 16 bytes = `verificationGasLimit`, next 16 bytes = `callGasLimit`.
-    pub account_gas_limits: [u8; 32],
-    /// The fixed gas to be paid before the verification step (covers calldata costs, etc.).
-    pub pre_verification_gas: U256,
-    /// Packed fee fields: first 16 bytes = `maxPriorityFeePerGas`, next 16 bytes = `maxFeePerGas`.
-    pub gas_fees: [u8; 32],
-    /// Data and address for an optional paymaster sponsoring the transaction.
-    pub paymaster_and_data: Bytes,
-    /// Signature over the operation (account-specific validation logic).
-    pub signature: Bytes,
-}
-
-/// Pack two U128 in 32 bytes
-fn pack_pair(a: &U128, b: &U128) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    a.copy_be_bytes_to(&mut out[..16]);
-    b.copy_be_bytes_to(&mut out[16..]);
-    out
-}
-
-impl TryFrom<&UserOperation> for PackedUserOperation {
-    type Error = SafeSmartAccountError;
-
-    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
-        Ok(Self {
-            sender: Address::parse_from_ffi(&user_op.sender, "sender")?,
-            nonce: U256::parse_from_ffi(&user_op.nonce, "nonce")?,
-            init_code: get_init_code(user_op)?,
-            call_data: Bytes::parse_from_ffi(&user_op.call_data, "call_data")?,
-            account_gas_limits: pack_pair(
-                &U128::parse_from_ffi(
-                    &user_op.verification_gas_limit,
-                    "verification_gas_limit",
-                )?,
-                &U128::parse_from_ffi(&user_op.call_gas_limit, "call_gas_limit")?,
-            ),
-            pre_verification_gas: U256::parse_from_ffi(
-                &user_op.pre_verification_gas,
-                "pre_verification_gas",
-            )?,
-            gas_fees: pack_pair(
-                &U128::parse_from_ffi(
-                    &user_op.max_priority_fee_per_gas,
-                    "max_priority_fee_per_gas",
-                )?,
-                &U128::parse_from_ffi(&user_op.max_fee_per_gas, "max_fee_per_gas")?,
-            ),
-            paymaster_and_data: get_paymaster_and_data(user_op)?,
-            signature: Bytes::parse_from_ffi(&user_op.signature, "signature")?,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::address;
+
     use super::*;
-    use crate::smart_account::SafeSmartAccount;
+    use crate::{
+        smart_account::SafeSmartAccount, transaction::foreign::UnparsedUserOperation,
+    };
 
     #[test]
     fn test_hash_user_op() {
-        let user_op = UserOperation {
+        let user_op = UnparsedUserOperation {
         sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
         nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
         call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
@@ -385,6 +305,8 @@ mod tests {
         factory_data: None,
     };
 
+        let user_op: UserOperation = user_op.try_into().unwrap();
+
         let encoded_safe_op = EncodedSafeOpStruct::try_from(&user_op).unwrap();
         let hash = encoded_safe_op.into_transaction_hash();
 
@@ -398,35 +320,14 @@ mod tests {
         assert_eq!(hex::encode(safe_tx_hash), expected_hash);
     }
 
-    // Helper function to fill in the other fields of UserOperation so the test compiles
-    fn dummy_user_op() -> UserOperation {
-        UserOperation {
-            sender: "0x0".into(),
-            nonce: "0".into(),
-            call_data: String::new(),
-            call_gas_limit: "0".into(),
-            verification_gas_limit: "0".into(),
-            pre_verification_gas: "0".into(),
-            max_fee_per_gas: "0".into(),
-            max_priority_fee_per_gas: "0".into(),
-            paymaster: None,
-            paymaster_verification_gas_limit: "0".into(),
-            paymaster_post_op_gas_limit: "0".into(),
-            paymaster_data: None,
-            signature: String::new(),
-            factory: None,
-            factory_data: None,
-        }
-    }
-
     #[test]
     fn test_get_init_code_allows_no_factory() {
         let user_op_no_factory = UserOperation {
-            factory: None,
-            factory_data: None,
-            ..dummy_user_op()
+            factory: Address::ZERO,
+            factory_data: Bytes::new(),
+            ..Default::default()
         };
-        let code = get_init_code(&user_op_no_factory).unwrap();
+        let code = user_op_no_factory.get_init_code();
         assert!(
             code.is_empty(),
             "Expected empty init code when factory=None"
@@ -434,28 +335,13 @@ mod tests {
     }
 
     #[test]
-    fn test_get_init_code_allows_0x_factory() {
-        let user_op_0x_factory = UserOperation {
-            factory: Some("0x".to_string()),
-            factory_data: None,
-            ..dummy_user_op()
-        };
-        let code = get_init_code(&user_op_0x_factory).unwrap();
-        assert!(
-            code.is_empty(),
-            "Expected empty init code when factory='0x'"
-        );
-    }
-
-    #[test]
     fn test_get_init_code_parse_valid_factory_no_data() {
         let user_op_valid_factory = UserOperation {
-            factory: Some("0x1111111111111111111111111111111111111111".to_string()),
-            factory_data: None,
-            ..dummy_user_op()
+            factory: address!("0x1111111111111111111111111111111111111111"),
+            factory_data: Bytes::new(),
+            ..Default::default()
         };
-        let code = get_init_code(&user_op_valid_factory).unwrap();
-        // Should be exactly 20 bytes of the parsed address.
+        let code = user_op_valid_factory.get_init_code();
         assert_eq!(
             code.len(),
             20,
@@ -466,33 +352,19 @@ mod tests {
     #[test]
     fn test_get_init_code_parse_valid_factory_and_data() {
         let user_op_with_data = UserOperation {
-            factory: Some("0x2222222222222222222222222222222222222222".to_string()),
-            factory_data: Some("0x1234abcd".to_string()),
-            ..dummy_user_op()
+            factory: address!("0x2222222222222222222222222222222222222222"),
+            factory_data: Bytes::from_str("0x1234abcd").unwrap(),
+            ..Default::default()
         };
-        let code = get_init_code(&user_op_with_data).unwrap();
+        let code = user_op_with_data.get_init_code();
         assert_eq!(
             code.len(),
             20 + 4,
             "Should be 20 bytes + length of factory_data"
         );
-        // The last 4 bytes should match 0x12,0x34,0xab,0xcd
+        // The last 4 bytes should match 0x12, 0x34, 0xab, 0xcd
         assert_eq!(&code[20..24], &[0x12, 0x34, 0xab, 0xcd]);
     }
 
-    #[test]
-    fn test_get_init_code_invalid_factory() {
-        let user_op_invalid_factory = UserOperation {
-            factory: Some("0xZZZZZ...".to_string()), // obviously not valid hex
-            factory_data: None,
-            ..dummy_user_op()
-        };
-        let err = get_init_code(&user_op_invalid_factory).unwrap_err();
-        match err {
-            SafeSmartAccountError::InvalidInput { attribute, .. } => {
-                assert_eq!(attribute, "factory");
-            }
-            _ => panic!("Expected SafeSmartAccountError::InvalidInput"),
-        }
-    }
+    // TODO: Add tests for get_paymaster_and_data and extract_validity_timestamps
 }
