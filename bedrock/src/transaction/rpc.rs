@@ -6,8 +6,10 @@
 
 use crate::{
     primitives::http_client::get_http_client,
-    primitives::{AuthenticatedHttpClient, HttpError, HttpMethod, Network},
-    smart_account::UserOperation,
+    primitives::{
+        AuthenticatedHttpClient, HttpError, HttpMethod, Network, PrimitiveError,
+    },
+    smart_account::{SafeSmartAccountError, UserOperation},
 };
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
@@ -112,6 +114,14 @@ pub enum RpcError {
     /// HTTP client has not been initialized
     #[error("HTTP client not initialized. Call set_http_client() first.")]
     HttpClientNotInitialized,
+
+    /// Primitive operation error
+    #[error("Primitive operation failed: {0}")]
+    PrimitiveError(#[from] PrimitiveError),
+
+    /// Safe Smart Account operation error
+    #[error("Safe Smart Account operation failed: {0}")]
+    SafeSmartAccountError(#[from] SafeSmartAccountError),
 }
 
 /// Response from `wa_sponsorUserOperation`

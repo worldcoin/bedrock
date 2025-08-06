@@ -128,11 +128,7 @@ pub trait Is4337Operable {
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
 
         // 1. Create preflight UserOperation
-        let mut user_operation = self.as_preflight_user_operation().map_err(|e| {
-            RpcError::InvalidResponse {
-                message: format!("Failed to create preflight UserOperation: {e}"),
-            }
-        })?;
+        let mut user_operation = self.as_preflight_user_operation()?;
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
@@ -143,21 +139,13 @@ pub trait Is4337Operable {
         user_operation = user_operation.with_paymaster_data(sponsor_response)?;
 
         // 4. Sign the UserOperation
-        let encoded_safe_op: EncodedSafeOpStruct = (&user_operation)
-            .try_into()
-            .map_err(|e| RpcError::InvalidResponse {
-                message: format!("Failed to encode SafeOp: {e}"),
-            })?;
+        let encoded_safe_op: EncodedSafeOpStruct = (&user_operation).try_into()?;
 
-        let signature = safe_account
-            .sign_digest(
-                encoded_safe_op.into_transaction_hash(),
-                network as u32,
-                Some(*GNOSIS_SAFE_4337_MODULE),
-            )
-            .map_err(|e| RpcError::InvalidResponse {
-                message: format!("Failed to sign UserOperation: {e}"),
-            })?;
+        let signature = safe_account.sign_digest(
+            encoded_safe_op.into_transaction_hash(),
+            network as u32,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        )?;
 
         // Add validity timestamps to signature (12 bytes = 6 bytes validAfter + 6 bytes validUntil)
         let mut full_signature = Vec::with_capacity(77);
