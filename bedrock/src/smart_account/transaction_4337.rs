@@ -3,7 +3,12 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::PrimitiveError;
+use crate::primitives::{
+    is_empty_bytes, is_zero_address, is_zero_u128, is_zero_u256, HttpError, Network,
+    PrimitiveError,
+};
+use crate::smart_account::SafeSmartAccountSigner;
+use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
 
 use alloy::hex::FromHex;
 use alloy::{
@@ -11,6 +16,7 @@ use alloy::{
     sol,
     sol_types::SolValue,
 };
+use chrono::{Duration, Utc};
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
 
@@ -39,9 +45,22 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
 /// This is the length of a regular ECDSA signature with r,s,v (32 + 32 + 1 = 65 bytes) + 12 bytes for the validity timestamps.
 const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
 
-/// Identifies a transaction that can be encoded as a 4337 `UserOperation`.
+/// The default validity duration for 4337 `UserOperation` signatures.
+///
+/// Operations are valid for this duration from the time they are signed.
+const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
+
+/// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
+#[allow(async_fn_in_trait)]
 pub trait Is4337Encodable {
-    /// Converts the object into a `callData` for the `executeUserOp` method.
+    /// Gas limit for the main execution call.
+    const CALL_GAS_LIMIT: u128;
+
+    // FIXME: full access to SafeSmartAccount is required to sign the transaction
+    /// The address of the wallet that will be used to execute the transaction (i.e. the Safe Smart Account).
+    fn wallet_address(&self) -> &Address;
+
+    /// Converts the object into a `callData` for the `executeUserOp` method. This is the inner-most `calldata`.
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
@@ -55,20 +74,91 @@ pub trait Is4337Encodable {
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn as_preflight_user_operation(
-        &self,
-        sender: Address,
-        nonce: U256,
-        call_gas_limit: u128,
-    ) -> Result<UserOperation, PrimitiveError> {
+    fn as_preflight_user_operation(&self) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
         Ok(UserOperation::new_with_defaults(
-            sender,
-            nonce,
+            *self.wallet_address(),
+            U256::ZERO, // FIXME: add proper nonce computation (generalizing)
             call_data,
-            call_gas_limit,
+            Self::CALL_GAS_LIMIT,
         ))
+    }
+
+    /// Signs and executes a 4337 `UserOperation` by:
+    /// 1. Creating a preflight `UserOperation`
+    /// 2. Requesting sponsorship via `wa_sponsorUserOperation`
+    /// 3. Merging paymaster data into the `UserOperation`
+    /// 4. Signing the `UserOperation`
+    /// 5. Submitting via `eth_sendUserOperation`
+    ///
+    /// Uses the global RPC client automatically.
+    ///
+    /// # Arguments
+    /// * `network` - The network to use for the operation
+    /// * `safe_account` - The Safe Smart Account to sign with
+    /// * `self_sponsor_token` - Optional token address for self-sponsorship
+    ///
+    /// # Returns
+    /// * `Result<FixedBytes<32>, RpcError>` - The `userOpHash` on success
+    ///
+    /// # Errors
+    /// * Returns `RpcError` if any RPC operation fails
+    /// * Returns `RpcError` if signing fails
+    /// * Returns `RpcError` if the global HTTP client has not been initialized
+    async fn sign_and_execute(
+        &self,
+        network: Network,
+        safe_account: &crate::smart_account::SafeSmartAccount,
+        self_sponsor_token: Option<Address>,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        // Get the global RPC client
+        let rpc_client = crate::transaction::rpc::get_rpc_client()?;
+
+        // 1. Create preflight UserOperation
+        let mut user_operation = self.as_preflight_user_operation()?;
+
+        // 2. Request sponsorship
+        let sponsor_response = rpc_client
+            .sponsor_user_operation(network, &user_operation, self_sponsor_token)
+            .await?;
+
+        // 3. Merge paymaster data
+        user_operation = user_operation.with_paymaster_data(sponsor_response)?;
+
+        // 4. Sign the UserOperation
+        let encoded_safe_op: EncodedSafeOpStruct = (&user_operation).try_into()?;
+
+        let signature = safe_account.sign_digest(
+            encoded_safe_op.into_transaction_hash(),
+            network as u32,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        )?;
+
+        // Add validity timestamps to signature (12 bytes = 6 bytes validAfter + 6 bytes validUntil)
+        let mut full_signature = Vec::with_capacity(77);
+        full_signature.extend_from_slice(&[0u8; 6]); // validAfter = 0
+
+        // Set validUntil to the configured duration from now
+        let valid_until_timestamp =
+            Utc::now() + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS);
+        let valid_until_seconds = valid_until_timestamp.timestamp();
+        // Convert to u64, ensuring we handle the sign properly
+        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0); // Fallback to 0 if conversion fails
+                                                                                    // Convert to 6-byte big-endian representation (48-bit timestamp)
+        let valid_until_bytes = valid_until_seconds.to_be_bytes();
+        full_signature.extend_from_slice(&valid_until_bytes[2..8]); // Take last 6 bytes (48 bits)
+
+        full_signature.extend_from_slice(&signature.as_bytes()[..]);
+
+        user_operation.signature = full_signature.into();
+
+        // 5. Submit UserOperation
+        let user_op_hash = rpc_client
+            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337)
+            .await?;
+
+        Ok(user_op_hash)
     }
 }
 
@@ -91,43 +181,56 @@ sol! {
     ///
     /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
     #[sol(rename_all = "camelcase")]
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct UserOperation {
         /// The Account making the UserOperation
         address sender;
         /// Anti-replay protection
         uint256 nonce;
         /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
+        #[serde(skip_serializing_if = "is_zero_address")]
         address factory;
         /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
+        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes factory_data;
         /// The data to pass to the sender during the main execution call
         bytes call_data;
         /// Gas limit for the main execution call.
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 call_gas_limit;
         /// Gas limit for the verification call
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 verification_gas_limit;
         /// Extra gas to pay the bundler
+        #[serde(skip_serializing_if = "is_zero_u256")]
         uint256 pre_verification_gas;
         /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_fee_per_gas)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 max_fee_per_gas;
         /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_priority_fee_per_gas)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 max_priority_fee_per_gas;
         /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
+        #[serde(skip_serializing_if = "is_zero_address")]
         address paymaster;
         /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 paymaster_verification_gas_limit;
         /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 paymaster_post_op_gas_limit;
         /// Data for paymaster (only if paymaster exists)
+        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes paymaster_data;
         /// Data passed into the sender to verify authorization
+        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes signature;
     }
 
@@ -238,6 +341,53 @@ impl UserOperation {
 
         out.into()
     }
+
+    /// Merges paymaster data from sponsorship response into the `UserOperation`
+    ///
+    /// # Errors
+    /// Returns an error if any U128 to u128 conversion fails
+    pub fn with_paymaster_data(
+        mut self,
+        sponsor_response: SponsorUserOperationResponse,
+    ) -> Result<Self, HttpError> {
+        self.paymaster = sponsor_response.paymaster;
+        self.paymaster_data = sponsor_response.paymaster_data;
+        self.paymaster_verification_gas_limit = sponsor_response
+            .paymaster_verification_gas_limit
+            .try_into()
+            .unwrap_or(0);
+        self.paymaster_post_op_gas_limit = sponsor_response
+            .paymaster_post_op_gas_limit
+            .try_into()
+            .unwrap_or(0);
+
+        // Update gas fields if they were estimated by the RPC
+        if self.pre_verification_gas.is_zero() {
+            self.pre_verification_gas = sponsor_response.pre_verification_gas;
+        }
+        if self.verification_gas_limit == 0 {
+            self.verification_gas_limit = sponsor_response
+                .verification_gas_limit
+                .try_into()
+                .unwrap_or(0);
+        }
+        if self.call_gas_limit == 0 {
+            self.call_gas_limit =
+                sponsor_response.call_gas_limit.try_into().unwrap_or(0);
+        }
+        if self.max_fee_per_gas == 0 {
+            self.max_fee_per_gas =
+                sponsor_response.max_fee_per_gas.try_into().unwrap_or(0);
+        }
+        if self.max_priority_fee_per_gas == 0 {
+            self.max_priority_fee_per_gas = sponsor_response
+                .max_priority_fee_per_gas
+                .try_into()
+                .unwrap_or(0);
+        }
+
+        Ok(self)
+    }
 }
 
 /// Converts a `UserOperation` into an `EncodedSafeOpStruct` to the 4337 user operation can be signed.
@@ -312,8 +462,11 @@ mod tests {
 
         let smart_account = SafeSmartAccount::random();
 
-        let safe_tx_hash =
-            smart_account.eip_712_hash(hash, 480, Some(*GNOSIS_SAFE_4337_MODULE));
+        let safe_tx_hash = smart_account.eip_712_hash(
+            hash,
+            Network::WorldChain as u32,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        );
 
         let expected_hash =
             "f56239eeacb960d469a19f397dd6dce1b0ca6c9553aeff6fc72100cbddbfdb1a";

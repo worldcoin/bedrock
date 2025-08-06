@@ -9,7 +9,7 @@ use alloy::{
     sol_types::{SolCall, SolEvent},
 };
 use bedrock::{
-    primitives::PrimitiveError,
+    primitives::{Network, PrimitiveError},
     smart_account::{
         EncodedSafeOpStruct, SafeOperation, SafeSmartAccount, SafeSmartAccountSigner,
         SafeTransaction, UnparsedPermitTransferFrom, UnparsedTokenPermissions,
@@ -284,7 +284,7 @@ async fn test_integration_personal_sign() {
     let safe_contract = ISafe::new(safe_address, &provider);
 
     let message = "Hello from Safe integration test!";
-    let chain_id = 480;
+    let chain_id = Network::WorldChain as u32;
 
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
         .expect("Failed to create SafeSmartAccount");
@@ -426,7 +426,7 @@ async fn test_integration_personal_sign_failure_on_incorrect_eip_191_prefix() {
     let safe_contract = ISafe::new(safe_address, &provider);
 
     let message = "Hello from Safe integration test!";
-    let chain_id = 480;
+    let chain_id = Network::WorldChain as u32;
 
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
         .expect("Failed to create SafeSmartAccount");
@@ -540,7 +540,7 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         .expect("Failed to create SafeSmartAccount");
     let op_hash = EncodedSafeOpStruct::try_from(&user_op)?.into_transaction_hash();
 
-    let worldchain_chain_id = 480;
+    let worldchain_chain_id = Network::WorldChain as u32;
     let sig = safe_account
         .sign_digest(op_hash, worldchain_chain_id, Some(*GNOSIS_SAFE_4337_MODULE))?
         .as_bytes();
@@ -660,7 +660,7 @@ async fn test_integration_sign_typed_data() {
          }
     });
 
-    let chain_id = 480;
+    let chain_id = Network::WorldChain as u32;
 
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
         .expect("Failed to create SafeSmartAccount");
@@ -763,7 +763,7 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
 
     // Step 2: Deploy a Safe (World App User)
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
-    let chain_id = 480;
+    let chain_id = Network::WorldChain as u32;
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 
     // Step 3: Give the Safe some simulated WLD balance

@@ -21,22 +21,39 @@ sol! {
 
 /// Enables operations with the ERC-20 token contract.
 pub struct Erc20 {
+    /// The inner call data for the ERC-20 `transferCall` function.
     call_data: Vec<u8>,
+    /// The address of the ERC-20 token contract.
     token_address: Address,
+    /// The Safe Smart Account address from where the transaction will be executed.
+    wallet_address: Address,
 }
 
 impl Erc20 {
-    pub fn new(token_address: Address, to: Address, value: U256) -> Self {
+    pub fn new(
+        token_address: Address,
+        to: Address,
+        value: U256,
+        wallet_address: Address,
+    ) -> Self {
         let call_data = IErc20::transferCall { to, value }.abi_encode();
 
         Self {
             call_data,
             token_address,
+            wallet_address,
         }
     }
 }
 
 impl Is4337Encodable for Erc20 {
+    /// Sensible gas limit for ERC-20 transfer.
+    const CALL_GAS_LIMIT: u128 = 65_000;
+
+    fn wallet_address(&self) -> &Address {
+        &self.wallet_address
+    }
+
     fn as_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             // The token address
@@ -63,6 +80,7 @@ mod tests {
             Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap(),
             Address::from_str("0x1234567890123456789012345678901234567890").unwrap(),
             U256::from(1),
+            Address::from_str("0x0000000000000000000000000000000000000000").unwrap(),
         );
 
         let execute_user_op_call_data = erc20.as_execute_user_op_call_data();

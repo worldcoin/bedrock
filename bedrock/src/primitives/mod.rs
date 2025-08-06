@@ -9,6 +9,32 @@ use std::str::FromStr;
 // Re-export HTTP client types for external use
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
+// Serde helper functions for skip_serializing_if
+
+/// Helper function to check if an `Address` is zero for serde `skip_serializing_if`
+#[must_use]
+pub fn is_zero_address(addr: &Address) -> bool {
+    addr.is_zero()
+}
+
+/// Helper function to check if `Bytes` is empty for serde `skip_serializing_if`
+#[must_use]
+pub fn is_empty_bytes(bytes: &Bytes) -> bool {
+    bytes.is_empty()
+}
+
+/// Helper function to check if `u128` is zero for serde `skip_serializing_if`
+#[must_use]
+pub const fn is_zero_u128(value: &u128) -> bool {
+    *value == 0
+}
+
+/// Helper function to check if `U256` is zero for serde `skip_serializing_if`
+#[must_use]
+pub fn is_zero_u256(value: &U256) -> bool {
+    value.is_zero()
+}
+
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
 
@@ -22,6 +48,46 @@ pub mod http_client;
 /// The elements in this module are only used in Foreign Tests and are not available in built binaries.
 #[cfg(feature = "tooling_tests")]
 pub mod tooling_tests;
+
+/// Supported blockchain networks for Bedrock operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Network {
+    /// Ethereum (chain ID: 1)
+    Ethereum = 1,
+    /// Optimism (chain ID: 10)
+    Optimism = 10,
+    /// World Chain (chain ID: 480)
+    WorldChain = 480,
+}
+
+impl Network {
+    /// Returns the network name for RPC endpoint construction
+    #[must_use]
+    pub const fn network_name(&self) -> &'static str {
+        match self {
+            Self::Ethereum => "ethereum",
+            Self::Optimism => "optimism",
+            Self::WorldChain => "worldchain",
+        }
+    }
+
+    /// Returns the display name for the network
+    #[must_use]
+    pub const fn display_name(&self) -> &'static str {
+        match self {
+            Self::Ethereum => "Ethereum",
+            Self::Optimism => "Optimism",
+            Self::WorldChain => "World Chain",
+        }
+    }
+}
+
+impl Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display_name())
+    }
+}
 
 /// A wrapper around hex-encoded bytes (may or may not be a number).
 ///
