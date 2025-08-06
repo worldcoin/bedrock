@@ -50,7 +50,7 @@ pub mod http_client;
 pub mod tooling_tests;
 
 /// Supported blockchain networks for Bedrock operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 #[repr(u32)]
 pub enum Network {
     /// Ethereum (chain ID: 1)

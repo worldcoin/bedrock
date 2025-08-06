@@ -53,13 +53,6 @@ const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
 pub trait Is4337Encodable {
-    /// Gas limit for the main execution call.
-    const CALL_GAS_LIMIT: u128;
-
-    // FIXME: full access to SafeSmartAccount is required to sign the transaction
-    /// The address of the wallet that will be used to execute the transaction (i.e. the Safe Smart Account).
-    fn wallet_address(&self) -> &Address;
-
     /// Converts the object into a `callData` for the `executeUserOp` method. This is the inner-most `calldata`.
     ///
     /// # Errors
@@ -74,14 +67,16 @@ pub trait Is4337Encodable {
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn as_preflight_user_operation(&self) -> Result<UserOperation, PrimitiveError> {
+    fn as_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+    ) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
         Ok(UserOperation::new_with_defaults(
-            *self.wallet_address(),
+            wallet_address,
             U256::ZERO, // FIXME: add proper nonce computation (generalizing)
             call_data,
-            Self::CALL_GAS_LIMIT,
         ))
     }
 
@@ -116,7 +111,8 @@ pub trait Is4337Encodable {
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
 
         // 1. Create preflight UserOperation
-        let mut user_operation = self.as_preflight_user_operation()?;
+        let mut user_operation =
+            self.as_preflight_user_operation(safe_account.wallet_address)?;
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
@@ -260,17 +256,11 @@ impl UserOperation {
     /// Initializes a new `UserOperation` with default values.
     ///
     /// In particular, it sets default values for gas limits & fees, paymaster and sets a dummy signature.
-    pub fn new_with_defaults(
-        sender: Address,
-        nonce: U256,
-        call_data: Bytes,
-        call_gas_limit: u128,
-    ) -> Self {
+    pub fn new_with_defaults(sender: Address, nonce: U256, call_data: Bytes) -> Self {
         Self {
             sender,
             nonce,
             call_data,
-            call_gas_limit,
             signature: vec![0xff; USER_OPERATION_SIGNATURE_LENGTH].into(),
             ..Default::default()
         }
