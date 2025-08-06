@@ -25,23 +25,15 @@ pub mod tooling_tests;
 
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
 pub enum Network {
     /// World Chain (chain ID: 480)
-    WorldChain,
+    WorldChain = 480,
     /// Optimism (chain ID: 10)
-    Optimism,
+    Optimism = 10,
 }
 
 impl Network {
-    /// Returns the chain ID for the network
-    #[must_use]
-    pub const fn chain_id(&self) -> u32 {
-        match self {
-            Self::WorldChain => 480,
-            Self::Optimism => 10,
-        }
-    }
-
     /// Returns the network name for RPC endpoint construction
     #[must_use]
     pub const fn network_name(&self) -> &'static str {
