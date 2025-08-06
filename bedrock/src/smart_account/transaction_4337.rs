@@ -5,9 +5,7 @@
 
 use crate::primitives::{HttpError, Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{
-    RpcError, SponsorUserOperationResponse, WORLDCHAIN_CHAIN_ID,
-};
+use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
 
 use alloy::hex::FromHex;
 use alloy::{
@@ -154,7 +152,7 @@ pub trait Is4337Operable {
         let signature = safe_account
             .sign_digest(
                 encoded_safe_op.into_transaction_hash(),
-                WORLDCHAIN_CHAIN_ID,
+                network as u32,
                 Some(*GNOSIS_SAFE_4337_MODULE),
             )
             .map_err(|e| RpcError::InvalidResponse {
@@ -487,8 +485,11 @@ mod tests {
 
         let smart_account = SafeSmartAccount::random();
 
-        let safe_tx_hash =
-            smart_account.eip_712_hash(hash, 480, Some(*GNOSIS_SAFE_4337_MODULE));
+        let safe_tx_hash = smart_account.eip_712_hash(
+            hash,
+            Network::WorldChain as u32,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        );
 
         let expected_hash =
             "f56239eeacb960d469a19f397dd6dce1b0ca6c9553aeff6fc72100cbddbfdb1a";

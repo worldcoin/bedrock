@@ -169,19 +169,9 @@ impl SafeSmartAccount {
 mod tests {
 
     use super::*;
+    use crate::primitives::Network;
     use alloy::{hex::FromHex, signers::local::PrivateKeySigner};
     use ruint::uint;
-
-    #[repr(u32)]
-    #[derive(Debug, Clone)]
-    pub enum Chain {
-        Ethereum = 1,
-
-        Optimism = 10,
-
-        #[allow(clippy::enum_variant_names)] // World Chain is the correct name
-        WorldChain = 480,
-    }
 
     #[test]
     fn test_get_domain_separator() {
@@ -194,7 +184,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            smart_account.get_domain_separator(Chain::Optimism as u32, None),
+            smart_account.get_domain_separator(Network::Optimism as u32, None),
             // From `domainSeparator()` in explorer
             FixedBytes::from(uint!(
                 0xaf6246ae5d27e327c493da685e4990ad5dca90f74f3cf59da650812870c1bd37_U256
@@ -209,7 +199,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            smart_account.get_domain_separator(Chain::Ethereum as u32, None),
+            smart_account.get_domain_separator(Network::Ethereum as u32, None),
             // From `domainSeparator()` in explorer
             FixedBytes::from(uint!(
                 0xbd4304a4e2fd76ed2bd2bad9479581da3f5a173b19d45dc57b12dd7c27509d3a_U256
@@ -224,7 +214,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            smart_account.get_domain_separator(Chain::Optimism as u32, None),
+            smart_account.get_domain_separator(Network::Optimism as u32, None),
             // From `domainSeparator()` in explorer
             FixedBytes::from(uint!(
                 0xcdee84b460ced58f4812951bcada15aaa862eab78e0dddf59f7839dc67b98c5d_U256
@@ -241,7 +231,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            smart_account.get_domain_separator(Chain::WorldChain as u32, None),
+            smart_account.get_domain_separator(Network::WorldChain as u32, None),
             FixedBytes::from(uint!(
                 0xf983f9bbe16178e12b086bfdacbe9b328aa09ad84c55527e6536ecaa2057ae01_U256
             ))
@@ -257,7 +247,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            smart_account.get_domain_separator(Chain::WorldChain as u32, None),
+            smart_account.get_domain_separator(Network::WorldChain as u32, None),
             FixedBytes::from(uint!(
                 0xd32fd7ce04127de88eddf17bda79d56263972efc440b905379a83b99655b3c43_U256
             ))
@@ -277,7 +267,7 @@ mod tests {
         // remember to prefix with 0x if testing in the chain explorer
         let message_hash = smart_account.get_message_hash_for_safe(
             hex::decode("deadbeef").unwrap(),
-            Chain::Optimism as u32,
+            Network::Optimism as u32,
             None,
         );
 
@@ -306,7 +296,7 @@ mod tests {
                 "9fa392e790461d261206f7eb4943aceb7402d8002116ce79ab3a27d26917199c",
             )
             .unwrap(),
-            Chain::Optimism as u32,
+            Network::Optimism as u32,
             None,
         );
 
@@ -334,7 +324,7 @@ mod tests {
                 "612b166f2a615243d8734e1b8a37fd9e662fc6de4d59cb0eb7799fad51182364",
             )
             .unwrap(),
-            Chain::Ethereum as u32,
+            Network::Ethereum as u32,
             None,
         );
 

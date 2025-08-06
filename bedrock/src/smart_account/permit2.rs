@@ -58,10 +58,9 @@ impl PermitTransferFrom {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::{address, fixed_bytes};
-
     use super::*;
-    use ruint::uint;
+    use crate::primitives::Network;
+    use alloy::primitives::{fixed_bytes, uint};
 
     #[test]
     fn test_permit2_typed_data_and_signing_hash() {
@@ -78,7 +77,7 @@ mod tests {
         };
 
         let typed_data = transfer_from
-            .as_typed_data(480)
+            .as_typed_data(Network::WorldChain as u32)
             .eip712_signing_hash()
             .unwrap();
 

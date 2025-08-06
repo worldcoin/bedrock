@@ -3,8 +3,6 @@
 //! This module provides functionality to:
 //! - Request sponsorship for `UserOperations` via `wa_sponsorUserOperation`
 //! - Submit signed `UserOperations` via `eth_sendUserOperation`
-//!
-//! All operations are performed on World Chain (chain ID: 480).
 
 use crate::{
     primitives::http_client::get_http_client,
@@ -78,6 +76,7 @@ impl<T> JsonRpcRequest<T> {
 struct ErrorPayload {
     code: i64,
     message: String,
+    // This is currently unused, but we keep it here for future use + consistency
     #[serde(default)]
     #[allow(dead_code)]
     data: Option<Value>,
@@ -155,9 +154,6 @@ struct TokenInfo {
 pub struct RpcClient {
     http_client: Arc<dyn AuthenticatedHttpClient>,
 }
-
-/// World Chain's chain ID (kept for backward compatibility)
-pub const WORLDCHAIN_CHAIN_ID: u32 = 480;
 
 impl RpcClient {
     /// Creates a new RPC client

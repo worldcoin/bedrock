@@ -8,6 +8,8 @@ use alloy::{
 pub use signer::SafeSmartAccountSigner;
 pub use transaction_4337::{ISafe4337Module, Is4337Operable};
 
+#[cfg(any(test, doc))]
+use crate::primitives::Network;
 use crate::{
     bedrock_export, debug, error, primitives::HexEncodedData,
     transaction::foreign::UnparsedUserOperation,
@@ -183,6 +185,7 @@ impl SafeSmartAccount {
     /// ```rust
     /// use bedrock::smart_account::{SafeSmartAccount};
     /// use bedrock::transaction::foreign::UnparsedUserOperation;
+    /// use bedrock::primitives::Network;
     ///
     /// let safe = SafeSmartAccount::new(
     ///     // this is Anvil's default private key, it is a test secret
@@ -210,7 +213,7 @@ impl SafeSmartAccount {
     ///     factory_data: None,
     /// };
     ///
-    /// let signature = safe.sign_4337_op(480, user_op).unwrap();
+    /// let signature = safe.sign_4337_op(Network::WorldChain as u32, user_op).unwrap();
     ///
     /// println!("Signature: {}", signature.to_hex_string());
     /// ```
@@ -592,7 +595,8 @@ mod tests {
 
         let smart_account = SafeSmartAccount::random();
 
-        let result = smart_account.sign_permit2_transfer(480, transfer_from);
+        let result = smart_account
+            .sign_permit2_transfer(Network::WorldChain as u32, transfer_from);
 
         assert!(result.is_err());
 
@@ -616,12 +620,15 @@ mod tests {
             deadline: uint!(1704067200_U256),
         };
 
-        let typed_data =
-            serde_json::to_string(&transfer_from.as_typed_data(480)).unwrap();
+        let typed_data = serde_json::to_string(
+            &transfer_from.as_typed_data(Network::WorldChain as u32),
+        )
+        .unwrap();
 
         let smart_account = SafeSmartAccount::random();
 
-        let result = smart_account.sign_typed_data(480, &typed_data);
+        let result =
+            smart_account.sign_typed_data(Network::WorldChain as u32, &typed_data);
 
         assert!(result.is_err());
 
@@ -645,7 +652,7 @@ mod tests {
             deadline: uint!(1704067200_U256),
         };
 
-        let mut typed_data = transfer_from.as_typed_data(480);
+        let mut typed_data = transfer_from.as_typed_data(Network::WorldChain as u32);
 
         let alternative_cases = [
             "0x000000000022d473030f116ddee9f6b43ac78BA3", // mixed case
@@ -665,7 +672,8 @@ mod tests {
 
             let smart_account = SafeSmartAccount::random();
 
-            let result = smart_account.sign_typed_data(480, &typed_data_str);
+            let result = smart_account
+                .sign_typed_data(Network::WorldChain as u32, &typed_data_str);
 
             assert!(result.is_err());
 

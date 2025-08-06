@@ -27,10 +27,12 @@ pub mod tooling_tests;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Network {
-    /// World Chain (chain ID: 480)
-    WorldChain = 480,
+    /// Ethereum (chain ID: 1)
+    Ethereum = 1,
     /// Optimism (chain ID: 10)
     Optimism = 10,
+    /// World Chain (chain ID: 480)
+    WorldChain = 480,
 }
 
 impl Network {
@@ -38,8 +40,9 @@ impl Network {
     #[must_use]
     pub const fn network_name(&self) -> &'static str {
         match self {
-            Self::WorldChain => "worldchain",
+            Self::Ethereum => "ethereum",
             Self::Optimism => "optimism",
+            Self::WorldChain => "worldchain",
         }
     }
 
@@ -47,8 +50,9 @@ impl Network {
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
         match self {
-            Self::WorldChain => "World Chain",
+            Self::Ethereum => "Ethereum",
             Self::Optimism => "Optimism",
+            Self::WorldChain => "World Chain",
         }
     }
 }

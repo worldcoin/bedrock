@@ -10,7 +10,7 @@ mod contracts;
 pub mod foreign;
 pub mod rpc;
 
-pub use rpc::{RpcClient, RpcError, SponsorUserOperationResponse, WORLDCHAIN_CHAIN_ID};
+pub use rpc::{RpcClient, RpcError, SponsorUserOperationResponse};
 
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
