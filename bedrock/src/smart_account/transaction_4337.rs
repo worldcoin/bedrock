@@ -45,6 +45,11 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
 /// This is the length of a regular ECDSA signature with r,s,v (32 + 32 + 1 = 65 bytes) + 12 bytes for the validity timestamps.
 const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
 
+/// The default validity duration for 4337 `UserOperation` signatures.
+///
+/// Operations are valid for this duration from the time they are signed.
+const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
+
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
 pub trait Is4337Operable {
@@ -134,8 +139,9 @@ pub trait Is4337Operable {
         let mut full_signature = Vec::with_capacity(77);
         full_signature.extend_from_slice(&[0u8; 6]); // validAfter = 0
 
-        // Set validUntil to 12 hours from now
-        let valid_until_timestamp = Utc::now() + Duration::hours(12);
+        // Set validUntil to the configured duration from now
+        let valid_until_timestamp =
+            Utc::now() + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS);
         let valid_until_seconds = valid_until_timestamp.timestamp();
         // Convert to u64, ensuring we handle the sign properly
         let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0); // Fallback to 0 if conversion fails
