@@ -52,7 +52,7 @@ const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
 
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
-pub trait Is4337Operable {
+pub trait Is4337Encodable {
     /// Gas limit for the main execution call.
     const CALL_GAS_LIMIT: u128;
 

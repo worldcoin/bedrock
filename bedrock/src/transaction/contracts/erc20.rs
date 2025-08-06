@@ -6,7 +6,7 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::smart_account::{ISafe4337Module, Is4337Operable, SafeOperation};
+use crate::smart_account::{ISafe4337Module, Is4337Encodable, SafeOperation};
 
 sol! {
     /// The ERC20 contract interface.
@@ -46,7 +46,7 @@ impl Erc20 {
     }
 }
 
-impl Is4337Operable for Erc20 {
+impl Is4337Encodable for Erc20 {
     /// Sensible gas limit for ERC-20 transfer.
     const CALL_GAS_LIMIT: u128 = 65_000;
 

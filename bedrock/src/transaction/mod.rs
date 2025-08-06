@@ -2,7 +2,7 @@ use alloy::primitives::{Address, U256};
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
-    smart_account::{Is4337Operable, SafeSmartAccount},
+    smart_account::{Is4337Encodable, SafeSmartAccount},
     transaction::contracts::erc20::Erc20,
 };
 
