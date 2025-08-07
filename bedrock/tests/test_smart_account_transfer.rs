@@ -5,7 +5,6 @@ use alloy::{
     primitives::{address, keccak256, Address, U256},
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
-    sol_types::SolCall,
 };
 
 use bedrock::{
@@ -15,14 +14,15 @@ use bedrock::{
         },
         Network,
     },
-    smart_account::{ISafe4337Module, SafeSmartAccount, ENTRYPOINT_4337},
+    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
+    transaction::foreign::UnparsedUserOperation,
 };
 
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::json;
 
 mod common;
-use common::{deploy_safe, setup_anvil, IEntryPoint, IERC20};
+use common::{deploy_safe, setup_anvil, IEntryPoint, PackedUserOperation, IERC20};
 
 // PackedUserOperation and interfaces are imported from common
 
@@ -38,13 +38,7 @@ where
     provider: P,
 }
 
-#[derive(Deserialize)]
-struct JsonRpcRequestLite {
-    _jsonrpc: String,
-    id: Value,
-    method: String,
-    params: Value,
-}
+// Intentionally no request struct; we parse the few fields we need directly from JSON
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -127,122 +121,88 @@ where
                 let user_op_val = params.first().ok_or(HttpError::Generic {
                     message: "missing userOp param".into(),
                 })?;
-                let _entry_point_str = params.get(1).and_then(|v| v.as_str()).ok_or(
+                let entry_point_str = params.get(1).and_then(|v| v.as_str()).ok_or(
                     HttpError::Generic {
                         message: "missing entryPoint param".into(),
                     },
                 )?;
-
-                // Validate presence of required fields (no defaulting). Throw if invalid.
-                let op_obj = user_op_val.as_object().ok_or(HttpError::Generic {
+                // Build UnparsedUserOperation from JSON (which uses hex strings), then convert
+                let obj = user_op_val.as_object().ok_or(HttpError::Generic {
                     message: "userOp param must be an object".into(),
                 })?;
 
-                let sender_str = op_obj.get("sender").and_then(|v| v.as_str()).ok_or(
-                    HttpError::Generic {
-                        message: "missing or invalid sender".into(),
-                    },
-                )?;
-                let call_data_str = op_obj
-                    .get("callData")
-                    .and_then(|v| v.as_str())
-                    .ok_or(HttpError::Generic {
-                        message: "missing or invalid callData".into(),
-                    })?;
-
-                let sender =
-                    Address::from_str(sender_str).map_err(|_| HttpError::Generic {
-                        message: "invalid sender".into(),
-                    })?;
-
-                let call_data_hex =
-                    call_data_str.strip_prefix("0x").unwrap_or(call_data_str);
-                let call_data_bytes =
-                    hex::decode(call_data_hex).map_err(|_| HttpError::Generic {
-                        message: "invalid callData".into(),
-                    })?;
-
-                // Decode the module callData and simulate a plain ERC20 transfer by updating storage
-                let module_call =
-                    ISafe4337Module::executeUserOpCall::abi_decode(&call_data_bytes)
-                        .map_err(|e| HttpError::Generic {
-                            message: format!(
-                                "decode executeUserOp callData failed: {e}"
-                            ),
-                        })?;
-
-                let token_address = module_call.to;
-                let inner_data: Vec<u8> = module_call.data.to_vec();
-
-                // Expect the ERC20 transfer selector (a9059cbb) and decode
-                let transfer =
-                    IERC20::transferCall::abi_decode(&inner_data).map_err(|e| {
-                        HttpError::Generic {
-                            message: format!("decode erc20 transfer failed: {e}"),
-                        }
-                    })?;
-
-                let recipient = transfer.to;
-                let amount = transfer.amount;
-
-                // Read current balances
-                let erc20 = IERC20::new(token_address, &self.provider);
-                let sender_balance =
-                    erc20.balanceOf(sender).call().await.map_err(|e| {
-                        HttpError::Generic {
-                            message: format!("read sender balance failed: {e}"),
-                        }
-                    })?;
-                let recipient_balance =
-                    erc20.balanceOf(recipient).call().await.map_err(|e| {
-                        HttpError::Generic {
-                            message: format!("read recipient balance failed: {e}"),
-                        }
-                    })?;
-
-                // Compute mapping slots (balances mapping at slot 0)
-                let calc_slot = |addr: Address| {
-                    let mut padded = [0u8; 64];
-                    padded[12..32].copy_from_slice(addr.as_slice());
-                    let slot_hash = keccak256(padded);
-                    U256::from_be_bytes(slot_hash.into())
+                let get_opt = |k: &str| -> Option<String> {
+                    obj.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
+                };
+                let get_or_zero = |k: &str| -> String {
+                    get_opt(k).unwrap_or_else(|| "0x0".to_string())
+                };
+                let get_required = |k: &str| -> Result<String, HttpError> {
+                    get_opt(k).ok_or(HttpError::Generic {
+                        message: format!("missing or invalid {k}"),
+                    })
                 };
 
-                let sender_slot = calc_slot(sender);
-                let recipient_slot = calc_slot(recipient);
+                let unparsed = UnparsedUserOperation {
+                    sender: get_required("sender")?,
+                    nonce: get_required("nonce")?,
+                    call_data: get_required("callData")?,
+                    call_gas_limit: get_or_zero("callGasLimit"),
+                    verification_gas_limit: get_or_zero("verificationGasLimit"),
+                    pre_verification_gas: get_or_zero("preVerificationGas"),
+                    max_fee_per_gas: get_or_zero("maxFeePerGas"),
+                    max_priority_fee_per_gas: get_or_zero("maxPriorityFeePerGas"),
+                    paymaster: get_opt("paymaster"),
+                    paymaster_verification_gas_limit: get_or_zero(
+                        "paymasterVerificationGasLimit",
+                    ),
+                    paymaster_post_op_gas_limit: get_or_zero("paymasterPostOpGasLimit"),
+                    paymaster_data: get_opt("paymasterData"),
+                    signature: get_required("signature")?,
+                    factory: get_opt("factory"),
+                    factory_data: get_opt("factoryData"),
+                };
 
-                // Update balances
-                let new_sender = sender_balance.saturating_sub(amount);
-                let new_recipient = recipient_balance.saturating_add(amount);
+                let user_op: bedrock::smart_account::UserOperation =
+                    unparsed.try_into().map_err(|e| HttpError::Generic {
+                        message: format!("invalid userOp: {e}"),
+                    })?;
 
-                self.provider
-                    .anvil_set_storage_at(token_address, sender_slot, new_sender.into())
+                // Convert to the packed format expected by EntryPoint
+                let packed = PackedUserOperation::try_from(&user_op).map_err(|e| {
+                    HttpError::Generic {
+                        message: format!("pack userOp failed: {e}"),
+                    }
+                })?;
+
+                // Execute via EntryPoint.handleOps on-chain
+                let entry_point_addr =
+                    Address::from_str(entry_point_str).map_err(|_| {
+                        HttpError::Generic {
+                            message: "invalid entryPoint".into(),
+                        }
+                    })?;
+                let entry_point = IEntryPoint::new(entry_point_addr, &self.provider);
+                let _tx = entry_point
+                    .handleOps(vec![packed], user_op.sender)
+                    .send()
                     .await
                     .map_err(|e| HttpError::Generic {
-                        message: format!("set sender storage failed: {e}"),
-                    })?;
-                self.provider
-                    .anvil_set_storage_at(
-                        token_address,
-                        recipient_slot,
-                        new_recipient.into(),
-                    )
-                    .await
-                    .map_err(|e| HttpError::Generic {
-                        message: format!("set recipient storage failed: {e}"),
+                        message: format!("handleOps failed: {e}"),
                     })?;
 
-                // Return a deterministic pseudo userOpHash from sender+callData
-                let mut preimage =
-                    Vec::with_capacity(sender.as_slice().len() + call_data_bytes.len());
-                preimage.extend_from_slice(sender.as_slice());
-                preimage.extend_from_slice(&call_data_bytes);
-                let user_op_hash = keccak256(preimage);
+                // Compute the standard Safe op hash (same preimage used for signing)
+                let op_hash =
+                    bedrock::smart_account::EncodedSafeOpStruct::try_from(&user_op)
+                        .map_err(|e| HttpError::Generic {
+                            message: format!("encode op failed: {e}"),
+                        })?
+                        .into_transaction_hash();
 
                 let resp = json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": format!("0x{}", hex::encode(user_op_hash)),
+                    "result": format!("0x{}", hex::encode(op_hash)),
                 });
                 Ok(serde_json::to_vec(&resp).unwrap())
             }

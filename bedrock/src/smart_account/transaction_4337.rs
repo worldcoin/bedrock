@@ -3,10 +3,7 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::{
-    is_empty_bytes, is_zero_address, is_zero_u128, is_zero_u256, HttpError, Network,
-    PrimitiveError,
-};
+use crate::primitives::{HttpError, Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
 use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
 
@@ -19,6 +16,8 @@ use alloy::{
 use chrono::{Duration, Utc};
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
+
+use serde::Serializer;
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
@@ -188,50 +187,46 @@ sol! {
         /// The Account making the `UserOperation`
         address sender;
         /// Anti-replay protection
+        #[serde(serialize_with = "serialize_u256_as_hex")]
         uint256 nonce;
         /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
-        #[serde(skip_serializing_if = "is_zero_address")]
         address factory;
         /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
-        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes factory_data;
         /// The data to pass to the sender during the main execution call
         bytes call_data;
         /// Gas limit for the main execution call.
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 call_gas_limit;
         /// Gas limit for the verification call
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 verification_gas_limit;
         /// Extra gas to pay the bundler
-        #[serde(skip_serializing_if = "is_zero_u256")]
+        #[serde(serialize_with = "serialize_u256_as_hex")]
         uint256 pre_verification_gas;
         /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_fee_per_gas`)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 max_fee_per_gas;
         /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_priority_fee_per_gas`)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 max_priority_fee_per_gas;
         /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
-        #[serde(skip_serializing_if = "is_zero_address")]
         address paymaster;
         /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 paymaster_verification_gas_limit;
         /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 paymaster_post_op_gas_limit;
         /// Data for paymaster (only if paymaster exists)
-        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes paymaster_data;
         /// Data passed into the sender to verify authorization
-        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes signature;
     }
 
@@ -419,6 +414,25 @@ impl EncodedSafeOpStruct {
     pub fn into_transaction_hash(self) -> FixedBytes<32> {
         keccak256(self.abi_encode())
     }
+}
+
+// --- JSON serialization helpers for ERC-7769 ---
+
+fn serialize_u128_as_hex<S: Serializer>(
+    value: &u128,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // Always hex with 0x prefix per spec
+    let s = format!("0x{value:x}");
+    serializer.serialize_str(&s)
+}
+
+fn serialize_u256_as_hex<S: Serializer>(
+    value: &U256,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let s = format!("0x{value:x}");
+    serializer.serialize_str(&s)
 }
 
 #[cfg(test)]
