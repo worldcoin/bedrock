@@ -172,7 +172,7 @@ sol! {
         function executeUserOp(address to, uint256 value, bytes calldata data, uint8 operation) external;
     }
 
-    /// The structure of a generic 4337 UserOperation.
+    /// The structure of a generic 4337 `UserOperation`.
     ///
     /// `UserOperation`s are not used on-chain, they are used by RPCs to bundle transactions as `PackedUserOperation`s.
     ///
@@ -185,7 +185,7 @@ sol! {
     #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct UserOperation {
-        /// The Account making the UserOperation
+        /// The Account making the `UserOperation`
         address sender;
         /// Anti-replay protection
         uint256 nonce;
@@ -198,33 +198,33 @@ sol! {
         /// The data to pass to the sender during the main execution call
         bytes call_data;
         /// Gas limit for the main execution call.
-        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
         #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 call_gas_limit;
         /// Gas limit for the verification call
-        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
         #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 verification_gas_limit;
         /// Extra gas to pay the bundler
         #[serde(skip_serializing_if = "is_zero_u256")]
         uint256 pre_verification_gas;
-        /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_fee_per_gas)
-        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_fee_per_gas`)
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
         #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 max_fee_per_gas;
-        /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) max_priority_fee_per_gas)
-        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
+        /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_priority_fee_per_gas`)
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
         #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 max_priority_fee_per_gas;
         /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
         #[serde(skip_serializing_if = "is_zero_address")]
         address paymaster;
         /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
-        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
         #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 paymaster_verification_gas_limit;
         /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
-        /// Even though the type is `uint256`, in the Safe4337Module (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
         #[serde(skip_serializing_if = "is_zero_u128")]
         uint128 paymaster_post_op_gas_limit;
         /// Data for paymaster (only if paymaster exists)
@@ -235,7 +235,7 @@ sol! {
         bytes signature;
     }
 
-    /// The EIP-712 type-hash for a SafeOp, representing the structure of a User Operation for the Safe.
+    /// The EIP-712 type-hash for a `SafeOp`, representing the structure of a User Operation for the Safe.
     ///
     /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
     #[sol(rename_all = "camelcase")]
