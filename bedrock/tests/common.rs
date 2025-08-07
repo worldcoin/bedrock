@@ -1,11 +1,13 @@
 use alloy::{
     network::Ethereum,
     node_bindings::AnvilInstance,
-    primitives::{address, Address, Log, U256},
+    primitives::{address, Address, FixedBytes, Log, U256},
     providers::{ext::AnvilApi, Provider},
     sol,
     sol_types::{SolCall, SolEvent},
 };
+
+use bedrock::{primitives::PrimitiveError, smart_account::UserOperation};
 
 // Shared on-chain interfaces used across tests
 sol!(
@@ -183,4 +185,36 @@ where
         .expect("ProxyCreation event not found");
 
     Ok(proxy_creation_event.proxy)
+}
+
+/// Pack two U128 in 32 bytes
+pub fn pack_pair(a: &u128, b: &u128) -> FixedBytes<32> {
+    let mut out = [0u8; 32];
+    out[..16].copy_from_slice(a.to_be_bytes().as_slice());
+    out[16..].copy_from_slice(b.to_be_bytes().as_slice());
+    out.into()
+}
+
+impl TryFrom<&UserOperation> for PackedUserOperation {
+    type Error = PrimitiveError;
+
+    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
+        Ok(Self {
+            sender: user_op.sender,
+            nonce: user_op.nonce,
+            init_code: user_op.get_init_code(),
+            call_data: user_op.call_data.clone(),
+            account_gas_limits: pack_pair(
+                &user_op.verification_gas_limit,
+                &user_op.call_gas_limit,
+            ),
+            pre_verification_gas: user_op.pre_verification_gas,
+            gas_fees: pack_pair(
+                &user_op.max_priority_fee_per_gas,
+                &user_op.max_fee_per_gas,
+            ),
+            paymaster_and_data: user_op.get_paymaster_and_data(),
+            signature: user_op.signature.clone(),
+        })
+    }
 }
