@@ -150,7 +150,7 @@ pub struct SponsorUserOperationResponse {
 
 /// Parameters for `wa_sponsorUserOperation` request
 #[derive(Debug, Serialize)]
-struct SponsorUserOperationParams<'a>(&'a UserOperation, Option<TokenInfo>);
+struct SponsorUserOperationParams<'a>(&'a UserOperation, Address, Option<TokenInfo>);
 
 /// Token information for self-sponsorship
 #[derive(Debug, Serialize)]
@@ -249,19 +249,16 @@ impl RpcClient {
     /// - The request serialization fails
     /// - The response parsing fails
     /// - The RPC returns an error response
-    ///
-    /// # Implementation Note
-    ///
-    /// This method requires the `wa_sponsorUserOperation` handler to be implemented in the app-backend.
-    /// As of now, this handler is not yet implemented and will return a "method not found" error.
     pub async fn sponsor_user_operation(
         &self,
         network: Network,
         user_operation: &UserOperation,
+        entry_point: Address,
         self_sponsor_token: Option<Address>,
     ) -> Result<SponsorUserOperationResponse, RpcError> {
         let params = SponsorUserOperationParams(
             user_operation,
+            entry_point,
             self_sponsor_token.map(|token| TokenInfo { token }),
         );
 
