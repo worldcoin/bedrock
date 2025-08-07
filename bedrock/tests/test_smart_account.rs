@@ -1,12 +1,10 @@
 use alloy::{
     dyn_abi::TypedData,
-    network::Ethereum,
-    node_bindings::AnvilInstance,
     primitives::{address, keccak256, Address, Bytes, FixedBytes, U256},
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
-    sol_types::{SolCall, SolEvent},
+    sol_types::SolCall,
 };
 use bedrock::{
     primitives::{Network, PrimitiveError},
@@ -20,118 +18,11 @@ use bedrock::{
 use chrono::Utc;
 use serde_json::json;
 
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    interface ISafeProxyFactory {
-        event ProxyCreation(address indexed proxy, address singleton);
-
-        function createProxyWithNonce(
-            address _singleton,
-            bytes memory initializer,
-            uint256 saltNonce
-        ) external returns (address proxy);
-    }
-);
-
-sol!(
-    /// The `setup` function of the Safe Smart Account. Sets an initial storage of the Safe contract.
-    ///
-    /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L95>
-    #[allow(clippy::too_many_arguments)] // this is how the function is defined in the Safe contract
-    #[sol(rpc)]
-    interface ISafe {
-        function setup(
-            address[] calldata _owners,
-            uint256 _threshold,
-            address to,
-            bytes calldata data,
-            address fallbackHandler,
-            address paymentToken,
-            uint256 payment,
-            address payable paymentReceiver
-        ) external;
-
-        function enableModules(address[] memory modules) external;
-
-        /// Verifies a signature is valid for a digest message following EIP-1271.
-        /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/handler/CompatibilityFallbackHandler.sol#L73>
-        function isValidSignature(bytes32 dataHash, bytes memory signature) external view returns (bytes4);
-
-
-        /// Executes a transaction.
-        /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol#L115>
-        function execTransaction(
-            address to,
-            uint256 value,
-            bytes calldata data,
-            uint8 operation,
-            uint256 safeTxGas,
-            uint256 baseGas,
-            uint256 gasPrice,
-            address gasToken,
-            address payable refundReceiver,
-            bytes memory signatures
-        ) external payable override returns (bool success);
-    }
-);
-
-sol! {
-    /// A gas efficient representation of a `UserOperation` for use with the `EntryPoint` contract.
-    ///
-    /// Submitting transactions through the `EntryPoint` requires a `PackedUserOperation`,
-    /// see `handleOps` in the `EntryPoint` contract. Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol#L174>
-    ///
-    ///
-    /// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/interfaces/PackedUserOperation.sol#L18>
-    #[sol(rename_all = "camelCase")]
-    struct PackedUserOperation {
-        /// The address of the smart contract account to be called.
-        address sender;
-        /// Anti-replay nonce for the userOp.
-        uint256 nonce;
-        /// Optional initialization code for deploying the account if it doesn't exist.
-        bytes init_code;
-        /// Calldata for the actual execution to be performed by the account.
-        bytes call_data;
-        /// Packed gas limits: first 16 bytes = `verificationGasLimit`, next 16 bytes = `callGasLimit`.
-        bytes32 account_gas_limits;
-        /// The fixed gas to be paid before the verification step (covers calldata costs, etc.).
-        uint256 pre_verification_gas;
-        /// Packed fee fields: first 16 bytes = `maxPriorityFeePerGas`, next 16 bytes = `maxFeePerGas`.
-        bytes32 gas_fees;
-        /// Data and address for an optional paymaster sponsoring the transaction.
-        bytes paymaster_and_data;
-        /// Signature over the operation (account-specific validation logic).
-        bytes signature;
-    }
-
-    /// Entry Point Contract
-    #[sol(rpc)]
-    interface IEntryPoint {
-        function depositTo(address account) external payable;
-        function handleOps(PackedUserOperation[] calldata ops, address payable beneficiary) external;
-    }
-
-    /// 4337 Module for Safe Smart Account
-    #[sol(rpc)]
-    interface ISafe4337Module {
-        function executeUserOp(
-            address to,
-            uint256 value,
-            bytes calldata data,
-            uint8 operation
-        ) external;
-    }
-
-    /// ERC-20 Token
-    #[sol(rpc)]
-    interface IERC20 {
-        function transfer(address to, uint256 amount) external returns (bool);
-        function balanceOf(address account) external view returns (uint256);
-        function approve(address spender, uint256 amount) external returns (bool);
-    }
-}
+mod common;
+use common::{
+    deploy_safe, setup_anvil, IEntryPoint, ISafe, ISafe4337Module, PackedUserOperation,
+    IERC20,
+};
 
 /// Pack two U128 in 32 bytes
 fn pack_pair(a: &u128, b: &u128) -> FixedBytes<32> {
@@ -165,96 +56,7 @@ impl TryFrom<&UserOperation> for PackedUserOperation {
     }
 }
 
-// Safe contract addresses on Worldchain
-const SAFE_PROXY_FACTORY_ADDRESS: Address =
-    address!("4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67");
-const SAFE_L2_SINGLETON_ADDRESS: Address =
-    address!("29fcB43b46531BcA003ddC8FCB67FFE91900C762");
-const SAFE_4337_MODULE_ADDRESS: Address =
-    address!("75cf11467937ce3F2f357CE24ffc3DBF8fD5c226");
-const SAFE_MODULE_SETUP_ADDRESS: Address =
-    address!("2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47");
-
-fn setup_anvil() -> AnvilInstance {
-    dotenvy::dotenv().ok();
-    let rpc_url = std::env::var("WORLDCHAIN_RPC_URL")
-        .expect("WORLDCHAIN_RPC_URL not set. Copy .env.example to .env and add your Alchemy API key");
-
-    println!("Starting Anvil for Safe integration test...");
-    let anvil = alloy::node_bindings::Anvil::new().fork(rpc_url).spawn();
-    println!("✓ Anvil started at: {}", anvil.endpoint());
-    anvil
-}
-
-async fn deploy_safe<P>(
-    provider: &P,
-    owner: Address,
-    deploy_nonce: U256,
-) -> anyhow::Result<Address>
-where
-    P: Provider<Ethereum>,
-{
-    // Fund the owner to be able to execute transactions
-    provider
-        .anvil_set_balance(owner, U256::from(1e19))
-        .await
-        .unwrap();
-
-    let proxy_factory = ISafeProxyFactory::new(SAFE_PROXY_FACTORY_ADDRESS, provider);
-
-    // Encode the Safe setup call
-    let setup_data = ISafe::setupCall {
-        _owners: vec![owner],
-        _threshold: U256::from(1),
-        to: SAFE_MODULE_SETUP_ADDRESS,
-        data: ISafe::enableModulesCall {
-            modules: vec![SAFE_4337_MODULE_ADDRESS],
-        }
-        .abi_encode()
-        .into(),
-        fallbackHandler: SAFE_4337_MODULE_ADDRESS,
-        paymentToken: Address::ZERO,
-        payment: U256::ZERO,
-        paymentReceiver: Address::ZERO,
-    }
-    .abi_encode();
-
-    // Deploy Safe via proxy factory
-    println!("\nDeploying Safe-{deploy_nonce}");
-    let deploy_tx = proxy_factory
-        .createProxyWithNonce(
-            SAFE_L2_SINGLETON_ADDRESS,
-            setup_data.into(),
-            deploy_nonce,
-        )
-        .from(owner)
-        .send()
-        .await
-        .expect("Failed to send createProxyWithNonce transaction");
-
-    let receipt = deploy_tx
-        .get_receipt()
-        .await
-        .expect("Failed to get transaction receipt");
-
-    // Get the Safe address from the ProxyCreation event
-    let proxy_creation_event = receipt
-        .inner
-        .logs()
-        .iter()
-        .find_map(|log| {
-            let raw_log = alloy::primitives::Log {
-                address: log.address(),
-                data: log.data().clone(),
-            };
-            ISafeProxyFactory::ProxyCreation::decode_log(&raw_log).ok()
-        })
-        .expect("ProxyCreation event not found");
-
-    let safe_address = proxy_creation_event.proxy;
-
-    Ok(safe_address)
-}
+// already imported from common
 
 #[tokio::test]
 async fn test_integration_personal_sign() {
