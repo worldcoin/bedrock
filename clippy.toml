@@ -16,10 +16,7 @@ doc-valid-idents = [
     "URL",
     "APIs",
     "JSON",
-    "BedrockConfig",
-    "bedrock_export",
     "uniffi",
     "export",
-    "SafeOp",
     "..",
 ]
