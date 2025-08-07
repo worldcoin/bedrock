@@ -235,7 +235,7 @@ sol! {
         bytes signature;
     }
 
-    /// The EIP-712 type-hash for a SafeOp, representing the structure of a User Operation for the Safe.
+    /// The EIP-712 type-hash for a `SafeOp`, representing the structure of a User Operation for the Safe.
     ///
     /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
     #[sol(rename_all = "camelcase")]

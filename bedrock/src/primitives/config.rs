@@ -39,7 +39,7 @@ pub struct BedrockConfig {
 
 #[bedrock_export]
 impl BedrockConfig {
-    /// Creates a new BedrockConfig with the specified environment
+    /// Creates a new `BedrockConfig` with the specified environment
     ///
     /// # Arguments
     /// * `environment` - The environment to use for this configuration

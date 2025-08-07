@@ -41,7 +41,7 @@ impl Default for ToolingDemo {
     }
 }
 
-/// Demonstrates automatic logging context injection with bedrock_export.
+/// Demonstrates automatic logging context injection with `bedrock_export`.
 /// All public methods will automatically have [Bedrock][ToolingDemo] prefix in logs.
 #[bedrock_export]
 impl ToolingDemo {
@@ -215,8 +215,8 @@ impl ToolingDemo {
 
     /// Demo: Async operation that showcases automatic tokio runtime configuration
     ///
-    /// This async method demonstrates that the bedrock_export macro automatically
-    /// adds `async_runtime = "tokio"` to the uniffi::export attribute when any
+    /// This async method demonstrates that the `bedrock_export` macro automatically
+    /// adds `async_runtime = "tokio"` to the `uniffi::export` attribute when any
     /// async functions are detected in the impl block.
     ///
     /// # Errors
