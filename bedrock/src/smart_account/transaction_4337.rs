@@ -126,8 +126,9 @@ pub trait Is4337Encodable {
         // 3. Merge paymaster data
         user_operation = user_operation.with_paymaster_data(sponsor_response)?;
 
-        // 4. Prepare validity timestamps and embed them into the user operation BEFORE hashing
+        // 4. Compute validity timestamps (without writing placeholder bytes on the user operation)
         // validAfter = 0 (immediately valid)
+        let valid_after_u48 = U48::from(0u64);
         let valid_after_bytes: [u8; 6] = [0u8; 6];
 
         // Set validUntil to the configured duration from now
@@ -135,18 +136,16 @@ pub trait Is4337Encodable {
             Utc::now() + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS);
         let valid_until_seconds = valid_until_timestamp.timestamp();
         let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
+        let valid_until_u48 = U48::from(valid_until_seconds);
         let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
         let valid_until_bytes: &[u8] = &valid_until_bytes_full[2..8]; // 48-bit timestamp
 
-        // Place a dummy 65-byte ECDSA signature after the timestamps so hashing uses the intended validity
-        let mut sig_with_timestamps_placeholder = Vec::with_capacity(77);
-        sig_with_timestamps_placeholder.extend_from_slice(&valid_after_bytes);
-        sig_with_timestamps_placeholder.extend_from_slice(valid_until_bytes);
-        sig_with_timestamps_placeholder.extend_from_slice(&[0u8; 65]);
-        user_operation.signature = sig_with_timestamps_placeholder.clone().into();
-
-        // Compute the hash including the intended validity timestamps
-        let encoded_safe_op: EncodedSafeOpStruct = (&user_operation).try_into()?;
+        // Build EncodedSafeOpStruct using explicit validity (no dependency on user_operation.signature)
+        let encoded_safe_op = EncodedSafeOpStruct::from_user_op_with_validity(
+            &user_operation,
+            valid_after_u48,
+            valid_until_u48,
+        )?;
 
         let signature = safe_account.sign_digest(
             encoded_safe_op.into_transaction_hash(),
@@ -154,9 +153,10 @@ pub trait Is4337Encodable {
             Some(*GNOSIS_SAFE_4337_MODULE),
         )?;
 
-        // Compose the final signature (timestamps + actual 65-byte signature)
+        // Compose the final signature once (timestamps + actual 65-byte signature)
         let mut full_signature = Vec::with_capacity(77);
-        full_signature.extend_from_slice(&sig_with_timestamps_placeholder[0..12]);
+        full_signature.extend_from_slice(&valid_after_bytes);
+        full_signature.extend_from_slice(valid_until_bytes);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
         user_operation.signature = full_signature.into();
@@ -417,6 +417,35 @@ impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
 }
 
 impl EncodedSafeOpStruct {
+    /// Builds an `EncodedSafeOpStruct` from a `UserOperation`, injecting explicit validity timestamps.
+    ///
+    /// # Errors
+    /// Returns `PrimitiveError` if hashing or conversions fail when deriving fields
+    /// from the provided `user_op`. Currently this can occur if internal helpers
+    /// on `user_op` return invalid data for hashing.
+    pub fn from_user_op_with_validity(
+        user_op: &UserOperation,
+        valid_after: U48,
+        valid_until: U48,
+    ) -> Result<Self, PrimitiveError> {
+        Ok(Self {
+            type_hash: *SAFE_OP_TYPEHASH,
+            safe: user_op.sender,
+            nonce: user_op.nonce,
+            init_code_hash: keccak256(user_op.get_init_code()),
+            call_data_hash: keccak256(&user_op.call_data),
+            verification_gas_limit: user_op.verification_gas_limit,
+            call_gas_limit: user_op.call_gas_limit,
+            pre_verification_gas: user_op.pre_verification_gas,
+            max_priority_fee_per_gas: user_op.max_priority_fee_per_gas,
+            max_fee_per_gas: user_op.max_fee_per_gas,
+            paymaster_and_data_hash: keccak256(user_op.get_paymaster_and_data()),
+            valid_after,
+            valid_until,
+            entry_point: *ENTRYPOINT_4337,
+        })
+    }
+
     /// computes the hash of the userOp
     #[must_use]
     pub fn into_transaction_hash(self) -> FixedBytes<32> {
