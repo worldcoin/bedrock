@@ -126,7 +126,7 @@ pub trait Is4337Encodable {
         // 3. Merge paymaster data
         user_operation = user_operation.with_paymaster_data(sponsor_response)?;
 
-        // 4. Compute validity timestamps (without writing placeholder bytes on the user operation)
+        // 4. Compute validity timestamps
         // validAfter = 0 (immediately valid)
         let valid_after_u48 = U48::from(0u64);
         let valid_after_bytes: [u8; 6] = [0u8; 6];
