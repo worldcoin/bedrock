@@ -116,7 +116,12 @@ pub trait Is4337Encodable {
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
-            .sponsor_user_operation(network, &user_operation, self_sponsor_token)
+            .sponsor_user_operation(
+                network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                self_sponsor_token,
+            )
             .await?;
 
         // 3. Merge paymaster data
