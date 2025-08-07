@@ -14,7 +14,9 @@ use bedrock::{
 };
 
 mod common;
-use common::{deploy_safe, setup_anvil, IEntryPoint, ISafe4337Module, PackedUserOperation};
+use common::{
+    deploy_safe, setup_anvil, IEntryPoint, ISafe4337Module, PackedUserOperation,
+};
 
 /// Integration test for the encoding, signing and execution of a 4337 transaction.
 ///
@@ -123,5 +125,3 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     );
     Ok(())
 }
-
-

@@ -4,10 +4,7 @@ use alloy::{
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
-use bedrock::{
-    primitives::Network,
-    smart_account::SafeSmartAccount,
-};
+use bedrock::{primitives::Network, smart_account::SafeSmartAccount};
 use serde_json::json;
 
 mod common;
@@ -139,7 +136,8 @@ async fn test_integration_sign_typed_data() {
         .expect("Failed to call isValidSignature");
 
     const EIP1271_MAGIC_VALUE: [u8; 4] = [0x16, 0x26, 0xba, 0x7e];
-    let expected_signature = alloy::primitives::FixedBytes::<4>::from(EIP1271_MAGIC_VALUE);
+    let expected_signature =
+        alloy::primitives::FixedBytes::<4>::from(EIP1271_MAGIC_VALUE);
 
     assert_eq!(
         is_valid_result, expected_signature,
@@ -148,5 +146,3 @@ async fn test_integration_sign_typed_data() {
 
     println!("✓ Signature validation for EIP-712 typed data passed");
 }
-
-

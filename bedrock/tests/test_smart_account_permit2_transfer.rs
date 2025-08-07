@@ -5,15 +5,15 @@ use alloy::{
     sol,
     sol_types::SolCall,
 };
+use bedrock::primitives::Network;
 use bedrock::smart_account::{
     SafeOperation, SafeSmartAccount, SafeTransaction, UnparsedPermitTransferFrom,
     UnparsedTokenPermissions, PERMIT2_ADDRESS,
 };
-use bedrock::primitives::Network;
 use chrono::Utc;
 
 mod common;
-use common::{deploy_safe, setup_anvil, IERC20, ISafe};
+use common::{deploy_safe, setup_anvil, ISafe, IERC20};
 
 sol!(
     // NOTE: This is defined in the `permit2` module, but it cannot be easily re-used here.
@@ -209,5 +209,3 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-
