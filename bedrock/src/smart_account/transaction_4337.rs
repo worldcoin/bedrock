@@ -126,7 +126,26 @@ pub trait Is4337Encodable {
         // 3. Merge paymaster data
         user_operation = user_operation.with_paymaster_data(sponsor_response)?;
 
-        // 4. Sign the UserOperation
+        // 4. Prepare validity timestamps and embed them into the user operation BEFORE hashing
+        // validAfter = 0 (immediately valid)
+        let valid_after_bytes: [u8; 6] = [0u8; 6];
+
+        // Set validUntil to the configured duration from now
+        let valid_until_timestamp =
+            Utc::now() + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS);
+        let valid_until_seconds = valid_until_timestamp.timestamp();
+        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
+        let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
+        let valid_until_bytes: &[u8] = &valid_until_bytes_full[2..8]; // 48-bit timestamp
+
+        // Place a dummy 65-byte ECDSA signature after the timestamps so hashing uses the intended validity
+        let mut sig_with_timestamps_placeholder = Vec::with_capacity(77);
+        sig_with_timestamps_placeholder.extend_from_slice(&valid_after_bytes);
+        sig_with_timestamps_placeholder.extend_from_slice(valid_until_bytes);
+        sig_with_timestamps_placeholder.extend_from_slice(&[0u8; 65]);
+        user_operation.signature = sig_with_timestamps_placeholder.clone().into();
+
+        // Compute the hash including the intended validity timestamps
         let encoded_safe_op: EncodedSafeOpStruct = (&user_operation).try_into()?;
 
         let signature = safe_account.sign_digest(
@@ -135,20 +154,9 @@ pub trait Is4337Encodable {
             Some(*GNOSIS_SAFE_4337_MODULE),
         )?;
 
-        // Add validity timestamps to signature (12 bytes = 6 bytes validAfter + 6 bytes validUntil)
+        // Compose the final signature (timestamps + actual 65-byte signature)
         let mut full_signature = Vec::with_capacity(77);
-        full_signature.extend_from_slice(&[0u8; 6]); // validAfter = 0
-
-        // Set validUntil to the configured duration from now
-        let valid_until_timestamp =
-            Utc::now() + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS);
-        let valid_until_seconds = valid_until_timestamp.timestamp();
-        // Convert to u64, ensuring we handle the sign properly
-        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0); // Fallback to 0 if conversion fails
-                                                                                    // Convert to 6-byte big-endian representation (48-bit timestamp)
-        let valid_until_bytes = valid_until_seconds.to_be_bytes();
-        full_signature.extend_from_slice(&valid_until_bytes[2..8]); // Take last 6 bytes (48 bits)
-
+        full_signature.extend_from_slice(&sig_with_timestamps_placeholder[0..12]);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
         user_operation.signature = full_signature.into();
