@@ -5,6 +5,7 @@ use alloy::{
     primitives::{address, keccak256, Address, U256},
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
+    sol_types::SolValue,
 };
 
 use bedrock::{
@@ -14,7 +15,7 @@ use bedrock::{
         },
         Network,
     },
-    smart_account::{EncodedSafeOpStruct, SafeSmartAccount, ENTRYPOINT_4337},
+    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     transaction::foreign::UnparsedUserOperation,
 };
 
@@ -168,6 +169,31 @@ where
                     }
                 })?;
 
+                // Compute the EntryPoint userOpHash per EIP-4337 spec
+                let packed_for_hash =
+                    PackedUserOperation::try_from(&user_op).map_err(|e| {
+                        HttpError::Generic {
+                            message: format!("pack userOp for hash failed: {e}"),
+                        }
+                    })?;
+                let chain_id_u64 = self.provider.get_chain_id().await.map_err(|e| {
+                    HttpError::Generic {
+                        message: format!("getChainId failed: {e}"),
+                    }
+                })?;
+                let inner_encoded = (
+                    packed_for_hash.sender,
+                    packed_for_hash.nonce,
+                    keccak256(packed_for_hash.init_code.clone()),
+                    keccak256(packed_for_hash.call_data.clone()),
+                    packed_for_hash.account_gas_limits,
+                    packed_for_hash.pre_verification_gas,
+                    packed_for_hash.gas_fees,
+                    keccak256(packed_for_hash.paymaster_and_data.clone()),
+                )
+                    .abi_encode();
+                let inner_hash = keccak256(inner_encoded);
+
                 // Execute via EntryPoint.handleOps on-chain
                 let entry_point_addr =
                     Address::from_str(entry_point_str).map_err(|_| {
@@ -184,23 +210,15 @@ where
                         message: format!("handleOps failed: {e}"),
                     })?;
 
-                // Compute the standard Safe op hash (same preimage used for signing)
-                let (va, vu) = user_op.extract_validity_timestamps().map_err(|e| {
-                    HttpError::Generic {
-                        message: format!("extract validity failed: {e}"),
-                    }
-                })?;
-                let op_hash =
-                    EncodedSafeOpStruct::from_user_op_with_validity(&user_op, va, vu)
-                        .map_err(|e| HttpError::Generic {
-                            message: format!("encode op failed: {e}"),
-                        })?
-                        .into_transaction_hash();
+                // Return the chain userOpHash (EntryPoint-wrapped)
+                let enc = (inner_hash, entry_point_addr, U256::from(chain_id_u64))
+                    .abi_encode();
+                let user_op_hash = keccak256(enc);
 
                 let resp = json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": format!("0x{}", hex::encode(op_hash)),
+                    "result": format!("0x{}", hex::encode(user_op_hash)),
                 });
                 Ok(serde_json::to_vec(&resp).unwrap())
             }
