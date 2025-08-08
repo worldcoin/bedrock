@@ -1,4 +1,3 @@
-#[cfg(feature = "tooling_tests")]
 use crate::primitives::filesystem::FileSystemError;
 use crate::{bedrock_export, debug, info, warn};
 
@@ -38,9 +37,8 @@ pub enum DemoError {
 }
 
 /// Filesystem test module to avoid Context import conflicts
-#[cfg(feature = "tooling_tests")]
 pub mod filesystem_tests {
-    /// Test error enum to verify FileSystemError is automatically included
+    /// Test error enum to verify `FileSystemError` is automatically included
     #[crate::bedrock_error]
     pub enum FileSystemTestError {
         /// Custom test error
@@ -52,7 +50,6 @@ pub mod filesystem_tests {
     }
 }
 
-#[cfg(feature = "tooling_tests")]
 pub use filesystem_tests::FileSystemTestError;
 
 impl Default for ToolingDemo {
@@ -61,7 +58,7 @@ impl Default for ToolingDemo {
     }
 }
 
-/// Demonstrates automatic logging context injection with bedrock_export.
+/// Demonstrates automatic logging context injection with `bedrock_export`.
 /// All public methods will automatically have [Bedrock][ToolingDemo] prefix in logs.
 #[bedrock_export]
 impl ToolingDemo {
@@ -235,8 +232,8 @@ impl ToolingDemo {
 
     /// Demo: Async operation that showcases automatic tokio runtime configuration
     ///
-    /// This async method demonstrates that the bedrock_export macro automatically
-    /// adds `async_runtime = "tokio"` to the uniffi::export attribute when any
+    /// This async method demonstrates that the `bedrock_export` macro automatically
+    /// adds `async_runtime = "tokio"` to the `uniffi::export` attribute when any
     /// async functions are detected in the impl block.
     ///
     /// # Errors
@@ -265,14 +262,12 @@ impl ToolingDemo {
 }
 
 /// Test struct to verify filesystem middleware injection
-#[cfg(feature = "tooling_tests")]
 #[derive(Default, uniffi::Object)]
 pub struct FileSystemTester;
 
-#[cfg(feature = "tooling_tests")]
 #[bedrock_export]
 impl FileSystemTester {
-    /// Creates a new FileSystemTester instance
+    /// Creates a new `FileSystemTester` instance
     #[uniffi::constructor]
     #[must_use]
     pub fn new() -> Self {
@@ -436,7 +431,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tooling_tests")]
     fn test_in_memory_filesystem_features() {
         use crate::primitives::filesystem::{FileSystem, InMemoryFileSystem};
 
