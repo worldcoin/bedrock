@@ -40,7 +40,7 @@ pub enum DemoError {
 /// Filesystem test module to avoid Context import conflicts
 #[cfg(feature = "tooling_tests")]
 pub mod filesystem_tests {
-    /// Test error enum to verify FileSystemError is automatically included
+    /// Test error enum to verify `FileSystemError` is automatically included
     #[crate::bedrock_error]
     pub enum FileSystemTestError {
         /// Custom test error
@@ -289,7 +289,7 @@ impl FileSystemTester {
         content: &str,
     ) -> Result<(), FileSystemTestError> {
         // _bedrock_fs is automatically injected by the macro
-        // FileSystemError automatically converts to FileSystemTestError::FileSystem
+        // `FileSystemError` automatically converts to FileSystemTestError::FileSystem
         Ok(_bedrock_fs.write_file(filename, content.as_bytes().to_vec())?)
     }
 
@@ -301,7 +301,7 @@ impl FileSystemTester {
         &self,
         filename: &str,
     ) -> Result<String, FileSystemTestError> {
-        // FileSystemError from _bedrock_fs automatically converts to FileSystemTestError::FileSystem
+        // `FileSystemError` from _bedrock_fs automatically converts to FileSystemTestError::FileSystem
         let data = _bedrock_fs.read_file(filename)?;
         String::from_utf8(data).map_err(|_| FileSystemTestError::TestError {
             message: "Invalid UTF-8 data".to_string(),
