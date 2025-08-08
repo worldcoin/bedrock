@@ -38,7 +38,7 @@ pub enum DemoError {
 
 /// Filesystem test module to avoid Context import conflicts
 pub mod filesystem_tests {
-    /// Test error enum to verify FileSystemError is automatically included
+    /// Test error enum to verify `FileSystemError` is automatically included
     #[crate::bedrock_error]
     pub enum FileSystemTestError {
         /// Custom test error
@@ -58,7 +58,7 @@ impl Default for ToolingDemo {
     }
 }
 
-/// Demonstrates automatic logging context injection with bedrock_export.
+/// Demonstrates automatic logging context injection with `bedrock_export`.
 /// All public methods will automatically have [Bedrock][ToolingDemo] prefix in logs.
 #[bedrock_export]
 impl ToolingDemo {
@@ -232,8 +232,8 @@ impl ToolingDemo {
 
     /// Demo: Async operation that showcases automatic tokio runtime configuration
     ///
-    /// This async method demonstrates that the bedrock_export macro automatically
-    /// adds `async_runtime = "tokio"` to the uniffi::export attribute when any
+    /// This async method demonstrates that the `bedrock_export` macro automatically
+    /// adds `async_runtime = "tokio"` to the `uniffi::export` attribute when any
     /// async functions are detected in the impl block.
     ///
     /// # Errors
@@ -267,7 +267,7 @@ pub struct FileSystemTester;
 
 #[bedrock_export]
 impl FileSystemTester {
-    /// Creates a new FileSystemTester instance
+    /// Creates a new `FileSystemTester` instance
     #[uniffi::constructor]
     #[must_use]
     pub fn new() -> Self {
