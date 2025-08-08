@@ -79,6 +79,7 @@ pub trait FileSystem: Send + Sync {
     /// Delete a file
     ///
     /// # Errors
+    /// - `FileSystemError::FileDoesNotExist` if the file does not exist
     /// - `FileSystemError::DeleteFileError` if the file cannot be deleted
     fn delete_file(&self, file_path: String) -> Result<(), FileSystemError>;
 }
@@ -211,7 +212,8 @@ impl FileSystemMiddleware {
     ///
     /// # Errors
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    /// - Any error from the underlying filesystem implementation
+    /// - `FileSystemError::FileDoesNotExist` if the file does not exist
+    /// - Any other error from the underlying filesystem implementation
     pub fn delete_file(&self, file_path: &str) -> Result<(), FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
@@ -219,8 +221,8 @@ impl FileSystemMiddleware {
     }
 }
 
-// Re-export InMemoryFileSystem for tooling tests feature
-#[cfg(all(test, feature = "tooling_tests"))]
+// Re-export InMemoryFileSystem for tests
+#[cfg(test)]
 pub use tests::InMemoryFileSystem;
 
 #[cfg(test)]
@@ -423,8 +425,11 @@ mod tests {
 
         fn delete_file(&self, file_path: String) -> Result<(), FileSystemError> {
             let normalized_path = Self::normalize_path(&file_path);
-            self.files.lock().unwrap().remove(&normalized_path);
-            Ok(())
+            let removed = self.files.lock().unwrap().remove(&normalized_path);
+            match removed {
+                Some(_) => Ok(()),
+                None => Err(FileSystemError::FileDoesNotExist),
+            }
         }
     }
 
