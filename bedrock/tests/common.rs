@@ -23,6 +23,7 @@ sol!(
     }
 );
 
+// https://github.com/safe-global/safe-smart-account/blob/v1.5.0/contracts/interfaces/ISafe.sol
 sol!(
     #[allow(clippy::too_many_arguments)]
     #[sol(rpc)]

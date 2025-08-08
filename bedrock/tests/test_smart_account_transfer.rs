@@ -33,8 +33,6 @@ where
     provider: P,
 }
 
-// Intentionally no request struct; we parse the few fields we need directly from JSON
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorUserOperationResponseLite<'a> {

@@ -132,9 +132,9 @@ pub trait Is4337Encodable {
         let valid_after_bytes: [u8; 6] = [0u8; 6];
 
         // Set validUntil to the configured duration from now
-        let valid_until_timestamp =
-            Utc::now() + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS);
-        let valid_until_seconds = valid_until_timestamp.timestamp();
+        let valid_until_seconds = (Utc::now()
+            + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS))
+        .timestamp();
         let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
         let valid_until_u48 = U48::from(valid_until_seconds);
         let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
