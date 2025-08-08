@@ -1,4 +1,3 @@
-#[cfg(feature = "tooling_tests")]
 use crate::primitives::filesystem::FileSystemError;
 use crate::{bedrock_export, debug, info, warn};
 
@@ -38,7 +37,6 @@ pub enum DemoError {
 }
 
 /// Filesystem test module to avoid Context import conflicts
-#[cfg(feature = "tooling_tests")]
 pub mod filesystem_tests {
     /// Test error enum to verify `FileSystemError` is automatically included
     #[crate::bedrock_error]
@@ -52,7 +50,6 @@ pub mod filesystem_tests {
     }
 }
 
-#[cfg(feature = "tooling_tests")]
 pub use filesystem_tests::FileSystemTestError;
 
 impl Default for ToolingDemo {
@@ -265,11 +262,9 @@ impl ToolingDemo {
 }
 
 /// Test struct to verify filesystem middleware injection
-#[cfg(feature = "tooling_tests")]
 #[derive(Default, uniffi::Object)]
 pub struct FileSystemTester;
 
-#[cfg(feature = "tooling_tests")]
 #[bedrock_export]
 impl FileSystemTester {
     /// Creates a new `FileSystemTester` instance
@@ -436,7 +431,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tooling_tests")]
     fn test_in_memory_filesystem_features() {
         use crate::primitives::filesystem::{FileSystem, InMemoryFileSystem};
 
