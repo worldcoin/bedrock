@@ -33,4 +33,4 @@ kotlin/**/build/
 kotlin/gradlew
 kotlin/gradlew.bat
 kotlin/gradle/
-
+kotlin/bedrock-tests/bin/
