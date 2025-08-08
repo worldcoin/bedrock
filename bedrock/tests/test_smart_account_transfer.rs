@@ -14,7 +14,7 @@ use bedrock::{
         },
         Network,
     },
-    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
+    smart_account::{EncodedSafeOpStruct, SafeSmartAccount, ENTRYPOINT_4337},
     transaction::foreign::UnparsedUserOperation,
 };
 
@@ -185,8 +185,13 @@ where
                     })?;
 
                 // Compute the standard Safe op hash (same preimage used for signing)
+                let (va, vu) = user_op.extract_validity_timestamps().map_err(|e| {
+                    HttpError::Generic {
+                        message: format!("extract validity failed: {e}"),
+                    }
+                })?;
                 let op_hash =
-                    bedrock::smart_account::EncodedSafeOpStruct::try_from(&user_op)
+                    EncodedSafeOpStruct::from_user_op_with_validity(&user_op, va, vu)
                         .map_err(|e| HttpError::Generic {
                             message: format!("encode op failed: {e}"),
                         })?

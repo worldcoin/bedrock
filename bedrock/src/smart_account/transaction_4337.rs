@@ -388,34 +388,6 @@ impl UserOperation {
     }
 }
 
-/// Converts a `UserOperation` into an `EncodedSafeOpStruct` to the 4337 user operation can be signed.
-///
-/// The `Safe4337Module` expects the hash of the `EncodedSafeOpStruct` to be signed.
-impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
-    type Error = PrimitiveError;
-
-    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
-        let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
-
-        Ok(Self {
-            type_hash: *SAFE_OP_TYPEHASH,
-            safe: user_op.sender,
-            nonce: user_op.nonce,
-            init_code_hash: keccak256(user_op.get_init_code()),
-            call_data_hash: keccak256(&user_op.call_data),
-            verification_gas_limit: user_op.verification_gas_limit,
-            call_gas_limit: user_op.call_gas_limit,
-            pre_verification_gas: user_op.pre_verification_gas,
-            max_priority_fee_per_gas: user_op.max_priority_fee_per_gas,
-            max_fee_per_gas: user_op.max_fee_per_gas,
-            paymaster_and_data_hash: keccak256(user_op.get_paymaster_and_data()),
-            valid_after,
-            valid_until,
-            entry_point: *ENTRYPOINT_4337,
-        })
-    }
-}
-
 impl EncodedSafeOpStruct {
     /// Builds an `EncodedSafeOpStruct` from a `UserOperation`, injecting explicit validity timestamps.
     ///
@@ -503,7 +475,13 @@ mod tests {
 
         let user_op: UserOperation = user_op.try_into().unwrap();
 
-        let encoded_safe_op = EncodedSafeOpStruct::try_from(&user_op).unwrap();
+        let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
+        let encoded_safe_op = EncodedSafeOpStruct::from_user_op_with_validity(
+            &user_op,
+            valid_after,
+            valid_until,
+        )
+        .unwrap();
         let hash = encoded_safe_op.into_transaction_hash();
 
         let smart_account = SafeSmartAccount::random();

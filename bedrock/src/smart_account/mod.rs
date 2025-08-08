@@ -223,7 +223,12 @@ impl SafeSmartAccount {
         user_operation: UnparsedUserOperation,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let user_op: UserOperation = user_operation.try_into()?;
-        let encoded_safe_op_struct: EncodedSafeOpStruct = (&user_op).try_into()?;
+        let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
+        let encoded_safe_op_struct = EncodedSafeOpStruct::from_user_op_with_validity(
+            &user_op,
+            valid_after,
+            valid_until,
+        )?;
 
         let signature = self.sign_digest(
             encoded_safe_op_struct.into_transaction_hash(),
