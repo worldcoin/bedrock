@@ -24,12 +24,7 @@ use serde_json::json;
 mod common;
 use common::{deploy_safe, setup_anvil, IEntryPoint, PackedUserOperation, IERC20};
 
-// PackedUserOperation and interfaces are imported from common
-
-// setup_anvil and deploy_safe are provided by common
-
 // ------------------ Mock HTTP client that actually executes the op on Anvil ------------------
-
 #[derive(Clone)]
 struct AnvilBackedHttpClient<P>
 where

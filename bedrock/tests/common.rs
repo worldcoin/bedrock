@@ -9,7 +9,6 @@ use alloy::{
 
 use bedrock::{primitives::PrimitiveError, smart_account::UserOperation};
 
-// Shared on-chain interfaces used across tests
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
