@@ -63,12 +63,24 @@ pub enum MyError {
 
 - Auto-derives `Debug`, `thiserror::Error`, `uniffi::Error`
 - Adds `Generic { message: String }` variant automatically
+- Adds `FileSystem(FileSystemError)` variant automatically for filesystem operations
 - Implements `From<anyhow::Error>` for seamless error conversion
+- Implements `From<FileSystemError>` for automatic filesystem error conversion
 - Provides helper methods like `from_anyhow_result()` and `from_anyhow_result_with_prefix()`
+
+This means filesystem operations automatically work with your error types:
+
+```rust
+pub fn load_config(&self) -> Result<String, MyError> {
+    // FileSystemError automatically converts to MyError::FileSystem
+    let data = _bedrock_fs.read_file("config.json")?;
+    Ok(String::from_utf8_lossy(&data).to_string())
+}
+```
 
 ### `#[bedrock_export]` Macro
 
-Wraps `#[uniffi::export]` with automatic logging context injection:
+Wraps `#[uniffi::export]` with automatic logging context and filesystem middleware injection:
 
 ```rust
 #[bedrock_export]
@@ -76,6 +88,11 @@ impl MyStruct {
     pub fn some_method(&self) -> String {
         // LogContext automatically set to "MyStruct"
         info!("This will be prefixed with [Bedrock][MyStruct]");
+
+        // Filesystem middleware available as _bedrock_fs with automatic path prefixing
+        // Files will be prefixed with snake_case version of struct name: "my_struct/"
+        _bedrock_fs.write_file("data.txt", b"content".to_vec()).ok();
+
         "result".to_string()
     }
 }

@@ -41,6 +41,9 @@ pub mod logger;
 /// Introduces global configuration for Bedrock operations.
 pub mod config;
 
+/// Introduces filesystem functionality with automatic path prefixing for each exported struct.
+pub mod filesystem;
+
 /// Introduces authenticated HTTP client functionality that native applications must implement for bedrock.
 pub mod http_client;
 

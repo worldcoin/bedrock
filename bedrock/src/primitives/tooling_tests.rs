@@ -1,3 +1,5 @@
+#[cfg(feature = "tooling_tests")]
+use crate::primitives::filesystem::FileSystemError;
 use crate::{bedrock_export, debug, info, warn};
 
 /// A simple demo struct to test tooling functionality like log prefixing and error handling.
@@ -34,6 +36,24 @@ pub enum DemoError {
     },
     // Note: Generic variant is automatically added by #[bedrock_error]
 }
+
+/// Filesystem test module to avoid Context import conflicts
+#[cfg(feature = "tooling_tests")]
+pub mod filesystem_tests {
+    /// Test error enum to verify FileSystemError is automatically included
+    #[crate::bedrock_error]
+    pub enum FileSystemTestError {
+        /// Custom test error
+        #[error("test error: {message}")]
+        TestError {
+            /// The error message
+            message: String,
+        },
+    }
+}
+
+#[cfg(feature = "tooling_tests")]
+pub use filesystem_tests::FileSystemTestError;
 
 impl Default for ToolingDemo {
     fn default() -> Self {
@@ -244,6 +264,75 @@ impl ToolingDemo {
     }
 }
 
+/// Test struct to verify filesystem middleware injection
+#[cfg(feature = "tooling_tests")]
+#[derive(Default, uniffi::Object)]
+pub struct FileSystemTester;
+
+#[cfg(feature = "tooling_tests")]
+#[bedrock_export]
+impl FileSystemTester {
+    /// Creates a new FileSystemTester instance
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Tests writing a file using the injected filesystem middleware
+    ///
+    /// # Errors
+    /// - `FileSystemTestError` if filesystem operations fail
+    pub fn test_write_file(
+        &self,
+        filename: &str,
+        content: &str,
+    ) -> Result<(), FileSystemTestError> {
+        // _bedrock_fs is automatically injected by the macro
+        // FileSystemError automatically converts to FileSystemTestError::FileSystem
+        Ok(_bedrock_fs.write_file(filename, content.as_bytes().to_vec())?)
+    }
+
+    /// Tests reading a file using the injected filesystem middleware
+    ///
+    /// # Errors
+    /// - `FileSystemTestError` if filesystem operations fail
+    pub fn test_read_file(
+        &self,
+        filename: &str,
+    ) -> Result<String, FileSystemTestError> {
+        // FileSystemError from _bedrock_fs automatically converts to FileSystemTestError::FileSystem
+        let data = _bedrock_fs.read_file(filename)?;
+        String::from_utf8(data).map_err(|_| FileSystemTestError::TestError {
+            message: "Invalid UTF-8 data".to_string(),
+        })
+    }
+
+    /// Tests listing files in the current directory
+    ///
+    /// # Errors
+    /// - `FileSystemError` if filesystem operations fail
+    pub fn test_list_files(&self) -> Result<Vec<String>, FileSystemError> {
+        _bedrock_fs.list_files(".")
+    }
+
+    /// Tests file existence check
+    ///
+    /// # Errors
+    /// - `FileSystemError` if filesystem operations fail
+    pub fn test_file_exists(&self, filename: &str) -> Result<bool, FileSystemError> {
+        _bedrock_fs.file_exists(filename)
+    }
+
+    /// Tests deleting a file
+    ///
+    /// # Errors
+    /// - `FileSystemError` if filesystem operations fail
+    pub fn test_delete_file(&self, filename: &str) -> Result<(), FileSystemError> {
+        _bedrock_fs.delete_file(filename)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +433,61 @@ mod tests {
         } else {
             panic!("Expected Generic error for timeout");
         }
+    }
+
+    #[test]
+    #[cfg(feature = "tooling_tests")]
+    fn test_in_memory_filesystem_features() {
+        use crate::primitives::filesystem::{FileSystem, InMemoryFileSystem};
+
+        // Test creating filesystem with initial files
+        let fs = InMemoryFileSystem::with_files(&[
+            ("config.json", r#"{"app": "bedrock"}"#),
+            ("data/users.txt", "alice\nbob\ncharlie"),
+            ("logs/app.log", "Starting application..."),
+        ]);
+
+        // Test file count
+        assert_eq!(fs.file_count(), 3);
+
+        // Test file exists
+        assert!(fs.contains_file("config.json"));
+        assert!(fs.contains_file("data/users.txt"));
+        assert!(!fs.contains_file("nonexistent.txt"));
+
+        // Test reading file content
+        assert_eq!(
+            String::from_utf8(fs.read_file("config.json".to_string()).unwrap())
+                .unwrap(),
+            r#"{"app": "bedrock"}"#
+        );
+
+        // Test setting up additional files
+        fs.write_file("temp/test.txt".to_string(), b"temporary data".to_vec())
+            .unwrap();
+        assert_eq!(fs.file_count(), 4);
+
+        // Test directory setup
+        fs.setup_directory("cache");
+        // Directory markers don't count as files
+        assert_eq!(fs.file_count(), 4);
+
+        // Test listing all file paths
+        let mut paths = fs.all_file_paths();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "config.json",
+                "data/users.txt",
+                "logs/app.log",
+                "temp/test.txt"
+            ]
+        );
+
+        // Test clear functionality
+        fs.clear();
+        assert_eq!(fs.file_count(), 0);
+        assert!(!fs.contains_file("config.json"));
     }
 }

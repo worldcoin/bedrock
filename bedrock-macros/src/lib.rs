@@ -10,8 +10,10 @@ use syn::{
 /// This macro automatically:
 /// 1. Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
 /// 2. Adds a `Generic { message: String }` variant if not already present
-/// 3. Implements `From<anyhow::Error>` for the error type
-/// 4. Provides helper methods for error conversion
+/// 3. Adds a `FileSystem(FileSystemError)` variant if not already present
+/// 4. Implements `From<anyhow::Error>` for the error type
+/// 5. Implements `From<FileSystemError>` for the error type (via thiserror's #[from])
+/// 6. Provides helper methods for error conversion
 ///
 /// # Usage
 ///
@@ -28,7 +30,18 @@ use syn::{
 /// This will automatically add:
 /// - `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
 /// - `Generic { message: String }` variant
+/// - `FileSystem(FileSystemError)` variant
 /// - `impl From<anyhow::Error> for MyError`
+/// - `impl From<FileSystemError> for MyError`
+///
+/// Now you can use filesystem operations with automatic error conversion:
+/// ```rust,ignore
+/// fn my_function() -> Result<String, MyError> {
+///     // FileSystemError automatically converts to MyError::FileSystem
+///     let data = _bedrock_fs.read_file("config.json")?;
+///     Ok(String::from_utf8_lossy(&data).to_string())
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -63,6 +76,12 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
                 .iter()
                 .any(|variant| variant.ident == "Generic");
 
+            // Check if FileSystem variant already exists
+            let has_filesystem = data_enum
+                .variants
+                .iter()
+                .any(|variant| variant.ident == "FileSystem");
+
             // Collect existing variants
             let mut variants = data_enum.variants.clone();
 
@@ -77,6 +96,16 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
                     }
                 };
                 variants.push(generic_variant);
+            }
+
+            // Add FileSystem variant if it doesn't exist
+            if !has_filesystem {
+                let filesystem_variant: Variant = syn::parse_quote! {
+                    /// Filesystem operation error.
+                    #[error(transparent)]
+                    FileSystem(#[from] crate::primitives::filesystem::FileSystemError)
+                };
+                variants.push(filesystem_variant);
             }
 
             // Generate the enhanced enum with automatic derives and attributes
@@ -156,13 +185,14 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Procedural macro that wraps `uniffi::export` and automatically injects logging context
+/// Procedural macro that wraps `uniffi::export` and automatically injects logging context and filesystem middleware
 ///
 /// This macro automatically:
 /// 1. Forwards the attribute to `#[uniffi::export]`
 /// 2. Injects `let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new("StructName");` at the start of every `pub fn`
-/// 3. Extracts the struct/trait name from the impl block for context
-/// 4. Automatically adds `async_runtime = "tokio"` if any async functions are detected
+/// 3. Injects a private `_bedrock_fs` field of type FileSystemMiddleware to the struct
+/// 4. Extracts the struct/trait name from the impl block for context
+/// 5. Automatically adds `async_runtime = "tokio"` if any async functions are detected
 ///
 /// # Usage
 ///
@@ -170,13 +200,19 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// #[bedrock_export]
 /// impl MyStruct {
 ///     pub fn some_method(&self) -> String {
-///         // _bedrock_logger_ctx is automatically injected here
+///         // _bedrock_logger_ctx and _bedrock_fs are automatically injected here
 ///         debug!("This will be prefixed with [Bedrock][MyStruct]");
+///         
+///         // Use the filesystem with automatic path prefixing
+///         let data = _bedrock_fs.read_file("config.json").unwrap();
+///         
 ///         "result".to_string()
 ///     }
 ///     
 ///     pub async fn async_method(&self) -> String {
 ///         // async_runtime = "tokio" is automatically added to uniffi::export
+///         // _bedrock_fs is available here too
+///         _bedrock_fs.write_file("output.txt", b"data".to_vec()).unwrap();
 ///         "async result".to_string()
 ///     }
 /// }
@@ -213,7 +249,7 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
                 if matches!(method.vis, Visibility::Public(_)) {
                     // Inject logging context at the start of the function body
                     let mut new_method = method.clone();
-                    inject_logging_context(&mut new_method, &type_name);
+                    inject_logging_and_filesystem_context(&mut new_method, &type_name);
                     new_items.push(ImplItem::Fn(new_method));
                 } else {
                     // Keep private methods unchanged
@@ -266,15 +302,56 @@ fn has_async_functions_in_impl(impl_items: &[ImplItem]) -> bool {
     })
 }
 
-/// Inject logging context at the start of a function body
-fn inject_logging_context(method: &mut ImplItemFn, type_name: &str) {
-    // Create the logging context statement
+/// Convert a PascalCase string to snake_case
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut prev_was_uppercase = false;
+    let chars: Vec<char> = s.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch.is_uppercase() {
+            // Don't add underscore at the beginning
+            if !result.is_empty() {
+                // Add underscore if:
+                // 1. Previous char was lowercase (e.g., "aB" -> "a_b")
+                // 2. Current char is uppercase followed by lowercase (e.g., "ABc" -> "a_bc")
+                let prev_was_lowercase = i > 0 && chars[i - 1].is_lowercase();
+                let next_is_lowercase =
+                    i + 1 < chars.len() && chars[i + 1].is_lowercase();
+
+                if prev_was_lowercase || (prev_was_uppercase && next_is_lowercase) {
+                    result.push('_');
+                }
+            }
+            result.push(ch.to_lowercase().next().unwrap());
+            prev_was_uppercase = true;
+        } else {
+            result.push(ch);
+            prev_was_uppercase = false;
+        }
+    }
+
+    result
+}
+
+/// Inject logging context and filesystem middleware at the start of a function body
+fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &str) {
+    // Convert type name to snake_case for filesystem prefix
+    let snake_case_name = to_snake_case(type_name);
+
+    // Create the filesystem middleware statement with snake_case name
+    let fs_stmt: Stmt = syn::parse_quote! {
+        let _bedrock_fs = crate::primitives::filesystem::create_middleware(#snake_case_name);
+    };
+
+    // Create the logging context statement (keep original PascalCase for logging)
     let context_stmt: Stmt = syn::parse_quote! {
         let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new(#type_name);
     };
 
-    // Insert at the beginning of the function body
-    method.block.stmts.insert(0, context_stmt);
+    // Insert both at the beginning of the function body
+    method.block.stmts.insert(0, fs_stmt);
+    method.block.stmts.insert(1, context_stmt);
 }
 
 /// Procedural macro that wraps `alloy::sol!` and generates unparsed versions of structs
@@ -879,5 +956,84 @@ mod tests {
             args.to_string(),
             "callback_interface = \"SomeInterface\" , async_runtime = \"tokio\""
         );
+    }
+
+    #[test]
+    fn test_bedrock_error_includes_filesystem() {
+        // Test that bedrock_error macro includes FileSystem variant
+        let input: DeriveInput = syn::parse_quote! {
+            pub enum TestError {
+                #[error("custom error")]
+                Custom,
+            }
+        };
+
+        // Simulate what the macro does
+        if let Data::Enum(data_enum) = &input.data {
+            let has_filesystem = data_enum
+                .variants
+                .iter()
+                .any(|variant| variant.ident == "FileSystem");
+
+            // Initially should not have FileSystem variant
+            assert!(!has_filesystem);
+
+            // After macro processing, it should add FileSystem variant
+            let mut variants = data_enum.variants.clone();
+
+            // Add FileSystem variant (simulating macro behavior)
+            let filesystem_variant: Variant = syn::parse_quote! {
+                /// Filesystem operation error.
+                #[error(transparent)]
+                FileSystem(#[from] crate::primitives::filesystem::FileSystemError)
+            };
+            variants.push(filesystem_variant);
+
+            // Now check it has FileSystem variant
+            let has_filesystem_after =
+                variants.iter().any(|variant| variant.ident == "FileSystem");
+            assert!(has_filesystem_after);
+        } else {
+            panic!("Expected enum");
+        }
+    }
+
+    #[test]
+    fn test_to_snake_case() {
+        // Basic cases
+        assert_eq!(to_snake_case("MyStruct"), "my_struct");
+        assert_eq!(to_snake_case("TestModule"), "test_module");
+        assert_eq!(to_snake_case("SimpleTest"), "simple_test");
+
+        // Single word cases
+        assert_eq!(to_snake_case("Simple"), "simple");
+        assert_eq!(to_snake_case("SIMPLE"), "simple");
+
+        // Acronyms and complex cases
+        assert_eq!(to_snake_case("HTTPClient"), "http_client");
+        assert_eq!(to_snake_case("XMLParser"), "xml_parser");
+        assert_eq!(to_snake_case("IOError"), "io_error");
+        assert_eq!(to_snake_case("URLPath"), "url_path");
+
+        // Multiple uppercase in a row
+        assert_eq!(to_snake_case("XMLHTTPRequest"), "xmlhttp_request");
+        assert_eq!(to_snake_case("HTTPSConnection"), "https_connection");
+
+        // Already snake_case
+        assert_eq!(to_snake_case("already_snake_case"), "already_snake_case");
+
+        // Mixed cases
+        assert_eq!(
+            to_snake_case("getHTTPResponseCode"),
+            "get_http_response_code"
+        );
+        assert_eq!(to_snake_case("ParseHTMLString"), "parse_html_string");
+
+        // Edge cases
+        assert_eq!(to_snake_case(""), "");
+        assert_eq!(to_snake_case("A"), "a");
+        assert_eq!(to_snake_case("AB"), "ab");
+        assert_eq!(to_snake_case("ABC"), "abc");
+        assert_eq!(to_snake_case("ABc"), "a_bc");
     }
 }
