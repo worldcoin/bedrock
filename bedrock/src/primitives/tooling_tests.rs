@@ -272,7 +272,7 @@ pub struct FileSystemTester;
 #[cfg(feature = "tooling_tests")]
 #[bedrock_export]
 impl FileSystemTester {
-    /// Creates a new FileSystemTester instance
+    /// Creates a new `FileSystemTester` instance
     #[uniffi::constructor]
     #[must_use]
     pub fn new() -> Self {
