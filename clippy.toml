@@ -16,4 +16,7 @@ doc-valid-idents = [
     "URL",
     "APIs",
     "JSON",
+    "uniffi",
+    "export",
+    "..",
 ]

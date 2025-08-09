@@ -3,10 +3,7 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::{
-    is_empty_bytes, is_zero_address, is_zero_u128, is_zero_u256, HttpError, Network,
-    PrimitiveError,
-};
+use crate::primitives::{HttpError, Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
 use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
 
@@ -19,6 +16,8 @@ use alloy::{
 use chrono::{Duration, Utc};
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
+
+use serde::Serializer;
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
@@ -127,8 +126,26 @@ pub trait Is4337Encodable {
         // 3. Merge paymaster data
         user_operation = user_operation.with_paymaster_data(sponsor_response)?;
 
-        // 4. Sign the UserOperation
-        let encoded_safe_op: EncodedSafeOpStruct = (&user_operation).try_into()?;
+        // 4. Compute validity timestamps
+        // validAfter = 0 (immediately valid)
+        let valid_after_u48 = U48::from(0u64);
+        let valid_after_bytes: [u8; 6] = [0u8; 6];
+
+        // Set validUntil to the configured duration from now
+        let valid_until_seconds = (Utc::now()
+            + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS))
+        .timestamp();
+        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
+        let valid_until_u48 = U48::from(valid_until_seconds);
+        let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
+        let valid_until_bytes: &[u8] = &valid_until_bytes_full[2..8]; // 48-bit timestamp
+
+        // Build EncodedSafeOpStruct using explicit validity (no dependency on user_operation.signature)
+        let encoded_safe_op = EncodedSafeOpStruct::from_user_op_with_validity(
+            &user_operation,
+            valid_after_u48,
+            valid_until_u48,
+        )?;
 
         let signature = safe_account.sign_digest(
             encoded_safe_op.into_transaction_hash(),
@@ -136,20 +153,10 @@ pub trait Is4337Encodable {
             Some(*GNOSIS_SAFE_4337_MODULE),
         )?;
 
-        // Add validity timestamps to signature (12 bytes = 6 bytes validAfter + 6 bytes validUntil)
+        // Compose the final signature once (timestamps + actual 65-byte signature)
         let mut full_signature = Vec::with_capacity(77);
-        full_signature.extend_from_slice(&[0u8; 6]); // validAfter = 0
-
-        // Set validUntil to the configured duration from now
-        let valid_until_timestamp =
-            Utc::now() + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS);
-        let valid_until_seconds = valid_until_timestamp.timestamp();
-        // Convert to u64, ensuring we handle the sign properly
-        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0); // Fallback to 0 if conversion fails
-                                                                                    // Convert to 6-byte big-endian representation (48-bit timestamp)
-        let valid_until_bytes = valid_until_seconds.to_be_bytes();
-        full_signature.extend_from_slice(&valid_until_bytes[2..8]); // Take last 6 bytes (48 bits)
-
+        full_signature.extend_from_slice(&valid_after_bytes);
+        full_signature.extend_from_slice(valid_until_bytes);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
         user_operation.signature = full_signature.into();
@@ -188,50 +195,46 @@ sol! {
         /// The Account making the `UserOperation`
         address sender;
         /// Anti-replay protection
+        #[serde(serialize_with = "serialize_u256_as_hex")]
         uint256 nonce;
         /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
-        #[serde(skip_serializing_if = "is_zero_address")]
         address factory;
         /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
-        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes factory_data;
         /// The data to pass to the sender during the main execution call
         bytes call_data;
         /// Gas limit for the main execution call.
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 call_gas_limit;
         /// Gas limit for the verification call
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 verification_gas_limit;
         /// Extra gas to pay the bundler
-        #[serde(skip_serializing_if = "is_zero_u256")]
+        #[serde(serialize_with = "serialize_u256_as_hex")]
         uint256 pre_verification_gas;
         /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_fee_per_gas`)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 max_fee_per_gas;
         /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_priority_fee_per_gas`)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 max_priority_fee_per_gas;
         /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
-        #[serde(skip_serializing_if = "is_zero_address")]
         address paymaster;
         /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 paymaster_verification_gas_limit;
         /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for paymasterAndData validation.
-        #[serde(skip_serializing_if = "is_zero_u128")]
+        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
+        #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 paymaster_post_op_gas_limit;
         /// Data for paymaster (only if paymaster exists)
-        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes paymaster_data;
         /// Data passed into the sender to verify authorization
-        #[serde(skip_serializing_if = "is_empty_bytes")]
         bytes signature;
     }
 
@@ -385,15 +388,18 @@ impl UserOperation {
     }
 }
 
-/// Converts a `UserOperation` into an `EncodedSafeOpStruct` to the 4337 user operation can be signed.
-///
-/// The `Safe4337Module` expects the hash of the `EncodedSafeOpStruct` to be signed.
-impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
-    type Error = PrimitiveError;
-
-    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
-        let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
-
+impl EncodedSafeOpStruct {
+    /// Builds an `EncodedSafeOpStruct` from a `UserOperation`, injecting explicit validity timestamps.
+    ///
+    /// # Errors
+    /// Returns `PrimitiveError` if hashing or conversions fail when deriving fields
+    /// from the provided `user_op`. Currently this can occur if internal helpers
+    /// on `user_op` return invalid data for hashing.
+    pub fn from_user_op_with_validity(
+        user_op: &UserOperation,
+        valid_after: U48,
+        valid_until: U48,
+    ) -> Result<Self, PrimitiveError> {
         Ok(Self {
             type_hash: *SAFE_OP_TYPEHASH,
             safe: user_op.sender,
@@ -411,14 +417,31 @@ impl TryFrom<&UserOperation> for EncodedSafeOpStruct {
             entry_point: *ENTRYPOINT_4337,
         })
     }
-}
 
-impl EncodedSafeOpStruct {
     /// computes the hash of the userOp
     #[must_use]
     pub fn into_transaction_hash(self) -> FixedBytes<32> {
         keccak256(self.abi_encode())
     }
+}
+
+// --- JSON serialization helpers for ERC-7769 ---
+
+fn serialize_u128_as_hex<S: Serializer>(
+    value: &u128,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // Always hex with 0x prefix per spec
+    let s = format!("0x{value:x}");
+    serializer.serialize_str(&s)
+}
+
+fn serialize_u256_as_hex<S: Serializer>(
+    value: &U256,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let s = format!("0x{value:x}");
+    serializer.serialize_str(&s)
 }
 
 #[cfg(test)]
@@ -452,7 +475,13 @@ mod tests {
 
         let user_op: UserOperation = user_op.try_into().unwrap();
 
-        let encoded_safe_op = EncodedSafeOpStruct::try_from(&user_op).unwrap();
+        let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
+        let encoded_safe_op = EncodedSafeOpStruct::from_user_op_with_validity(
+            &user_op,
+            valid_after,
+            valid_until,
+        )
+        .unwrap();
         let hash = encoded_safe_op.into_transaction_hash();
 
         let smart_account = SafeSmartAccount::random();

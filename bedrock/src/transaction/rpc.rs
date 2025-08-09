@@ -363,7 +363,7 @@ mod tests {
             "0x845adb2c711129d4f3966735ed98a9f09fc4ce57"
         );
         assert_eq!(serialized["callData"], "0xe9ae5c53");
-        assert_eq!(serialized["callGasLimit"], 80000); // Now serialized as number, not hex string
+        assert_eq!(serialized["callGasLimit"], "0x13880"); // ERC-7769: numeric fields as hex strings
     }
 
     #[test]
@@ -444,13 +444,18 @@ mod tests {
         // Verify the key field is properly serialized with camelCase naming
         assert_eq!(serialized["callData"], "0xe9ae5c53");
 
-        // Verify that zero/empty fields are properly omitted (this is what we want for RPC)
-        assert!(!serialized.as_object().unwrap().contains_key("factory"));
-        assert!(!serialized.as_object().unwrap().contains_key("factoryData"));
-        assert!(!serialized.as_object().unwrap().contains_key("paymaster"));
-        assert!(!serialized
-            .as_object()
-            .unwrap()
-            .contains_key("paymasterData"));
+        // ERC-7769: All fields MUST be present and hex-encoded; empty bytes must be "0x"
+        assert_eq!(
+            serialized["factory"],
+            "0x0000000000000000000000000000000000000000"
+        );
+        assert_eq!(serialized["factoryData"], "0x");
+        assert_eq!(
+            serialized["paymaster"],
+            "0x0000000000000000000000000000000000000000"
+        );
+        assert_eq!(serialized["paymasterData"], "0x");
+        assert_eq!(serialized["paymasterVerificationGasLimit"], "0x0");
+        assert_eq!(serialized["paymasterPostOpGasLimit"], "0x0");
     }
 }
