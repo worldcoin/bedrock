@@ -8,7 +8,7 @@ use alloy::{
 
 use crate::primitives::PrimitiveError;
 use crate::smart_account::{
-    derive_subtype_erc20_transfer, encode_nonce_v1, InstructionFlags, ISafe4337Module,
+    derive_subtype_erc20_transfer, encode_nonce_v1, ISafe4337Module, InstructionFlags,
     Is4337Encodable, NonceKeyV1, SafeOperation, TransactionTypeId, UserOperation,
 };
 
@@ -37,7 +37,11 @@ impl Erc20 {
     pub fn new(token_address: Address, to: Address, value: U256) -> Self {
         let call_data = IErc20::transferCall { to, value }.abi_encode();
 
-        Self { call_data, token_address, to }
+        Self {
+            call_data,
+            token_address,
+            to,
+        }
     }
 }
 
@@ -70,7 +74,9 @@ impl Is4337Encodable for Erc20 {
         let nonce = encode_nonce_v1(key.to_bytes(), 0u64);
 
         Ok(UserOperation::new_with_defaults(
-            wallet_address, nonce, call_data,
+            wallet_address,
+            nonce,
+            call_data,
         ))
     }
 }
@@ -100,11 +106,14 @@ mod tests {
 
     #[test]
     fn test_erc20_preflight_user_operation_nonce_v1() {
-        let token = Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
-        let to = Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
+        let token =
+            Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
+        let to =
+            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
         let erc20 = Erc20::new(token, to, U256::from(1));
 
-        let wallet = Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let wallet =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
         let user_op = erc20.as_preflight_user_operation(wallet).unwrap();
 
         // Check nonce layout
