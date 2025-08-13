@@ -8,8 +8,8 @@ use alloy::{
 
 use crate::primitives::PrimitiveError;
 use crate::smart_account::{
-    derive_subtype_erc20_transfer, encode_nonce_v1, ISafe4337Module, InstructionFlags,
-    Is4337Encodable, NonceKeyV1, SafeOperation, TransactionTypeId, UserOperation,
+    encode_nonce_v1, ISafe4337Module, InstructionFlags, Is4337Encodable, NonceKeyV1,
+    SafeOperation, TransactionTypeId, UserOperation,
 };
 
 sol! {
@@ -29,8 +29,6 @@ pub struct Erc20 {
     call_data: Vec<u8>,
     /// The address of the ERC-20 token contract.
     token_address: Address,
-    /// Recipient for transfer subtype derivation
-    to: Address,
 }
 
 impl Erc20 {
@@ -40,7 +38,6 @@ impl Erc20 {
         Self {
             call_data,
             token_address,
-            to,
         }
     }
 }
@@ -64,12 +61,11 @@ impl Is4337Encodable for Erc20 {
     ) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
-        // Nonce v1: build subtype and nonceKey
-        let subtype = derive_subtype_erc20_transfer(self.token_address, self.to);
+        // Nonce v1: transfers have no subtype/metadata (all zeros)
         let key = NonceKeyV1::new(
             TransactionTypeId::Transfer,
             InstructionFlags::default(),
-            subtype,
+            [0u8; 10],
         );
         let nonce = encode_nonce_v1(key.to_bytes(), 0u64);
 
@@ -121,8 +117,8 @@ mod tests {
         assert_eq!(be[0], TransactionTypeId::Transfer as u8);
         assert_eq!(&be[1..=5], b"bdrck");
         assert_eq!(be[6], 0u8); // instruction flags default
-        let expected_subtype = derive_subtype_erc20_transfer(token, to);
-        assert_eq!(&be[7..=16], &expected_subtype);
+                                // transfer has no subtype/metadata (zeros)
+        assert_eq!(&be[7..=16], &[0u8; 10]);
         // sequence must be zero
         assert_eq!(&be[24..32], &[0u8; 8]);
     }
