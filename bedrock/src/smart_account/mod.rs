@@ -36,10 +36,7 @@ pub use transaction_4337::{
     EncodedSafeOpStruct, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
 };
 
-pub use nonce::{
-    derive_subtype_erc20_transfer, encode_nonce_v1, InstructionFlags, NonceKeyV1,
-    TransactionTypeId,
-};
+pub use nonce::{encode_nonce_v1, InstructionFlags, NonceKeyV1, TransactionTypeId};
 
 // Import the generated types from permit2 module
 pub use permit2::{

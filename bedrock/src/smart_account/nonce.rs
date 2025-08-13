@@ -8,7 +8,7 @@
 //! [17..=23]  : random tail (7 bytes)
 //! [24..=31]  : sequence (8 bytes) - usually 0 for WA crafted txs
 
-use alloy::primitives::{keccak256, Address};
+// no external primitive imports needed here currently
 
 /// Stable, never-reordered identifiers for transaction classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,22 +130,9 @@ pub fn encode_nonce_v1(nonce_key: [u8; 24], sequence: u64) -> ruint::aliases::U2
     ruint::aliases::U256::from_be_bytes(be)
 }
 
-/// Subtype derivation for ERC-20 transfers: first 10 bytes of keccak256(token || to)
-#[must_use]
-pub fn derive_subtype_erc20_transfer(token: Address, to: Address) -> [u8; 10] {
-    let mut preimage = [0u8; 40];
-    preimage[0..20].copy_from_slice(token.as_slice());
-    preimage[20..40].copy_from_slice(to.as_slice());
-    let hash = keccak256(preimage);
-    let mut out = [0u8; 10];
-    out.copy_from_slice(&hash[0..10]);
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
 
     #[test]
     fn test_nonce_key_v1_layout() {
@@ -183,22 +170,5 @@ mod tests {
         let nonce = encode_nonce_v1(key, 0);
         let lower_64 = nonce & ruint::aliases::U256::from(u64::MAX);
         assert!(lower_64.is_zero(), "sequence must be zero");
-    }
-
-    #[test]
-    fn test_derive_subtype_erc20_transfer() {
-        let token =
-            Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
-        let to =
-            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
-        let subtype = derive_subtype_erc20_transfer(token, to);
-        // Sanity: deterministic and 10 bytes
-        assert_eq!(subtype.len(), 10);
-        // Check expected prefix against a locally recomputed value
-        let mut preimage = [0u8; 40];
-        preimage[0..20].copy_from_slice(token.as_slice());
-        preimage[20..40].copy_from_slice(to.as_slice());
-        let expected = keccak256(preimage);
-        assert_eq!(&subtype, &expected[0..10]);
     }
 }
