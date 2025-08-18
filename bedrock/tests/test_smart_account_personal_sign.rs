@@ -145,7 +145,7 @@ async fn test_integration_personal_sign_failure_on_incorrect_chain_id() {
             // https://github.com/safe-global/safe-smart-account/blob/v1.4.1/docs/error_codes.md?plain=1#L21
             assert_eq!(
                 e.as_error_resp().unwrap().message,
-                "execution reverted: GS026"
+                "execution reverted: revert: GS026"
             );
         }
         _ => panic!("Expected TransportError error, got {is_valid_result:?}"),
@@ -204,7 +204,7 @@ async fn test_integration_personal_sign_failure_on_incorrect_eip_191_prefix() {
             // https://github.com/safe-global/safe-smart-account/blob/v1.4.1/docs/error_codes.md?plain=1#L21
             assert_eq!(
                 e.as_error_resp().unwrap().message,
-                "execution reverted: GS026"
+                "execution reverted: revert: GS026"
             );
         }
         _ => panic!("Expected TransportError error, got {is_valid_result:?}"),
