@@ -12,26 +12,6 @@ BLUE='\033[0;34m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
-# Ensure a consistent Xcode toolchain and required iOS platform on CI
-if [ "${GITHUB_ACTIONS:-false}" = "true" ] || [ "${CI:-false}" = "true" ]; then
-  # Prefer Xcode 16.2 if present, to align with iOS 18 simulator expectations
-  if [ -d "/Applications/Xcode_16.2.app/Contents/Developer" ]; then
-    echo "Selecting Xcode 16.2..."
-    sudo xcode-select -switch /Applications/Xcode_16.2.app/Contents/Developer || true
-  fi
-
-  # Align DEVELOPER_DIR for all xcrun/xcodebuild invocations
-  export DEVELOPER_DIR="$(xcode-select -p)"
-  echo "Using DEVELOPER_DIR: $DEVELOPER_DIR"
-  xcodebuild -version || true
-
-  # Ensure the iOS simulator platform is installed for the selected Xcode
-  if ! xcodebuild -showsdks | grep -q 'iphonesimulator'; then
-    echo "Installing iOS platform for the selected Xcode..."
-    xcodebuild -downloadPlatform iOS || true
-  fi
-fi
-
 # Check if iOS Simulator SDK is installed
 if ! xcodebuild -showsdks | grep -q 'iphonesimulator'; then
   echo -e "${RED}✗ No iOS Simulator SDK installed${NC}"
