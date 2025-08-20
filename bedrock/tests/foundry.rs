@@ -2,27 +2,16 @@ use std::path::PathBuf;
 use std::process::Command;
 
 pub fn resolve_forge_bin() -> Option<String> {
+    // Try FORGE_BIN env var first
     if let Ok(p) = std::env::var("FORGE_BIN") {
         if std::path::Path::new(&p).is_file() {
             return Some(p);
         }
     }
-    if let Some(found) = which_on_path("forge") {
-        return Some(found);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let candidate = format!("{home}/.foundry/bin/forge");
-        if std::path::Path::new(&candidate).is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-fn which_on_path(bin: &str) -> Option<String> {
+    // Otherwise, search PATH for "forge"
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
-        let p: PathBuf = dir.join(bin);
+        let p: PathBuf = dir.join("forge");
         if p.is_file() {
             return Some(p.to_string_lossy().to_string());
         }
@@ -30,71 +19,83 @@ fn which_on_path(bin: &str) -> Option<String> {
     None
 }
 
-pub fn forge_create_checker(
-    private_key_hex: &str,
-    rpc_url: &str,
-) -> anyhow::Result<String> {
-    let forge_bin = resolve_forge_bin().ok_or_else(|| {
-        anyhow::anyhow!("forge binary not found (set FORGE_BIN or install foundry)")
-    })?;
+/// Result of a `forge create` invocation.
+/// Builder for running `forge create` in tests.
+pub struct ForgeCreate {
+    contract: String, // e.g. "src/NonceV1Checker.sol:NonceV1Checker"
+}
 
-    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crate has no parent dir");
-    let solidity_dir = workspace_root.join("solidity");
-
-    // Try JSON output path first
-    let out_json = Command::new(&forge_bin)
-        .args([
-            "create",
-            "--json",
-            "--broadcast",
-            "src/NonceV1Checker.sol:NonceV1Checker",
-            "--private-key",
-            private_key_hex,
-            "--rpc-url",
-            rpc_url,
-        ])
-        .current_dir(&solidity_dir)
-        .output()?;
-
-    if out_json.status.success() {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out_json.stdout) {
-            if let Some(addr) = v.get("deployedTo").and_then(|s| s.as_str()) {
-                return Ok(addr.to_string());
-            }
+impl ForgeCreate {
+    pub fn new(contract: impl Into<String>) -> Self {
+        Self {
+            contract: contract.into(),
         }
     }
 
-    // Fallback to plain output and parse "Deployed to: 0x..."
-    let out_plain = Command::new(&forge_bin)
-        .args([
-            "create",
-            "--broadcast",
-            "src/NonceV1Checker.sol:NonceV1Checker",
-            "--private-key",
-            private_key_hex,
-            "--rpc-url",
-            rpc_url,
-        ])
-        .current_dir(&solidity_dir)
-        .output()?;
+    pub fn run(
+        self,
+        private_key_hex: impl Into<String>,
+        rpc_url: impl Into<String>,
+    ) -> anyhow::Result<String> {
+        let forge_bin = resolve_forge_bin().ok_or_else(|| {
+            anyhow::anyhow!("forge binary not found (set FORGE_BIN or install foundry)")
+        })?;
+        let rpc_url: String = rpc_url.into();
+        let private_key_hex: String = private_key_hex.into();
 
-    if !out_plain.status.success() {
-        return Err(anyhow::anyhow!(
-            "forge create failed: {}",
-            String::from_utf8_lossy(&out_plain.stderr)
-        ));
-    }
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crate has no parent dir");
+        let solidity_dir = workspace_root.join("solidity");
 
-    let stdout = String::from_utf8_lossy(&out_plain.stdout);
-    if let Some(addr) = parse_deployed_to(&stdout) {
-        return Ok(addr);
+        let mut args: Vec<String> = vec!["create".into()];
+        args.push("--json".into());
+        args.push("--broadcast".into());
+        args.push(self.contract.clone());
+        args.push("--private-key".into());
+        args.push(private_key_hex);
+        args.push("--rpc-url".into());
+        args.push(rpc_url);
+
+        let out_json = Command::new(&forge_bin)
+            .args(args.clone())
+            .current_dir(&solidity_dir)
+            .output()?;
+
+        if out_json.status.success() {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out_json.stdout)
+            {
+                if let Some(addr) = v.get("deployedTo").and_then(|s| s.as_str()) {
+                    return Ok(addr.to_string());
+                }
+            }
+        }
+
+        let plain_args = args
+            .into_iter()
+            .filter(|a| a != "--json")
+            .collect::<Vec<_>>();
+        let out_plain = Command::new(&forge_bin)
+            .args(&plain_args)
+            .current_dir(&solidity_dir)
+            .output()?;
+
+        if !out_plain.status.success() {
+            return Err(anyhow::anyhow!(
+                "forge create failed: {}",
+                String::from_utf8_lossy(&out_plain.stderr)
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&out_plain.stdout);
+        if let Some(addr) = parse_deployed_to(&stdout) {
+            return Ok(addr);
+        }
+        Err(anyhow::anyhow!(
+            "forge output missing deployed address; stdout: {}",
+            stdout
+        ))
     }
-    Err(anyhow::anyhow!(
-        "forge output missing deployed address; stdout: {}",
-        stdout
-    ))
 }
 
 fn parse_deployed_to(stdout: &str) -> Option<String> {
@@ -109,32 +110,4 @@ fn parse_deployed_to(stdout: &str) -> Option<String> {
         }
     }
     None
-}
-
-pub fn ensure_anvil_on_path() -> anyhow::Result<()> {
-    // If `anvil` is already on PATH, nothing to do
-    if which_on_path("anvil").is_some() {
-        return Ok(());
-    }
-    // Try common Foundry install dir
-    if let Ok(home) = std::env::var("HOME") {
-        let bin_dir = format!("{home}/.foundry/bin");
-        let candidate = format!("{bin_dir}/anvil");
-        if std::path::Path::new(&candidate).is_file() {
-            // Prepend to PATH for this process
-            let orig = std::env::var_os("PATH").unwrap_or_default();
-            let mut new_path = std::ffi::OsString::from(bin_dir);
-            new_path.push(std::ffi::OsString::from(if cfg!(target_os = "windows") {
-                ";"
-            } else {
-                ":"
-            }));
-            new_path.push(orig);
-            std::env::set_var("PATH", new_path);
-            return Ok(());
-        }
-    }
-    Err(anyhow::anyhow!(
-        "anvil not found on PATH; install Foundry or expose ~/.foundry/bin in PATH"
-    ))
 }

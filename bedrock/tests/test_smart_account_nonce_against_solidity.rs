@@ -12,7 +12,7 @@ use bedrock::smart_account::{InstructionFlag, OperationNonce, TransactionTypeId}
 
 mod common;
 mod foundry;
-use foundry::forge_create_checker;
+use foundry::ForgeCreate;
 
 sol!(
     #[sol(rpc)]
@@ -20,6 +20,14 @@ sol!(
         function decodeAll(uint256 nonce) external pure returns (uint8 typeId, bytes5 magic, uint8 instruction, bytes10 metadata, bytes7 randomTail, uint64 sequence);
     }
 );
+
+fn forge_create_checker(
+    private_key_hex: &str,
+    rpc_url: &str,
+) -> anyhow::Result<String> {
+    ForgeCreate::new("src/NonceV1Checker.sol:NonceV1Checker")
+        .run(private_key_hex.to_string(), rpc_url.to_string())
+}
 
 #[tokio::test]
 async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
