@@ -134,7 +134,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_nonce_key_v1_layout() {
+    fn test_nonce_key_layout() {
         let metadata = [0x11u8; 10];
         let random_tail = [0x22u8; 7];
         let key = OperationNonce::with_random_tail(
@@ -158,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_nonce_v1_sequence_zero() {
+    fn test_encode_nonce_sequence_is_zero() {
         let key = OperationNonce::with_random_tail(
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
@@ -167,6 +167,6 @@ mod tests {
         );
         let nonce = key.to_encoded_nonce();
         let lower_64 = nonce & U256::from(u64::MAX);
-        assert!(lower_64.is_zero(), "sequence must be zero");
+        assert!(lower_64.is_zero(), "sequence must be zero"); // checks the lower 64 bits of the nonce (i.e. the sequence) are zero
     }
 }
