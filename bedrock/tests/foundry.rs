@@ -43,10 +43,12 @@ pub fn forge_create_checker(
         .expect("crate has no parent dir");
     let solidity_dir = workspace_root.join("solidity");
 
-    let out = Command::new(&forge_bin)
+    // Try JSON output path first
+    let out_json = Command::new(&forge_bin)
         .args([
             "create",
             "--json",
+            "--broadcast",
             "src/NonceV1Checker.sol:NonceV1Checker",
             "--private-key",
             private_key_hex,
@@ -56,20 +58,57 @@ pub fn forge_create_checker(
         .current_dir(&solidity_dir)
         .output()?;
 
-    if !out.status.success() {
+    if out_json.status.success() {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out_json.stdout) {
+            if let Some(addr) = v.get("deployedTo").and_then(|s| s.as_str()) {
+                return Ok(addr.to_string());
+            }
+        }
+    }
+
+    // Fallback to plain output and parse "Deployed to: 0x..."
+    let out_plain = Command::new(&forge_bin)
+        .args([
+            "create",
+            "--broadcast",
+            "src/NonceV1Checker.sol:NonceV1Checker",
+            "--private-key",
+            private_key_hex,
+            "--rpc-url",
+            rpc_url,
+        ])
+        .current_dir(&solidity_dir)
+        .output()?;
+
+    if !out_plain.status.success() {
         return Err(anyhow::anyhow!(
             "forge create failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            String::from_utf8_lossy(&out_plain.stderr)
         ));
     }
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| anyhow::anyhow!("forge json parse failed: {e}: {stdout}"))?;
-    if let Some(addr) = v.get("deployedTo").and_then(|s| s.as_str()) {
-        return Ok(addr.to_string());
+    let stdout = String::from_utf8_lossy(&out_plain.stdout);
+    if let Some(addr) = parse_deployed_to(&stdout) {
+        return Ok(addr);
     }
-    Err(anyhow::anyhow!("forge output missing deployedTo: {stdout}"))
+    Err(anyhow::anyhow!(
+        "forge output missing deployed address; stdout: {}",
+        stdout
+    ))
+}
+
+fn parse_deployed_to(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        if let Some(idx) = line.find("Deployed to:") {
+            let rest = line[idx + "Deployed to:".len()..].trim();
+            if let Some(pos) = rest.find("0x") {
+                let addr = &rest[pos..];
+                let candidate = if addr.len() >= 42 { &addr[..42] } else { addr };
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
 }
 
 pub fn ensure_anvil_on_path() -> anyhow::Result<()> {
@@ -85,7 +124,11 @@ pub fn ensure_anvil_on_path() -> anyhow::Result<()> {
             // Prepend to PATH for this process
             let orig = std::env::var_os("PATH").unwrap_or_default();
             let mut new_path = std::ffi::OsString::from(bin_dir);
-            new_path.push(std::ffi::OsString::from(if cfg!(target_os = "windows") { ";" } else { ":" }));
+            new_path.push(std::ffi::OsString::from(if cfg!(target_os = "windows") {
+                ";"
+            } else {
+                ":"
+            }));
             new_path.push(orig);
             std::env::set_var("PATH", new_path);
             return Ok(());

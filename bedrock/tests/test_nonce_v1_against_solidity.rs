@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
+// no std imports needed
 
 use alloy::{
-    network::Ethereum,
-    primitives::{Address, FixedBytes, U256},
-    providers::{ext::AnvilApi, Provider, ProviderBuilder},
+    node_bindings::Anvil,
+    primitives::{Address, U256},
+    providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
 };
@@ -11,8 +11,8 @@ use alloy::{
 use bedrock::smart_account::{InstructionFlag, OperationNonce, TransactionTypeId};
 
 mod common;
-use common::setup_anvil;
 mod foundry;
+use foundry::forge_create_checker;
 
 sol!(
     #[sol(rpc)]
@@ -23,11 +23,8 @@ sol!(
 
 #[tokio::test]
 async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
-    // 1) Spin up Anvil
-    // Use a fresh local anvil without remote fork to make CI deterministic
-    let anvil = alloy::node_bindings::Anvil::new().spawn();
+    let anvil = Anvil::new().spawn();
 
-    // 2) Local wallet/provider
     let deployer = PrivateKeySigner::random();
     let provider = ProviderBuilder::new()
         .wallet(deployer.clone())
@@ -37,26 +34,18 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
         .anvil_set_balance(deployer.address(), U256::from(1e19 as u64))
         .await?;
 
-    // 3) Build and deploy the NonceV1Checker with Forge via helper
-    let checker_addr_str = match crate::foundry::forge_create_checker(
+    // Build and deploy the NonceV1Checker via forge
+    let checker_addr_str = forge_create_checker(
         &format!("0x{}", hex::encode(deployer.to_bytes())),
         anvil.endpoint_url().as_str(),
-    ) {
-        Ok(addr) => addr,
-        Err(e) => {
-            eprintln!("skipping nonce v1 solidity cross-check: {e}");
-            return Ok(());
-        }
-    };
+    )?;
     let checker_addr: Address = checker_addr_str.parse()?;
 
     let checker = NonceV1Checker::new(checker_addr, &provider);
 
-    // 4) Build a deterministic nonce in Rust with explicit random tail
+    // Build a deterministic nonce in Rust with explicit random tail
     let metadata: [u8; 10] = [0x11; 10];
-    // let metadata2: [u8; 10] = [0x22; 10];
     let random_tail: [u8; 7] = [0x22; 7];
-    // let random_tail2: [u8; 7] = [0x33; 7];
     let rust_nonce = OperationNonce::with_random_tail(
         TransactionTypeId::Transfer,
         InstructionFlag::Default,
@@ -65,7 +54,7 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
     )
     .to_encoded_nonce();
 
-    // 5) Ask Solidity to decode and compare fields
+    // Solidity decode and compare fields
     let res = checker.decodeAll(rust_nonce).call().await?;
 
     // typeId
@@ -81,8 +70,6 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
     assert_eq!(res.randomTail.0, random_tail);
     // sequence must be zero
     assert_eq!(res.sequence, 0);
-
-    // 6) Only on-chain decode vs Rust encode
 
     Ok(())
 }
