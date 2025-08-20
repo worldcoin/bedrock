@@ -79,6 +79,9 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Add forge to PATH
+        run: echo "FORGE_BIN=$(which forge)" >> $GITHUB_ENV
+
       - name: Run tests
         env:
           WORLDCHAIN_RPC_URL: ${{ secrets.WORLDCHAIN_RPC_URL || 'https://worldchain-mainnet.g.alchemy.com/public' }}
