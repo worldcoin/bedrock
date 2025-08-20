@@ -218,8 +218,7 @@ jobs:
 
       - name: Publish
         working-directory: kotlin
-        # Gradle will pick up the right version from Cargo.toml
-        run: ./gradlew bedrock-android:publish
+        run: ./gradlew bedrock-android:publish -PversionName=${{ needs.pre-release-checks.outputs.new_version }}
         env:
           GITHUB_ACTOR: wc-cicd
           GITHUB_TOKEN: ${{ github.token }}

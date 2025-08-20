@@ -1,4 +1,4 @@
-//! NonceKey v1 helpers for 4337 UserOperation nonces (RIP-7712 style).
+//! A helper to construct 4337 UserOperation nonces.
 //!
 //! Layout (24-byte nonceKey + 8-byte sequence):
 //! [0]        : typeId (1 byte)
@@ -6,9 +6,7 @@
 //! [6]        : instruction flags (1 byte)
 //! [7..=16]   : metadata (10 bytes) - type-specific metadata
 //! [17..=23]  : random tail (7 bytes)
-//! [24..=31]  : sequence (8 bytes) - usually 0 for WA crafted txs
-
-// no external primitive imports needed here currently
+//! [24..=31]  : sequence (8 bytes) - usually 0 for Bedrock crafted txs
 
 use ruint::aliases::U256;
 
@@ -151,7 +149,7 @@ mod tests {
         assert_eq!(&bytes[1..=5], &[0x62, 0x64, 0x72, 0x63, 0x6b]);
         // instruction
         assert_eq!(bytes[6], 0);
-        // subtype
+        // metadata
         assert_eq!(&bytes[7..=16], &metadata);
         // random tail
         assert_eq!(&bytes[17..=23], &random_tail);
