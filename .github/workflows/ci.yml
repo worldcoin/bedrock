@@ -47,14 +47,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16.2
-        run: sudo xcode-select -switch /Applications/Xcode_16.2.app/Contents/Developer
+      # Ensure a specific Xcode version is selected to match available simulators
+      - name: Select Xcode 16.4
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
 
-      - name: Print Xcode version
-        run: xcodebuild -version
-
-      - name: Download iOS Platform
-        run: xcodebuild -downloadPlatform iOS
+      # Install required iOS simulator runtime (iOS 18.x) on macOS-15 runners
+      # This addresses missing iOS platforms due to runner image size constraints
+      - name: Install iOS 18 simulator runtime
+        run: |
+          xcodebuild -version
+          xcode-select -p
+          # Try to install the latest available iOS 18 runtime for Xcode 16.4
+          # If -buildVersion is unsupported, fall back to generic download
+          if xcodebuild -downloadPlatform iOS -buildVersion 18.4; then
+            echo "Installed iOS 18.4 runtime"
+          else
+            echo "-buildVersion not supported, downloading default iOS platform"
+            xcodebuild -downloadPlatform iOS
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
