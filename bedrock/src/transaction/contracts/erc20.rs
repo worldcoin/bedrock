@@ -8,8 +8,8 @@ use alloy::{
 
 use crate::primitives::PrimitiveError;
 use crate::smart_account::{
-    encode_nonce_v1, ISafe4337Module, InstructionFlags, Is4337Encodable, NonceKeyV1,
-    SafeOperation, TransactionTypeId, UserOperation,
+    ISafe4337Module, InstructionFlag, Is4337Encodable, OperationNonce, SafeOperation,
+    TransactionTypeId, UserOperation,
 };
 
 sol! {
@@ -62,12 +62,12 @@ impl Is4337Encodable for Erc20 {
         let call_data = self.as_execute_user_op_call_data();
 
         // Nonce v1: transfers have no subtype/metadata (all zeros)
-        let key = NonceKeyV1::new(
+        let key = OperationNonce::new(
             TransactionTypeId::Transfer,
-            InstructionFlags::default(),
+            InstructionFlag::Default,
             [0u8; 10],
         );
-        let nonce = encode_nonce_v1(key.to_bytes(), 0u64);
+        let nonce = key.to_encoded_nonce();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,
