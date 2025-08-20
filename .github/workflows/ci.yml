@@ -47,6 +47,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -switch /Applications/Xcode_16.2.app/Contents/Developer
+
+      - name: Print Xcode version
+        run: xcodebuild -version
+
+      - name: Download iOS Platform
+        run: xcodebuild -downloadPlatform iOS
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
