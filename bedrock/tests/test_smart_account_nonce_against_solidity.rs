@@ -21,14 +21,6 @@ sol!(
     }
 );
 
-fn forge_create_checker(
-    private_key_hex: &str,
-    rpc_url: &str,
-) -> anyhow::Result<String> {
-    ForgeCreate::new("src/NonceV1Checker.sol:NonceV1Checker")
-        .run(private_key_hex.to_string(), rpc_url.to_string())
-}
-
 #[tokio::test]
 async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
     let anvil = Anvil::new().spawn();
@@ -43,10 +35,11 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
         .await?;
 
     // Build and deploy the NonceV1Checker via forge
-    let checker_addr_str = forge_create_checker(
-        &format!("0x{}", hex::encode(deployer.to_bytes())),
-        anvil.endpoint_url().as_str(),
-    )?;
+    let checker_addr_str = ForgeCreate::new("src/NonceV1Checker.sol:NonceV1Checker")
+        .run(
+            format!("0x{}", hex::encode(deployer.to_bytes())),
+            anvil.endpoint_url().to_string(),
+        )?;
     let checker_addr: Address = checker_addr_str.parse()?;
 
     let checker = NonceV1Checker::new(checker_addr, &provider);
