@@ -52,6 +52,18 @@ jobs:
           toolchain: stable
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
+      - name: List available simulators
+        run: xcrun simctl list devices available
+
+      - name: Create iPhone 16 simulator if not available
+        run: |
+          if ! xcrun simctl list devices available | grep -q "iPhone 16"; then
+            echo "Creating iPhone 16 simulator..."
+            xcrun simctl create "iPhone 16" com.apple.CoreSimulator.SimDeviceType.iPhone-16 com.apple.CoreSimulator.SimRuntime.iOS-18-1 || \
+            xcrun simctl create "iPhone 16" com.apple.CoreSimulator.SimDeviceType.iPhone-16 com.apple.CoreSimulator.SimRuntime.iOS-18-0 || \
+            xcrun simctl create "iPhone 16" com.apple.CoreSimulator.SimDeviceType.iPhone-16 latest
+          fi
+
       - name: Build and test Swift bindings
         run: ./swift/test_swift.sh
 
