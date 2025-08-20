@@ -49,44 +49,54 @@ echo ""
 rm -rf .build
 rm -rf ~/Library/Developer/Xcode/DerivedData/BedrockForeignTestPackage-*
 
-# Find an available iPhone simulator
-SIMULATOR_ID=$(xcrun simctl list devices available | grep "iPhone 14" | head -1 | grep -o "[0-9A-F\-]*" | tail -1)
 
-if [ -z "$SIMULATOR_ID" ]; then
-    # Try any available iPhone
-    SIMULATOR_ID=$(xcrun simctl list devices available | grep "iPhone" | head -1 | grep -o "[0-9A-F\-]*" | tail -1)
+# Prefer iPhone 16; otherwise first iOS sim xcodebuild knows about
+PREFERRED_DEVICE_NAME="${PREFERRED_DEVICE_NAME:-iPhone 16}"
+
+if ! xcodebuild -showsdks | grep -q 'iphonesimulator'; then
+  echo -e "${RED}✗ No iOS Simulator SDK installed for the selected Xcode${NC}"
+  exit 1
 fi
 
-if [ -z "$SIMULATOR_ID" ]; then
-    echo -e "${RED}✗ No iPhone simulator available${NC}"
-    exit 1
-fi
-
-# ------------------------------------------------------------------
-# Simulator hygiene: clear residual state that intermittently prevents
-# the test runner from launching inside the device ("Test runner never
-# began executing tests after launching" timeout observed in CI).
-# ------------------------------------------------------------------
-if [ "${GITHUB_ACTIONS:-false}" = "true" ] || [ "${CI:-false}" = "true" ]; then
-    echo "🧹 Running simulator hygiene (CI environment detected)..."
-    xcrun simctl shutdown "$SIMULATOR_ID" >/dev/null 2>&1 || true
-    xcrun simctl erase    "$SIMULATOR_ID"
-    xcrun simctl boot     "$SIMULATOR_ID"
-    xcrun simctl bootstatus "$SIMULATOR_ID" -b   # wait until boot completes
-else
-    echo "💻 Local environment detected - skipping simulator hygiene"
-fi
-
-echo "📱 Using simulator ID: $SIMULATOR_ID"
-
+# Need to be in tests directory to find the scheme
 cd "$TESTS_PATH"
+
+# Try to find the preferred device, otherwise use the first available
+if xcodebuild -scheme BedrockForeignTestPackage -showdestinations 2>/dev/null | grep "platform:iOS Simulator" | grep -q "$PREFERRED_DEVICE_NAME"; then
+  DEST_NAME="$PREFERRED_DEVICE_NAME"
+else
+  DEST_NAME=$(xcodebuild -scheme BedrockForeignTestPackage -showdestinations 2>/dev/null | \
+    grep "platform:iOS Simulator" | grep -v "Any iOS Simulator" | \
+    head -1 | sed 's/.*name://' | sed 's/ }$//' | sed 's/^ *//')
+fi
+
+if [ -z "$DEST_NAME" ]; then
+  echo -e "${RED}✗ No iOS Simulator destinations are available for scheme BedrockForeignTestPackage${NC}"
+  exit 1
+fi
+
+# Resolve the matching sim ID from simctl for hygiene steps
+SIMULATOR_ID=$(xcrun simctl list devices available | awk -v N="$DEST_NAME" -F'[()]' \
+  '$0 ~ N {print $2; exit}')
+
+if [ -z "$SIMULATOR_ID" ]; then
+  echo -e "${YELLOW}⚠️  Could not resolve simulator ID for '$DEST_NAME'; skipping hygiene${NC}"
+else
+  if [ "${GITHUB_ACTIONS:-false}" = "true" ] || [ "${CI:-false}" = "true" ]; then
+    echo "🧹 Running simulator hygiene on $DEST_NAME ($SIMULATOR_ID)..."
+    xcrun simctl shutdown "$SIMULATOR_ID" >/dev/null 2>&1 || true
+    xcrun simctl erase    "$SIMULATOR_ID" || true
+  fi
+fi
+echo "📱 Using simulator: $DEST_NAME"
+
+# Already in tests directory, no need to cd again
 
 # Run tests using xcodebuild for iOS simulator with more explicit settings
 echo "🚀 Running tests on iOS Simulator..."
 xcodebuild test \
   -scheme BedrockForeignTestPackage \
-  -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-  -sdk iphonesimulator \
+  -destination "platform=iOS Simulator,name=${DEST_NAME}" \
   CODE_SIGNING_ALLOWED=NO \
   2>&1 | tee test_output.log
 

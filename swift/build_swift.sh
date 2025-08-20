@@ -67,6 +67,7 @@ export IPHONEOS_DEPLOYMENT_TARGET="13.0"
 export RUSTFLAGS="-C link-arg=-Wl,-application_extension"
 
 # Build for all iOS targets
+cd "$PROJECT_ROOT_PATH"
 cargo build --package $PACKAGE_NAME --target aarch64-apple-ios-sim --release
 cargo build --package $PACKAGE_NAME --target aarch64-apple-ios --release
 cargo build --package $PACKAGE_NAME --target x86_64-apple-ios --release
