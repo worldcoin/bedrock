@@ -52,6 +52,10 @@ const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
 pub trait Is4337Encodable {
+    /// Each implementation can define its own metadata argument struct used when
+    /// constructing a preflight `UserOperation`.
+    type MetadataArg;
+
     /// Converts the object into a `callData` for the `executeUserOp` method. This is the inner-most `calldata`.
     ///
     /// # Errors
@@ -69,6 +73,7 @@ pub trait Is4337Encodable {
     fn as_preflight_user_operation(
         &self,
         wallet_address: Address,
+        _metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
@@ -105,13 +110,14 @@ pub trait Is4337Encodable {
         network: Network,
         safe_account: &crate::smart_account::SafeSmartAccount,
         self_sponsor_token: Option<Address>,
+        metadata: Option<Self::MetadataArg>,
     ) -> Result<FixedBytes<32>, RpcError> {
         // Get the global RPC client
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
 
-        // 1. Create preflight UserOperation
+        // 1. Create preflight UserOperation using default metadata for this implementation
         let mut user_operation =
-            self.as_preflight_user_operation(safe_account.wallet_address)?;
+            self.as_preflight_user_operation(safe_account.wallet_address, metadata)?;
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client

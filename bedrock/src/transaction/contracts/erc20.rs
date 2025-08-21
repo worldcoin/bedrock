@@ -42,7 +42,50 @@ impl Erc20 {
     }
 }
 
+// First byte of the metadata field in the nonce used to determine where the transfer was initiated from
+// NOTE: Ordering should never change, only new values should be added
+#[repr(u8)]
+#[allow(dead_code)]
+pub enum TransferSource {
+    QrScanner,
+    WalletHome,
+    DollarPage,
+    WorldCoinPage,
+    CryptoPage,
+    ExternalPage,
+    Spending,
+    Savings,
+    TokenUnavailable,
+    SavingsIntro,
+    ContentCard,
+    InfoTabBanner,
+    MiniApp,
+    ClaimToVault,
+    ContactTab,
+    DeleteProfile,
+    NewPaymentFlow,
+    CashSection,
+    CryptoSection,
+    Deeplink,
+    WorldSection,
+}
+
+// NOTE: Ordering should never change, only new values should be added
+#[repr(u8)]
+#[allow(dead_code)]
+pub enum TransferAssociation {
+    None,
+    XmtpMessage,
+}
+
+pub struct MetadataArg {
+    pub source: TransferSource,
+    pub association: TransferAssociation,
+}
+
 impl Is4337Encodable for Erc20 {
+    type MetadataArg = MetadataArg;
+
     fn as_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             // The token address
@@ -58,14 +101,20 @@ impl Is4337Encodable for Erc20 {
     fn as_preflight_user_operation(
         &self,
         wallet_address: Address,
+        metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
-        // Nonce v1: transfers have no subtype/metadata (all zeros)
+        let mut metadata_bytes: [u8; 10] = [0u8; 10];
+        if let Some(metadata) = metadata {
+            metadata_bytes[0] = metadata.source as u8;
+            metadata_bytes[1] = metadata.association as u8;
+        }
+
         let key = OperationNonce::new(
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
-            [0u8; 10],
+            metadata_bytes,
         );
         let nonce = key.to_encoded_nonce();
 
@@ -101,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_erc20_preflight_user_operation_nonce_v1() {
+    fn test_erc20_preflight_user_operation_nonce_v1_no_metadata() {
         let token =
             Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
         let to =
@@ -110,15 +159,51 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = erc20.as_preflight_user_operation(wallet).unwrap();
+        let user_op = erc20.as_preflight_user_operation(wallet, None).unwrap();
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
         assert_eq!(be[0], TransactionTypeId::Transfer as u8);
         assert_eq!(&be[1..=5], b"bdrck");
         assert_eq!(be[6], 0u8); // instruction flags default
-                                // transfer has no subtype/metadata (zeros)
+
+        // Empty metadata
         assert_eq!(&be[7..=16], &[0u8; 10]);
+
+        assert_eq!(&be[24..32], &[0u8; 8]);
+    }
+
+    #[test]
+    fn test_erc20_preflight_user_operation_nonce_v1_with_metadata() {
+        let token =
+            Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
+        let to =
+            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
+        let erc20 = Erc20::new(token, to, U256::from(1));
+
+        let wallet =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+
+        let metadata = MetadataArg {
+            source: TransferSource::QrScanner,
+            association: TransferAssociation::XmtpMessage,
+        };
+
+        let user_op = erc20
+            .as_preflight_user_operation(wallet, Some(metadata))
+            .unwrap();
+
+        // Check nonce layout
+        let be: [u8; 32] = user_op.nonce.to_be_bytes();
+        assert_eq!(be[0], TransactionTypeId::Transfer as u8);
+        assert_eq!(&be[1..=5], b"bdrck");
+        assert_eq!(be[6], 0u8);
+
+        // Check metadata
+        assert_eq!(be[7], TransferSource::QrScanner as u8);
+        assert_eq!(be[8], TransferAssociation::XmtpMessage as u8);
+        assert_eq!(&be[9..=16], &[0u8; 8]);
+
         // sequence must be zero
         assert_eq!(&be[24..32], &[0u8; 8]);
     }
