@@ -192,8 +192,8 @@ mod tests {
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
 
         let metadata = MetadataArg {
-            source: TransferSource::QrScanner,
-            association: TransferAssociation::XmtpMessage,
+            source: Some(TransferSource::QrScanner),
+            association: Some(TransferAssociation::XmtpMessage),
         };
 
         let user_op = erc20
