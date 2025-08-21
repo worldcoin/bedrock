@@ -42,12 +42,12 @@ impl Erc20 {
     }
 }
 
-// First byte of the metadata field
+// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
 // NOTE: Ordering should never change, only new values should be added
 #[repr(u8)]
 #[allow(dead_code)]
 pub enum TransferSource {
-    QrScanner,
+    QrScanner = 1,
     WalletHome,
     DollarPage,
     WorldCoinPage,
@@ -70,18 +70,18 @@ pub enum TransferSource {
     WorldSection,
 }
 
-// Second byte of the metadata field
+// Second byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
 // NOTE: Ordering should never change, only new values should be added
 #[repr(u8)]
 #[allow(dead_code)]
 pub enum TransferAssociation {
-    None,
+    None = 1,
     XmtpMessage,
 }
 
 pub struct MetadataArg {
-    pub source: TransferSource,
-    pub association: TransferAssociation,
+    pub source: Option<TransferSource>,
+    pub association: Option<TransferAssociation>,
 }
 
 impl Is4337Encodable for Erc20 {
@@ -108,8 +108,14 @@ impl Is4337Encodable for Erc20 {
 
         let mut metadata_bytes: [u8; 10] = [0u8; 10];
         if let Some(metadata) = metadata {
-            metadata_bytes[0] = metadata.source as u8;
-            metadata_bytes[1] = metadata.association as u8;
+            // We use 0 if the individual field is not set
+            // Hence why we use 1 as the first index in enum definition
+            if let Some(source) = metadata.source {
+                metadata_bytes[0] = source as u8;
+            }
+            if let Some(association) = metadata.association {
+                metadata_bytes[1] = association as u8;
+            }
         }
 
         let key = OperationNonce::new(
