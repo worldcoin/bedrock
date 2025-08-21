@@ -53,21 +53,6 @@ jobs:
         with:
           xcode-version: "16.2"
 
-      # Install required iOS simulator runtime (iOS 18.x) on macOS-15 runners
-      # This addresses missing iOS platforms due to runner image size constraints
-      - name: Install iOS 18 simulator runtime
-        run: |
-          xcodebuild -version
-          xcode-select -p
-          # Try to install the latest available iOS 18 runtime for Xcode 16.4
-          # If -buildVersion is unsupported, fall back to generic download
-          if xcodebuild -downloadPlatform iOS -buildVersion 18.4; then
-            echo "Installed iOS 18.4 runtime"
-          else
-            echo "-buildVersion not supported, downloading default iOS platform"
-            xcodebuild -downloadPlatform iOS
-          fi
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
