@@ -12,6 +12,14 @@ BLUE='\033[0;34m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
+# Check if iOS Simulator SDK is installed
+if ! xcodebuild -showsdks | grep -q 'iphonesimulator'; then
+  echo -e "${RED}✗ No iOS Simulator SDK installed${NC}"
+  echo "Available SDKs:"
+  xcodebuild -showsdks || true
+  exit 1
+fi
+
 # Base paths
 BASE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_PATH="$BASE_PATH/tests"
@@ -50,7 +58,7 @@ rm -rf .build
 rm -rf ~/Library/Developer/Xcode/DerivedData/BedrockForeignTestPackage-*
 
 # Find an available iPhone simulator
-SIMULATOR_ID=$(xcrun simctl list devices available | grep "iPhone 14" | head -1 | grep -o "[0-9A-F\-]*" | tail -1)
+SIMULATOR_ID=$(xcrun simctl list devices available | grep "iPhone 16" | head -1 | grep -o "[0-9A-F\-]*" | tail -1)
 
 if [ -z "$SIMULATOR_ID" ]; then
     # Try any available iPhone
