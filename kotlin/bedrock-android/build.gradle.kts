@@ -43,23 +43,12 @@ afterEvaluate {
                 groupId = "com.toolsforhumanity"
                 artifactId = "bedrock"
 
-                version = if (project.hasProperty("versionName")) {
-                    project.property("versionName") as String
-                } else {
-                    val stdout = ByteArrayOutputStream()
-                    exec {
-                        commandLine = listOf(
-                            "curl", "-s", "-H",
-                            "Authorization: token ${System.getenv("GITHUB_TOKEN")}",
-                            "https://api.github.com/repos/worldcoin/bedrock/releases/latest"
-                        )
-                        standardOutput = stdout
-                    }
-                    val response = stdout.toString()
-                    val tag = Regex("\"tag_name\":\\s*\"(.*?)\"")
-                        .find(response)?.groupValues?.get(1) ?: "0.0.0"
-                    "$tag"
-                }
+                // Read version from Cargo.toml
+                val cargoToml = file("../../Cargo.toml")
+                val versionRegex = """version\s*=\s*"([^"]+)"""".toRegex()
+                val cargoContent = cargoToml.readText()
+                version = versionRegex.find(cargoContent)?.groupValues?.get(1)
+                    ?: throw GradleException("Could not find version in Cargo.toml")
 
                 afterEvaluate {
                     from(components["release"])
