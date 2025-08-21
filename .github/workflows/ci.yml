@@ -39,7 +39,7 @@ jobs:
 
   swift-build-and-test:
     name: Build and Test Swift Bindings
-    runs-on: macos-15
+    runs-on: macos-14
     permissions:
       contents: read
 
