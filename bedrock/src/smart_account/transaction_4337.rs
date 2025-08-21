@@ -73,16 +73,8 @@ pub trait Is4337Encodable {
     fn as_preflight_user_operation(
         &self,
         wallet_address: Address,
-        _metadata: Option<Self::MetadataArg>,
-    ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.as_execute_user_op_call_data();
-
-        Ok(UserOperation::new_with_defaults(
-            wallet_address,
-            U256::ZERO, // FIXME: add proper nonce computation (generalizing)
-            call_data,
-        ))
-    }
+        metadata: Option<Self::MetadataArg>,
+    ) -> Result<UserOperation, PrimitiveError>;
 
     /// Signs and executes a 4337 `UserOperation` by:
     /// 1. Creating a preflight `UserOperation`

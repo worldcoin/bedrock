@@ -42,7 +42,7 @@ impl Erc20 {
     }
 }
 
-// First byte of the metadata field in the nonce used to determine where the transfer was initiated from
+// First byte of the metadata field
 // NOTE: Ordering should never change, only new values should be added
 #[repr(u8)]
 #[allow(dead_code)]
@@ -70,6 +70,7 @@ pub enum TransferSource {
     WorldSection,
 }
 
+// Second byte of the metadata field
 // NOTE: Ordering should never change, only new values should be added
 #[repr(u8)]
 #[allow(dead_code)]
