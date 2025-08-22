@@ -63,8 +63,6 @@ pub struct NonceKeyV1 {
     pub sequence: u64,
 }
 
-}
-
 impl NonceKeyV1 {
     /// Builds a new v1 nonceKey with a random 7-byte tail.
     #[must_use]
