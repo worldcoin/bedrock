@@ -9,6 +9,13 @@ use std::str::FromStr;
 // Re-export HTTP client types for external use
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
+/// The prefix for Bedrock-generated transactions.
+pub static BEDROCK_NONCE_PREFIX_CONST: &[u8; 5] = b"bdrck";
+
+/// The prefix for PBHTX-generated transactions.
+#[allow(dead_code)]
+pub static PBH_NONCE_PREFIX_CONST: &[u8; 5] = b"pbhtx";
+
 // Serde helper functions for skip_serializing_if
 
 /// Helper function to check if an `Address` is zero for serde `skip_serializing_if`

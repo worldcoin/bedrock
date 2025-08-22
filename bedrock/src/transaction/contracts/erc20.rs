@@ -138,6 +138,8 @@ mod tests {
     use alloy::primitives::bytes;
     use std::str::FromStr;
 
+    use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
+
     use super::*;
 
     #[test]
@@ -170,8 +172,9 @@ mod tests {
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
-        assert_eq!(be[0], TransactionTypeId::Transfer as u8);
-        assert_eq!(&be[1..=5], b"bdrck");
+
+        assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
+        assert_eq!(be[5], TransactionTypeId::Transfer as u8);
         assert_eq!(be[6], 0u8); // instruction flags default
 
         // Empty metadata
@@ -202,8 +205,8 @@ mod tests {
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
-        assert_eq!(be[0], TransactionTypeId::Transfer as u8);
-        assert_eq!(&be[1..=5], b"bdrck");
+        assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
+        assert_eq!(be[5], TransactionTypeId::Transfer as u8);
         assert_eq!(be[6], 0u8);
 
         // Check metadata

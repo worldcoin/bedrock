@@ -8,7 +8,10 @@ use alloy::{
     sol,
 };
 
-use bedrock::smart_account::{InstructionFlag, NonceKeyV1, TransactionTypeId};
+use bedrock::{
+    primitives::BEDROCK_NONCE_PREFIX_CONST,
+    smart_account::{InstructionFlag, NonceKeyV1, TransactionTypeId},
+};
 
 mod common;
 mod foundry;
@@ -17,7 +20,7 @@ use foundry::ForgeCreate;
 sol!(
     #[sol(rpc)]
     contract NonceV1Checker {
-        function decodeAll(uint256 nonce) external pure returns (uint8 typeId, bytes5 magic, uint8 instruction, bytes10 metadata, bytes7 randomTail, uint64 sequence);
+        function decodeAll(uint256 nonce) external pure returns (bytes5 magic, uint8 typeId, uint8 instruction, bytes10 metadata, bytes7 randomTail, uint64 sequence);
     }
 );
 
@@ -58,11 +61,12 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
     // Solidity decode and compare fields
     let res = checker.decodeAll(rust_nonce).call().await?;
 
+    let expected_magic: [u8; 5] = *BEDROCK_NONCE_PREFIX_CONST;
+    assert_eq!(res.magic.0, expected_magic);
+
     // typeId
     assert_eq!(res.typeId, TransactionTypeId::Transfer as u8);
     // magic bytes "bdrck"
-    let expected_magic: [u8; 5] = *b"bdrck";
-    assert_eq!(res.magic.0, expected_magic);
     // instruction
     assert_eq!(res.instruction, InstructionFlag::Default as u8);
     // metadata
