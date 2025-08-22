@@ -119,7 +119,6 @@ impl NonceKeyV1 {
         out
     }
 
-  
     /// Encodes the 24-byte nonceKey together with a provided 8-byte sequence into a U256 integer
     /// for use with the 4337 `EntryPoint` contract.
     #[must_use]

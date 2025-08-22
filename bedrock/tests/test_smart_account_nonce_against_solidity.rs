@@ -52,8 +52,8 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
         InstructionFlag::Default,
         metadata,
         random_tail,
-    ).encode_with_sequence(0);
-    
+    )
+    .encode_with_sequence(0);
 
     // Solidity decode and compare fields
     let res = checker.decodeAll(rust_nonce).call().await?;
