@@ -8,7 +8,7 @@ use alloy::{
     sol,
 };
 
-use bedrock::smart_account::{InstructionFlag, OperationNonce, TransactionTypeId};
+use bedrock::smart_account::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
 mod common;
 mod foundry;
@@ -47,13 +47,13 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
     // Build a deterministic nonce in Rust with explicit random tail
     let metadata: [u8; 10] = [0x11; 10];
     let random_tail: [u8; 7] = [0x22; 7];
-    let rust_nonce = OperationNonce::with_random_tail(
+    let rust_nonce = NonceKeyV1::with_random_tail(
         TransactionTypeId::Transfer,
         InstructionFlag::Default,
         metadata,
         random_tail,
-    )
-    .to_encoded_nonce();
+    ).encode_with_sequence(0);
+    
 
     // Solidity decode and compare fields
     let res = checker.decodeAll(rust_nonce).call().await?;

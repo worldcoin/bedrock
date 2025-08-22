@@ -118,12 +118,12 @@ impl Is4337Encodable for Erc20 {
             }
         }
 
-        let key = OperationNonce::new(
+        let key = NonceKeyV1::new(
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
             metadata_bytes,
         );
-        let nonce = key.to_encoded_nonce();
+        let nonce = key.encode_with_sequence(0);
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,
@@ -211,7 +211,6 @@ mod tests {
         assert_eq!(be[8], TransferAssociation::XmtpMessage as u8);
         assert_eq!(&be[9..=16], &[0u8; 8]);
 
-        assert_eq!(&be[7..=16], &[0u8; 10]);
         // sequence must be zero
         assert_eq!(&be[24..32], &[0u8; 8]);
     }

@@ -119,14 +119,6 @@ impl NonceKeyV1 {
         out
     }
 
-    /// Encode the 24-byte nonceKey and 8-byte sequence into a U256 integer for use in the `EntryPoint` contract.
-    #[must_use]
-    pub fn to_encoded_nonce(self) -> U256 {
-        let mut be = [0u8; 32];
-        be[..24].copy_from_slice(&self.as_bytes());
-        be[24..].copy_from_slice(&self.sequence.to_be_bytes());
-      
-    }
   
     /// Encodes the 24-byte nonceKey together with a provided 8-byte sequence into a U256 integer
     /// for use with the 4337 `EntryPoint` contract.
