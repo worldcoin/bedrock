@@ -59,6 +59,8 @@ pub struct NonceKeyV1 {
     pub metadata: [u8; 10],
     /// Random tail to reduce accidental collisions (7 bytes, 56 bits).
     pub random_tail: [u8; 7],
+    /// Sequence number for the operation. This is currently not in use and set to 0 for all operations.
+    pub sequence: u64,
 }
 
 impl NonceKeyV1 {
@@ -79,6 +81,7 @@ impl NonceKeyV1 {
             instruction,
             metadata,
             random_tail: tail,
+            sequence: 0,
         }
     }
 
@@ -95,6 +98,7 @@ impl NonceKeyV1 {
             instruction,
             metadata,
             random_tail,
+            sequence: 0,
         }
     }
 
