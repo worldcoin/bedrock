@@ -48,26 +48,26 @@ impl Erc20 {
 #[allow(dead_code)]
 pub enum TransferSource {
     QrScanner = 1,
-    WalletHome,
-    DollarPage,
-    WorldCoinPage,
-    CryptoPage,
-    ExternalPage,
-    Spending,
-    Savings,
-    TokenUnavailable,
-    SavingsIntro,
-    ContentCard,
-    InfoTabBanner,
-    MiniApp,
-    ClaimToVault,
-    ContactTab,
-    DeleteProfile,
-    NewPaymentFlow,
-    CashSection,
-    CryptoSection,
-    Deeplink,
-    WorldSection,
+    WalletHome = 2,
+    DollarPage = 3,
+    WorldCoinPage = 4,
+    CryptoPage = 5,
+    ExternalPage = 6,
+    Spending = 7,
+    Savings = 8,
+    TokenUnavailable = 9,
+    SavingsIntro = 10,
+    ContentCard = 11,
+    InfoTabBanner = 12,
+    MiniApp = 13,
+    ClaimToVault = 14,
+    ContactTab = 15,
+    DeleteProfile = 16,
+    NewPaymentFlow = 17,
+    CashSection = 18,
+    CryptoSection = 19,
+    Deeplink = 20,
+    WorldSection = 21,
 }
 
 // Second byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
@@ -76,7 +76,7 @@ pub enum TransferSource {
 #[allow(dead_code)]
 pub enum TransferAssociation {
     None = 1,
-    XmtpMessage,
+    XmtpMessage = 2,
 }
 
 pub struct MetadataArg {
