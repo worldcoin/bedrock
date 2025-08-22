@@ -8,7 +8,7 @@ use alloy::{
 
 use crate::primitives::PrimitiveError;
 use crate::smart_account::{
-    ISafe4337Module, InstructionFlag, Is4337Encodable, OperationNonce, SafeOperation,
+    ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
     TransactionTypeId, UserOperation,
 };
 
@@ -211,6 +211,7 @@ mod tests {
         assert_eq!(be[8], TransferAssociation::XmtpMessage as u8);
         assert_eq!(&be[9..=16], &[0u8; 8]);
 
+        assert_eq!(&be[7..=16], &[0u8; 10]);
         // sequence must be zero
         assert_eq!(&be[24..32], &[0u8; 8]);
     }

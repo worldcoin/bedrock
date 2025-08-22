@@ -39,16 +39,18 @@ pub enum InstructionFlag {
     Default = 0,
 }
 
-/// Constructs a nonce for a 4337 `UserOperation`.
+/// Constructs a nonceKey for a 4337 `UserOperation`.
 ///
-/// The nonce is a 256-bit integer where 192 bits are used for the `nonceKey` and 64 bits are used for the sequence.
+/// A 4337 nonce is a 256-bit integer where the high 192 bits are used for the `nonceKey`
+/// and the low 64 bits are used for the sequence. This struct models the 24-byte `nonceKey`
+/// only. The sequence is provided separately at encoding time.
 ///
-/// The `nonceKey` is defined for Bedrock in an opinionated way (in the spirit of RIP-7712) to encompass metadata required
-/// for rendering transactions for users.
+/// The `nonceKey` is defined for Bedrock in an opinionated way (in the spirit of RIP-7712)
+/// to encompass metadata required for rendering transactions for users.
 ///
 /// Follows 4337 specs: <https://eips.ethereum.org/EIPS/eip-4337#semi-abstracted-nonce-support>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OperationNonce {
+pub struct NonceKeyV1 {
     /// Stable transaction class id.
     pub type_id: TransactionTypeId,
     /// Instruction flags bitfield.
@@ -61,7 +63,9 @@ pub struct OperationNonce {
     pub sequence: u64,
 }
 
-impl OperationNonce {
+}
+
+impl NonceKeyV1 {
     /// Builds a new v1 nonceKey with a random 7-byte tail.
     #[must_use]
     pub fn new(
@@ -123,6 +127,16 @@ impl OperationNonce {
         let mut be = [0u8; 32];
         be[..24].copy_from_slice(&self.as_bytes());
         be[24..].copy_from_slice(&self.sequence.to_be_bytes());
+      
+    }
+  
+    /// Encodes the 24-byte nonceKey together with a provided 8-byte sequence into a U256 integer
+    /// for use with the 4337 `EntryPoint` contract.
+    #[must_use]
+    pub fn encode_with_sequence(&self, sequence: u64) -> U256 {
+        let mut be = [0u8; 32];
+        be[..24].copy_from_slice(&self.as_bytes());
+        be[24..].copy_from_slice(&sequence.to_be_bytes());
         U256::from_be_bytes(be)
     }
 }
@@ -135,7 +149,7 @@ mod tests {
     fn test_nonce_key_layout() {
         let metadata = [0x11u8; 10];
         let random_tail = [0x22u8; 7];
-        let key = OperationNonce::with_random_tail(
+        let key = NonceKeyV1::with_random_tail(
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
             metadata,
@@ -157,13 +171,13 @@ mod tests {
 
     #[test]
     fn test_encode_nonce_sequence_is_zero() {
-        let key = OperationNonce::with_random_tail(
+        let key = NonceKeyV1::with_random_tail(
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
             [0u8; 10],
             [0u8; 7],
         );
-        let nonce = key.to_encoded_nonce();
+        let nonce = key.encode_with_sequence(0);
         let lower_64 = nonce & U256::from(u64::MAX);
         assert!(lower_64.is_zero(), "sequence must be zero"); // checks the lower 64 bits of the nonce (i.e. the sequence) are zero
     }
