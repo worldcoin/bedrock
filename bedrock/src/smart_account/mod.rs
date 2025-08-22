@@ -21,6 +21,9 @@ mod signer;
 /// Enables EIP-4337 transaction crafting and signing
 mod transaction_4337;
 
+/// Nonce v1 helpers for RIP-7712 style nonceKey/sequence encoding
+mod nonce;
+
 /// Allows executing operations (i.e. regular transactions) on behalf of the Safe Smart Account
 /// Reference: <https://docs.safe.global/reference-smart-account/transactions/execTransaction>
 mod transaction;
@@ -32,6 +35,8 @@ mod permit2;
 pub use transaction_4337::{
     EncodedSafeOpStruct, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
 };
+
+pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
 // Import the generated types from permit2 module
 pub use permit2::{

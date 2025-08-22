@@ -6,7 +6,11 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::smart_account::{ISafe4337Module, Is4337Encodable, SafeOperation};
+use crate::primitives::PrimitiveError;
+use crate::smart_account::{
+    ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
+    TransactionTypeId, UserOperation,
+};
 
 sol! {
     /// The ERC20 contract interface.
@@ -50,6 +54,27 @@ impl Is4337Encodable for Erc20 {
         .abi_encode()
         .into()
     }
+
+    fn as_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let call_data = self.as_execute_user_op_call_data();
+
+        // Nonce v1: transfers have no subtype/metadata (all zeros)
+        let key = NonceKeyV1::new(
+            TransactionTypeId::Transfer,
+            InstructionFlag::Default,
+            [0u8; 10],
+        );
+        let nonce = key.encode_with_sequence(0);
+
+        Ok(UserOperation::new_with_defaults(
+            wallet_address,
+            nonce,
+            call_data,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -73,5 +98,28 @@ mod tests {
         let expected_call_data = bytes!("0x7bb374280000000000000000000000002cfc85d8e48f8eab294be644d9e25c30308630030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb0000000000000000000000001234567890123456789012345678901234567890000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000");
 
         assert_eq!(execute_user_op_call_data, expected_call_data);
+    }
+
+    #[test]
+    fn test_erc20_preflight_user_operation_nonce_v1() {
+        let token =
+            Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
+        let to =
+            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
+        let erc20 = Erc20::new(token, to, U256::from(1));
+
+        let wallet =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let user_op = erc20.as_preflight_user_operation(wallet).unwrap();
+
+        // Check nonce layout
+        let be: [u8; 32] = user_op.nonce.to_be_bytes();
+        assert_eq!(be[0], TransactionTypeId::Transfer as u8);
+        assert_eq!(&be[1..=5], b"bdrck");
+        assert_eq!(be[6], 0u8); // instruction flags default
+                                // transfer has no subtype/metadata (zeros)
+        assert_eq!(&be[7..=16], &[0u8; 10]);
+        // sequence must be zero
+        assert_eq!(&be[24..32], &[0u8; 8]);
     }
 }
