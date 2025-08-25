@@ -10,15 +10,17 @@ final class BedrockHttpClientTests: XCTestCase {
         var responses: [String: Result<Data, HttpError>] = [:]
         var requestHistory: [String] = []
         var methodHistory: [HttpMethod] = []
+        var headersHistory: [[HttpHeader]] = []
         var bodyHistory: [Data?] = []
         
         func setResponse(for url: String, result: Result<Data, HttpError>) {
             responses[url] = result
         }
         
-        func fetchFromAppBackend(url: String, method: HttpMethod, body: Data?) async throws -> Data {
+        func fetchFromAppBackend(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws -> Data {
             requestHistory.append(url)
             methodHistory.append(method)
+            headersHistory.append(headers)
             bodyHistory.append(body)
             
             guard let response = responses[url] else {
@@ -41,12 +43,13 @@ final class BedrockHttpClientTests: XCTestCase {
         
         client.setResponse(for: testUrl, result: .success(testData))
         
-        let result = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
+        let result = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
         
         XCTAssertEqual(result, testData)
         XCTAssertEqual(client.requestHistory.count, 1)
         XCTAssertEqual(client.requestHistory[0], testUrl)
         XCTAssertEqual(client.methodHistory[0], .get)
+        XCTAssertEqual(client.headersHistory[0].count, 0)
         XCTAssertNil(client.bodyHistory[0])
     }
 
@@ -58,12 +61,16 @@ final class BedrockHttpClientTests: XCTestCase {
         
         client.setResponse(for: testUrl, result: .success(testData))
         
-        let result = try await client.fetchFromAppBackend(url: testUrl, method: .post, body: requestBody)
+        let customHeaders = [HttpHeader(name: "X-Test", value: "1")]
+        let result = try await client.fetchFromAppBackend(url: testUrl, method: .post, headers: customHeaders, body: requestBody)
         
         XCTAssertEqual(result, testData)
         XCTAssertEqual(client.requestHistory.count, 1)
         XCTAssertEqual(client.requestHistory[0], testUrl)
         XCTAssertEqual(client.methodHistory[0], .post)
+        XCTAssertEqual(client.headersHistory[0].count, 1)
+        XCTAssertEqual(client.headersHistory[0][0].name, "X-Test")
+        XCTAssertEqual(client.headersHistory[0][0].value, "1")
         XCTAssertEqual(client.bodyHistory[0], requestBody)
     }
     
@@ -75,7 +82,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(error))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .BadStatusCode(let message) = httpError {
@@ -94,7 +101,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.NoConnectivity(message: "No internet connectivity")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .NoConnectivity(let message) = httpError {
@@ -112,7 +119,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.Timeout(message: "Request timed out after 30 seconds")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .Timeout(let message) = httpError {
@@ -131,7 +138,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(message: "DNS resolution failed for nonexistent.example.com")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .DnsResolutionFailed(let message) = httpError {
@@ -150,7 +157,7 @@ final class BedrockHttpClientTests: XCTestCase {
         client.setResponse(for: testUrl, result: .failure(.SslError(message: "SSL certificate validation failed: Certificate validation failed")))
         
         do {
-            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, body: nil)
+            _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
             if case .SslError(let message) = httpError {
@@ -176,7 +183,7 @@ final class BedrockHttpClientTests: XCTestCase {
         }
         
         for (index, url) in urls.enumerated() {
-            let result = try await client.fetchFromAppBackend(url: url, method: .get, body: nil)
+            let result = try await client.fetchFromAppBackend(url: url, method: .get, headers: [], body: nil)
             let expectedData = "Response \(index + 1)".data(using: .utf8)!
             XCTAssertEqual(result, expectedData)
         }
@@ -185,6 +192,7 @@ final class BedrockHttpClientTests: XCTestCase {
         XCTAssertEqual(client.requestHistory, urls)
         // Verify all requests were GET with no body
         XCTAssertEqual(client.methodHistory, [.get, .get, .get])
+        XCTAssertEqual(client.headersHistory.map { $0.count }, [0, 0, 0])
         XCTAssertEqual(client.bodyHistory, [nil, nil, nil])
     }
 } 

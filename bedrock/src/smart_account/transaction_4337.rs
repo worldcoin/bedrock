@@ -5,7 +5,9 @@
 
 use crate::primitives::{HttpError, Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
+use crate::transaction::rpc::{
+    RpcError, RpcProviderName, SponsorUserOperationResponse,
+};
 
 use alloy::hex::FromHex;
 use alloy::{
@@ -103,6 +105,7 @@ pub trait Is4337Encodable {
         safe_account: &crate::smart_account::SafeSmartAccount,
         self_sponsor_token: Option<Address>,
         metadata: Option<Self::MetadataArg>,
+        provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
         // Get the global RPC client
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
@@ -118,6 +121,7 @@ pub trait Is4337Encodable {
                 &user_operation,
                 *ENTRYPOINT_4337,
                 self_sponsor_token,
+                provider,
             )
             .await?;
 
@@ -161,7 +165,7 @@ pub trait Is4337Encodable {
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337)
+            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
             .await?;
 
         Ok(user_op_hash)
