@@ -6,7 +6,7 @@ use alloy::{
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 pub use signer::SafeSmartAccountSigner;
-pub use transaction_4337::{ISafe4337Module, Is4337Encodable};
+pub use transaction_4337::Is4337Encodable;
 
 #[cfg(any(test, doc))]
 use crate::primitives::Network;
@@ -32,8 +32,9 @@ mod transaction;
 /// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
 mod permit2;
 
-pub use transaction_4337::{
-    EncodedSafeOpStruct, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
+pub use crate::primitives::contracts::{
+    EncodedSafeOpStruct, ISafe4337Module, UserOperation, ENTRYPOINT_4337,
+    GNOSIS_SAFE_4337_MODULE,
 };
 
 pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
