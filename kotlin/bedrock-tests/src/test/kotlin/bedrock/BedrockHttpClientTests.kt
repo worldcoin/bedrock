@@ -90,7 +90,7 @@ class BedrockHttpClientTests {
         }
         
         assertEquals("Bad status code 400", exception.message)
-        assertTrue(exception.message?.contains("400") == true)
+        assertTrue(exception.message!!.contains("400"))
     }
     
     @Test
@@ -119,7 +119,7 @@ class BedrockHttpClientTests {
         }
         
         assertEquals("Request timed out after 30 seconds", exception.message)
-        assertTrue(exception.message?.contains("30") == true)
+        assertTrue(exception.message!!.contains("30"))
     }
     
     @Test
@@ -134,7 +134,7 @@ class BedrockHttpClientTests {
         }
         
         assertEquals("DNS resolution failed for nonexistent.example.com", exception.message)
-        assertTrue(exception.message?.contains("nonexistent.example.com") == true)
+        assertTrue(exception.message!!.contains("nonexistent.example.com"))
     }
     
     @Test
@@ -149,7 +149,7 @@ class BedrockHttpClientTests {
         }
         
         assertEquals("SSL certificate validation failed: Certificate validation failed", exception.message)
-        assertTrue(exception.message?.contains("Certificate validation failed") == true)
+        assertTrue(exception.message!!.contains("Certificate validation failed"))
     }
     
     @Test
@@ -178,7 +178,7 @@ class BedrockHttpClientTests {
         }
         
         assertEquals("Connection refused by api.example.com", exception.message)
-        assertTrue(exception.message?.contains("api.example.com") == true)
+        assertTrue(exception.message!!.contains("api.example.com"))
     }
     
     @Test
@@ -193,7 +193,7 @@ class BedrockHttpClientTests {
         }
         
         assertEquals("Generic error: Unexpected error occurred", exception.message)
-        assertTrue(exception.message?.contains("Unexpected error occurred") == true)
+        assertTrue(exception.message!!.contains("Unexpected error occurred"))
     }
     
     @Test
