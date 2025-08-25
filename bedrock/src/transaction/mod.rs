@@ -49,6 +49,7 @@ impl SafeSmartAccount {
     ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
     ///     "0x1234567890123456789012345678901234567890",
     ///     "1000000", // 1 USDC (6 decimals)
+    ///     RpcProviderName::Alchemy,
     /// ).await?;
     ///
     /// println!("Transaction hash: {}", tx_hash.to_hex_string());
