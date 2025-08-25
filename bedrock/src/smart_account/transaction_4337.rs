@@ -5,7 +5,7 @@
 
 use crate::primitives::{HttpError, Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
+use crate::transaction::rpc::{ProviderName, RpcError, SponsorUserOperationResponse};
 
 use alloy::hex::FromHex;
 use alloy::{
@@ -118,6 +118,7 @@ pub trait Is4337Encodable {
                 &user_operation,
                 *ENTRYPOINT_4337,
                 self_sponsor_token,
+                ProviderName::Alchemy,
             )
             .await?;
 
@@ -161,7 +162,12 @@ pub trait Is4337Encodable {
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337)
+            .send_user_operation(
+                network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                ProviderName::Alchemy,
+            )
             .await?;
 
         Ok(user_op_hash)

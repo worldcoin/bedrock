@@ -41,6 +41,26 @@ pub enum RpcMethod {
     SendUserOperation,
 }
 
+/// 4337 provider selection to be passed by native apps
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProviderName {
+    /// Use Alchemy as 4337 provider
+    Alchemy,
+    /// Use Pimlico as 4337 provider
+    Pimlico,
+}
+
+impl ProviderName {
+    /// Returns the wire/header value for the provider
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Alchemy => "alchemy",
+            Self::Pimlico => "pimlico",
+        }
+    }
+}
+
 impl RpcMethod {
     /// Get the string representation of the RPC method
     #[must_use]
@@ -169,12 +189,19 @@ impl RpcClient {
         format!("/v1/rpc/{}", network.network_name())
     }
 
-    /// Makes a generic RPC call with typed parameters and result
+    /// Makes a generic RPC call with typed parameters and result, adding provider header
+    ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `method`: JSON-RPC method to invoke
+    /// - `params`: JSON-RPC params (typed)
+    /// - `provider`: selected 4337 provider to include in headers
     async fn rpc_call<P, R>(
         &self,
         network: Network,
         method: RpcMethod,
         params: P,
+        provider: ProviderName,
     ) -> Result<R, RpcError>
     where
         P: Serialize,
@@ -191,7 +218,7 @@ impl RpcClient {
             serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
         // Send the HTTP request
-        let provider_name = "alchemy";
+        let provider_name = provider.as_str();
         let headers = vec![HttpHeader {
             name: "provider-name".to_string(),
             value: provider_name.to_string(),
@@ -252,6 +279,7 @@ impl RpcClient {
         user_operation: &UserOperation,
         entry_point: Address,
         self_sponsor_token: Option<Address>,
+        provider: ProviderName,
     ) -> Result<SponsorUserOperationResponse, RpcError> {
         // Build params as a positional array. If no token is provided, omit the 3rd param entirely
         // so the backend can auto-fill an empty object as needed.
@@ -264,7 +292,7 @@ impl RpcClient {
             params.push(serde_json::json!({ "token": format!("{token:?}") }));
         }
 
-        self.rpc_call(network, RpcMethod::SponsorUserOperation, params)
+        self.rpc_call(network, RpcMethod::SponsorUserOperation, params, provider)
             .await
     }
 
@@ -283,6 +311,7 @@ impl RpcClient {
         network: Network,
         user_operation: &UserOperation,
         entrypoint: Address,
+        provider: ProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
@@ -290,7 +319,7 @@ impl RpcClient {
         ];
 
         let result: String = self
-            .rpc_call(network, RpcMethod::SendUserOperation, params)
+            .rpc_call(network, RpcMethod::SendUserOperation, params, provider)
             .await?;
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
