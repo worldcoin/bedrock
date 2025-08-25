@@ -63,7 +63,7 @@ pub enum HttpMethod {
 /// Simple name/value HTTP header pair for passing additional headers
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct HttpHeader {
-    /// Header name (case-insensitive per RFC)
+    /// Header name
     pub name: String,
     /// Header value
     pub value: String,
