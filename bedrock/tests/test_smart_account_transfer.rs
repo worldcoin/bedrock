@@ -16,7 +16,7 @@ use bedrock::{
         Network,
     },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::foreign::UnparsedUserOperation,
+    transaction::{foreign::UnparsedUserOperation, RpcProviderName},
 };
 
 use serde::Serialize;
@@ -296,6 +296,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
             &wld_token_address.to_string(),
             &recipient.to_string(),
             amount,
+            RpcProviderName::Alchemy,
         )
         .await
         .expect("transaction_transfer failed");
