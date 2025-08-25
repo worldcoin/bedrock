@@ -4,14 +4,14 @@ use bedrock_macros::bedrock_export;
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Encodable, SafeSmartAccount},
-    transaction::{contracts::erc20::Erc20, rpc::RpcProviderName},
+    transaction::contracts::erc20::Erc20,
 };
 
 mod contracts;
 pub mod foreign;
 pub mod rpc;
 
-pub use rpc::{RpcClient, RpcError, SponsorUserOperationResponse};
+pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
