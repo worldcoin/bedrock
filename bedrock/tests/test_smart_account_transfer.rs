@@ -11,7 +11,7 @@ use alloy::{
 use bedrock::{
     primitives::{
         http_client::{
-            set_http_client, AuthenticatedHttpClient, HttpError, HttpMethod,
+            set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
         },
         Network,
     },
@@ -57,6 +57,7 @@ where
         &self,
         _url: String,
         method: HttpMethod,
+        _headers: Vec<HttpHeader>,
         body: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, HttpError> {
         if method != HttpMethod::Post {
