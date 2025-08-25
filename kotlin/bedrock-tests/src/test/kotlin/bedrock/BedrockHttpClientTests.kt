@@ -82,15 +82,15 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/error"
         
-        val error = HttpException.BadStatusCode(400uL, "oops".encodeToByteArray())
+        val error = HttpException.BadStatusCode("Bad status code 400")
         client.setResponse(testUrl, Result.failure(error))
         
         val exception = assertFailsWith<HttpException.BadStatusCode> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals(400uL, exception.code)
-        assertEquals("oops", exception.responseBody.decodeToString())
+        assertEquals("Bad status code 400", exception.message)
+        assertTrue(exception.message?.contains("400") == true)
     }
     
     @Test
@@ -98,11 +98,13 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/offline"
         
-        client.setResponse(testUrl, Result.failure(HttpException.NoConnectivity))
+        client.setResponse(testUrl, Result.failure(HttpException.NoConnectivity("No internet connectivity")))
         
-        assertFailsWith<HttpException.NoConnectivity> {
+        val exception = assertFailsWith<HttpException.NoConnectivity> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
+        
+        assertEquals("No internet connectivity", exception.message)
     }
     
     @Test
@@ -110,13 +112,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/slow"
         
-        client.setResponse(testUrl, Result.failure(HttpException.Timeout(30uL)))
+        client.setResponse(testUrl, Result.failure(HttpException.Timeout("Request timed out after 30 seconds")))
         
         val exception = assertFailsWith<HttpException.Timeout> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals(30uL, exception.seconds)
+        assertEquals("Request timed out after 30 seconds", exception.message)
+        assertTrue(exception.message?.contains("30") == true)
     }
     
     @Test
@@ -124,14 +127,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://nonexistent.example.com/test"
         
-        client.setResponse(testUrl, Result.failure(HttpException.DnsResolutionFailed("nonexistent.example.com")))
+        client.setResponse(testUrl, Result.failure(HttpException.DnsResolutionFailed("DNS resolution failed for nonexistent.example.com")))
         
         val exception = assertFailsWith<HttpException.DnsResolutionFailed> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("nonexistent.example.com", exception.hostname)
-        assertTrue(exception.hostname.contains("nonexistent.example.com"))
+        assertEquals("DNS resolution failed for nonexistent.example.com", exception.message)
+        assertTrue(exception.message?.contains("nonexistent.example.com") == true)
     }
     
     @Test
@@ -139,14 +142,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/ssl-error"
         
-        client.setResponse(testUrl, Result.failure(HttpException.SslError("Certificate validation failed")))
+        client.setResponse(testUrl, Result.failure(HttpException.SslException("SSL certificate validation failed: Certificate validation failed")))
         
-        val exception = assertFailsWith<HttpException.SslError> {
+        val exception = assertFailsWith<HttpException.SslException> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("Certificate validation failed", exception.reason)
-        assertTrue(exception.reason.contains("Certificate validation failed"))
+        assertEquals("SSL certificate validation failed: Certificate validation failed", exception.message)
+        assertTrue(exception.message?.contains("Certificate validation failed") == true)
     }
     
     @Test
@@ -154,11 +157,13 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/cancelled"
         
-        client.setResponse(testUrl, Result.failure(HttpException.Cancelled))
+        client.setResponse(testUrl, Result.failure(HttpException.Cancelled("Request was cancelled")))
         
-        assertFailsWith<HttpException.Cancelled> {
+        val exception = assertFailsWith<HttpException.Cancelled> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
+        
+        assertEquals("Request was cancelled", exception.message)
     }
     
     @Test
@@ -166,14 +171,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/refused"
         
-        client.setResponse(testUrl, Result.failure(HttpException.ConnectionRefused("api.example.com")))
+        client.setResponse(testUrl, Result.failure(HttpException.ConnectionRefused("Connection refused by api.example.com")))
         
         val exception = assertFailsWith<HttpException.ConnectionRefused> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("api.example.com", exception.host)
-        assertTrue(exception.host.contains("api.example.com"))
+        assertEquals("Connection refused by api.example.com", exception.message)
+        assertTrue(exception.message?.contains("api.example.com") == true)
     }
     
     @Test
@@ -181,14 +186,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/generic-error"
         
-        client.setResponse(testUrl, Result.failure(HttpException.Generic("Unexpected error occurred")))
+        client.setResponse(testUrl, Result.failure(HttpException.Generic("Generic error: Unexpected error occurred")))
         
         val exception = assertFailsWith<HttpException.Generic> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("Unexpected error occurred", exception.message)
-        assertTrue(exception.message.contains("Unexpected error occurred"))
+        assertEquals("Generic error: Unexpected error occurred", exception.message)
+        assertTrue(exception.message?.contains("Unexpected error occurred") == true)
     }
     
     @Test
