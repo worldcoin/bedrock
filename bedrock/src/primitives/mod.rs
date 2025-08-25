@@ -59,6 +59,9 @@ pub mod http_client;
 #[cfg(feature = "tooling_tests")]
 pub mod tooling_tests;
 
+/// Contract interfaces and data structures for ERC-4337 account abstraction
+pub mod contracts;
+
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 #[repr(u32)]
