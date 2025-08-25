@@ -1,3 +1,4 @@
+use crate::primitives::contracts::IPBHEntryPoint::PBHPayload;
 use crate::primitives::{HttpError, PrimitiveError};
 use crate::transaction::rpc::SponsorUserOperationResponse;
 use alloy::hex::FromHex;
@@ -6,6 +7,8 @@ use alloy::sol;
 use alloy::sol_types::SolValue;
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
+use world_chain_builder_pbh::external_nullifier::EncodedExternalNullifier;
+use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, TREE_DEPTH};
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
@@ -307,6 +310,113 @@ impl EncodedSafeOpStruct {
     }
 }
 
+impl From<UserOperation> for EncodedSafeOpStruct {
+    /// Converts a `UserOperation` into an `EncodedSafeOpStruct`.
+    ///
+    /// This implementation extracts validity timestamps from the UserOperation's signature.
+    /// If the signature doesn't contain valid timestamps, it uses zero values as defaults.
+    ///
+    /// # Example
+    /// ```rust
+    /// use bedrock::primitives::contracts::{UserOperation, EncodedSafeOpStruct};
+    ///
+    /// let user_op = UserOperation::default();
+    /// let encoded_safe_op: EncodedSafeOpStruct = user_op.into();
+    /// ```
+    fn from(user_op: UserOperation) -> Self {
+        // Extract validity timestamps from the signature, or use defaults
+        let (valid_after, valid_until) = user_op
+            .extract_validity_timestamps()
+            .unwrap_or((U48::ZERO, U48::ZERO));
+
+        // Use the existing method to create the struct
+        Self::from_user_op_with_validity(&user_op, valid_after, valid_until)
+            .expect("Failed to convert UserOperation to EncodedSafeOpStruct")
+    }
+}
+
+impl From<UserOperation> for IEntryPoint::PackedUserOperation {
+    /// Converts a `UserOperation` into a `PackedUserOperation`.
+    ///
+    /// This conversion packs gas limits and fees into bytes32 fields as required by EIP-4337.
+    /// - `accountGasLimits`: verification_gas_limit (upper 128 bits) + call_gas_limit (lower 128 bits)
+    /// - `gasFees`: max_priority_fee_per_gas (upper 128 bits) + max_fee_per_gas (lower 128 bits)
+    ///
+    /// # Example
+    /// ```rust
+    /// use bedrock::primitives::contracts::{UserOperation, IEntryPoint::PackedUserOperation};
+    ///
+    /// let user_op = UserOperation::default();
+    /// let packed_user_op: PackedUserOperation = user_op.into();
+    /// ```
+    fn from(user_op: UserOperation) -> Self {
+        // Pack verification_gas_limit (upper 128 bits) + call_gas_limit (lower 128 bits) into accountGasLimits
+        let verification_gas_u256 = U256::from(user_op.verification_gas_limit);
+        let call_gas_u256 = U256::from(user_op.call_gas_limit);
+        let account_gas_limits: U256 = (verification_gas_u256 << 128) | call_gas_u256;
+
+        // Pack max_priority_fee_per_gas (upper 128 bits) + max_fee_per_gas (lower 128 bits) into gasFees
+        let max_priority_fee_u256 = U256::from(user_op.max_priority_fee_per_gas);
+        let max_fee_u256 = U256::from(user_op.max_fee_per_gas);
+        let gas_fees: U256 = (max_priority_fee_u256 << 128) | max_fee_u256;
+
+        Self {
+            sender: user_op.sender,
+            nonce: user_op.nonce,
+            initCode: user_op.get_init_code(),
+            callData: user_op.call_data.clone(),
+            accountGasLimits: FixedBytes::from_slice(
+                &account_gas_limits.to_be_bytes::<32>(),
+            ),
+            preVerificationGas: user_op.pre_verification_gas,
+            gasFees: FixedBytes::from_slice(&gas_fees.to_be_bytes::<32>()),
+            paymasterAndData: user_op.get_paymaster_and_data(),
+            signature: user_op.signature,
+        }
+    }
+}
+
+impl From<&UserOperation> for IEntryPoint::PackedUserOperation {
+    /// Converts a `&UserOperation` into a `PackedUserOperation`.
+    ///
+    /// This conversion packs gas limits and fees into bytes32 fields as required by EIP-4337.
+    /// This implementation works with borrowed UserOperations to avoid unnecessary moves.
+    ///
+    /// # Example
+    /// ```rust
+    /// use bedrock::primitives::contracts::{UserOperation, IEntryPoint::PackedUserOperation};
+    ///
+    /// let user_op = UserOperation::default();
+    /// let packed_user_op: PackedUserOperation = (&user_op).into();
+    /// // user_op is still available for use
+    /// ```
+    fn from(user_op: &UserOperation) -> Self {
+        // Pack verification_gas_limit (upper 128 bits) + call_gas_limit (lower 128 bits) into accountGasLimits
+        let verification_gas_u256 = U256::from(user_op.verification_gas_limit);
+        let call_gas_u256 = U256::from(user_op.call_gas_limit);
+        let account_gas_limits: U256 = (verification_gas_u256 << 128) | call_gas_u256;
+
+        // Pack max_priority_fee_per_gas (upper 128 bits) + max_fee_per_gas (lower 128 bits) into gasFees
+        let max_priority_fee_u256 = U256::from(user_op.max_priority_fee_per_gas);
+        let max_fee_u256 = U256::from(user_op.max_fee_per_gas);
+        let gas_fees: U256 = (max_priority_fee_u256 << 128) | max_fee_u256;
+
+        Self {
+            sender: user_op.sender,
+            nonce: user_op.nonce,
+            initCode: user_op.get_init_code(),
+            callData: user_op.call_data.clone(),
+            accountGasLimits: FixedBytes::from_slice(
+                &account_gas_limits.to_be_bytes::<32>(),
+            ),
+            preVerificationGas: user_op.pre_verification_gas,
+            gasFees: FixedBytes::from_slice(&gas_fees.to_be_bytes::<32>()),
+            paymasterAndData: user_op.get_paymaster_and_data(),
+            signature: user_op.signature.clone(),
+        }
+    }
+}
+
 sol! {
     contract IMulticall3 {
         #[derive(Default)]
@@ -357,5 +467,28 @@ sol! {
             IMulticall3.Call3[] calls,
             PBHPayload payload,
         ) external;
+    }
+}
+
+impl From<PbhPayload> for PBHPayload {
+    fn from(val: PbhPayload) -> Self {
+        let p0 = val.proof.0 .0 .0;
+        let p1 = val.proof.0 .0 .1;
+        let p2 = val.proof.0 .1 .0[0];
+        let p3 = val.proof.0 .1 .0[1];
+        let p4 = val.proof.0 .1 .1[0];
+        let p5 = val.proof.0 .1 .1[1];
+        let p6 = val.proof.0 .2 .0;
+        let p7 = val.proof.0 .2 .1;
+
+        Self {
+            root: val.root,
+            pbhExternalNullifier: EncodedExternalNullifier::from(
+                val.external_nullifier,
+            )
+            .0,
+            nullifierHash: val.nullifier_hash,
+            proof: [p0, p1, p2, p3, p4, p5, p6, p7],
+        }
     }
 }

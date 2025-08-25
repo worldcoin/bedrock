@@ -10,7 +10,7 @@
 
 use ruint::aliases::U256;
 
-use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
+use crate::primitives::{BEDROCK_NONCE_PREFIX_CONST, PBH_NONCE_PREFIX_CONST};
 
 /// Stable, never-reordered identifiers for transaction classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +51,8 @@ pub enum InstructionFlag {
 /// Follows 4337 specs: <https://eips.ethereum.org/EIPS/eip-4337#semi-abstracted-nonce-support>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NonceKeyV1 {
+    /// Whether the nonce is for a PBH transaction.
+    pub pbh: bool,
     /// Stable transaction class id.
     pub type_id: TransactionTypeId,
     /// Instruction flags bitfield.
@@ -67,6 +69,7 @@ impl NonceKeyV1 {
     /// Builds a new v1 nonceKey with a random 7-byte tail.
     #[must_use]
     pub fn new(
+        pbh: bool,
         type_id: TransactionTypeId,
         instruction: InstructionFlag,
         metadata: [u8; 10],
@@ -77,6 +80,7 @@ impl NonceKeyV1 {
         let mut tail = [0u8; 7];
         tail.copy_from_slice(&bytes[1..8]);
         Self {
+            pbh,
             type_id,
             instruction,
             metadata,
@@ -88,12 +92,14 @@ impl NonceKeyV1 {
     /// Test/advanced constructor allowing explicit random tail specification.
     #[must_use]
     pub const fn with_random_tail(
+        pbh: bool,
         type_id: TransactionTypeId,
         instruction: InstructionFlag,
         metadata: [u8; 10],
         random_tail: [u8; 7],
     ) -> Self {
         Self {
+            pbh,
             type_id,
             instruction,
             metadata,
@@ -107,7 +113,11 @@ impl NonceKeyV1 {
     fn as_bytes(&self) -> [u8; 24] {
         let mut out: [u8; 24] = [0u8; 24];
         // [0..=4] magic
-        out[0..=4].copy_from_slice(BEDROCK_NONCE_PREFIX_CONST);
+        if self.pbh {
+            out[0..=4].copy_from_slice(PBH_NONCE_PREFIX_CONST);
+        } else {
+            out[0..=4].copy_from_slice(BEDROCK_NONCE_PREFIX_CONST);
+        }
         // [5] typeId
         out[5] = self.type_id.as_u8();
         // [6] instruction flags
@@ -139,6 +149,7 @@ mod tests {
         let metadata = [0x11u8; 10];
         let random_tail = [0x22u8; 7];
         let key = NonceKeyV1::with_random_tail(
+            false,
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
             metadata,
@@ -161,6 +172,7 @@ mod tests {
     #[test]
     fn test_encode_nonce_sequence_is_zero() {
         let key = NonceKeyV1::with_random_tail(
+            false,
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
             [0u8; 10],

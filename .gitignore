@@ -38,3 +38,5 @@ kotlin/bedrock-tests/bin/
 
 # foundry
 out/
+
+load_test_identities.json

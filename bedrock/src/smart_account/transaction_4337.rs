@@ -3,13 +3,33 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
+use crate::primitives::contracts::IPBHEntryPoint::PBHPayload;
+use crate::primitives::contracts::{
+    EncodedSafeOpStruct, IEntryPoint::PackedUserOperation, UserOperation,
+};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
 use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
 
-use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
+use reqwest::Client;
+use ruint::{aliases::U256, uint};
+use semaphore_rs::identity::Identity;
+use semaphore_rs::poseidon_tree::LazyPoseidonTree;
+use semaphore_rs::{hash_to_field, Field};
+
+use alloy::primitives::fixed_bytes;
+use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
+use alloy::sol_types::SolValue;
 use chrono::{Duration, Utc};
+use eyre;
+
+use futures::{stream, StreamExt, TryStreamExt};
+use serde::{Deserialize, Serialize};
+use world_chain_builder_pbh::external_nullifier::{
+    EncodedExternalNullifier, ExternalNullifier,
+};
+use world_chain_builder_pbh::payload::Proof;
+use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, TREE_DEPTH};
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
@@ -17,6 +37,27 @@ use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 ///
 /// Operations are valid for this duration from the time they are signed.
 const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SerializableIdentity {
+    pub nullifier: Field,
+    pub trapdoor: Field,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InclusionProof {
+    pub root: Field,
+    pub proof: semaphore_rs::poseidon_tree::Proof,
+}
+
+impl From<&Identity> for SerializableIdentity {
+    fn from(identity: &Identity) -> Self {
+        Self {
+            nullifier: identity.nullifier,
+            trapdoor: identity.trapdoor,
+        }
+    }
+}
 
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
@@ -43,6 +84,7 @@ pub trait Is4337Encodable {
         &self,
         wallet_address: Address,
         metadata: Option<Self::MetadataArg>,
+        pbh: bool,
     ) -> Result<UserOperation, PrimitiveError>;
 
     /// Signs and executes a 4337 `UserOperation` by:
@@ -72,13 +114,17 @@ pub trait Is4337Encodable {
         safe_account: &crate::smart_account::SafeSmartAccount,
         self_sponsor_token: Option<Address>,
         metadata: Option<Self::MetadataArg>,
+        pbh: bool,
     ) -> Result<FixedBytes<32>, RpcError> {
         // Get the global RPC client
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
 
         // 1. Create preflight UserOperation using default metadata for this implementation
-        let mut user_operation =
-            self.as_preflight_user_operation(safe_account.wallet_address, metadata)?;
+        let mut user_operation = self.as_preflight_user_operation(
+            safe_account.wallet_address,
+            metadata,
+            pbh,
+        )?;
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
@@ -121,10 +167,18 @@ pub trait Is4337Encodable {
         )?;
 
         // Compose the final signature once (timestamps + actual 65-byte signature)
-        let mut full_signature = Vec::with_capacity(77);
+        let mut full_signature = Vec::new();
         full_signature.extend_from_slice(&valid_after_bytes);
         full_signature.extend_from_slice(valid_until_bytes);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
+
+        // // PBH Logic
+        if pbh {
+            let pbh_payload = Self::generate_pbh_proof(&user_operation).await;
+            full_signature.extend_from_slice(
+                PBHPayload::from(pbh_payload.clone()).abi_encode().as_ref(),
+            );
+        }
 
         user_operation.signature = full_signature.into();
 
@@ -134,6 +188,116 @@ pub trait Is4337Encodable {
             .await?;
 
         Ok(user_op_hash)
+    }
+
+    /// Generates a PBH proof for a given user operation.
+    async fn generate_pbh_proof(user_op: &UserOperation) -> PbhPayload {
+        // Convert from UserOperation to PackedUserOperation
+        // TODO: Fix this
+        let packed_user_op: PackedUserOperation = PackedUserOperation::from(user_op);
+
+        let signal = Self::hash_user_op(&packed_user_op);
+
+        let external_nullifier = ExternalNullifier::v1(1, 2025, 11);
+
+        // TODO: Autotmatically find an unused one
+        let encoded_external_nullifier =
+            EncodedExternalNullifier::from(external_nullifier);
+
+        let identities: Vec<SerializableIdentity> = serde_json::from_reader(
+            std::fs::File::open("load_test_identities.json").unwrap(),
+        )
+        .unwrap();
+        let identities: Vec<Identity> = identities
+            .into_iter()
+            .map(|identity| Identity {
+                nullifier: identity.nullifier,
+                trapdoor: identity.trapdoor,
+            })
+            .collect();
+
+        let proofs =
+            futures::future::try_join_all(identities.iter().map(|identity| async {
+                Self::fetch_inclusion_proof(
+                    "https://signup-orb-ethereum.stage-crypto.worldcoin.dev", // Staging
+                    identity,
+                )
+                .await
+            }))
+            .await
+            .unwrap();
+
+        let identity = identities[0].clone();
+        let inclusion_proof = proofs[0].clone();
+
+        let proof: semaphore_rs_proof::Proof = semaphore_rs::protocol::generate_proof(
+            &identity,
+            &inclusion_proof.proof,
+            encoded_external_nullifier.0,
+            signal,
+        )
+        .expect("Failed to generate semaphore proof");
+        let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
+            &identity,
+            encoded_external_nullifier.0,
+        );
+
+        let proof = Proof(proof);
+
+        PbhPayload {
+            external_nullifier,
+            nullifier_hash,
+            root: inclusion_proof.root,
+            proof,
+        }
+    }
+
+    /// Fetches an inclusion proof for a given identity from the signup sequencer.
+    ///
+    /// This function sends a request to the sequencer to fetch the inclusion proof for a given identity.
+    ///
+    /// # Arguments
+    /// * `url` - The URL of the sequencer
+    /// * `identity` - The identity to fetch the proof for
+    async fn fetch_inclusion_proof(
+        url: &str,
+        identity: &Identity,
+    ) -> eyre::Result<InclusionProof> {
+        let client = Client::new();
+
+        let commitment = identity.commitment();
+        let response = client
+            .post(format!("{}/inclusionProof", url))
+            .json(&serde_json::json! {{
+                "identityCommitment": commitment,
+            }})
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let proof: InclusionProof = response.json().await?;
+
+        Ok(proof)
+    }
+
+    /// Computes a ZK-friendly hash of a PackedUserOperation.
+    ///
+    /// This function extracts key fields (sender, nonce, callData) from a PackedUserOperation,
+    /// encodes them using ABI packed encoding, and converts the result to a Field element
+    /// suitable for use in zero-knowledge proof circuits.
+    ///
+    /// # Arguments
+    /// * `user_op` - The PackedUserOperation to hash
+    ///
+    /// # Returns
+    /// A Field element representing the hash of the user operation
+    fn hash_user_op(user_op: &PackedUserOperation) -> Field {
+        let hash = SolValue::abi_encode_packed(&(
+            &user_op.sender,
+            &user_op.nonce,
+            &user_op.callData,
+        ));
+        hash_to_field(hash.as_slice())
     }
 }
 
@@ -455,5 +619,106 @@ mod tests {
         } else {
             panic!("Expected InvalidInput error");
         }
+    }
+
+    #[test]
+    fn test_user_operation_to_encoded_safe_op_struct_conversion() {
+        use alloy::primitives::{address, U256};
+        use std::str::FromStr;
+
+        // Create a UserOperation with valid signature containing timestamps
+        let mut signature = Vec::with_capacity(77);
+
+        // Add validAfter (6 bytes) - timestamp 1704067200
+        let valid_after_timestamp: u64 = 1704067200;
+        let valid_after_bytes = valid_after_timestamp.to_be_bytes();
+        signature.extend_from_slice(&valid_after_bytes[2..8]);
+
+        // Add validUntil (6 bytes) - timestamp 1735689600
+        let valid_until_timestamp: u64 = 1735689600;
+        let valid_until_bytes = valid_until_timestamp.to_be_bytes();
+        signature.extend_from_slice(&valid_until_bytes[2..8]);
+
+        // Add dummy ECDSA signature (65 bytes)
+        signature.extend_from_slice(&[0xff; 65]);
+
+        let user_op = UserOperation {
+            sender: address!("0x1111111111111111111111111111111111111111"),
+            nonce: U256::from(42),
+            call_data: Bytes::from_str("0x1234abcd").unwrap(),
+            signature: signature.into(),
+            call_gas_limit: 100000,
+            verification_gas_limit: 50000,
+            pre_verification_gas: U256::from(30000),
+            max_fee_per_gas: 2000000000,
+            max_priority_fee_per_gas: 1000000000,
+            ..Default::default()
+        };
+
+        // Test the From trait conversion
+        let encoded_safe_op: EncodedSafeOpStruct = user_op.clone().into();
+
+        // Verify the conversion worked correctly
+        assert_eq!(encoded_safe_op.safe, user_op.sender);
+        assert_eq!(encoded_safe_op.nonce, user_op.nonce);
+        assert_eq!(encoded_safe_op.call_gas_limit, user_op.call_gas_limit);
+        assert_eq!(
+            encoded_safe_op.verification_gas_limit,
+            user_op.verification_gas_limit
+        );
+        assert_eq!(
+            encoded_safe_op.pre_verification_gas,
+            user_op.pre_verification_gas
+        );
+        assert_eq!(encoded_safe_op.max_fee_per_gas, user_op.max_fee_per_gas);
+        assert_eq!(
+            encoded_safe_op.max_priority_fee_per_gas,
+            user_op.max_priority_fee_per_gas
+        );
+        assert_eq!(
+            encoded_safe_op.valid_after,
+            U48::from(valid_after_timestamp)
+        );
+        assert_eq!(
+            encoded_safe_op.valid_until,
+            U48::from(valid_until_timestamp)
+        );
+        assert_eq!(encoded_safe_op.entry_point, *ENTRYPOINT_4337);
+        assert_eq!(
+            encoded_safe_op.call_data_hash,
+            keccak256(&user_op.call_data)
+        );
+        assert_eq!(
+            encoded_safe_op.init_code_hash,
+            keccak256(user_op.get_init_code())
+        );
+        assert_eq!(
+            encoded_safe_op.paymaster_and_data_hash,
+            keccak256(user_op.get_paymaster_and_data())
+        );
+    }
+
+    #[test]
+    fn test_user_operation_to_encoded_safe_op_struct_with_invalid_signature() {
+        use alloy::primitives::{address, U256};
+        use std::str::FromStr;
+
+        // Create a UserOperation with invalid signature (too short)
+        let user_op = UserOperation {
+            sender: address!("0x1111111111111111111111111111111111111111"),
+            nonce: U256::from(42),
+            call_data: Bytes::from_str("0x1234abcd").unwrap(),
+            signature: vec![0xff; 65].into(), // Invalid length
+            ..Default::default()
+        };
+
+        // Test the From trait conversion with invalid signature
+        let encoded_safe_op: EncodedSafeOpStruct = user_op.clone().into();
+
+        // Should use default timestamps (zero) when signature is invalid
+        assert_eq!(encoded_safe_op.valid_after, U48::ZERO);
+        assert_eq!(encoded_safe_op.valid_until, U48::ZERO);
+        assert_eq!(encoded_safe_op.safe, user_op.sender);
+        assert_eq!(encoded_safe_op.nonce, user_op.nonce);
     }
 }

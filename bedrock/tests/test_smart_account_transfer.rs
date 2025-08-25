@@ -232,7 +232,7 @@ where
 // ------------------ The test for the full transaction_transfer flow ------------------
 
 #[tokio::test]
-async fn test_transaction_transfer_full_flow_executes_user_operation(
+async fn test_transaction_transfer_full_flow_executes_user_operation_non_pbh(
 ) -> anyhow::Result<()> {
     // 1) Spin up anvil fork
     let anvil = setup_anvil();
@@ -295,6 +295,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
             &wld_token_address.to_string(),
             &recipient.to_string(),
             amount,
+            false,
         )
         .await
         .expect("transaction_transfer failed");

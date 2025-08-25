@@ -103,6 +103,7 @@ impl Is4337Encodable for Erc20 {
         &self,
         wallet_address: Address,
         metadata: Option<Self::MetadataArg>,
+        pbh: bool,
     ) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
@@ -118,7 +119,8 @@ impl Is4337Encodable for Erc20 {
             }
         }
 
-        let key = NonceKeyV1::new(
+        let key: NonceKeyV1 = NonceKeyV1::new(
+            pbh,
             TransactionTypeId::Transfer,
             InstructionFlag::Default,
             metadata_bytes,
@@ -168,7 +170,9 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = erc20.as_preflight_user_operation(wallet, None).unwrap();
+        let user_op = erc20
+            .as_preflight_user_operation(wallet, None, false)
+            .unwrap();
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
@@ -200,7 +204,7 @@ mod tests {
         };
 
         let user_op = erc20
-            .as_preflight_user_operation(wallet, Some(metadata))
+            .as_preflight_user_operation(wallet, Some(metadata), false)
             .unwrap();
 
         // Check nonce layout

@@ -63,9 +63,11 @@ impl SafeSmartAccount {
     pub async fn transaction_transfer(
         &self,
         network: Network,
+        // TODO: Use struct for transaction parameters
         token_address: &str,
         to_address: &str,
         amount: &str,
+        pbh: bool,
     ) -> Result<HexEncodedData, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
@@ -75,7 +77,7 @@ impl SafeSmartAccount {
 
         // Sign and execute the transaction (uses global RPC client automatically)
         let user_op_hash = transaction
-            .sign_and_execute(network, self, None, None)
+            .sign_and_execute(network, self, None, None, pbh)
             .await
             .map_err(|e| TransactionError::Generic {
                 message: format!("Failed to execute transaction: {e}"),
