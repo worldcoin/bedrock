@@ -78,16 +78,16 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://api.example.com/error"
         
-        let error = HttpError.BadStatusCode(code: 400, responseBody: Data("oops".utf8))
+        let error = HttpError.BadStatusCode(message: "Bad status code 400")
         client.setResponse(for: testUrl, result: .failure(error))
         
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
-            if case .BadStatusCode(let code, let responseBody) = httpError {
-                XCTAssertEqual(code, 400)
-                XCTAssertEqual(String(data: responseBody, encoding: .utf8), "oops")
+            if case .BadStatusCode(let message) = httpError {
+                XCTAssertEqual(message, "Bad status code 400")
+                XCTAssertTrue(message.contains("400"))
             } else {
                 XCTFail("Expected BadStatusCode error, got \(httpError)")
             }
@@ -98,14 +98,14 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://api.example.com/offline"
         
-        client.setResponse(for: testUrl, result: .failure(.NoConnectivity))
+        client.setResponse(for: testUrl, result: .failure(.NoConnectivity(message: "No internet connectivity")))
         
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
-            if case .NoConnectivity = httpError {
-                // ok
+            if case .NoConnectivity(let message) = httpError {
+                XCTAssertEqual(message, "No internet connectivity")
             } else {
                 XCTFail("Expected NoConnectivity error, got \(httpError)")
             }
@@ -116,14 +116,15 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://api.example.com/slow"
         
-        client.setResponse(for: testUrl, result: .failure(.Timeout(seconds: 30)))
+        client.setResponse(for: testUrl, result: .failure(.Timeout(message: "Request timed out after 30 seconds")))
         
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
-            if case .Timeout(let seconds) = httpError {
-                XCTAssertEqual(seconds, 30)
+            if case .Timeout(let message) = httpError {
+                XCTAssertEqual(message, "Request timed out after 30 seconds")
+                XCTAssertTrue(message.contains("30"))
             } else {
                 XCTFail("Expected Timeout error, got \(httpError)")
             }
@@ -134,14 +135,15 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://nonexistent.example.com/test"
         
-        client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(hostname: "nonexistent.example.com")))
+        client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(message: "DNS resolution failed for nonexistent.example.com")))
         
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
-            if case .DnsResolutionFailed(let hostname) = httpError {
-                XCTAssertEqual(hostname, "nonexistent.example.com")
+            if case .DnsResolutionFailed(let message) = httpError {
+                XCTAssertEqual(message, "DNS resolution failed for nonexistent.example.com")
+                XCTAssertTrue(message.contains("nonexistent.example.com"))
             } else {
                 XCTFail("Expected DnsResolutionFailed error, got \(httpError)")
             }
@@ -152,14 +154,15 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://api.example.com/ssl-error"
         
-        client.setResponse(for: testUrl, result: .failure(.SslError(reason: "Certificate validation failed")))
+        client.setResponse(for: testUrl, result: .failure(.SslError(message: "SSL certificate validation failed: Certificate validation failed")))
         
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
-            if case .SslError(let reason) = httpError {
-                XCTAssertEqual(reason, "Certificate validation failed")
+            if case .SslError(let message) = httpError {
+                XCTAssertEqual(message, "SSL certificate validation failed: Certificate validation failed")
+                XCTAssertTrue(message.contains("Certificate validation failed"))
             } else {
                 XCTFail("Expected SslError, got \(httpError)")
             }
