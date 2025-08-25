@@ -57,7 +57,7 @@ test-case = "3.3.1"
 thiserror = "2.0.12"
 tokio = { version = "1.47.1", features = ["time"], optional = true }
 uniffi = { workspace = true, features = ["build", "tokio"] }
-world-chain-builder-pbh = { git = "https://github.com/worldcoin/world-chain", rev = "4f524c6"}
+world-chain-builder-pbh = { git = "https://github.com/worldcoin/world-chain", rev = "4f524c6" }
 [dev-dependencies]
 alloy = { version = "1.0.23", default-features = false, features = [
     "json",
