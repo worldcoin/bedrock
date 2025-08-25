@@ -201,7 +201,6 @@ impl RpcClient {
             serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
         // Send the HTTP request
-        // Build additional headers Bedrock wants to send via the app's HTTP client
         let provider_name = "alchemy";
         let headers = vec![HttpHeader {
             name: "provider-name".to_string(),
