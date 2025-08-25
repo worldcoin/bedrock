@@ -3,7 +3,7 @@ members = ["bedrock", "bedrock-macros", "uniffi-bindgen"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.6"
+version = "0.0.7"
 license = "MIT"
 edition = "2021"
 authors = [
