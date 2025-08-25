@@ -33,7 +33,8 @@ mod transaction;
 mod permit2;
 
 pub use crate::primitives::contracts::{
-    EncodedSafeOpStruct, UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE, ISafe4337Module,
+    EncodedSafeOpStruct, ISafe4337Module, UserOperation, ENTRYPOINT_4337,
+    GNOSIS_SAFE_4337_MODULE,
 };
 
 pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};

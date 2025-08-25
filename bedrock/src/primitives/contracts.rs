@@ -1,11 +1,11 @@
+use crate::primitives::{HttpError, PrimitiveError};
+use crate::transaction::rpc::SponsorUserOperationResponse;
+use alloy::hex::FromHex;
+use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
 use alloy::sol;
-use alloy::primitives::{Address, Bytes, FixedBytes, keccak256, aliases::U48};
 use alloy::sol_types::SolValue;
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
-use crate::primitives::{PrimitiveError, HttpError};
-use crate::transaction::rpc::SponsorUserOperationResponse;
-use alloy::hex::FromHex;
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {

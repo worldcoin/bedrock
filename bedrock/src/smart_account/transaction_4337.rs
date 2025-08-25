@@ -3,14 +3,12 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
+use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::{Network, PrimitiveError};
-use crate::primitives::contracts::{UserOperation, EncodedSafeOpStruct};
 use crate::smart_account::SafeSmartAccountSigner;
 use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
 
-use alloy::{
-    primitives::{aliases::U48, Address, Bytes, FixedBytes},
-};
+use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::{Duration, Utc};
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
@@ -74,7 +72,6 @@ pub trait Is4337Encodable {
         safe_account: &crate::smart_account::SafeSmartAccount,
         self_sponsor_token: Option<Address>,
         metadata: Option<Self::MetadataArg>,
-        _pbh: bool
     ) -> Result<FixedBytes<32>, RpcError> {
         // Get the global RPC client
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
@@ -138,32 +135,6 @@ pub trait Is4337Encodable {
 
         Ok(user_op_hash)
     }
-
-
-    /// Generates a Privacy-Preserving Biometric Hash (PBH) proof for account abstraction transactions.
-    ///
-    /// This function is intended to create cryptographic proofs that verify human uniqueness
-    /// without revealing biometric data, as part of the Person Bound Transactions (PBT) system.
-    ///
-    /// # Returns
-    /// * `Result<Bytes, PrimitiveError>` - The generated PBH proof bytes on success
-    ///
-    /// # Errors
-    /// * Returns `PrimitiveError` if proof generation fails
-    ///
-    /// # Note
-    /// This is currently unimplemented and will return a todo!() error.
-    fn generate_pbh_proof() -> Result<Bytes, PrimitiveError> {
-        todo!("PBH proof generation not yet implemented")
-    }
-    
-    // pub fn hash_user_op(user_op: &PackedUserOperation) -> Field {
-    //     let hash = SolValue::abi_encode_packed(&(&user_op.sender, &user_op.nonce, &user_op.callData));
-
-    //     hash_to_field(hash.as_slice())
-    // }
-
-
 }
 
 #[cfg(test)]

@@ -75,7 +75,7 @@ impl SafeSmartAccount {
 
         // Sign and execute the transaction (uses global RPC client automatically)
         let user_op_hash = transaction
-            .sign_and_execute(network, self, None, None, false)
+            .sign_and_execute(network, self, None, None)
             .await
             .map_err(|e| TransactionError::Generic {
                 message: format!("Failed to execute transaction: {e}"),
