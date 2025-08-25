@@ -38,6 +38,7 @@ impl SafeSmartAccount {
     /// use bedrock::smart_account::SafeSmartAccount;
     /// use bedrock::transaction::TransactionError;
     /// use bedrock::primitives::Network;
+    /// use bedrock::transaction::RpcProviderName;
     ///
     /// # async fn example() -> Result<(), TransactionError> {
     /// // Assume we have a configured SafeSmartAccount
