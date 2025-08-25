@@ -11,12 +11,12 @@ use alloy::{
 use bedrock::{
     primitives::{
         http_client::{
-            set_http_client, AuthenticatedHttpClient, HttpError, HttpMethod,
+            set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
         },
         Network,
     },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::foreign::UnparsedUserOperation,
+    transaction::{foreign::UnparsedUserOperation, RpcProviderName},
 };
 
 use serde::Serialize;
@@ -57,6 +57,7 @@ where
         &self,
         _url: String,
         method: HttpMethod,
+        _headers: Vec<HttpHeader>,
         body: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, HttpError> {
         if method != HttpMethod::Post {
@@ -296,6 +297,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation_non_pbh(
             &recipient.to_string(),
             amount,
             false,
+            RpcProviderName::Alchemy,
         )
         .await
         .expect("transaction_transfer failed");

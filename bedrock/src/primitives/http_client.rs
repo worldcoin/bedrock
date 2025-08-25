@@ -27,6 +27,7 @@ pub trait AuthenticatedHttpClient: Send + Sync {
     /// # Arguments
     /// * `url` - The URL to fetch data from
     /// * `method` - The HTTP method to use for the request
+    /// * `headers` - Additional headers to include in the request
     /// * `body` - Optional request body data for POST requests
     ///
     /// # Returns
@@ -45,6 +46,7 @@ pub trait AuthenticatedHttpClient: Send + Sync {
         &self,
         url: String,
         method: HttpMethod,
+        headers: Vec<HttpHeader>,
         body: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, HttpError>;
 }
@@ -56,6 +58,15 @@ pub enum HttpMethod {
     Get,
     /// HTTP POST method for sending data
     Post,
+}
+
+/// Simple name/value HTTP header pair for passing additional headers
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct HttpHeader {
+    /// Header name
+    pub name: String,
+    /// Header value
+    pub value: String,
 }
 
 /// Represents HTTP-related errors that can occur during network requests.
@@ -205,6 +216,7 @@ mod tests {
             &self,
             _url: String,
             _method: HttpMethod,
+            _headers: Vec<HttpHeader>,
             _body: Option<Vec<u8>>,
         ) -> Result<Vec<u8>, HttpError> {
             Ok(b"mock response".to_vec())

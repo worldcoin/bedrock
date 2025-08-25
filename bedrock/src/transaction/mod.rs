@@ -11,7 +11,7 @@ mod contracts;
 pub mod foreign;
 pub mod rpc;
 
-pub use rpc::{RpcClient, RpcError, SponsorUserOperationResponse};
+pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
@@ -38,6 +38,7 @@ impl SafeSmartAccount {
     /// use bedrock::smart_account::SafeSmartAccount;
     /// use bedrock::transaction::TransactionError;
     /// use bedrock::primitives::Network;
+    /// use bedrock::transaction::RpcProviderName;
     ///
     /// # async fn example() -> Result<(), TransactionError> {
     /// // Assume we have a configured SafeSmartAccount
@@ -49,6 +50,7 @@ impl SafeSmartAccount {
     ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
     ///     "0x1234567890123456789012345678901234567890",
     ///     "1000000", // 1 USDC (6 decimals)
+    ///     RpcProviderName::Alchemy,
     /// ).await?;
     ///
     /// println!("Transaction hash: {}", tx_hash.to_hex_string());
@@ -68,6 +70,7 @@ impl SafeSmartAccount {
         to_address: &str,
         amount: &str,
         pbh: bool,
+        provider: RpcProviderName,
     ) -> Result<HexEncodedData, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
@@ -77,7 +80,7 @@ impl SafeSmartAccount {
 
         // Sign and execute the transaction (uses global RPC client automatically)
         let user_op_hash = transaction
-            .sign_and_execute(network, self, None, None, pbh)
+            .sign_and_execute(network, self, None, None, pbh, provider)
             .await
             .map_err(|e| TransactionError::Generic {
                 message: format!("Failed to execute transaction: {e}"),

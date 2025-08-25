@@ -30,6 +30,15 @@ use world_chain_builder_pbh::external_nullifier::{
 };
 use world_chain_builder_pbh::payload::Proof;
 use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, TREE_DEPTH};
+use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
+use crate::primitives::{Network, PrimitiveError};
+use crate::smart_account::SafeSmartAccountSigner;
+use crate::transaction::rpc::{
+    RpcError, RpcProviderName, SponsorUserOperationResponse,
+};
+
+use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
+use chrono::{Duration, Utc};
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
@@ -115,6 +124,7 @@ pub trait Is4337Encodable {
         self_sponsor_token: Option<Address>,
         metadata: Option<Self::MetadataArg>,
         pbh: bool,
+        provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
         // Get the global RPC client
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
@@ -133,6 +143,7 @@ pub trait Is4337Encodable {
                 &user_operation,
                 *ENTRYPOINT_4337,
                 self_sponsor_token,
+                provider,
             )
             .await?;
 
@@ -184,7 +195,7 @@ pub trait Is4337Encodable {
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337)
+            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
             .await?;
 
         Ok(user_op_hash)

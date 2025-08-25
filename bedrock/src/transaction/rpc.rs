@@ -5,7 +5,7 @@
 //! - Submit signed `UserOperations` via `eth_sendUserOperation`
 
 use crate::{
-    primitives::http_client::get_http_client,
+    primitives::http_client::{get_http_client, HttpHeader},
     primitives::{
         AuthenticatedHttpClient, HttpError, HttpMethod, Network, PrimitiveError,
     },
@@ -39,6 +39,26 @@ pub enum RpcMethod {
     /// Submit a signed `UserOperation`
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
+}
+
+/// 4337 provider selection to be passed by native apps
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RpcProviderName {
+    /// Use Alchemy as 4337 provider
+    Alchemy,
+    /// Use Pimlico as 4337 provider
+    Pimlico,
+}
+
+impl RpcProviderName {
+    /// Returns the wire/header value for the provider
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Alchemy => "alchemy",
+            Self::Pimlico => "pimlico",
+        }
+    }
 }
 
 impl RpcMethod {
@@ -148,16 +168,6 @@ pub struct SponsorUserOperationResponse {
     pub max_fee_per_gas: U128,
 }
 
-/// Parameters for `wa_sponsorUserOperation` request
-#[derive(Debug, Serialize)]
-struct SponsorUserOperationParams<'a>(&'a UserOperation, Address, Option<TokenInfo>);
-
-/// Token information for self-sponsorship
-#[derive(Debug, Serialize)]
-struct TokenInfo {
-    token: Address,
-}
-
 /// RPC client for handling 4337 `UserOperation` requests
 ///
 /// This client communicates with the app-backend's RPC endpoint at `/v1/rpc/{network}`.
@@ -179,12 +189,19 @@ impl RpcClient {
         format!("/v1/rpc/{}", network.network_name())
     }
 
-    /// Makes a generic RPC call with typed parameters and result
+    /// Makes a generic RPC call with typed parameters and result, adding provider header
+    ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `method`: JSON-RPC method to invoke
+    /// - `params`: JSON-RPC params (typed)
+    /// - `provider`: selected 4337 provider to include in headers
     async fn rpc_call<P, R>(
         &self,
         network: Network,
         method: RpcMethod,
         params: P,
+        provider: RpcProviderName,
     ) -> Result<R, RpcError>
     where
         P: Serialize,
@@ -201,12 +218,19 @@ impl RpcClient {
             serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
         // Send the HTTP request
+        let provider_name = provider.as_str();
+        let headers = vec![HttpHeader {
+            name: "provider-name".to_string(),
+            value: provider_name.to_string(),
+        }];
+
         let response_bytes = self
             .http_client
             .as_ref()
             .fetch_from_app_backend(
                 Self::rpc_endpoint(network),
                 HttpMethod::Post,
+                headers,
                 Some(request_body),
             )
             .await?;
@@ -255,14 +279,20 @@ impl RpcClient {
         user_operation: &UserOperation,
         entry_point: Address,
         self_sponsor_token: Option<Address>,
+        provider: RpcProviderName,
     ) -> Result<SponsorUserOperationResponse, RpcError> {
-        let params = SponsorUserOperationParams(
-            user_operation,
-            entry_point,
-            self_sponsor_token.map(|token| TokenInfo { token }),
+        // Build params as a positional array. If no token is provided, omit the 3rd param entirely
+        // so the backend can auto-fill an empty object as needed.
+        let mut params: Vec<serde_json::Value> = Vec::with_capacity(3);
+        params.push(
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
         );
+        params.push(serde_json::Value::String(format!("{entry_point:?}")));
+        if let Some(token) = self_sponsor_token {
+            params.push(serde_json::json!({ "token": format!("{token:?}") }));
+        }
 
-        self.rpc_call(network, RpcMethod::SponsorUserOperation, params)
+        self.rpc_call(network, RpcMethod::SponsorUserOperation, params, provider)
             .await
     }
 
@@ -281,6 +311,7 @@ impl RpcClient {
         network: Network,
         user_operation: &UserOperation,
         entrypoint: Address,
+        provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
@@ -288,7 +319,7 @@ impl RpcClient {
         ];
 
         let result: String = self
-            .rpc_call(network, RpcMethod::SendUserOperation, params)
+            .rpc_call(network, RpcMethod::SendUserOperation, params, provider)
             .await?;
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
