@@ -4,16 +4,8 @@ use bedrock_macros::bedrock_export;
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Encodable, SafeSmartAccount},
-    transaction::contracts::erc20::Erc20,
+    transaction::{contracts::erc20::Erc20, rpc::RpcProviderName},
 };
-/// 4337 provider selection for native callers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ProviderName {
-    /// Use Alchemy as 4337 provider
-    Alchemy,
-    /// Use Pimlico as 4337 provider
-    Pimlico,
-}
 
 mod contracts;
 pub mod foreign;
@@ -74,7 +66,7 @@ impl SafeSmartAccount {
         token_address: &str,
         to_address: &str,
         amount: &str,
-        provider: ProviderName,
+        provider: RpcProviderName,
     ) -> Result<HexEncodedData, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
@@ -84,7 +76,7 @@ impl SafeSmartAccount {
 
         // Sign and execute the transaction (uses global RPC client automatically)
         let user_op_hash = transaction
-            .sign_and_execute(network, self, None, None)
+            .sign_and_execute(network, self, None, None, provider)
             .await
             .map_err(|e| TransactionError::Generic {
                 message: format!("Failed to execute transaction: {e}"),

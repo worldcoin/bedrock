@@ -43,14 +43,14 @@ pub enum RpcMethod {
 
 /// 4337 provider selection to be passed by native apps
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ProviderName {
+pub enum RpcProviderName {
     /// Use Alchemy as 4337 provider
     Alchemy,
     /// Use Pimlico as 4337 provider
     Pimlico,
 }
 
-impl ProviderName {
+impl RpcProviderName {
     /// Returns the wire/header value for the provider
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
@@ -201,7 +201,7 @@ impl RpcClient {
         network: Network,
         method: RpcMethod,
         params: P,
-        provider: ProviderName,
+        provider: RpcProviderName,
     ) -> Result<R, RpcError>
     where
         P: Serialize,
@@ -279,7 +279,7 @@ impl RpcClient {
         user_operation: &UserOperation,
         entry_point: Address,
         self_sponsor_token: Option<Address>,
-        provider: ProviderName,
+        provider: RpcProviderName,
     ) -> Result<SponsorUserOperationResponse, RpcError> {
         // Build params as a positional array. If no token is provided, omit the 3rd param entirely
         // so the backend can auto-fill an empty object as needed.
@@ -311,7 +311,7 @@ impl RpcClient {
         network: Network,
         user_operation: &UserOperation,
         entrypoint: Address,
-        provider: ProviderName,
+        provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
