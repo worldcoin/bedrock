@@ -2,6 +2,7 @@ package bedrock
 
 import uniffi.bedrock.AuthenticatedHttpClient
 import uniffi.bedrock.HttpException
+import uniffi.bedrock.HttpHeader
 import uniffi.bedrock.HttpMethod
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,15 +17,17 @@ class BedrockHttpClientTests {
         private val responses = mutableMapOf<String, Result<ByteArray>>()
         val requestHistory = mutableListOf<String>()
         val methodHistory = mutableListOf<HttpMethod>()
+        val headersHistory = mutableListOf<List<HttpHeader>>()
         val bodyHistory = mutableListOf<ByteArray?>()
         
         fun setResponse(url: String, result: Result<ByteArray>) {
             responses[url] = result
         }
         
-        override suspend fun fetchFromAppBackend(url: String, method: HttpMethod, body: ByteArray?): ByteArray {
+        override suspend fun fetchFromAppBackend(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
             requestHistory.add(url)
             methodHistory.add(method)
+            headersHistory.add(headers)
             bodyHistory.add(body)
             
             val response = responses[url] 
@@ -42,12 +45,13 @@ class BedrockHttpClientTests {
         
         client.setResponse(testUrl, Result.success(testData))
         
-        val result = client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+        val result = client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         
         assertEquals(testData.contentToString(), result.contentToString())
         assertEquals(1, client.requestHistory.size)
         assertEquals(testUrl, client.requestHistory[0])
         assertEquals(HttpMethod.GET, client.methodHistory[0])
+        assertEquals(0, client.headersHistory[0].size)
         assertEquals(null, client.bodyHistory[0])
     }
 
@@ -60,12 +64,16 @@ class BedrockHttpClientTests {
         
         client.setResponse(testUrl, Result.success(testData))
         
-        val result = client.fetchFromAppBackend(testUrl, HttpMethod.POST, requestBody)
+        val customHeaders = listOf(HttpHeader("X-Test", "1"))
+        val result = client.fetchFromAppBackend(testUrl, HttpMethod.POST, customHeaders, requestBody)
         
         assertEquals(testData.contentToString(), result.contentToString())
         assertEquals(1, client.requestHistory.size)
         assertEquals(testUrl, client.requestHistory[0])
         assertEquals(HttpMethod.POST, client.methodHistory[0])
+        assertEquals(1, client.headersHistory[0].size)
+        assertEquals("X-Test", client.headersHistory[0][0].name)
+        assertEquals("1", client.headersHistory[0][0].value)
         assertEquals(requestBody.contentToString(), client.bodyHistory[0]?.contentToString())
     }
     
@@ -74,15 +82,15 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/error"
         
-        val error = HttpException.BadStatusCode("Bad status code 400")
+        val error = HttpException.BadStatusCode(400uL, "oops".encodeToByteArray())
         client.setResponse(testUrl, Result.failure(error))
         
         val exception = assertFailsWith<HttpException.BadStatusCode> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("Bad status code 400", exception.message)
-        assertTrue(exception.message!!.contains("400"))
+        assertEquals(400uL, exception.code)
+        assertEquals("oops", exception.responseBody.decodeToString())
     }
     
     @Test
@@ -90,13 +98,11 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/offline"
         
-        client.setResponse(testUrl, Result.failure(HttpException.NoConnectivity("No internet connectivity")))
+        client.setResponse(testUrl, Result.failure(HttpException.NoConnectivity))
         
-        val exception = assertFailsWith<HttpException.NoConnectivity> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+        assertFailsWith<HttpException.NoConnectivity> {
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
-        
-        assertEquals("No internet connectivity", exception.message)
     }
     
     @Test
@@ -104,14 +110,13 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/slow"
         
-        client.setResponse(testUrl, Result.failure(HttpException.Timeout("Request timed out after 30 seconds")))
+        client.setResponse(testUrl, Result.failure(HttpException.Timeout(30uL)))
         
         val exception = assertFailsWith<HttpException.Timeout> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("Request timed out after 30 seconds", exception.message)
-        assertTrue(exception.message!!.contains("30"))
+        assertEquals(30uL, exception.seconds)
     }
     
     @Test
@@ -119,14 +124,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://nonexistent.example.com/test"
         
-        client.setResponse(testUrl, Result.failure(HttpException.DnsResolutionFailed("DNS resolution failed for nonexistent.example.com")))
+        client.setResponse(testUrl, Result.failure(HttpException.DnsResolutionFailed("nonexistent.example.com")))
         
         val exception = assertFailsWith<HttpException.DnsResolutionFailed> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("DNS resolution failed for nonexistent.example.com", exception.message)
-        assertTrue(exception.message!!.contains("nonexistent.example.com"))
+        assertEquals("nonexistent.example.com", exception.hostname)
+        assertTrue(exception.hostname.contains("nonexistent.example.com"))
     }
     
     @Test
@@ -134,14 +139,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/ssl-error"
         
-        client.setResponse(testUrl, Result.failure(HttpException.SslException("SSL certificate validation failed: Certificate validation failed")))
+        client.setResponse(testUrl, Result.failure(HttpException.SslError("Certificate validation failed")))
         
-        val exception = assertFailsWith<HttpException.SslException> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+        val exception = assertFailsWith<HttpException.SslError> {
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("SSL certificate validation failed: Certificate validation failed", exception.message)
-        assertTrue(exception.message!!.contains("Certificate validation failed"))
+        assertEquals("Certificate validation failed", exception.reason)
+        assertTrue(exception.reason.contains("Certificate validation failed"))
     }
     
     @Test
@@ -149,13 +154,11 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/cancelled"
         
-        client.setResponse(testUrl, Result.failure(HttpException.Cancelled("Request was cancelled")))
+        client.setResponse(testUrl, Result.failure(HttpException.Cancelled))
         
-        val exception = assertFailsWith<HttpException.Cancelled> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+        assertFailsWith<HttpException.Cancelled> {
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
-        
-        assertEquals("Request was cancelled", exception.message)
     }
     
     @Test
@@ -163,14 +166,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/refused"
         
-        client.setResponse(testUrl, Result.failure(HttpException.ConnectionRefused("Connection refused by api.example.com")))
+        client.setResponse(testUrl, Result.failure(HttpException.ConnectionRefused("api.example.com")))
         
         val exception = assertFailsWith<HttpException.ConnectionRefused> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("Connection refused by api.example.com", exception.message)
-        assertTrue(exception.message!!.contains("api.example.com"))
+        assertEquals("api.example.com", exception.host)
+        assertTrue(exception.host.contains("api.example.com"))
     }
     
     @Test
@@ -178,14 +181,14 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/generic-error"
         
-        client.setResponse(testUrl, Result.failure(HttpException.Generic("Generic error: Unexpected error occurred")))
+        client.setResponse(testUrl, Result.failure(HttpException.Generic("Unexpected error occurred")))
         
         val exception = assertFailsWith<HttpException.Generic> {
-            client.fetchFromAppBackend(testUrl, HttpMethod.GET, null)
+            client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
         
-        assertEquals("Generic error: Unexpected error occurred", exception.message)
-        assertTrue(exception.message!!.contains("Unexpected error occurred"))
+        assertEquals("Unexpected error occurred", exception.message)
+        assertTrue(exception.message.contains("Unexpected error occurred"))
     }
     
     @Test
@@ -203,7 +206,7 @@ class BedrockHttpClientTests {
         }
         
         urls.forEachIndexed { index, url ->
-            val result = client.fetchFromAppBackend(url, HttpMethod.GET, null)
+            val result = client.fetchFromAppBackend(url, HttpMethod.GET, emptyList(), null)
             val expectedData = "Response ${index + 1}".toByteArray()
             assertEquals(expectedData.contentToString(), result.contentToString())
         }
@@ -212,6 +215,7 @@ class BedrockHttpClientTests {
         assertEquals(urls, client.requestHistory)
         // Verify all requests were GET with no body
         assertEquals(listOf(HttpMethod.GET, HttpMethod.GET, HttpMethod.GET), client.methodHistory)
+        assertEquals(listOf(0, 0, 0), client.headersHistory.map { it.size })
         assertEquals(arrayOf<ByteArray?>(null, null, null).toList(), client.bodyHistory)
     }
 } 
