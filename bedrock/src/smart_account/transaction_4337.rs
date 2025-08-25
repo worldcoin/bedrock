@@ -111,26 +111,6 @@ pub trait Is4337Encodable {
         let mut user_operation =
             self.as_preflight_user_operation(safe_account.wallet_address, metadata)?;
 
-        // Inject validity timestamps into the preflight signature so sponsorship evaluates a realistic op
-        // validAfter = 0 (immediately valid)
-        let preflight_valid_after_bytes: [u8; 6] = [0u8; 6];
-        // validUntil = now + configured duration
-        let preflight_valid_until_seconds = (Utc::now()
-            + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS))
-        .timestamp();
-        let preflight_valid_until_seconds: u64 =
-            preflight_valid_until_seconds.try_into().unwrap_or(0);
-        let preflight_valid_until_bytes_full =
-            preflight_valid_until_seconds.to_be_bytes();
-        let preflight_valid_until_bytes: &[u8] =
-            &preflight_valid_until_bytes_full[2..8];
-        // Compose dummy ECDSA part (65 bytes of 0xff) but keep real validity prefix (12 bytes)
-        let mut preflight_signature = Vec::with_capacity(77);
-        preflight_signature.extend_from_slice(&preflight_valid_after_bytes);
-        preflight_signature.extend_from_slice(preflight_valid_until_bytes);
-        preflight_signature.extend([0xff; 65]);
-        user_operation.signature = preflight_signature.into();
-
         // 2. Request sponsorship
         let sponsor_response = rpc_client
             .sponsor_user_operation(
