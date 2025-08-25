@@ -148,16 +148,6 @@ pub struct SponsorUserOperationResponse {
     pub max_fee_per_gas: U128,
 }
 
-/// Parameters for `wa_sponsorUserOperation` request
-#[derive(Debug, Serialize)]
-struct SponsorUserOperationParams<'a>(&'a UserOperation, Address, Option<TokenInfo>);
-
-/// Token information for self-sponsorship
-#[derive(Debug, Serialize)]
-struct TokenInfo {
-    token: Address,
-}
-
 /// RPC client for handling 4337 `UserOperation` requests
 ///
 /// This client communicates with the app-backend's RPC endpoint at `/v1/rpc/{network}`.
@@ -263,11 +253,16 @@ impl RpcClient {
         entry_point: Address,
         self_sponsor_token: Option<Address>,
     ) -> Result<SponsorUserOperationResponse, RpcError> {
-        let params = SponsorUserOperationParams(
-            user_operation,
-            entry_point,
-            self_sponsor_token.map(|token| TokenInfo { token }),
+        // Build params as a positional array. If no token is provided, omit the 3rd param entirely
+        // so the backend can auto-fill an empty object as needed.
+        let mut params: Vec<serde_json::Value> = Vec::with_capacity(3);
+        params.push(
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
         );
+        params.push(serde_json::Value::String(format!("{entry_point:?}")));
+        if let Some(token) = self_sponsor_token {
+            params.push(serde_json::json!({ "token": format!("{token:?}") }));
+        }
 
         self.rpc_call(network, RpcMethod::SponsorUserOperation, params)
             .await
