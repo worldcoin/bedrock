@@ -3,34 +3,10 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::contracts::IPBHEntryPoint::PBHPayload;
 use crate::primitives::contracts::{
-    EncodedSafeOpStruct, IEntryPoint::PackedUserOperation, UserOperation,
+    EncodedSafeOpStruct, IEntryPoint::PackedUserOperation, IPBHEntryPoint::PBHPayload,
+    UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
 };
-use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{RpcError, SponsorUserOperationResponse};
-
-use reqwest::Client;
-use ruint::{aliases::U256, uint};
-use semaphore_rs::identity::Identity;
-use semaphore_rs::poseidon_tree::LazyPoseidonTree;
-use semaphore_rs::{hash_to_field, Field};
-
-use alloy::primitives::fixed_bytes;
-use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
-use alloy::sol_types::SolValue;
-use chrono::{Duration, Utc};
-use eyre;
-
-use futures::{stream, StreamExt, TryStreamExt};
-use serde::{Deserialize, Serialize};
-use world_chain_builder_pbh::external_nullifier::{
-    EncodedExternalNullifier, ExternalNullifier,
-};
-use world_chain_builder_pbh::payload::Proof;
-use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, TREE_DEPTH};
-use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
 use crate::transaction::rpc::{
@@ -38,9 +14,18 @@ use crate::transaction::rpc::{
 };
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
+use alloy::sol_types::SolValue;
 use chrono::{Duration, Utc};
-
-use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
+use eyre;
+use futures::future;
+use reqwest::Client;
+use semaphore_rs::identity::Identity;
+use semaphore_rs::{hash_to_field, Field};
+use serde::{Deserialize, Serialize};
+use world_chain_builder_pbh::external_nullifier::{
+    EncodedExternalNullifier, ExternalNullifier,
+};
+use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, Proof};
 
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
