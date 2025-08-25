@@ -5,7 +5,7 @@
 //! - Submit signed `UserOperations` via `eth_sendUserOperation`
 
 use crate::{
-    primitives::http_client::get_http_client,
+    primitives::http_client::{get_http_client, HttpHeader},
     primitives::{
         AuthenticatedHttpClient, HttpError, HttpMethod, Network, PrimitiveError,
     },
@@ -201,12 +201,20 @@ impl RpcClient {
             serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
         // Send the HTTP request
+        // Build additional headers Bedrock wants to send via the app's HTTP client
+        let provider_name = "alchemy";
+        let headers = vec![HttpHeader {
+            name: "provider-name".to_string(),
+            value: provider_name.to_string(),
+        }];
+
         let response_bytes = self
             .http_client
             .as_ref()
             .fetch_from_app_backend(
                 Self::rpc_endpoint(network),
                 HttpMethod::Post,
+                headers,
                 Some(request_body),
             )
             .await?;
