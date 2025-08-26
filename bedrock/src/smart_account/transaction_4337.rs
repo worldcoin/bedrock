@@ -6,9 +6,7 @@
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
-use crate::transaction::rpc::{
-    RpcError, RpcProviderName, SponsorUserOperationResponse,
-};
+use crate::transaction::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::{Duration, Utc};
@@ -144,7 +142,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        smart_account::SafeSmartAccount, transaction::foreign::UnparsedUserOperation,
+        smart_account::SafeSmartAccount,
+        transaction::{foreign::UnparsedUserOperation, SponsorUserOperationResponse},
     };
 
     #[test]
