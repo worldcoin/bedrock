@@ -4,7 +4,7 @@ use bedrock_macros::bedrock_export;
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Encodable, SafeSmartAccount},
-    transaction::contracts::erc20::Erc20,
+    transaction::contracts::{erc20::Erc20, safe_owner::SafeOwner},
 };
 
 mod contracts;
@@ -62,7 +62,7 @@ impl SafeSmartAccount {
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if the transaction submission fails.
     /// - Will throw an error if the global HTTP client has not been initialized.
-    pub async fn transaction_transfer(
+    pub async fn tx_transfer(
         &self,
         network: Network,
         token_address: &str,
@@ -81,7 +81,49 @@ impl SafeSmartAccount {
             .sign_and_execute(network, self, None, None, provider)
             .await
             .map_err(|e| TransactionError::Generic {
-                message: format!("Failed to execute transaction: {e}"),
+                message: format!("Failed to execute ERC-20 transfer: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Allows swapping the owner of a Safe Smart Account.
+    ///
+    /// This is used to allow key rotation. The EOA signer that can act on behalf of the Safe is rotated.
+    ///
+    /// # Arguments
+    /// - `old_owner`: The EOA of the old owner (address).
+    /// - `new_owner`: The EOA of the new owner (address).
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    /// - Will throw an RPC error if the transaction submission fails.
+    pub async fn tx_swap_safe_owner(
+        &self,
+        old_owner: &str,
+        new_owner: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let old_owner = Address::parse_from_ffi(old_owner, "old_owner")?;
+        let new_owner = Address::parse_from_ffi(new_owner, "new_owner")?;
+
+        // TODO: RPC call to check if the old owner is the current owner.
+
+        // TODO: Check if we derive new_owner through key derivation directly in Bedrock.
+
+        let transaction = SafeOwner::new(self.wallet_address, old_owner, new_owner);
+
+        // TODO: Check if rotation on Optimism is also necessary.
+        let user_op_hash = transaction
+            .sign_and_execute(
+                Network::WorldChain,
+                self,
+                None,
+                None,
+                RpcProviderName::Alchemy,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                message: format!("Failed to execute swapOwner: {e}"),
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)

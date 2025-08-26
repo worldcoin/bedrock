@@ -2,3 +2,5 @@
 //! that power the common transactions for the crypto wallet.
 
 pub mod erc20;
+
+pub mod safe_owner;

@@ -291,7 +291,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
     let amount = "1000000000000000000"; // 1 WLD
     let _user_op_hash = safe_account
-        .transaction_transfer(
+        .tx_transfer(
             Network::WorldChain,
             &wld_token_address.to_string(),
             &recipient.to_string(),
