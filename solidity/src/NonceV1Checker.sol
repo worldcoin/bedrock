@@ -36,8 +36,12 @@ contract NonceV1Checker {
         return bytes7(uint56((nonce >> 64) & ((uint256(1) << 56) - 1)));
     }
 
+    function decodeKey(uint256 nonce) public pure returns (uint192) {
+        return uint192(nonce >> 64);
+    }
+
     function decodeSequence(uint256 nonce) public pure returns (uint64) {
-        return uint64(nonce & ((uint256(1) << 64) - 1));
+        return uint64(nonce);
     }
 
     function decodeAll(
@@ -51,18 +55,22 @@ contract NonceV1Checker {
             uint8 instruction,
             bytes10 metadata,
             bytes7 randomTail,
+            uint192 key,
             uint64 sequence
         )
     {
         magic = decodeMagic(nonce);
 
-        if (magic != BEDROCK_NONCE_PREFIX_CONST && magic != PBH_NONCE_PREFIX_CONST)
-            revert InvalidNoncePrefix();
+        if (
+            magic != BEDROCK_NONCE_PREFIX_CONST &&
+            magic != PBH_NONCE_PREFIX_CONST
+        ) revert InvalidNoncePrefix();
 
         typeId = decodeTypeId(nonce);
         instruction = decodeInstruction(nonce);
         metadata = decodeMetadata(nonce);
         randomTail = decodeRandomTail(nonce);
+        key = decodeKey(nonce);
         sequence = decodeSequence(nonce);
     }
 }

@@ -20,7 +20,7 @@ use foundry::ForgeCreate;
 sol!(
     #[sol(rpc)]
     contract NonceV1Checker {
-        function decodeAll(uint256 nonce) external pure returns (bytes5 magic, uint8 typeId, uint8 instruction, bytes10 metadata, bytes7 randomTail, uint64 sequence);
+        function decodeAll(uint256 nonce) external pure returns (bytes5 magic, uint8 typeId, uint8 instruction, bytes10 metadata, bytes7 randomTail, uint192 key, uint64 sequence);
     }
 );
 
@@ -75,6 +75,15 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
     assert_eq!(res.randomTail.0, random_tail);
     // sequence must be zero
     assert_eq!(res.sequence, 0);
+
+    // key
+    let mut key_bytes = [0u8; 24];
+    key_bytes[0..=4].copy_from_slice(BEDROCK_NONCE_PREFIX_CONST);
+    key_bytes[5] = 1u8;
+    key_bytes[6] = 0u8;
+    key_bytes[7..=16].copy_from_slice(&metadata);
+    key_bytes[17..=23].copy_from_slice(&random_tail);
+    assert_eq!(res.key.to_be_bytes::<24>(), key_bytes);
 
     Ok(())
 }
