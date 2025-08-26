@@ -40,6 +40,11 @@ contract NonceV1Checker {
         return uint192(nonce >> 64);
     }
 
+    /// @notice Decode the sequence from the nonce.
+    /// @param nonce The nonce to decode.
+    /// @return The sequence.
+    /// This follows the same pattern as the NonceManager in the EntryPoint contract.
+    /// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/NonceManager.sol>
     function decodeSequence(uint256 nonce) public pure returns (uint64) {
         return uint64(nonce);
     }

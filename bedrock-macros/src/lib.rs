@@ -1,4 +1,5 @@
 #![deny(clippy::all, clippy::nursery)]
+// TODO: pedantic after we decide whether `bedrock_sol` is stable and will remain
 
 use proc_macro::TokenStream;
 use quote::quote;
