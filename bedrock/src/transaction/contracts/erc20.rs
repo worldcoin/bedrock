@@ -42,7 +42,7 @@ impl Erc20 {
     }
 }
 
-/// Second byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
+/// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
 /// NOTE: Ordering should never change, only new values should be added
 #[derive(Debug, uniffi::Enum)]
 #[repr(u8)]
