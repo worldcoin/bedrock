@@ -176,7 +176,7 @@ mod tests {
 
         // Check metadata
         assert_eq!(be[7], TransferAssociation::XmtpMessage as u8);
-        assert_eq!(&be[8..=15], &[0u8; 8]);
+        assert_eq!(&be[8..=16], &[0u8; 9]);
 
         // sequence must be zero
         assert_eq!(&be[24..32], &[0u8; 8]);
