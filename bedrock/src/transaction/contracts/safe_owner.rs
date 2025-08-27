@@ -4,7 +4,7 @@
 //! is done via the `SafeSmartAccount` module.
 
 use alloy::{
-    primitives::{address, Address, Bytes, U256},
+    primitives::{address, Address, Bytes},
     sol,
     sol_types::SolCall,
 };
@@ -12,8 +12,7 @@ use alloy::{
 use crate::{
     primitives::PrimitiveError,
     smart_account::{
-        ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
-        TransactionTypeId, UserOperation,
+        InstructionFlag, Is4337Encodable, NonceKeyV1, TransactionTypeId, UserOperation,
     },
 };
 
@@ -59,16 +58,12 @@ impl SafeOwner {
 impl Is4337Encodable for SafeOwner {
     type MetadataArg = ();
 
-    // TODO: Make this the default in Is4337Encodable trait, it's a sensible default.
-    fn as_execute_user_op_call_data(&self) -> Bytes {
-        ISafe4337Module::executeUserOpCall {
-            to: self.wallet_address,
-            value: U256::ZERO,
-            data: self.call_data.clone().into(),
-            operation: SafeOperation::Call as u8,
-        }
-        .abi_encode()
-        .into()
+    fn target_address(&self) -> Address {
+        self.wallet_address
+    }
+
+    fn call_data(&self) -> Bytes {
+        self.call_data.clone().into()
     }
 
     fn as_preflight_user_operation(

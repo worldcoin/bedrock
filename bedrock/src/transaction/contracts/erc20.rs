@@ -8,8 +8,7 @@ use alloy::{
 
 use crate::primitives::PrimitiveError;
 use crate::smart_account::{
-    ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
-    TransactionTypeId, UserOperation,
+    InstructionFlag, Is4337Encodable, NonceKeyV1, TransactionTypeId, UserOperation,
 };
 
 sol! {
@@ -87,16 +86,12 @@ pub struct MetadataArg {
 impl Is4337Encodable for Erc20 {
     type MetadataArg = MetadataArg;
 
-    fn as_execute_user_op_call_data(&self) -> Bytes {
-        ISafe4337Module::executeUserOpCall {
-            // The token address
-            to: self.token_address,
-            value: U256::ZERO,
-            data: self.call_data.clone().into(),
-            operation: SafeOperation::Call as u8,
-        }
-        .abi_encode()
-        .into()
+    fn target_address(&self) -> Address {
+        self.token_address
+    }
+
+    fn call_data(&self) -> Bytes {
+        self.call_data.clone().into()
     }
 
     fn as_preflight_user_operation(

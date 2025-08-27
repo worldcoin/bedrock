@@ -3,14 +3,15 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
+use crate::primitives::contracts::{
+    EncodedSafeOpStruct, ISafe4337Module, UserOperation,
+};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{
-    RpcError, RpcProviderName, SponsorUserOperationResponse,
-};
+use crate::transaction::rpc::{RpcError, RpcProviderName};
 
-use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
+use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes, U256};
+use alloy::sol_types::SolCall;
 use chrono::{Duration, Utc};
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
@@ -27,11 +28,29 @@ pub trait Is4337Encodable {
     /// constructing a preflight `UserOperation`.
     type MetadataArg;
 
+    /// Returns the target address to which the inner transaction will be executed against.
+    /// For example, for a token transfer, the transfer operation is executed against the token contract address.
+    fn target_address(&self) -> Address;
+
+    /// Returns the call data for the transaction.
+    fn call_data(&self) -> Bytes;
+
     /// Converts the object into a `callData` for the `executeUserOp` method. This is the inner-most `calldata`.
+    ///
+    /// This is a sensible default implementation that should work for most use cases.
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn as_execute_user_op_call_data(&self) -> Bytes;
+    fn as_execute_user_op_call_data(&self) -> Bytes {
+        ISafe4337Module::executeUserOpCall {
+            to: self.target_address(),
+            value: U256::ZERO,
+            data: self.call_data(),
+            operation: 0, // SafeOperation::Call as u8
+        }
+        .abi_encode()
+        .into()
+    }
 
     /// Converts the object into a preflight `UserOperation` for use with the `Safe4337Module`.
     ///
@@ -150,6 +169,7 @@ mod tests {
     use super::*;
     use crate::{
         smart_account::SafeSmartAccount, transaction::foreign::UnparsedUserOperation,
+        transaction::rpc::SponsorUserOperationResponse,
     };
 
     #[test]
