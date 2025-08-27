@@ -4,13 +4,14 @@ use bedrock_macros::bedrock_export;
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Encodable, SafeSmartAccount},
-    transaction::contracts::{erc20::Erc20, safe_owner::SafeOwner},
+    transaction::contracts::erc20::Erc20,
 };
 
 mod contracts;
 pub mod foreign;
 pub mod rpc;
 
+pub use contracts::safe_owner::SafeOwner;
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
 /// Errors that can occur when interacting with transaction operations.
@@ -110,7 +111,7 @@ impl SafeSmartAccount {
 
         // TODO: Check if we derive new_owner through key derivation directly in Bedrock.
 
-        let transaction = SafeOwner::new(self.wallet_address, old_owner, new_owner);
+        let transaction = crate::transaction::SafeOwner::new(self.wallet_address, old_owner, new_owner);
 
         // TODO: Check if rotation on Optimism is also necessary.
         let user_op_hash = transaction

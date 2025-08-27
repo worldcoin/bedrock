@@ -30,6 +30,7 @@ sol! {
     }
 }
 
+/// Represents a Safe owner swap transaction for key rotation.
 pub struct SafeOwner {
     /// The inner call data for the ERC-20 `transferCall` function.
     call_data: Vec<u8>,
@@ -38,6 +39,13 @@ pub struct SafeOwner {
 }
 
 impl SafeOwner {
+    /// Creates a new `SafeOwner` transaction for swapping Safe owners.
+    ///
+    /// # Arguments
+    /// - `wallet_address`: The address of the Safe Smart Account
+    /// - `old_owner`: The current owner to be replaced
+    /// - `new_owner`: The new owner to replace the old owner
+    #[must_use]
     pub fn new(
         wallet_address: Address,
         old_owner: Address,
