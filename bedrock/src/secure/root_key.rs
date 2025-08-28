@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::{OxideError, OxideResult, PersonalCustodyKeypair};
 use alloy::signers::local::LocalSigner;
+use bedrock_macros::bedrock_error;
 use dryoc::kdf::Kdf;
 use k256::ecdsa::SigningKey;
 use rand::{rngs::OsRng, RngCore};
@@ -70,24 +70,32 @@ where
     Ok(key)
 }
 
+#[bedrock_error]
+pub enum SecureError {
+    #[error("Failed to derive subkey from RootKey.")]
+    DeriveKeyError,
+    #[error("Failed to parse RootKey.")]
+    KeyParseError,
+}
+
 /// Derives a subkey from the given key and subkey id using KDF.
-fn derive_subkey(key: &Key, subkey_id: u64) -> OxideResult<Key> {
+fn derive_subkey(key: &Key, subkey_id: u64) -> Result<Key, SecureError> {
     let key = Kdf::from_parts(*key, CONTEXT);
     let subkey = key
         .derive_subkey_to_vec(subkey_id)
-        .map_err(|_| OxideError::DeriveKeyError)?;
+        .map_err(|_| SecureError::DeriveKeyError)?;
     let mut result_key = [0u8; KEY_LENGTH];
     result_key.copy_from_slice(&subkey);
     Ok(result_key)
 }
 
-fn derive_key_v0(encoded_key: String) -> OxideResult<Key> {
+fn derive_key_v0(encoded_key: String) -> Result<Key, SecureError> {
     let mut hasher = Sha256::new();
     hasher.update(encoded_key);
     let key_bytes = hasher.finalize().to_vec();
 
     if key_bytes.len() != KEY_LENGTH {
-        return Err(OxideError::KeyParseError);
+        return Err(SecureError::KeyParseError);
     }
 
     let mut key = [0u8; KEY_LENGTH];
@@ -106,27 +114,27 @@ impl RootKey {
     /// # TODO
     /// Remove the Result and Arc wrapping (API breaking change)
     #[uniffi::constructor]
-    pub fn new() -> OxideResult<Arc<Self>> {
+    pub fn new() -> Result<Self, SecureError> {
         let mut buf = [0u8; KEY_LENGTH];
         OsRng
             .try_fill_bytes(&mut buf)
             .expect("Fatal CSPRNG error: unable to initialize new RootKey");
-        Ok(Arc::new(Self {
+        Ok(Self {
             key: VersionedKey::V1(buf),
-        }))
+        })
     }
 
     /// Decodes the key from serialized format.
     #[uniffi::constructor]
-    pub fn decode(encoded_key: String) -> OxideResult<Arc<Self>> {
+    pub fn decode(encoded_key: String) -> Result<Self, SecureError> {
         let key = serde_json::from_str::<Self>(&encoded_key)
-            .map_err(|_| OxideError::KeyParseError);
+            .map_err(|_| SecureError::KeyParseError);
 
         match key {
-            Ok(key) => Ok(Arc::new(key)),
-            Err(_) => Ok(Arc::new(Self {
+            Ok(key) => Ok(key),
+            Err(_) => Ok(Self {
                 key: VersionedKey::V0(encoded_key),
-            })),
+            }),
         }
     }
 
@@ -141,15 +149,17 @@ impl RootKey {
     /// When recovery is happening, we know the key is in JSON format, so we can use this function
     /// to decode it at the recovery time.
     #[uniffi::constructor]
-    pub fn decode_from_json_enforced(encoded_key: String) -> OxideResult<Arc<Self>> {
+    pub fn decode_from_json_enforced(encoded_key: String) -> Result<Self, SecureError> {
         let key = serde_json::from_str::<Self>(&encoded_key)
-            .map_err(|_| OxideError::KeyParseError)?;
+            .map_err(|_| SecureError::KeyParseError)?;
         Ok(Arc::new(key))
     }
 
     /// Encodes the key as JSON.
-    pub fn encode(&self) -> OxideResult<String> {
-        serde_json::to_string(self).map_err(|_| OxideError::SerializationError)
+    pub fn encode(&self) -> Result<String, SecureError> {
+        serde_json::to_string(self).map_err(|_| SecureError::Generic {
+            message: "unable to encode RootKey as JSON".to_string(),
+        })
     }
 
     /// Returns true if the key is in the legacy format and don't used indexed derivation.
@@ -158,7 +168,7 @@ impl RootKey {
     }
 
     /// Returns the Ethereum key as hex (without leading 0x).
-    pub fn ethereum_key(&self) -> OxideResult<String> {
+    pub fn ethereum_key(&self) -> Result<String, SecureError> {
         // In the old version, the key was used directly.
         Ok(match &self.key {
             VersionedKey::V0(str) => hex::encode(derive_key_v0(str.clone())?),
@@ -166,7 +176,7 @@ impl RootKey {
         })
     }
 
-    pub fn ethereum_key_with_index(&self, index: u64) -> OxideResult<String> {
+    pub fn ethereum_key_with_index(&self, index: u64) -> Result<String, SecureError> {
         Ok(match &self.key {
             VersionedKey::V0(str) => {
                 if index == 0 {
@@ -182,7 +192,7 @@ impl RootKey {
                     let key_bytes = hasher.finalize().to_vec();
 
                     if key_bytes.len() != KEY_LENGTH {
-                        return Err(OxideError::KeyParseError);
+                        return Err(SecureError::KeyParseError);
                     }
 
                     let mut result_key = [0u8; KEY_LENGTH];
@@ -206,7 +216,7 @@ impl RootKey {
     }
 
     /// Returns the World ID key as hex (without leading 0x).
-    pub fn worldid_key(&self) -> OxideResult<String> {
+    pub fn worldid_key(&self) -> Result<String, SecureError> {
         // In the old version, the key was used directly.
         // Notes:
         //   (1) The key is used in semaphore-rs, which itself derives a separate key from it through sha256.
@@ -219,7 +229,9 @@ impl RootKey {
     }
 
     /// Returns the Orb encryption key, used to encrypt the Personal Custody Package.
-    pub fn orb_encryption_key(&self) -> OxideResult<Arc<PersonalCustodyKeypair>> {
+    pub fn orb_encryption_key(
+        &self,
+    ) -> Result<Arc<PersonalCustodyKeypair>, SecureError> {
         let key = match &self.key {
             VersionedKey::V0(key_str) => derive_key_v0(key_str.clone())?,
             VersionedKey::V1(key) => *key,
@@ -231,7 +243,9 @@ impl RootKey {
 
     /// Returns the encryption key for Personal Custody Package for documents, starting with
     /// the passport.
-    pub fn document_encryption_key(&self) -> OxideResult<Arc<PersonalCustodyKeypair>> {
+    pub fn document_encryption_key(
+        &self,
+    ) -> Result<Arc<PersonalCustodyKeypair>, SecureError> {
         let key = match &self.key {
             VersionedKey::V0(key_str) => derive_key_v0(key_str.clone())?,
             VersionedKey::V1(key) => *key,
@@ -242,7 +256,7 @@ impl RootKey {
     }
 
     /// Returns the encryption key for World Chat backup.
-    pub fn world_chat_backup_key(&self) -> OxideResult<String> {
+    pub fn world_chat_backup_key(&self) -> Result<String, SecureError> {
         let key = match &self.key {
             VersionedKey::V0(key_str) => derive_key_v0(key_str.clone())?,
             VersionedKey::V1(key) => *key,
@@ -252,7 +266,7 @@ impl RootKey {
         Ok(hex::encode(subkey))
     }
 
-    pub fn marble_seed(&self) -> OxideResult<String> {
+    pub fn marble_seed(&self) -> Result<String, SecureError> {
         Ok(match &self.key {
             VersionedKey::V0(str) => {
                 let mut hasher = Sha256::new();
@@ -282,7 +296,10 @@ impl RootKey {
     /// representation for the counter input.
     ///
     /// **Note:** The push id itself is not a secret it's used to identify the user across devices for notifications,
-    pub fn world_chat_push_id_public(&self, counter: u64) -> OxideResult<String> {
+    pub fn world_chat_push_id_public(
+        &self,
+        counter: u64,
+    ) -> Result<String, SecureError> {
         let key = match &self.key {
             VersionedKey::V0(key_str) => derive_key_v0(key_str.clone())?,
             VersionedKey::V1(key) => *key,
@@ -306,7 +323,7 @@ impl RootKey {
     ///
     /// # Errors
     /// Will return an error if parsing the key fails or the key is not valid for the `secp256k1` curve.
-    pub fn as_signer(&self) -> OxideResult<LocalSigner<SigningKey>> {
+    pub fn as_signer(&self) -> Result<LocalSigner<SigningKey>, SecureError> {
         self.try_into()
     }
 }
@@ -319,12 +336,12 @@ impl RootKey {
 /// Will return an error if hex decoding fails or the key is not valid for the `secp256k1` curve.
 pub fn ethereum_key_to_signer(
     ethereum_key: &str,
-) -> OxideResult<LocalSigner<SigningKey>> {
+) -> Result<LocalSigner<SigningKey>, SecureError> {
     Ok(LocalSigner::from_slice(&hex::decode(ethereum_key)?)?)
 }
 
 impl TryFrom<&RootKey> for LocalSigner<SigningKey> {
-    type Error = OxideError;
+    type Error = SecureError;
 
     /// Parses the `RootKey` into an Ethereum wallet `LocalSigner<SigningKey>` for use with `alloy`.
     ///
