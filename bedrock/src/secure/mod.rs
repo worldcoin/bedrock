@@ -224,6 +224,7 @@ impl RootKey {
         })
     }
 
+    // FIXME: Not yet implemented
     // /// Returns the Orb encryption key, used to encrypt the Personal Custody Package.
     // pub fn orb_encryption_key(
     //     &self,
