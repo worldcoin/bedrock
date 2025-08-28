@@ -61,15 +61,16 @@ sol! {
     /// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol>
     interface IEntryPoint {
         #[derive(Default, serde::Serialize, serde::Deserialize, Debug)]
+        #[sol(rename_all = "camelCase")]
         struct PackedUserOperation {
             address sender;
             uint256 nonce;
-            bytes initCode;
-            bytes callData;
-            bytes32 accountGasLimits;
-            uint256 preVerificationGas;
-            bytes32 gasFees;
-            bytes paymasterAndData;
+            bytes init_code;
+            bytes call_data;
+            bytes32 account_gas_limits;
+            uint256 pre_verification_gas;
+            bytes32 gas_fees;
+            bytes paymaster_and_data;
             bytes signature;
         }
 
@@ -94,6 +95,7 @@ sol! {
         }
     }
 
+    // FIXME: Currently PBHEntryPoint is not in use. Depending on how it ends up being used, some of these functions might not be needed (e.g. `PackedUserOperation`).
     /// `PBHEntryPoint` contract. An entry point contract that supports Priority Blockspace for Humans (PBH) transactions.
     ///
     /// Reference: <https://github.com/worldcoin/world-chain/blob/646bb294dac87bd993be9a218cc357ab1b4a8f6d/contracts/src/interfaces/IPBHEntryPoint.sol>

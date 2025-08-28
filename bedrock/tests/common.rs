@@ -118,6 +118,7 @@ pub const SAFE_4337_MODULE_ADDRESS: Address =
 pub const SAFE_MODULE_SETUP_ADDRESS: Address =
     address!("2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47");
 
+#[allow(dead_code)] // this is used across integration tests
 pub fn setup_anvil() -> AnvilInstance {
     dotenvy::dotenv().ok();
     let rpc_url = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
@@ -128,6 +129,7 @@ pub fn setup_anvil() -> AnvilInstance {
     alloy::node_bindings::Anvil::new().fork(rpc_url).spawn()
 }
 
+#[allow(dead_code)] // this is used across integration tests
 pub async fn deploy_safe<P>(
     provider: &P,
     owner: Address,
