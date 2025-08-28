@@ -9,9 +9,9 @@ const CONTEXT: [u8; 8] = *b"OXIDEKEY";
 const ETHEREUM_KEY_ID: u64 = 0x00;
 const ROTATED_ETHEREUM_KEY_ID: u64 = 0x01;
 const WORLDID_KEY_ID: u64 = 0x10;
-const ORB_ENCRYPTION_KEY_ID: u64 = 0x20;
+//const ORB_ENCRYPTION_KEY_ID: u64 = 0x20;
 const MARBLE_SEED_KEY_ID: u64 = 0x30;
-const DOCUMENT_PCP_KEY_ID: u64 = 0x40;
+//const DOCUMENT_PCP_KEY_ID: u64 = 0x40;
 const WORLDCHAT_BACKUP_KEY_ID: u64 = 0x50;
 const WORLD_CHAT_PUSH_ID_KEY_ID: u64 = 0x60;
 const KEY_LENGTH: usize = 32;
@@ -31,6 +31,7 @@ enum VersionedKey {
     V1(Key),
 }
 
+/// The `RootKey` is a 256-bit secret from which other keys are derived for use throughout World App.
 #[derive(uniffi::Object, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RootKey {
     #[serde(flatten)]
@@ -55,8 +56,7 @@ where
 
     if decoded_key.len() != KEY_LENGTH {
         return Err(serde::de::Error::custom(format!(
-            "Key length must be {} bytes",
-            KEY_LENGTH
+            "Key length must be {KEY_LENGTH} bytes",
         )));
     }
 
@@ -66,10 +66,13 @@ where
     Ok(key)
 }
 
+/// Errors that can occur when working with the `RootKey`.
 #[bedrock_error]
 pub enum SecureError {
+    /// An unexpected error occurred while deriving a subkey from the `RootKey`. This should never happen in production.
     #[error("Failed to derive subkey from RootKey.")]
     DeriveKeyError,
+    /// The provided input is likely not an actual `RootKey`. It is malformed or not the right format.
     #[error("Failed to parse RootKey.")]
     KeyParseError,
 }
@@ -106,31 +109,31 @@ impl RootKey {
     ///
     /// # Panics
     /// Will panic if there is an error with the CSPRNG. This terminates the app.
-    ///
-    /// # TODO
-    /// Remove the Result and Arc wrapping (API breaking change)
     #[uniffi::constructor]
-    pub fn new() -> Result<Self, SecureError> {
+    #[must_use]
+    pub fn new_random() -> Self {
         let mut buf = [0u8; KEY_LENGTH];
         OsRng
             .try_fill_bytes(&mut buf)
             .expect("Fatal CSPRNG error: unable to initialize new RootKey");
-        Ok(Self {
+        Self {
             key: VersionedKey::V1(buf),
-        })
+        }
     }
 
     /// Decodes the key from serialized format.
+    /// TODO: Remove or refactor this method; it's not safe because it doesn't guarantee the key is valid.
     #[uniffi::constructor]
-    pub fn decode(encoded_key: String) -> Result<Self, SecureError> {
-        let key = serde_json::from_str::<Self>(&encoded_key)
-            .map_err(|_| SecureError::KeyParseError);
+    #[must_use]
+    pub fn decode(encoded_key: String) -> Self {
+        let key = serde_json::from_str::<Self>(&encoded_key);
 
+        #[allow(clippy::option_if_let_else)] // this is actually clearer
         match key {
-            Ok(key) => Ok(key),
-            Err(_) => Ok(Self {
+            Ok(key) => key,
+            Err(_) => Self {
                 key: VersionedKey::V0(encoded_key),
-            }),
+            },
         }
     }
 
@@ -144,14 +147,19 @@ impl RootKey {
     /// on enrollment (using regular `decode`) and then re-encodes it to JSON format for storage.
     /// When recovery is happening, we know the key is in JSON format, so we can use this function
     /// to decode it at the recovery time.
+    ///
+    /// # Errors
+    /// Will return an error if the key is not a validly encoded `RootKey`.
     #[uniffi::constructor]
-    pub fn decode_from_json_enforced(encoded_key: String) -> Result<Self, SecureError> {
-        let key = serde_json::from_str::<Self>(&encoded_key)
-            .map_err(|_| SecureError::KeyParseError)?;
-        Ok(key)
+    pub fn decode_from_json_enforced(encoded_key: &str) -> Result<Self, SecureError> {
+        serde_json::from_str::<Self>(encoded_key)
+            .map_err(|_| SecureError::KeyParseError)
     }
 
     /// Encodes the key as JSON.
+    ///
+    /// # Errors
+    /// Will return an error if the key cannot be serialized to JSON (highly unexpected).
     pub fn encode(&self) -> Result<String, SecureError> {
         serde_json::to_string(self).map_err(|_| SecureError::Generic {
             message: "unable to encode RootKey as JSON".to_string(),
@@ -159,11 +167,15 @@ impl RootKey {
     }
 
     /// Returns true if the key is in the legacy format and don't used indexed derivation.
+    #[must_use]
     pub fn is_v0(&self) -> bool {
         matches!(self.key, VersionedKey::V0(_))
     }
 
     /// Returns the Ethereum key as hex (without leading 0x).
+    ///
+    /// # Errors
+    /// Will return an error if the key cannot be derived (highly unexpected).
     pub fn ethereum_key(&self) -> Result<String, SecureError> {
         // In the old version, the key was used directly.
         Ok(match &self.key {
@@ -172,6 +184,12 @@ impl RootKey {
         })
     }
 
+    /// Returns the Ethereum key at a given index. The index is used to enable key rotation for Ethereum keys.
+    ///
+    /// The key is returned as hex (without leading 0x).
+    ///
+    /// # Errors
+    /// Will return an error if the key cannot be derived (highly unexpected).
     pub fn ethereum_key_with_index(&self, index: u64) -> Result<String, SecureError> {
         Ok(match &self.key {
             VersionedKey::V0(str) => {
@@ -212,6 +230,9 @@ impl RootKey {
     }
 
     /// Returns the World ID key as hex (without leading 0x).
+    ///
+    /// # Errors
+    /// Will return an error if the key cannot be derived (highly unexpected).
     pub fn worldid_key(&self) -> Result<String, SecureError> {
         // In the old version, the key was used directly.
         // Notes:
@@ -253,6 +274,9 @@ impl RootKey {
     // }
 
     /// Returns the encryption key for World Chat backup.
+    ///
+    /// # Errors
+    /// Will return an error if the key cannot be derived (highly unexpected).
     pub fn world_chat_backup_key(&self) -> Result<String, SecureError> {
         let key = match &self.key {
             VersionedKey::V0(key_str) => derive_key_v0(key_str.clone())?,
@@ -263,6 +287,10 @@ impl RootKey {
         Ok(hex::encode(subkey))
     }
 
+    /// Returns the seed which is used to generate the user's marble.
+    ///
+    /// # Errors
+    /// Will return an error if the key cannot be derived (highly unexpected).
     pub fn marble_seed(&self) -> Result<String, SecureError> {
         Ok(match &self.key {
             VersionedKey::V0(str) => {
@@ -292,7 +320,10 @@ impl RootKey {
     /// Using a fixed-length little-endian encoding provides a canonical
     /// representation for the counter input.
     ///
-    /// **Note:** The push id itself is not a secret it's used to identify the user across devices for notifications,
+    /// **Note:** The push id itself is not a secret it's used to identify the user across devices for notifications.
+    ///
+    /// # Errors
+    /// Will return an error if the key cannot be derived (highly unexpected).
     pub fn world_chat_push_id_public(
         &self,
         counter: u64,
@@ -313,10 +344,11 @@ impl RootKey {
 
 #[cfg(test)]
 impl RootKey {
-    // A test identity with idComm = 0x305105be6fd1b51e543f8b73744f1b34da9717d38ff17f66a9820c987eb77618
+    /// Creates a deterministic test key. This key is only used for tests and is not secure.
+    #[must_use]
     pub fn test_key() -> Self {
         let key = r#"{"version":"V1","key":"171bb3fa7a43708f077ee4b7c6c0602d95b10f4b7227fe60ec26fdcd964b78c1"}"#;
-        RootKey::decode(key.to_owned()).unwrap().clone()
+        Self::decode(key.to_owned())
     }
 }
 
