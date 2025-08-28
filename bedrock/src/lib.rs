@@ -30,6 +30,9 @@ pub mod transaction;
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
+// Backup module
+pub mod backup;
+
 // Re-export commonly used primitives at the crate root for convenience
 pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
