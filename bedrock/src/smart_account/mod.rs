@@ -11,8 +11,12 @@ pub use transaction_4337::Is4337Encodable;
 #[cfg(any(test, doc))]
 use crate::primitives::Network;
 use crate::{
-    bedrock_export, debug, error, primitives::HexEncodedData,
-    transaction::foreign::UnparsedUserOperation,
+    bedrock_export, debug, error,
+    primitives::HexEncodedData,
+    transaction::{
+        foreign::UnparsedUserOperation, EncodedSafeOpStruct, UserOperation,
+        GNOSIS_SAFE_4337_MODULE,
+    },
 };
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.
@@ -32,12 +36,9 @@ mod transaction;
 /// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
 mod permit2;
 
-pub use crate::primitives::contracts::{
-    EncodedSafeOpStruct, ISafe4337Module, UserOperation, ENTRYPOINT_4337,
-    GNOSIS_SAFE_4337_MODULE,
+pub use nonce::{
+    InstructionFlag, NonceKeyV1, TransactionTypeId, BEDROCK_NONCE_PREFIX_CONST,
 };
-
-pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
 // Import the generated types from permit2 module
 pub use permit2::{
@@ -234,7 +235,7 @@ impl SafeSmartAccount {
             &user_op,
             valid_after,
             valid_until,
-        )?;
+        );
 
         let signature = self.sign_digest(
             encoded_safe_op_struct.into_transaction_hash(),

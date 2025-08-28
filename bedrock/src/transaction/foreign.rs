@@ -3,10 +3,8 @@
 
 use alloy::primitives::{Address, Bytes, U256};
 
-use crate::{
-    primitives::{ParseFromForeignBinding, PrimitiveError},
-    smart_account::UserOperation,
-};
+use crate::primitives::{ParseFromForeignBinding, PrimitiveError};
+use crate::transaction::UserOperation;
 
 /// A pseudo-transaction object for EIP-4337. Used to execute transactions through the Safe Smart Account.
 ///

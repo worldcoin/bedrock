@@ -11,9 +11,8 @@ use alloy::{
 
 use crate::{
     primitives::PrimitiveError,
-    smart_account::{
-        InstructionFlag, Is4337Encodable, NonceKeyV1, TransactionTypeId, UserOperation,
-    },
+    smart_account::{InstructionFlag, Is4337Encodable, NonceKeyV1, TransactionTypeId},
+    transaction::UserOperation,
 };
 
 const SENTINEL_ADDRESS: Address =

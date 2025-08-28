@@ -15,8 +15,10 @@ use bedrock::{
         },
         Network,
     },
-    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::{foreign::UnparsedUserOperation, RpcProviderName},
+    smart_account::SafeSmartAccount,
+    transaction::{
+        foreign::UnparsedUserOperation, RpcProviderName, UserOperation, ENTRYPOINT_4337,
+    },
 };
 
 use serde::Serialize;
@@ -158,7 +160,7 @@ where
                     factory_data: get_opt("factoryData"),
                 };
 
-                let user_op: bedrock::smart_account::UserOperation =
+                let user_op: UserOperation =
                     unparsed.try_into().map_err(|e| HttpError::Generic {
                         message: format!("invalid userOp: {e}"),
                     })?;

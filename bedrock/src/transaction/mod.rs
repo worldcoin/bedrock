@@ -11,6 +11,10 @@ mod contracts;
 pub mod foreign;
 pub mod rpc;
 
+pub use contracts::entrypoint::{
+    EncodedSafeOpStruct, ISafe4337Module, UserOperation, ENTRYPOINT_4337,
+    GNOSIS_SAFE_4337_MODULE,
+};
 pub use contracts::safe_owner::SafeOwner;
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 

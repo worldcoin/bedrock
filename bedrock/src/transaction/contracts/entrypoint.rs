@@ -1,4 +1,8 @@
-use crate::primitives::{HttpError, PrimitiveError};
+//! This module introduces the contract interface for:
+//! - the `EntryPoint` contract, including support for ERC-4337 in the Safe Smart Account
+//! - the `PBHEntryPoint` contract, which is to execute Priority Blockspace for Humans transactions
+
+use crate::primitives::PrimitiveError;
 use crate::transaction::rpc::SponsorUserOperationResponse;
 use alloy::hex::FromHex;
 use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
@@ -53,6 +57,65 @@ fn serialize_u256_as_hex<S: serde::Serializer>(
 }
 
 sol! {
+    /// `EntryPoint` contract (0.7.0)
+    /// Reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol>
+    interface IEntryPoint {
+        #[derive(Default, serde::Serialize, serde::Deserialize, Debug)]
+        struct PackedUserOperation {
+            address sender;
+            uint256 nonce;
+            bytes initCode;
+            bytes callData;
+            bytes32 accountGasLimits;
+            uint256 preVerificationGas;
+            bytes32 gasFees;
+            bytes paymasterAndData;
+            bytes signature;
+        }
+
+        #[derive(Default)]
+        struct UserOpsPerAggregator {
+            PackedUserOperation[] userOps;
+            address aggregator;
+            bytes signature;
+        }
+    }
+
+    /// `Multicall3` contract. Aggregates results from multiple calls in a single transaction.
+    ///
+    /// Reference: <https://github.com/worldcoin/world-chain/blob/646bb294dac87bd993be9a218cc357ab1b4a8f6d/contracts/src/interfaces/IMulticall3.sol#L4C1-L4C10>
+    /// Reference: <https://github.com/mds1/multicall3/blob/main/src/Multicall3.sol#L13>
+    interface IMulticall3 {
+        #[derive(Default)]
+        struct Call3 {
+            address target;
+            bool allowFailure;
+            bytes callData;
+        }
+    }
+
+    /// `PBHEntryPoint` contract. An entry point contract that supports Priority Blockspace for Humans (PBH) transactions.
+    ///
+    /// Reference: <https://github.com/worldcoin/world-chain/blob/646bb294dac87bd993be9a218cc357ab1b4a8f6d/contracts/src/interfaces/IPBHEntryPoint.sol>
+    interface IPBHEntryPoint {
+        #[derive(Default)]
+        struct PBHPayload {
+            uint256 root;
+            uint256 pbhExternalNullifier;
+            uint256 nullifierHash;
+            uint256[8] proof;
+        }
+
+        function handleAggregatedOps(
+            IEntryPoint.UserOpsPerAggregator[] calldata,
+            address payable
+        ) external;
+
+        function pbhMulticall(
+            IMulticall3.Call3[] calls,
+            PBHPayload payload,
+        ) external;
+    }
 
     /// Interface for the `Safe4337Module` contract.
     ///
@@ -223,14 +286,15 @@ impl UserOperation {
         out.into()
     }
 
-    /// Merges paymaster data from sponsorship response into the `UserOperation`
+    /// Merges paymaster data from sponsorship response into the existing `UserOperation`
     ///
     /// # Errors
-    /// Returns an error if any U128 to u128 conversion fails
+    /// Returns an error if any parameter conversion fails
+    #[must_use]
     pub fn with_paymaster_data(
         mut self,
         sponsor_response: SponsorUserOperationResponse,
-    ) -> Result<Self, HttpError> {
+    ) -> Self {
         self.paymaster = sponsor_response.paymaster;
         self.paymaster_data = sponsor_response.paymaster_data;
         self.paymaster_verification_gas_limit = sponsor_response
@@ -267,7 +331,7 @@ impl UserOperation {
                 .unwrap_or(0);
         }
 
-        Ok(self)
+        self
     }
 }
 
@@ -282,8 +346,8 @@ impl EncodedSafeOpStruct {
         user_op: &UserOperation,
         valid_after: U48,
         valid_until: U48,
-    ) -> Result<Self, PrimitiveError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             type_hash: *SAFE_OP_TYPEHASH,
             safe: user_op.sender,
             nonce: user_op.nonce,
@@ -298,65 +362,12 @@ impl EncodedSafeOpStruct {
             valid_after,
             valid_until,
             entry_point: *ENTRYPOINT_4337,
-        })
+        }
     }
 
     /// computes the hash of the userOp
     #[must_use]
     pub fn into_transaction_hash(self) -> FixedBytes<32> {
         keccak256(self.abi_encode())
-    }
-}
-
-sol! {
-    contract IMulticall3 {
-        #[derive(Default)]
-        struct Call3 {
-            address target;
-            bool allowFailure;
-            bytes callData;
-        }
-    }
-
-    contract IEntryPoint {
-        #[derive(Default, serde::Serialize, serde::Deserialize, Debug)]
-        struct PackedUserOperation {
-            address sender;
-            uint256 nonce;
-            bytes initCode;
-            bytes callData;
-            bytes32 accountGasLimits;
-            uint256 preVerificationGas;
-            bytes32 gasFees;
-            bytes paymasterAndData;
-            bytes signature;
-        }
-
-        #[derive(Default)]
-        struct UserOpsPerAggregator {
-            PackedUserOperation[] userOps;
-            address aggregator;
-            bytes signature;
-        }
-    }
-
-    contract IPBHEntryPoint {
-        #[derive(Default)]
-        struct PBHPayload {
-            uint256 root;
-            uint256 pbhExternalNullifier;
-            uint256 nullifierHash;
-            uint256[8] proof;
-        }
-
-        function handleAggregatedOps(
-            IEntryPoint.UserOpsPerAggregator[] calldata,
-            address payable
-        ) external;
-
-        function pbhMulticall(
-            IMulticall3.Call3[] calls,
-            PBHPayload payload,
-        ) external;
     }
 }

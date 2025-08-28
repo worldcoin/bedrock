@@ -6,10 +6,10 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::primitives::PrimitiveError;
 use crate::smart_account::{
-    InstructionFlag, Is4337Encodable, NonceKeyV1, TransactionTypeId, UserOperation,
+    InstructionFlag, Is4337Encodable, NonceKeyV1, TransactionTypeId,
 };
+use crate::{primitives::PrimitiveError, transaction::UserOperation};
 
 sol! {
     /// The ERC20 contract interface.
@@ -133,7 +133,7 @@ mod tests {
     use alloy::primitives::bytes;
     use std::str::FromStr;
 
-    use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
+    use crate::smart_account::BEDROCK_NONCE_PREFIX_CONST;
 
     use super::*;
 

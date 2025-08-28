@@ -3,18 +3,16 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::contracts::{
-    EncodedSafeOpStruct, ISafe4337Module, UserOperation,
-};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeOperation, SafeSmartAccountSigner};
-use crate::transaction::rpc::{RpcError, RpcProviderName};
+use crate::transaction::{
+    EncodedSafeOpStruct, ISafe4337Module, RpcError, RpcProviderName, UserOperation,
+    ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
+};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes, U256};
 use alloy::sol_types::SolCall;
 use chrono::{Duration, Utc};
-
-use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
@@ -114,7 +112,7 @@ pub trait Is4337Encodable {
             .await?;
 
         // 3. Merge paymaster data
-        user_operation = user_operation.with_paymaster_data(sponsor_response)?;
+        user_operation = user_operation.with_paymaster_data(sponsor_response);
 
         // 4. Compute validity timestamps
         // validAfter = 0 (immediately valid)
@@ -135,7 +133,7 @@ pub trait Is4337Encodable {
             &user_operation,
             valid_after_u48,
             valid_until_u48,
-        )?;
+        );
 
         let signature = safe_account.sign_digest(
             encoded_safe_op.into_transaction_hash(),
@@ -199,8 +197,7 @@ mod tests {
             &user_op,
             valid_after,
             valid_until,
-        )
-        .unwrap();
+        );
         let hash = encoded_safe_op.into_transaction_hash();
 
         let smart_account = SafeSmartAccount::random();
@@ -286,10 +283,8 @@ mod tests {
             max_fee_per_gas: U128::from(900),
         };
 
-        let result = user_op.with_paymaster_data(sponsor_response);
-        assert!(result.is_ok());
+        let updated_user_op = user_op.with_paymaster_data(sponsor_response);
 
-        let updated_user_op = result.unwrap();
         assert_eq!(
             updated_user_op.paymaster,
             address!("0x2222222222222222222222222222222222222222")
@@ -332,10 +327,7 @@ mod tests {
             max_fee_per_gas: U128::from(900),
         };
 
-        let result = user_op.with_paymaster_data(sponsor_response);
-        assert!(result.is_ok());
-
-        let updated_user_op = result.unwrap();
+        let updated_user_op = user_op.with_paymaster_data(sponsor_response);
 
         // Paymaster fields should always be updated
         assert_eq!(

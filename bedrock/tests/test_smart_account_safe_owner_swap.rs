@@ -7,8 +7,8 @@ use alloy::{
     sol,
 };
 use bedrock::{
-    primitives::http_client::set_http_client,
-    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
+    primitives::http_client::set_http_client, smart_account::SafeSmartAccount,
+    transaction::ENTRYPOINT_4337,
 };
 
 mod common;

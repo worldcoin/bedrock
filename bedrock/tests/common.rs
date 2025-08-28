@@ -12,8 +12,7 @@ use bedrock::{
         http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
         PrimitiveError,
     },
-    smart_account::{UserOperation, ENTRYPOINT_4337},
-    transaction::foreign::UnparsedUserOperation,
+    transaction::{foreign::UnparsedUserOperation, UserOperation, ENTRYPOINT_4337},
 };
 use serde::Serialize;
 use serde_json::json;
