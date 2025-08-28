@@ -107,6 +107,11 @@ pub struct BackupManager {}
 
 #[bedrock_export]
 impl BackupManager {
+    #[uniffi::constructor]
+    pub fn new() -> Self {
+        Self {}
+    }
+
     /// Creates a sealed backup with metadata for a new user with a factor secret. Since it's a new user,
     /// the backup won't contain PCP data yet.
     ///
