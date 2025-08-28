@@ -1,3 +1,6 @@
+#![deny(clippy::all, clippy::nursery)]
+// TODO: pedantic after we decide whether `bedrock_sol` is stable and will remain
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
@@ -226,13 +229,10 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
 
     // Extract the struct/trait name for logging context
     let type_name = match &*input_impl.self_ty {
-        syn::Type::Path(type_path) => {
-            if let Some(segment) = type_path.path.segments.last() {
-                segment.ident.to_string()
-            } else {
-                "Unknown".to_string()
-            }
-        }
+        syn::Type::Path(type_path) => type_path.path.segments.last().map_or_else(
+            || "Unknown".to_string(),
+            |segment| segment.ident.to_string(),
+        ),
         _ => "Unknown".to_string(),
     };
 
@@ -418,7 +418,6 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
                     if let Some(struct_pos) = cleaned_line.find(" struct ") {
                         let remaining = &cleaned_line[struct_pos + " struct ".len()..];
                         if let Some(struct_name) = remaining
-                            .trim()
                             .split_whitespace()
                             .next()
                             .map(|s| s.trim_end_matches('{'))
@@ -438,7 +437,6 @@ pub fn bedrock_sol(input: TokenStream) -> TokenStream {
             if let Some(struct_pos) = trimmed_line.find(" struct ") {
                 let remaining = &trimmed_line[struct_pos + " struct ".len()..];
                 if let Some(struct_name) = remaining
-                    .trim()
                     .split_whitespace()
                     .next()
                     .map(|s| s.trim_end_matches('{'))
@@ -506,10 +504,7 @@ alloy::sol! {{
 
     // 5.1: Parse and return the final token stream
     output.parse().unwrap_or_else(|e| {
-        panic!(
-            "Failed to parse macro output: {}\nGenerated output:\n{}",
-            e, output
-        );
+        panic!("Failed to parse macro output: {e}\nGenerated output:\n{output}");
     })
 }
 
@@ -527,6 +522,7 @@ struct FieldInfo {
     doc_comment: Option<String>,
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInfo> {
     // 9: Parse struct definition from multiple line formats (single/multi-line)
     let struct_line = lines[start_idx].trim();
@@ -535,7 +531,6 @@ fn parse_struct_definition(lines: &[&str], start_idx: usize) -> Option<StructInf
     let struct_pos = struct_line.find(" struct ")? + " struct ".len();
     let remaining = &struct_line[struct_pos..];
     let name = remaining
-        .trim()
         .split_whitespace()
         .next()?
         .trim_end_matches('{')
@@ -734,7 +729,7 @@ fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
     code.push_str("/// For Swift & Kotlin usage only.\n");
     code.push_str("///\n");
     for doc in &struct_info.doc_comments {
-        code.push_str(&format!("{}\n", doc));
+        code.push_str(&format!("{doc}\n"));
     }
 
     // 6.1: Add struct definition with uniffi Record derive
@@ -744,7 +739,7 @@ fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
     // 6.2: Convert each field to String type for safe foreign binding
     for field in &struct_info.fields {
         if let Some(doc) = &field.doc_comment {
-            code.push_str(&format!("    {}\n", doc));
+            code.push_str(&format!("    {doc}\n"));
         }
 
         // 6.3: Use nested unparsed struct for complex types, String for primitives
@@ -759,7 +754,7 @@ fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
         code.push_str(&format!("    pub {}: {},\n", field.name, field_type));
     }
 
-    code.push_str("}");
+    code.push('}');
 
     code
 }
@@ -829,7 +824,7 @@ fn generate_try_from_impl(
     code.push_str(",\n");
     code.push_str("        })\n");
     code.push_str("    }\n");
-    code.push_str("}");
+    code.push('}');
 
     code
 }
