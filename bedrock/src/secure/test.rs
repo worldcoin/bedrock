@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use super::*;
-use ethers::signers::{LocalWallet, Signer};
 use serde_json;
 
 #[test]
