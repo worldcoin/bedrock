@@ -107,7 +107,6 @@ impl SafeSmartAccount {
         let old_owner = Address::parse_from_ffi(old_owner, "old_owner")?;
         let new_owner = Address::parse_from_ffi(new_owner, "new_owner")?;
 
-        // TODO: RPC call to check if the old owner is the current owner.
         // TODO: Check if we derive new_owner through key derivation directly in Bedrock.
         // TODO: Check if rotation on Optimism is also necessary.
 
