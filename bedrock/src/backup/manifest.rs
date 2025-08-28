@@ -502,9 +502,7 @@ impl ManifestManager {
     pub fn collect_manifests(&self) -> Result<Vec<BackupManifest>, BackupError> {
         let mut file_path_list = HashSet::new();
         let mut manifests = vec![];
-        let manifest_paths = self
-            .file_system
-            .list_files(BACKUP_MANIFEST_DIRECTORY)?;
+        let manifest_paths = self.file_system.list_files(BACKUP_MANIFEST_DIRECTORY)?;
 
         for manifest_path in manifest_paths {
             if BackupModule::try_from(manifest_path.as_str()).is_err() {
