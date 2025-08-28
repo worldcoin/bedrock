@@ -7,7 +7,7 @@ use crate::primitives::contracts::{
     EncodedSafeOpStruct, ISafe4337Module, UserOperation,
 };
 use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::SafeSmartAccountSigner;
+use crate::smart_account::{SafeOperation, SafeSmartAccountSigner};
 use crate::transaction::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes, U256};
@@ -46,7 +46,7 @@ pub trait Is4337Encodable {
             to: self.target_address(),
             value: U256::ZERO,
             data: self.call_data(),
-            operation: 0, // SafeOperation::Call as u8
+            operation: SafeOperation::Call as u8,
         }
         .abi_encode()
         .into()
