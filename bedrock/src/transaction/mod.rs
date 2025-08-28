@@ -108,12 +108,15 @@ impl SafeSmartAccount {
         let new_owner = Address::parse_from_ffi(new_owner, "new_owner")?;
 
         // TODO: RPC call to check if the old owner is the current owner.
-
         // TODO: Check if we derive new_owner through key derivation directly in Bedrock.
-
-        let transaction = crate::transaction::SafeOwner::new(self.wallet_address, old_owner, new_owner);
-
         // TODO: Check if rotation on Optimism is also necessary.
+
+        let transaction = crate::transaction::SafeOwner::new(
+            self.wallet_address,
+            old_owner,
+            new_owner,
+        );
+
         let user_op_hash = transaction
             .sign_and_execute(
                 Network::WorldChain,
