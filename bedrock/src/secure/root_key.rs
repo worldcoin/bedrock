@@ -36,7 +36,7 @@ enum VersionedKey {
 }
 
 #[derive(uniffi::Object, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct OxideKey {
+pub struct RootKey {
     #[serde(flatten)]
     key: VersionedKey,
 }
@@ -97,8 +97,8 @@ fn derive_key_v0(encoded_key: String) -> OxideResult<Key> {
 }
 
 #[uniffi::export]
-impl OxideKey {
-    /// Generates a new random `OxideKey` using the system CSPRNG.
+impl RootKey {
+    /// Generates a new random `RootKey` using the system CSPRNG.
     ///
     /// # Panics
     /// Will panic if there is an error with the CSPRNG. This terminates the app.
@@ -110,7 +110,7 @@ impl OxideKey {
         let mut buf = [0u8; KEY_LENGTH];
         OsRng
             .try_fill_bytes(&mut buf)
-            .expect("Fatal CSPRNG error: unable to initialize new OxideKey");
+            .expect("Fatal CSPRNG error: unable to initialize new RootKey");
         Ok(Arc::new(Self {
             key: VersionedKey::V1(buf),
         }))
@@ -135,7 +135,7 @@ impl OxideKey {
     /// This function does not allow the key to be in the raw hex format, like regular `decode`.
     /// Even it is a v0 key, it has to be serialized in JSON format (for example, after .encode()).
     ///
-    /// This function can be used in cases where OxideKey is decoded regularly (for v0 or v1) and then
+    /// This function can be used in cases where `RootKey` is decoded regularly (for v0 or v1) and then
     /// re-encoded to full JSON format. For example, backup service parses the key from HEX/JSON
     /// on enrollment (using regular `decode`) and then re-encodes it to JSON format for storage.
     /// When recovery is happening, we know the key is in JSON format, so we can use this function
@@ -297,9 +297,9 @@ impl OxideKey {
     }
 }
 
-/// This impl of `OxideKey` is not exposed to foreign code.
-impl OxideKey {
-    /// Converts the `OxideKey` into an Ethereum wallet `LocalSigner<SigningKey>` (for use with `alloy`).
+/// This impl of `RootKey` is not exposed to foreign code.
+impl RootKey {
+    /// Converts the `RootKey` into an Ethereum wallet `LocalSigner<SigningKey>` (for use with `alloy`).
     ///
     /// It will automatically handle key derivation from the `root_secret` into the Ethereum secret key which will
     /// be further parsed.
@@ -323,24 +323,24 @@ pub fn ethereum_key_to_signer(
     Ok(LocalSigner::from_slice(&hex::decode(ethereum_key)?)?)
 }
 
-impl TryFrom<&OxideKey> for LocalSigner<SigningKey> {
+impl TryFrom<&RootKey> for LocalSigner<SigningKey> {
     type Error = OxideError;
 
-    /// Parses the `OxideKey` into an Ethereum wallet `LocalSigner<SigningKey>` for use with `alloy`.
+    /// Parses the `RootKey` into an Ethereum wallet `LocalSigner<SigningKey>` for use with `alloy`.
     ///
     /// # Errors
     /// Will return an error if hex decoding fails or the key is not valid for the `secp256k1` curve.
-    fn try_from(key: &OxideKey) -> Result<Self, Self::Error> {
+    fn try_from(key: &RootKey) -> Result<Self, Self::Error> {
         Ok(ethereum_key_to_signer(key.ethereum_key()?.as_str())?)
     }
 }
 
 #[cfg(test)]
-impl OxideKey {
+impl RootKey {
     // A test identity with idComm = 0x305105be6fd1b51e543f8b73744f1b34da9717d38ff17f66a9820c987eb77618
     pub fn test_key() -> Self {
         let key = r#"{"version":"V1","key":"171bb3fa7a43708f077ee4b7c6c0602d95b10f4b7227fe60ec26fdcd964b78c1"}"#;
-        OxideKey::decode(key.to_owned()).unwrap().as_ref().clone()
+        RootKey::decode(key.to_owned()).unwrap().as_ref().clone()
     }
 
     pub fn identity(&self) -> crate::identity::Identity {

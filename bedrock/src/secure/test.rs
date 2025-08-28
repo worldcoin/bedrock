@@ -8,11 +8,11 @@ use serde_json;
 fn test_key_versions() {
     // Version 1
     let seed = "1111111111111111111111111111111111111111111111111111111111111111";
-    let ethereum_key = OxideKey::decode(seed.to_owned())
+    let ethereum_key = RootKey::decode(seed.to_owned())
         .unwrap()
         .ethereum_key()
         .unwrap();
-    let worldid_key = OxideKey::decode(seed.to_owned())
+    let worldid_key = RootKey::decode(seed.to_owned())
         .unwrap()
         .worldid_key()
         .unwrap();
@@ -24,11 +24,11 @@ fn test_key_versions() {
 
     // Version 2
     let key = r#"{"key":"db547ff3ded25c60e791917584090eafd8efceba61d6e73946b89b7d6fc04725","version":"V1"}"#;
-    let ethereum_key = OxideKey::decode(key.to_owned())
+    let ethereum_key = RootKey::decode(key.to_owned())
         .unwrap()
         .ethereum_key()
         .unwrap();
-    let worldid_key = OxideKey::decode(key.to_owned())
+    let worldid_key = RootKey::decode(key.to_owned())
         .unwrap()
         .worldid_key()
         .unwrap();
@@ -43,15 +43,15 @@ fn test_key_versions() {
 fn test_ethereum_key_with_index() {
     // Version 0
     let seed = "1111111111111111111111111111111111111111111111111111111111111111";
-    let ethereum_key = OxideKey::decode(seed.to_owned())
+    let ethereum_key = RootKey::decode(seed.to_owned())
         .unwrap()
         .ethereum_key()
         .unwrap();
-    let ethereum_key0 = OxideKey::decode(seed.to_owned())
+    let ethereum_key0 = RootKey::decode(seed.to_owned())
         .unwrap()
         .ethereum_key_with_index(0)
         .unwrap();
-    let ethereum_key1 = OxideKey::decode(seed.to_owned())
+    let ethereum_key1 = RootKey::decode(seed.to_owned())
         .unwrap()
         .ethereum_key_with_index(1)
         .unwrap();
@@ -64,15 +64,15 @@ fn test_ethereum_key_with_index() {
 
     // Version 1
     let key = r#"{"key":"db547ff3ded25c60e791917584090eafd8efceba61d6e73946b89b7d6fc04725","version":"V1"}"#;
-    let ethereum_key = OxideKey::decode(key.to_owned())
+    let ethereum_key = RootKey::decode(key.to_owned())
         .unwrap()
         .ethereum_key()
         .unwrap();
-    let ethereum_key0 = OxideKey::decode(key.to_owned())
+    let ethereum_key0 = RootKey::decode(key.to_owned())
         .unwrap()
         .ethereum_key_with_index(0)
         .unwrap();
-    let ethereum_key1 = OxideKey::decode(key.to_owned())
+    let ethereum_key1 = OxidRootKeyeKey::decode(key.to_owned())
         .unwrap()
         .ethereum_key_with_index(1)
         .unwrap();
@@ -86,10 +86,10 @@ fn test_ethereum_key_with_index() {
 
 #[test]
 fn test_encode_v2() {
-    let key = OxideKey::new().unwrap();
+    let key = RootKey::new().unwrap();
     assert_eq!(
         key.ethereum_key().unwrap(),
-        OxideKey::decode(key.encode().unwrap())
+        RootKey::decode(key.encode().unwrap())
             .unwrap()
             .ethereum_key()
             .unwrap()
@@ -99,7 +99,7 @@ fn test_encode_v2() {
 #[test]
 fn test_encode_v1_wallet() {
     let key = "19c96ab440adf075647ada1402d69c25a87886a1933cf313e15b55c95ee04b99";
-    let key = OxideKey::decode(key.to_owned()).unwrap();
+    let key = RootKey::decode(key.to_owned()).unwrap();
 
     let wallet = LocalWallet::try_from(key.ethereum_key().unwrap()).unwrap();
 
@@ -112,7 +112,7 @@ fn test_encode_v1_wallet() {
 #[test]
 fn test_encode_v1_odd_length() {
     let key = "be1c98a32231f6bb1edb0bc0a5ef08f5c1f917923aadedb2399b648117c1d8d";
-    let key = OxideKey::decode(key.to_owned()).unwrap();
+    let key = RootKey::decode(key.to_owned()).unwrap();
 
     let wallet = LocalWallet::try_from(key.ethereum_key().unwrap()).unwrap();
 
@@ -125,7 +125,7 @@ fn test_encode_v1_odd_length() {
 #[test]
 fn test_encode_v1_zero_byte() {
     let key = "e1c98a32231f6bb1edb0bc0a5ef08f5c1f917923aadedb2399b648117c1d8d";
-    let key = OxideKey::decode(key.to_owned()).unwrap();
+    let key = RootKey::decode(key.to_owned()).unwrap();
 
     let wallet = LocalWallet::try_from(key.ethereum_key().unwrap()).unwrap();
 
@@ -172,7 +172,7 @@ fn test_legacy_world_id_keys() {
     .collect();
 
     for (key, expected_value) in test_cases.iter() {
-        let oxide_key = OxideKey::decode(key.to_string()).unwrap();
+        let oxide_key = RootKey::decode(key.to_string()).unwrap();
         let result = oxide_key.worldid_key().unwrap();
 
         // Assert that the result is equal to the expected value
@@ -205,7 +205,7 @@ fn test_marble_seeds_v0() {
     .collect();
 
     for (key, expected_value) in test_cases.iter() {
-        let oxide_key = OxideKey::decode(key.to_string()).unwrap();
+        let oxide_key = RootKey::decode(key.to_string()).unwrap();
         let result = oxide_key.marble_seed().unwrap();
 
         // Assert that the result is equal to the expected value
@@ -216,7 +216,7 @@ fn test_marble_seeds_v0() {
 #[test]
 fn test_marble_seeds_v1() {
     assert_eq!(
-        OxideKey::decode(
+        RootKey::decode(
             r#"{"version":"V1","key":"986d08cca33ace012f3535afb2c05cd837b1ce1d23cca2f7a212ec167767fe8c"}"#.to_string()
         )
         .unwrap()
@@ -226,7 +226,7 @@ fn test_marble_seeds_v1() {
     );
 
     assert_eq!(
-        OxideKey::decode(
+        RootKey::decode(
             r#"{"version":"V1","key":"123d08cca33ace012f3535afb2c05cd837b1ce1d23cca2f7a212ec167767fe8c"}"#.to_string()
         )
         .unwrap()
@@ -236,7 +236,7 @@ fn test_marble_seeds_v1() {
     );
 
     assert_eq!(
-        OxideKey::decode(
+        RootKey::decode(
             r#"{"version":"V1","key":"123d08cca33ace012f3535afb2c05cd837b1ce1d23cca2f7a212ec167767f123"}"#.to_string()
         )
         .unwrap()
@@ -249,7 +249,7 @@ fn test_marble_seeds_v1() {
 #[test]
 fn test_v0_encode() {
     assert_eq!(
-        OxideKey {
+        RootKey {
             key: VersionedKey::V0("1234".to_string())
         }
         .encode()
@@ -267,7 +267,7 @@ fn test_v1_encode() {
     key.copy_from_slice(&slice);
 
     assert_eq!(
-        serde_json::to_string(&OxideKey {
+        serde_json::to_string(&RootKey {
             key: VersionedKey::V1(key)
         })
         .unwrap(),
@@ -301,21 +301,21 @@ fn test_key_versions_decode_from_json() {
     // as it expects a JSON string.
     let seed = "1111111111111111111111111111111111111111111111111111111111111111";
     assert_eq!(
-        OxideKey::decode_from_json_enforced(seed.to_owned())
+        RootKey::decode_from_json_enforced(seed.to_owned())
             .unwrap_err()
             .to_string(),
         "failed to parse key"
     );
     // Should be able to be parsed after being decoded with decode function and re-encoded
     let seed_after_re_encode =
-        OxideKey::decode(seed.to_owned()).unwrap().encode().unwrap();
+        RootKey::decode(seed.to_owned()).unwrap().encode().unwrap();
     let ethereum_key =
-        OxideKey::decode_from_json_enforced(seed_after_re_encode.to_owned())
+        RootKey::decode_from_json_enforced(seed_after_re_encode.to_owned())
             .unwrap()
             .ethereum_key()
             .unwrap();
     let worldid_key =
-        OxideKey::decode_from_json_enforced(seed_after_re_encode.to_owned())
+        RootKey::decode_from_json_enforced(seed_after_re_encode.to_owned())
             .unwrap()
             .worldid_key()
             .unwrap();
@@ -327,11 +327,11 @@ fn test_key_versions_decode_from_json() {
 
     // Version 2 - should be parsed with decode_from_json_enforced function
     let key = r#"{"key":"db547ff3ded25c60e791917584090eafd8efceba61d6e73946b89b7d6fc04725","version":"V1"}"#;
-    let ethereum_key = OxideKey::decode_from_json_enforced(key.to_owned())
+    let ethereum_key = RootKey::decode_from_json_enforced(key.to_owned())
         .unwrap()
         .ethereum_key()
         .unwrap();
-    let worldid_key = OxideKey::decode_from_json_enforced(key.to_owned())
+    let worldid_key = RootKey::decode_from_json_enforced(key.to_owned())
         .unwrap()
         .worldid_key()
         .unwrap();
@@ -351,7 +351,7 @@ fn test_new_generates_seemingly_random_keys() {
     let mut keys = Vec::with_capacity(NUM_KEYS);
 
     for _ in 0..NUM_KEYS {
-        let key = OxideKey::new().unwrap();
+        let key = RootKey::new().unwrap();
         let encoded = key.encode().unwrap();
         keys.push(encoded);
     }
@@ -381,7 +381,7 @@ fn test_new_generates_seemingly_random_keys() {
 fn test_world_chat_push_id() {
     // Test with V0 key
     let seed = "1111111111111111111111111111111111111111111111111111111111111111";
-    let oxide_key_v0 = OxideKey::decode(seed.to_owned()).unwrap();
+    let oxide_key_v0 = RootKey::decode(seed.to_owned()).unwrap();
 
     let push_id_1 = oxide_key_v0.world_chat_push_id_public(1).unwrap();
     let push_id_2 = oxide_key_v0.world_chat_push_id_public(2).unwrap();
@@ -399,7 +399,7 @@ fn test_world_chat_push_id() {
 
     // Test with V1 key
     let key_v1 = r#"{"key":"db547ff3ded25c60e791917584090eafd8efceba61d6e73946b89b7d6fc04725","version":"V1"}"#;
-    let oxide_key_v1 = OxideKey::decode(key_v1.to_owned()).unwrap();
+    let oxide_key_v1 = RootKey::decode(key_v1.to_owned()).unwrap();
 
     let push_id_v1 = oxide_key_v1.world_chat_push_id_public(1).unwrap();
 
