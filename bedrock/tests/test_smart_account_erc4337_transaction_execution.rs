@@ -15,7 +15,7 @@ use bedrock::{
 
 mod common;
 use common::{
-    deploy_safe, setup_anvil, IEntryPoint, ISafe4337Module, PackedUserOperation,
+    deploy_safe, setup_anvil, IEntryPointForTests, ISafe4337Module, PackedUserOperation,
 };
 
 /// Integration test for the encoding, signing and execution of a 4337 transaction.
@@ -48,7 +48,7 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     let before_balance = provider.get_balance(safe_address2).await?;
 
     // Fund EntryPoint deposit for the Safe
-    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    let entry_point = IEntryPointForTests::new(*ENTRYPOINT_4337, &provider);
     let _ = entry_point
         .depositTo(safe_address)
         .value(U256::from(1e18))

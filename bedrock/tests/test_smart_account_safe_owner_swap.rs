@@ -12,7 +12,7 @@ use bedrock::{
 };
 
 mod common;
-use common::{deploy_safe, setup_anvil, AnvilBackedHttpClient, IEntryPoint};
+use common::{deploy_safe, setup_anvil, AnvilBackedHttpClient, IEntryPointForTests};
 
 sol! {
     /// Safe owner management interface
@@ -60,7 +60,7 @@ async fn test_safe_owner_swap_e2e() -> anyhow::Result<()> {
         .await?;
 
     // Fund EntryPoint deposit for the Safe
-    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    let entry_point = IEntryPointForTests::new(*ENTRYPOINT_4337, &provider);
     let _deposit_tx = entry_point
         .depositTo(safe_address)
         .value(U256::from(1e18))

@@ -70,6 +70,7 @@ sol!(
 
 sol! {
     /// Packed user operation for EntryPoint
+    /// This is duplicated from the main codebase because the sol! macro does not support using external types.
     #[sol(rename_all = "camelCase")]
     struct PackedUserOperation {
         address sender;
@@ -83,8 +84,10 @@ sol! {
         bytes signature;
     }
 
+    /// The `EntryPoint` contract interface for testing.
+    /// Note this exposes different functions that should only be used in tests.
     #[sol(rpc)]
-    interface IEntryPoint {
+    interface IEntryPointForTests {
         function depositTo(address account) external payable;
         function handleOps(PackedUserOperation[] calldata ops, address payable beneficiary) external;
     }
@@ -374,7 +377,7 @@ where
 
                 // Execute on Anvil via EntryPoint
                 let entry_point_contract =
-                    IEntryPoint::new(*ENTRYPOINT_4337, &self.provider);
+                    IEntryPointForTests::new(*ENTRYPOINT_4337, &self.provider);
                 let packed_op =
                     PackedUserOperation::try_from(&parsed_op).map_err(|e| {
                         HttpError::Generic {
