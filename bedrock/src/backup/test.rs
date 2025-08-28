@@ -38,21 +38,15 @@ fn helper_write_manifest_file(
     )
     .unwrap();
 
-    // write the manifest
+    // write the manifest under the backup prefix expected by middleware
     file_system.write_file(
-        format!(
-            "{}/backup_manifests/{module_name}",
-            file_system.get_user_data_directory()
-        ),
+        format!("backup/backup_manifests/{module_name}"),
         serde_json::to_vec(&manifest).unwrap(),
     );
 
     if let Some(data) = data {
-        // write the actual file
-        file_system.write_file(
-            format!("{}{file_path}", file_system.get_user_data_directory()),
-            data,
-        );
+        // write the actual file at its full (prefixed) path
+        file_system.write_file(format!("backup{file_path}"), data);
     }
 }
 
