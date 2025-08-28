@@ -157,6 +157,15 @@ impl FileSystemMiddleware {
         }
     }
 
+    /// Returns the full globally-scoped path (with prefix) for a relative file path.
+    ///
+    /// This does not touch the filesystem; it only computes the prefixed path that will be used
+    /// by the underlying global filesystem implementation.
+    #[must_use]
+    pub fn get_full_path_from_file_path(&self, file_path: &str) -> String {
+        self.prefix_path(file_path)
+    }
+
     /// Check if a file exists at the given path (with prefix)
     ///
     /// # Errors

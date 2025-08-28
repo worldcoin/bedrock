@@ -9,12 +9,15 @@ use chrono::{DateTime, Utc};
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
-use crate::backup::{
-    backup_format::v0::{V0Backup, V0BackupFile, V0BackupManifest},
-    service_client::{BackupHttpClient, BackupServiceClient},
-    BackupError, BackupModule, SyncSigner,
-};
 use crate::primitives::filesystem::{create_middleware, FileSystemMiddleware};
+use crate::{
+    backup::{
+        backup_format::v0::{V0Backup, V0BackupFile, V0BackupManifest},
+        service_client::{BackupHttpClient, BackupServiceClient},
+        BackupError, BackupModule, SyncSigner,
+    },
+    primitives::filesystem::get_filesystem_raw,
+};
 
 const BACKUP_MANIFEST_DIRECTORY: &str = "backup_manifests";
 const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
@@ -162,14 +165,17 @@ impl ManifestManager {
 
     /// Builds unsealed backup files from the global manifest by reading and checksumming the files.
     /// Validates presence and recomputes checksum to ensure manifest correctness.
+    /// TODO: verify paths prefixing is correct here.
     pub fn build_unsealed_backup_files_from_manifest(
         &self,
         manifest: &GlobalManifestV1,
     ) -> Result<Vec<V0BackupFile>, BackupError> {
         let mut files = Vec::with_capacity(manifest.files.len());
+        // Use the global filesystem (no prefixing) to read file contents.
+        let fs = get_filesystem_raw()?;
         for entry in &manifest.files {
             let rel = entry.file_path.trim_start_matches('/');
-            let data = self.file_system.read_file(rel).map_err(|e| {
+            let data = fs.read_file(rel.to_string()).map_err(|e| {
                 let msg = format!(
                     "High Impact. Failed to load file from {:?}: {}",
                     entry.designator, e
@@ -268,12 +274,14 @@ impl ManifestManager {
             .iter_mut()
             .find(|e| e.designator == designator)
         {
-            entry.file_path = rel_path.clone();
+            // Persist full global path (prefixed) in the manifest
+            entry.file_path = self.file_system.get_full_path_from_file_path(&rel_path);
             entry.checksum_hex = checksum_hex.clone();
         } else {
             manifest.files.push(ManifestEntry {
                 designator,
-                file_path: rel_path.clone(),
+                // Persist full global path (prefixed) in the manifest
+                file_path: self.file_system.get_full_path_from_file_path(&rel_path),
                 checksum_hex: checksum_hex.clone(),
             });
         }
