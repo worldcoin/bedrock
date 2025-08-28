@@ -46,7 +46,7 @@ impl SafeSmartAccount {
     /// # let safe_account = SafeSmartAccount::new("test_key".to_string(), "0x1234567890123456789012345678901234567890").unwrap();
     ///
     /// // Transfer USDC on World Chain
-    /// let tx_hash = safe_account.transaction_transfer(
+    /// let tx_hash = safe_account.tx_transfer(
     ///     Network::WorldChain,
     ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
     ///     "0x1234567890123456789012345678901234567890",

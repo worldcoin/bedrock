@@ -234,11 +234,10 @@ where
     }
 }
 
-// ------------------ The test for the full transaction_transfer flow ------------------
+// ------------------ The test for the full tx_transfer flow ------------------
 
 #[tokio::test]
-async fn test_transaction_transfer_full_flow_executes_user_operation(
-) -> anyhow::Result<()> {
+async fn test_tx_transfer_full_flow_executes_user_operation() -> anyhow::Result<()> {
     // 1) Spin up anvil fork
     let anvil = setup_anvil();
 
@@ -292,7 +291,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     };
     let _ = set_http_client(Arc::new(client));
 
-    // 8) Execute high-level transfer via transaction_transfer
+    // 8) Execute high-level transfer via tx_transfer
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
     let amount = "1000000000000000000"; // 1 WLD
     let _user_op_hash = safe_account
@@ -304,7 +303,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
             RpcProviderName::Alchemy,
         )
         .await
-        .expect("transaction_transfer failed");
+        .expect("tx_transfer failed");
 
     // 9) Verify balances updated
     let after_recipient = wld.balanceOf(recipient).call().await?;
