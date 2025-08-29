@@ -15,15 +15,19 @@ use bedrock::{
         },
         Network,
     },
-    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::{foreign::UnparsedUserOperation, RpcProviderName},
+    smart_account::SafeSmartAccount,
+    transaction::{
+        foreign::UnparsedUserOperation, RpcProviderName, UserOperation, ENTRYPOINT_4337,
+    },
 };
 
 use serde::Serialize;
 use serde_json::json;
 
 mod common;
-use common::{deploy_safe, setup_anvil, IEntryPoint, PackedUserOperation, IERC20};
+use common::{
+    deploy_safe, setup_anvil, IEntryPointForTests, PackedUserOperation, IERC20,
+};
 
 // ------------------ Mock HTTP client that actually executes the op on Anvil ------------------
 #[derive(Clone)]
@@ -158,7 +162,7 @@ where
                     factory_data: get_opt("factoryData"),
                 };
 
-                let user_op: bedrock::smart_account::UserOperation =
+                let user_op: UserOperation =
                     unparsed.try_into().map_err(|e| HttpError::Generic {
                         message: format!("invalid userOp: {e}"),
                     })?;
@@ -202,7 +206,8 @@ where
                             message: "invalid entryPoint".into(),
                         }
                     })?;
-                let entry_point = IEntryPoint::new(entry_point_addr, &self.provider);
+                let entry_point =
+                    IEntryPointForTests::new(entry_point_addr, &self.provider);
                 let tx = entry_point
                     .handleOps(vec![packed], user_op.sender)
                     .send()
@@ -258,7 +263,7 @@ async fn test_tx_transfer_full_flow_executes_user_operation() -> anyhow::Result<
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
 
     // 4) Fund EntryPoint deposit for Safe
-    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    let entry_point = IEntryPointForTests::new(*ENTRYPOINT_4337, &provider);
     let deposit_tx = entry_point
         .depositTo(safe_address)
         .value(U256::from(1e18 as u64))

@@ -10,7 +10,12 @@
 
 use ruint::aliases::U256;
 
-use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
+/// The prefix for Bedrock-generated transactions.
+pub static BEDROCK_NONCE_PREFIX_CONST: &[u8; 5] = b"bdrck";
+
+/// The prefix for PBHTX-generated transactions.
+#[allow(dead_code)]
+pub static PBH_NONCE_PREFIX_CONST: &[u8; 5] = b"pbhtx";
 
 /// Stable, never-reordered identifiers for transaction classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -5,11 +5,12 @@
 //! - Submit signed `UserOperations` via `eth_sendUserOperation`
 
 use crate::{
-    primitives::http_client::{get_http_client, HttpHeader},
     primitives::{
+        http_client::{get_http_client, HttpHeader},
         AuthenticatedHttpClient, HttpError, HttpMethod, Network, PrimitiveError,
     },
-    smart_account::{SafeSmartAccountError, UserOperation},
+    smart_account::SafeSmartAccountError,
+    transaction::UserOperation,
 };
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
