@@ -59,6 +59,10 @@ blake3 = "1.5.5"
 strum = { version = "0.26.2", features = ["derive"] }
 uuid = { version = "1.4.1", features = ["v4"], default-features = false }
 dryoc = { git = "https://github.com/brndnmtthws/dryoc", rev = "e0e0ef0" }
+reqwest = { version = "0.12.7", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
 
 
 [dev-dependencies]

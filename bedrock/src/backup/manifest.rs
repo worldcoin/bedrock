@@ -13,7 +13,7 @@ use crate::primitives::filesystem::{create_middleware, FileSystemMiddleware};
 use crate::{
     backup::{
         backup_format::v0::{V0Backup, V0BackupFile, V0BackupManifest},
-        service_client::{BackupHttpClient, BackupServiceClient},
+        service_client::BackupServiceClient,
         BackupError, BackupModule, SyncSigner,
     },
     primitives::filesystem::get_filesystem_raw,
@@ -215,10 +215,10 @@ impl ManifestManager {
     /// The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
     pub async fn list_files(
         &self,
-        http: Arc<dyn BackupHttpClient>,
         signer: &dyn SyncSigner,
     ) -> Result<Vec<ManifestEntry>, BackupError> {
-        let client = BackupServiceClient::new(http);
+        let client = BackupServiceClient::new()
+            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
         let remote_hash = client
             .get_remote_manifest_hash(signer)
             .await
@@ -237,7 +237,6 @@ impl ManifestManager {
     /// TODO: Integrate size validation policies per module when available.
     pub async fn store_file(
         &self,
-        http: Arc<dyn BackupHttpClient>,
         signer: &dyn SyncSigner,
         designator: BackupModule,
         file_path: String,
@@ -245,8 +244,8 @@ impl ManifestManager {
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         // 1) Remote hash
-        // Instantiate service client using platform-provided HTTP adapter
-        let client = BackupServiceClient::new(http);
+        let client = BackupServiceClient::new()
+            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
         let remote_hash = client
             .get_remote_manifest_hash(signer)
             .await
@@ -330,7 +329,6 @@ impl ManifestManager {
     /// Replaces the file entry for a given designator with a new file path and performs a remote-gated update inline.
     pub async fn replace_file(
         &self,
-        http: Arc<dyn BackupHttpClient>,
         signer: &dyn SyncSigner,
         designator: BackupModule,
         file_path: String,
@@ -339,7 +337,6 @@ impl ManifestManager {
     ) -> Result<(), BackupError> {
         // Delegate to store_file, as replace semantics equal to upsert for this designator.
         self.store_file(
-            http,
             signer,
             designator,
             file_path,
@@ -352,14 +349,14 @@ impl ManifestManager {
     /// Removes the file entry for the given designator, if present, and performs a remote-gated update inline.
     pub async fn remove_file(
         &self,
-        http: Arc<dyn BackupHttpClient>,
         signer: &dyn SyncSigner,
         designator: BackupModule,
         root_secret: String,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         // 1) Remote gate
-        let client = BackupServiceClient::new(http);
+        let client = BackupServiceClient::new()
+            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
         let remote_hash = client
             .get_remote_manifest_hash(signer)
             .await

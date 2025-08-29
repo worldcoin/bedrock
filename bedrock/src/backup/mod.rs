@@ -18,7 +18,6 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 use std::sync::Arc;
-use thiserror::Error;
 use zeroize::Zeroizing;
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.

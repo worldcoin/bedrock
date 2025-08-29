@@ -1347,6 +1347,7 @@ dependencies = [
  "quote",
  "rand 0.8.5",
  "regex",
+ "reqwest",
  "ruint",
  "serde",
  "serde_json",

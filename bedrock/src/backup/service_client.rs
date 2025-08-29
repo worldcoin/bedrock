@@ -1,10 +1,11 @@
-use std::sync::Arc;
-
-use async_trait::async_trait;
+use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::primitives::config::{get_config, BedrockEnvironment};
 use crate::{backup::SyncSigner, HttpError};
 use serde_json::Value;
+use std::time::Duration;
 
 /// Lightweight multipart/form-data builder to avoid hand-concatenating bytes in callers.
 struct MultipartBuilder {
@@ -78,7 +79,8 @@ impl MultipartBuilder {
 
 /// Lightweight client responsible for calling backup-service endpoints.
 pub struct BackupServiceClient {
-    http: Arc<dyn BackupHttpClient>,
+    http: Client,
+    base_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,26 +99,54 @@ pub struct EcKeypairAuthorizationPayload {
 }
 
 impl BackupServiceClient {
-    /// Constructs a new client using a platform-provided HTTP adapter.
-    pub fn new(http: Arc<dyn BackupHttpClient>) -> Self {
-        Self { http }
+    /// Constructs a new client using reqwest and the configured Bedrock environment.
+    pub fn new() -> Result<Self, HttpError> {
+        let base_url = resolve_base_url()?;
+        let http = Client::builder()
+            .use_rustls_tls()
+            .tcp_keepalive(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .build()
+            .map_err(|e| HttpError::Generic {
+                message: e.to_string(),
+            })?;
+        Ok(Self { http, base_url })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
     }
 
     /// POST /v1/sync/challenge/keypair → { challenge, token }
     pub async fn get_sync_challenge_keypair(
         &self,
     ) -> Result<ChallengeResponse, HttpError> {
-        let body = b"{}".to_vec();
+        let url = self.url("/v1/sync/challenge/keypair");
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert(ACCEPT, "application/json".parse().unwrap());
         let resp = self
             .http
-            .post(
-                "/v1/sync/challenge/keypair".to_string(),
-                body,
-                "application/json".to_string(),
-            )
-            .await?;
+            .post(url)
+            .headers(headers)
+            .body(b"{}".to_vec())
+            .send()
+            .await
+            .map_err(|e| HttpError::Generic {
+                message: e.to_string(),
+            })?;
+        let status = resp.status();
+        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
+            message: e.to_string(),
+        })?;
+        if !status.is_success() {
+            return Err(HttpError::BadStatusCode {
+                code: status.as_u16() as u64,
+                response_body: bytes.to_vec(),
+            });
+        }
         let v: Value =
-            serde_json::from_slice(&resp).map_err(|e| HttpError::Generic {
+            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
                 message: e.to_string(),
             })?;
         let challenge =
@@ -172,13 +202,32 @@ impl BackupServiceClient {
         );
         let (content_type, body) = mp.build();
 
-        //TODO: move to reqwuest
+        let url = self.url("/v1/sync");
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, content_type.parse().unwrap());
+        headers.insert(ACCEPT, "application/json".parse().unwrap());
         let resp = self
             .http
-            .post("/v1/sync".to_string(), body, content_type)
-            .await?;
+            .post(url)
+            .headers(headers)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| HttpError::Generic {
+                message: e.to_string(),
+            })?;
+        let status = resp.status();
+        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
+            message: e.to_string(),
+        })?;
+        if !status.is_success() {
+            return Err(HttpError::BadStatusCode {
+                code: status.as_u16() as u64,
+                response_body: bytes.to_vec(),
+            });
+        }
         let v: Value =
-            serde_json::from_slice(&resp).map_err(|e| HttpError::Generic {
+            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
                 message: e.to_string(),
             })?;
         Ok(v)
@@ -190,19 +239,34 @@ impl BackupServiceClient {
         signer: &dyn SyncSigner,
     ) -> Result<String, HttpError> {
         // 1) Request challenge
-        let challenge_bytes = self
+        let url_challenge = self.url("/v1/retrieve-metadata/challenge/keypair");
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert(ACCEPT, "application/json".parse().unwrap());
+        let resp = self
             .http
-            .post(
-                "/v1/retrieve-metadata/challenge/keypair".to_string(),
-                b"{}".to_vec(),
-                "application/json".to_string(),
-            )
-            .await?;
-        let v: Value = serde_json::from_slice(&challenge_bytes).map_err(|e| {
-            HttpError::Generic {
+            .post(url_challenge)
+            .headers(headers.clone())
+            .body(b"{}".to_vec())
+            .send()
+            .await
+            .map_err(|e| HttpError::Generic {
                 message: e.to_string(),
-            }
+            })?;
+        let status = resp.status();
+        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
+            message: e.to_string(),
         })?;
+        if !status.is_success() {
+            return Err(HttpError::BadStatusCode {
+                code: status.as_u16() as u64,
+                response_body: bytes.to_vec(),
+            });
+        }
+        let v: Value =
+            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
+                message: e.to_string(),
+            })?;
         let challenge =
             v.get("challenge").and_then(|x| x.as_str()).ok_or_else(|| {
                 HttpError::Generic {
@@ -229,18 +293,33 @@ impl BackupServiceClient {
             },
             "challengeToken": token,
         });
-        let resp_bytes = self
+        let url_retrieve = self.url("/v1/retrieve-metadata");
+        let resp = self
             .http
-            .post(
-                "/v1/retrieve-metadata".to_string(),
+            .post(url_retrieve)
+            .headers(headers)
+            .body(
                 serde_json::to_vec(&payload).map_err(|e| HttpError::Generic {
                     message: e.to_string(),
                 })?,
-                "application/json".to_string(),
             )
-            .await?;
+            .send()
+            .await
+            .map_err(|e| HttpError::Generic {
+                message: e.to_string(),
+            })?;
+        let status = resp.status();
+        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
+            message: e.to_string(),
+        })?;
+        if !status.is_success() {
+            return Err(HttpError::BadStatusCode {
+                code: status.as_u16() as u64,
+                response_body: bytes.to_vec(),
+            });
+        }
         let v: Value =
-            serde_json::from_slice(&resp_bytes).map_err(|e| HttpError::Generic {
+            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
                 message: e.to_string(),
             })?;
         let metadata = v.get("metadata").ok_or_else(|| HttpError::Generic {
@@ -256,15 +335,16 @@ impl BackupServiceClient {
     }
 }
 
-/// Minimal HTTP adapter native clients must implement for backup-service interactions.
-#[uniffi::export(with_foreign)]
-#[async_trait]
-pub trait BackupHttpClient: Send + Sync {
-    async fn get(&self, path: String) -> Result<Vec<u8>, HttpError>;
-    async fn post(
-        &self,
-        path: String,
-        body: Vec<u8>,
-        content_type: String,
-    ) -> Result<Vec<u8>, HttpError>;
+fn resolve_base_url() -> Result<String, HttpError> {
+    let cfg = get_config().ok_or_else(|| HttpError::Generic {
+        message: "Bedrock config not initialized; call set_config() first".to_string(),
+    })?;
+    let url = match cfg.environment() {
+        BedrockEnvironment::Staging => STAGING_BACKUP_BASE_URL,
+        BedrockEnvironment::Production => PRODUCTION_BACKUP_BASE_URL,
+    };
+    Ok(url.to_string())
 }
+
+const STAGING_BACKUP_BASE_URL: &str = "https://backup-staging.placeholder";
+const PRODUCTION_BACKUP_BASE_URL: &str = "https://backup-prod.placeholder";

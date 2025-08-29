@@ -7,14 +7,10 @@ use crate::backup::FactorType;
 use crate::backup::OxideKey;
 use crate::backup::PersonalCustodyKeypair;
 use crate::primitives::filesystem::FileSystem;
-use crate::primitives::filesystem::InMemoryFileSystem;
 use chrono::Utc;
 use crypto_box::{PublicKey, SecretKey};
 use dryoc::rng;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
 fn helper_write_manifest_file(
     file_system: &dyn FileSystem,
