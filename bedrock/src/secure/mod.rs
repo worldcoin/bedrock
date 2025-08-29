@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use bedrock_macros::{bedrock_error, bedrock_export};
 use dryoc::kdf::Kdf;
 use rand::{rngs::OsRng, RngCore};
@@ -20,7 +22,7 @@ const MARBLE_SEED_SALT: &str = "world_id_card_marble_b9dcc41bf41_";
 
 type Key = [u8; KEY_LENGTH];
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(tag = "version", content = "key")]
 enum VersionedKey {
     V0(String),
@@ -31,8 +33,20 @@ enum VersionedKey {
     V1(Key),
 }
 
+/// Custom debug implementation for `VersionedKey` to ensure the actual key is not printed.
+impl Debug for VersionedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let version = match self {
+            Self::V0(_) => "V0",
+            Self::V1(_) => "V1",
+        };
+
+        write!(f, "VersionedKey({version})")
+    }
+}
+
 /// The `RootKey` is a 256-bit secret from which other keys are derived for use throughout World App.
-#[derive(uniffi::Object, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, uniffi::Object, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct RootKey {
     #[serde(flatten)]
     key: VersionedKey,
