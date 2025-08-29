@@ -132,6 +132,20 @@ impl EnclaveAttestationVerifier {
 
 impl EnclaveAttestationVerifier {
     fn parse_cose_sign1(&self, bytes: &[u8]) -> EnclaveAttestationResult<CoseSign1> {
+        // Validate before loading into buffer
+        if bytes.is_empty() {
+            return Err(EnclaveAttestationError::AttestationDocumentParseError(
+                "Empty attestation document".to_string(),
+            ));
+        }
+
+        let first_byte = bytes[0];
+        if !(0x80..=0x97).contains(&first_byte) && first_byte != 0x9f {
+            return Err(EnclaveAttestationError::AttestationDocumentParseError(
+                format!("Invalid CBOR magic byte: expected array marker (0x80-0x97 or 0x9f), got 0x{:02x}", first_byte)
+            ));
+        }
+
         let cbor_value: ciborium::Value =
             ciborium::from_reader(bytes).map_err(|e| {
                 EnclaveAttestationError::AttestationDocumentParseError(format!(
@@ -192,7 +206,7 @@ impl EnclaveAttestationVerifier {
                 ))
             })?;
 
-        // Collect intermediate certificates from cabundle
+        // Collect intermediate certificates from cabundle,
         let intermediate_certs: Vec<&[u8]> = attestation
             .cabundle
             .iter()
@@ -212,6 +226,7 @@ impl EnclaveAttestationVerifier {
             }
         };
 
+        // This is only used for tests
         let current_time = if should_skip_time_check {
             // Use the attestation timestamp converted to seconds for certificate validation
             // This ensures we're using the same time context as when the attestation was created
