@@ -27,42 +27,6 @@ pub struct V0BackupManifest {
     pub module_name: BackupModule,
 }
 
-impl V0BackupManifest {
-    pub fn new(
-        file_path: &str,
-        manifest_last_updated_at: DateTime<Utc>,
-        max_file_size_kb: u64,
-        module_name: BackupModule,
-    ) -> Result<Self, BackupError> {
-        let unsanitized_path = Path::new(file_path);
-
-        for component in unsanitized_path.components() {
-            match component {
-                Component::Normal(_) | Component::CurDir | Component::RootDir => {}
-                Component::ParentDir | Component::Prefix(_) => {
-                    return Err(BackupError::ParseBackupManifestError {
-                        // Important we don't log the actual file path as it may contain some user info
-                        details: "Invalid file path for manifest.".to_string(),
-                        manifest_name: module_name.to_string(),
-                    });
-                }
-            }
-        }
-
-        Ok(Self {
-            file_path: file_path.trim_start_matches('/').to_string(),
-            manifest_last_updated_at,
-            max_file_size_kb,
-            module_name,
-        })
-    }
-
-    #[must_use]
-    pub fn file_path(&self) -> &str {
-        &self.file_path
-    }
-}
-
 /// This backup format allows the app to store any files that it wants, primarily, PCPs. Root secret
 /// is stored separately and specially handled.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]

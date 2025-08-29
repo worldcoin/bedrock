@@ -1,6 +1,5 @@
 mod backup_format;
 mod manifest;
-mod personal_custody_keypair;
 mod service_client;
 mod signer;
 mod utils;
@@ -10,7 +9,6 @@ mod test;
 
 use bedrock_macros::bedrock_export;
 pub use manifest::{GlobalManifestV1, ManifestEntry, ManifestManager};
-use personal_custody_keypair::PersonalCustodyKeypair;
 use regex::Regex;
 pub use signer::SyncSigner;
 
@@ -260,13 +258,13 @@ impl BackupManager {
             .unseal(&encrypted_backup_keypair_bytes)
             .map_err(|_| BackupError::DecryptBackupKeypairError)?;
 
-        // 4.1: Build a PersonalCustodyKeypair from the decrypted backup keypair
-        let backup_keypair = Zeroizing::new(
-            PersonalCustodyKeypair::from_private_key_bytes(&backup_keypair_bytes),
+        // 4.1: Build a SecretKey from the decrypted backup keypair bytes
+        let backup_secret_key = Zeroizing::new(
+            SecretKey::from_slice(&backup_keypair_bytes)
+                .map_err(|_| BackupError::DecodeBackupKeypairError)?,
         );
-        // 4.2: Decrypt the sealed backup with the backup keypair
-        let unsealed_backup = backup_keypair
-            .sk()
+        // 4.2: Decrypt the sealed backup with the backup secret key
+        let unsealed_backup = backup_secret_key
             .unseal(sealed_backup_data)
             .map_err(|_| BackupError::DecryptBackupError)?;
 
@@ -274,7 +272,7 @@ impl BackupManager {
         let _unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
         Ok(UnpackedBackupResponse {
-            backup_keypair_public_key: hex::encode(backup_keypair.pk().as_bytes()),
+            backup_keypair_public_key: hex::encode(backup_secret_key.public_key().as_bytes()),
         })
     }
 
