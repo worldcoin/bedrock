@@ -1,4 +1,5 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
+use rand::RngCore as _;
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::Zeroize;
@@ -14,7 +15,7 @@ pub enum RootKeyError {
     KeyParseError,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(tag = "version", content = "key")]
 enum VersionedKey {
     V0(String),
@@ -94,6 +95,66 @@ impl RootKey {
 
 /// Internal implementation for `RootKey` (methods not exposed to foreign bindings)
 impl RootKey {
+    /// Encode the `RootKey` into a JSON string representation.
+    ///
+    /// The returned string is a JSON object with the shape {"version":"V0|V1","key":"<hex-or-string>"}.
+    // pub fn encode(&self) -> Result<String, RootKeyError> {
+    //     serde_json::to_string(self.inner.expose_secret()).map_err(|_| {
+    //         RootKeyError::Generic {
+    //             message: "Failed to serialize key".to_string(),
+    //         }
+    //     })
+    // }
+
+    /// Decode a `RootKey` from either a hex string (V0) or a JSON string (V0/V1).
+    ///
+    /// This is a compatibility shim for legacy call sites that previously accepted
+    /// multiple formats. It never fails; if parsing as JSON fails and the input is
+    /// not valid hex, it will keep the original string as a V0 value.
+    #[must_use]
+    pub fn decode(input: String) -> Self {
+        // Try JSON first
+        if let Ok(key) = serde_json::from_str::<VersionedKey>(&input) {
+            return Self {
+                inner: SecretBox::new(Box::new(key)),
+            };
+        }
+
+        // Preserve as-is in V0 for compatibility (validation performed elsewhere)
+        Self {
+            inner: SecretBox::new(Box::new(VersionedKey::V0(input))),
+        }
+    }
+
+    /// Strictly decode from a JSON string; returns an error if the input is not JSON or invalid.
+    pub fn decode_from_json_enforced(json_str: &str) -> Result<Self, RootKeyError> {
+        let key: VersionedKey =
+            serde_json::from_str(json_str).map_err(|_| RootKeyError::KeyParseError)?;
+
+        // Additional enforcement for V0: ensure it is valid hex of correct length
+        if let VersionedKey::V0(ref s) = key {
+            let decoded = hex::decode(s).map_err(|_| RootKeyError::KeyParseError)?;
+            if decoded.len() != KEY_LENGTH {
+                return Err(RootKeyError::KeyParseError);
+            }
+        }
+
+        Ok(Self {
+            inner: SecretBox::new(Box::new(key)),
+        })
+    }
+
+    /// Generate a new random V1 `RootKey`.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn new_random() -> Self {
+        let mut key = [0u8; KEY_LENGTH];
+        rand::thread_rng().fill_bytes(&mut key);
+        Self {
+            inner: SecretBox::new(Box::new(VersionedKey::V1(key))),
+        }
+    }
+
     /// Serializes a `RootKey` to a JSON string.
     ///
     /// # Warning
@@ -108,6 +169,23 @@ impl RootKey {
         })
     }
 }
+
+impl Clone for RootKey {
+    fn clone(&self) -> Self {
+        let inner = self.inner.expose_secret().clone();
+        Self {
+            inner: SecretBox::new(Box::new(inner)),
+        }
+    }
+}
+
+impl PartialEq for RootKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.expose_secret() == other.inner.expose_secret()
+    }
+}
+
+impl Eq for RootKey {}
 
 #[cfg(test)]
 mod test;

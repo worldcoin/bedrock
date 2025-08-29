@@ -1,5 +1,5 @@
 use crate::backup::{BackupError, BackupModule};
-use crate::secure::RootKey;
+use crate::root_key::RootKey;
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;

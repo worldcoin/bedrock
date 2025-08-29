@@ -37,8 +37,6 @@ pub mod backup;
 // Re-export commonly used primitives at the crate root for convenience
 pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
-/// Contains highly secure primitives. Particularly, it contains key management.
-pub mod secure;
 /// Key management for World App.
 mod root_key;
 

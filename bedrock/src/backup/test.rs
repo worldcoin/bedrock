@@ -6,7 +6,7 @@ use crate::backup::BackupModule;
 use crate::backup::FactorType;
 use crate::backup::PersonalCustodyKeypair;
 use crate::primitives::filesystem::FileSystem;
-use crate::secure::RootKey;
+use crate::root_key::RootKey;
 use chrono::Utc;
 use crypto_box::{PublicKey, SecretKey};
 use dryoc::rng;

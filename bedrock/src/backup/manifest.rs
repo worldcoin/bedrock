@@ -10,7 +10,7 @@ use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::primitives::filesystem::{create_middleware, FileSystemMiddleware};
-use crate::secure::RootKey;
+use crate::root_key::RootKey;
 use crate::{
     backup::{
         backup_format::v0::{V0Backup, V0BackupFile, V0BackupManifest},

@@ -16,7 +16,7 @@ pub use signer::SyncSigner;
 
 use crate::backup::backup_format::v0::V0Backup;
 use crate::backup::backup_format::BackupFormat;
-use crate::secure::RootKey;
+use crate::root_key::RootKey;
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
