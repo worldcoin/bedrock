@@ -8,9 +8,8 @@ use alloy::{
     sol,
 };
 
-use bedrock::{
-    primitives::BEDROCK_NONCE_PREFIX_CONST,
-    smart_account::{InstructionFlag, NonceKeyV1, TransactionTypeId},
+use bedrock::smart_account::{
+    InstructionFlag, NonceKeyV1, TransactionTypeId, BEDROCK_NONCE_PREFIX_CONST,
 };
 
 mod common;

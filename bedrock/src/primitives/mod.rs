@@ -9,14 +9,7 @@ use std::str::FromStr;
 // Re-export HTTP client types for external use
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
-/// The prefix for Bedrock-generated transactions.
-pub static BEDROCK_NONCE_PREFIX_CONST: &[u8; 5] = b"bdrck";
-
-/// The prefix for PBHTX-generated transactions.
-#[allow(dead_code)]
-pub static PBH_NONCE_PREFIX_CONST: &[u8; 5] = b"pbhtx";
-
-// Serde helper functions for skip_serializing_if
+// ---- Serde helper functions for `skip_serializing_if` ----
 
 /// Helper function to check if an `Address` is zero for serde `skip_serializing_if`
 #[must_use]
@@ -58,9 +51,6 @@ pub mod http_client;
 /// The elements in this module are only used in Foreign Tests and are not available in built binaries.
 #[cfg(feature = "tooling_tests")]
 pub mod tooling_tests;
-
-/// Contract interfaces and data structures for ERC-4337 account abstraction
-pub mod contracts;
 
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

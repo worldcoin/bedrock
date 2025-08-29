@@ -11,6 +11,11 @@ mod contracts;
 pub mod foreign;
 pub mod rpc;
 
+pub use contracts::entrypoint::{
+    EncodedSafeOpStruct, ISafe4337Module, UserOperation, ENTRYPOINT_4337,
+    GNOSIS_SAFE_4337_MODULE,
+};
+pub use contracts::safe_owner::SafeOwner;
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
 /// Errors that can occur when interacting with transaction operations.
@@ -45,7 +50,7 @@ impl SafeSmartAccount {
     /// # let safe_account = SafeSmartAccount::new("test_key".to_string(), "0x1234567890123456789012345678901234567890").unwrap();
     ///
     /// // Transfer USDC on World Chain
-    /// let tx_hash = safe_account.transaction_transfer(
+    /// let tx_hash = safe_account.tx_transfer(
     ///     Network::WorldChain,
     ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
     ///     "0x1234567890123456789012345678901234567890",
@@ -62,7 +67,7 @@ impl SafeSmartAccount {
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if the transaction submission fails.
     /// - Will throw an error if the global HTTP client has not been initialized.
-    pub async fn transaction_transfer(
+    pub async fn tx_transfer(
         &self,
         network: Network,
         token_address: &str,
@@ -81,7 +86,51 @@ impl SafeSmartAccount {
             .sign_and_execute(network, self, None, None, provider)
             .await
             .map_err(|e| TransactionError::Generic {
-                message: format!("Failed to execute transaction: {e}"),
+                message: format!("Failed to execute ERC-20 transfer: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Allows swapping the owner of a Safe Smart Account.
+    ///
+    /// This is used to allow key rotation. The EOA signer that can act on behalf of the Safe is rotated.
+    ///
+    /// # Arguments
+    /// - `old_owner`: The EOA of the old owner (address).
+    /// - `new_owner`: The EOA of the new owner (address).
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    /// - Will throw an RPC error if the transaction submission fails.
+    pub async fn tx_swap_safe_owner(
+        &self,
+        old_owner: &str,
+        new_owner: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let old_owner = Address::parse_from_ffi(old_owner, "old_owner")?;
+        let new_owner = Address::parse_from_ffi(new_owner, "new_owner")?;
+
+        // TODO: Check if we derive new_owner through key derivation directly in Bedrock.
+        // TODO: Check if rotation on Optimism is also necessary.
+
+        let transaction = crate::transaction::SafeOwner::new(
+            self.wallet_address,
+            old_owner,
+            new_owner,
+        );
+
+        let user_op_hash = transaction
+            .sign_and_execute(
+                Network::WorldChain,
+                self,
+                None,
+                None,
+                RpcProviderName::Alchemy,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                message: format!("Failed to execute swapOwner: {e}"),
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)

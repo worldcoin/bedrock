@@ -6,11 +6,10 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::primitives::PrimitiveError;
 use crate::smart_account::{
-    ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
-    TransactionTypeId, UserOperation,
+    InstructionFlag, Is4337Encodable, NonceKeyV1, TransactionTypeId,
 };
+use crate::{primitives::PrimitiveError, transaction::UserOperation};
 
 sol! {
     /// The ERC20 contract interface.
@@ -87,16 +86,12 @@ pub struct MetadataArg {
 impl Is4337Encodable for Erc20 {
     type MetadataArg = MetadataArg;
 
-    fn as_execute_user_op_call_data(&self) -> Bytes {
-        ISafe4337Module::executeUserOpCall {
-            // The token address
-            to: self.token_address,
-            value: U256::ZERO,
-            data: self.call_data.clone().into(),
-            operation: SafeOperation::Call as u8,
-        }
-        .abi_encode()
-        .into()
+    fn target_address(&self) -> Address {
+        self.token_address
+    }
+
+    fn call_data(&self) -> Bytes {
+        self.call_data.clone().into()
     }
 
     fn as_preflight_user_operation(
@@ -138,7 +133,7 @@ mod tests {
     use alloy::primitives::bytes;
     use std::str::FromStr;
 
-    use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
+    use crate::smart_account::BEDROCK_NONCE_PREFIX_CONST;
 
     use super::*;
 

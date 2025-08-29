@@ -15,15 +15,19 @@ use bedrock::{
         },
         Network,
     },
-    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::{foreign::UnparsedUserOperation, RpcProviderName},
+    smart_account::SafeSmartAccount,
+    transaction::{
+        foreign::UnparsedUserOperation, RpcProviderName, UserOperation, ENTRYPOINT_4337,
+    },
 };
 
 use serde::Serialize;
 use serde_json::json;
 
 mod common;
-use common::{deploy_safe, setup_anvil, IEntryPoint, PackedUserOperation, IERC20};
+use common::{
+    deploy_safe, setup_anvil, IEntryPointForTests, PackedUserOperation, IERC20,
+};
 
 // ------------------ Mock HTTP client that actually executes the op on Anvil ------------------
 #[derive(Clone)]
@@ -158,7 +162,7 @@ where
                     factory_data: get_opt("factoryData"),
                 };
 
-                let user_op: bedrock::smart_account::UserOperation =
+                let user_op: UserOperation =
                     unparsed.try_into().map_err(|e| HttpError::Generic {
                         message: format!("invalid userOp: {e}"),
                     })?;
@@ -202,7 +206,8 @@ where
                             message: "invalid entryPoint".into(),
                         }
                     })?;
-                let entry_point = IEntryPoint::new(entry_point_addr, &self.provider);
+                let entry_point =
+                    IEntryPointForTests::new(entry_point_addr, &self.provider);
                 let tx = entry_point
                     .handleOps(vec![packed], user_op.sender)
                     .send()
@@ -234,11 +239,10 @@ where
     }
 }
 
-// ------------------ The test for the full transaction_transfer flow ------------------
+// ------------------ The test for the full tx_transfer flow ------------------
 
 #[tokio::test]
-async fn test_transaction_transfer_full_flow_executes_user_operation(
-) -> anyhow::Result<()> {
+async fn test_tx_transfer_full_flow_executes_user_operation() -> anyhow::Result<()> {
     // 1) Spin up anvil fork
     let anvil = setup_anvil();
 
@@ -259,7 +263,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
 
     // 4) Fund EntryPoint deposit for Safe
-    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    let entry_point = IEntryPointForTests::new(*ENTRYPOINT_4337, &provider);
     let deposit_tx = entry_point
         .depositTo(safe_address)
         .value(U256::from(1e18 as u64))
@@ -292,11 +296,11 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     };
     let _ = set_http_client(Arc::new(client));
 
-    // 8) Execute high-level transfer via transaction_transfer
+    // 8) Execute high-level transfer via tx_transfer
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
     let amount = "1000000000000000000"; // 1 WLD
     let _user_op_hash = safe_account
-        .transaction_transfer(
+        .tx_transfer(
             Network::WorldChain,
             &wld_token_address.to_string(),
             &recipient.to_string(),
@@ -304,7 +308,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
             RpcProviderName::Alchemy,
         )
         .await
-        .expect("transaction_transfer failed");
+        .expect("tx_transfer failed");
 
     // 9) Verify balances updated
     let after_recipient = wld.balanceOf(recipient).call().await?;

@@ -6,16 +6,16 @@ use alloy::{
 };
 use bedrock::{
     primitives::Network,
-    smart_account::{
-        EncodedSafeOpStruct, SafeSmartAccount, SafeSmartAccountSigner, UserOperation,
+    smart_account::{SafeSmartAccount, SafeSmartAccountSigner},
+    transaction::{
+        foreign::UnparsedUserOperation, EncodedSafeOpStruct, UserOperation,
         ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
     },
-    transaction::foreign::UnparsedUserOperation,
 };
 
 mod common;
 use common::{
-    deploy_safe, setup_anvil, IEntryPoint, ISafe4337Module, PackedUserOperation,
+    deploy_safe, setup_anvil, IEntryPointForTests, ISafe4337Module, PackedUserOperation,
 };
 
 /// Integration test for the encoding, signing and execution of a 4337 transaction.
@@ -48,7 +48,7 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     let before_balance = provider.get_balance(safe_address2).await?;
 
     // Fund EntryPoint deposit for the Safe
-    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    let entry_point = IEntryPointForTests::new(*ENTRYPOINT_4337, &provider);
     let _ = entry_point
         .depositTo(safe_address)
         .value(U256::from(1e18))
@@ -99,7 +99,6 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         .expect("Failed to create SafeSmartAccount");
     let (va, vu) = user_op.extract_validity_timestamps()?;
     let op_hash = EncodedSafeOpStruct::from_user_op_with_validity(&user_op, va, vu)
-        .unwrap()
         .into_transaction_hash();
 
     let worldchain_chain_id = Network::WorldChain as u32;
