@@ -33,7 +33,7 @@ pub mod primitives;
 // Re-export commonly used primitives at the crate root for convenience
 pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
-/// Contains secure primitives. Particularly, key management for World App.
-mod secure;
+/// Key management for World App.
+mod root_key;
 
 uniffi::setup_scaffolding!("bedrock");
