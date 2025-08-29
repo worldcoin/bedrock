@@ -108,7 +108,7 @@ where
                 });
                 Ok(serde_json::to_vec(&resp).unwrap())
             }
-            // Execute the inner call directly through the Safe 4337 Module (no sponsorship path)
+            // Send the userOperation to alchemy as Rundler will be able to determine this is a PBH userOperation
             "eth_sendUserOperation" => {
                 let params = params.as_array().ok_or(HttpError::Generic {
                     message: "invalid params".into(),
