@@ -551,8 +551,10 @@ pub enum BackupError {
     LocalCheckpointError(String),
     #[error("Invalid checksum for file {module_name}")]
     /// File checksum does not match the expected value.
-    InvalidChecksumError { /// The module name associated with the file.
-        module_name: String },
+    InvalidChecksumError {
+        /// The module name associated with the file.
+        module_name: String,
+    },
     /// Remote manifest head is ahead of local.
     /// Native layer should trigger a download/apply of the latest backup before retrying.
     #[error("remote manifest is ahead of local; fetch and apply latest backup before updating")]

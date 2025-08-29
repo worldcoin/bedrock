@@ -118,7 +118,9 @@ impl ManifestManager {
 
     /// Returns the absolute path to the global manifest file on disk.
     #[allow(clippy::missing_const_for_fn)]
-    fn global_manifest_path() -> &'static str { GLOBAL_MANIFEST_FILE }
+    fn global_manifest_path() -> &'static str {
+        GLOBAL_MANIFEST_FILE
+    }
 
     /// Reads the global manifest from disk.
     ///
@@ -154,7 +156,9 @@ impl ManifestManager {
                 manifest_name: "global_manifest".to_string(),
             }
         })?;
-        let result = self.file_system.write_file(Self::global_manifest_path(), serialized);
+        let result = self
+            .file_system
+            .write_file(Self::global_manifest_path(), serialized);
         if result.is_err() {
             return Err(BackupError::WriteFileError);
         }
@@ -666,7 +670,9 @@ impl ManifestManager {
 }
 
 impl Default for ManifestManager {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -675,12 +681,8 @@ mod tests {
 
     #[test]
     fn test_cannot_create_backup_manifest_with_parent_directory() {
-        let result = BackupManifest::new(
-            "../../test.txt",
-            Utc::now(),
-            1024,
-            "test".to_string(),
-        );
+        let result =
+            BackupManifest::new("../../test.txt", Utc::now(), 1024, "test".to_string());
         assert!(result.is_err());
 
         let result = BackupManifest::new(
