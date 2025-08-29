@@ -8,13 +8,14 @@ use crate::primitives::contracts::{
     UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
 };
 
-use alloy_primitives::keccak256;
-use crate::primitives::contracts::{
-    PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_SEPOLIA,
-};
+use crate::primitives::contracts::{PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_SEPOLIA};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
+
+use crate::primitives::world_id::generate_pbh_proof;
+
 use crate::transaction::rpc::{RpcError, RpcProviderName};
+use alloy_primitives::keccak256;
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use alloy::sol_types::SolValue;
@@ -28,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use world_chain_builder_pbh::external_nullifier::{
     EncodedExternalNullifier, ExternalNullifier,
 };
-use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, Proof};
 
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
@@ -39,12 +39,6 @@ const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
 pub struct SerializableIdentity {
     pub nullifier: Field,
     pub trapdoor: Field,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InclusionProof {
-    pub root: Field,
-    pub proof: semaphore_rs::poseidon_tree::Proof,
 }
 
 impl From<&Identity> for SerializableIdentity {
@@ -181,7 +175,7 @@ pub trait Is4337Encodable {
 
         // // // PBH Logic
         if pbh {
-            let pbh_payload = Self::generate_pbh_proof(&user_operation).await;
+            let pbh_payload = generate_pbh_proof(&user_operation).await;
             full_signature.extend_from_slice(
                 PBHPayload::from(pbh_payload.clone()).abi_encode().as_ref(),
             );
@@ -189,134 +183,19 @@ pub trait Is4337Encodable {
 
         user_operation.signature = full_signature.into();
 
-        // println!("user_operation: {user_operation:?}");
-
         // 5. Submit UserOperation
         let user_op_hash: FixedBytes<32> = rpc_client
-        // Always send to standard 4337 entrypoint even for PBH
-        // The bundler will route it to the PBH entrypoint if it's a PBH transaction
-        .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
+            // Always send to standard 4337 entrypoint even for PBH
+            // The bundler will route it to the PBH entrypoint if it's a PBH transaction
+            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
             .await?;
 
         Ok(user_op_hash)
     }
 
-    /// Generates a PBH proof for a given user operation.
-    async fn generate_pbh_proof(user_op: &UserOperation) -> PbhPayload {
-        // Convert from UserOperation to PackedUserOperation
-        // TODO: Fix this
-        let packed_user_op: PackedUserOperation = PackedUserOperation::from(user_op);
+    // async fn get_pbh_nonce() -> u64 {
 
-        let signal = Self::hash_user_op(&packed_user_op);
-
-        let external_nullifier = ExternalNullifier::v1(8, 2025, 0);
-
-        // TODO: Autotmatically find an unused one
-        let encoded_external_nullifier =
-            EncodedExternalNullifier::from(external_nullifier);
-
-
-        let secrets: String = std::fs::read_to_string("tests/sepolia_secrets.json").unwrap();
-
-        let secret: serde_json::Value = serde_json::from_str(&secrets).unwrap();
-        let nullifier = secret["nullifier"].as_str().unwrap();
-        let trapdoor = secret["trapdoor"].as_str().unwrap();
-
-        let identity = Identity {
-            nullifier: nullifier.parse().unwrap(),
-            trapdoor: trapdoor.parse().unwrap(),
-        };
-
-        let identities = vec![identity];
-
-        let proofs =
-            futures::future::try_join_all(identities.iter().map(|identity| async {
-                Self::fetch_inclusion_proof(
-                    "https://signup-orb-ethereum.stage-crypto.worldcoin.dev", // Staging
-                    identity,
-                )
-                .await
-            }))
-            .await
-            .unwrap();
-
-        let identity = identities[0].clone();
-        let inclusion_proof = proofs[0].clone();
-
-        // println!("inclusion_proof: {inclusion_proof:?}");
-
-        let proof: semaphore_rs_proof::Proof = semaphore_rs::protocol::generate_proof(
-            &identity,
-            &inclusion_proof.proof,
-            encoded_external_nullifier.0,
-            signal,
-        )
-        .expect("Failed to generate semaphore proof");
-
-        // println!("proof: {proof:?}");
-
-        let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
-            &identity,
-            encoded_external_nullifier.0,
-        );
-
-        let proof = Proof(proof);
-
-        PbhPayload {
-            external_nullifier,
-            nullifier_hash,
-            root: inclusion_proof.root,
-            proof,
-        }
-    }
-
-    /// Fetches an inclusion proof for a given identity from the signup sequencer.
-    ///
-    /// This function sends a request to the sequencer to fetch the inclusion proof for a given identity.
-    ///
-    /// # Arguments
-    /// * `url` - The URL of the sequencer
-    /// * `identity` - The identity to fetch the proof for
-    async fn fetch_inclusion_proof(
-        url: &str,
-        identity: &Identity,
-    ) -> eyre::Result<InclusionProof> {
-        let client = Client::new();
-
-        let commitment = identity.commitment();
-        let response = client
-            .post(format!("{}/inclusionProof", url))
-            .json(&serde_json::json! {{
-                "identityCommitment": commitment,
-            }})
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let proof: InclusionProof = response.json().await?;
-
-        Ok(proof)
-    }
-
-    /// Computes a ZK-friendly hash of a PackedUserOperation.
-    ///
-    /// This function extracts key fields (sender, nonce, callData) from a PackedUserOperation,
-    /// encodes them using ABI packed encoding, and converts the result to a Field element
-    /// suitable for use in zero-knowledge proof circuits.
-    ///
-    /// # Arguments
-    /// * `user_op` - The PackedUserOperation to hash
-    ///
-    /// # Returns
-    /// A Field element representing the hash of the user operation
-    fn hash_user_op(user_op: &PackedUserOperation) -> Field {
-        let hash = SolValue::abi_encode_packed(&(
-            &user_op.sender,
-            &user_op.nonce,
-            &user_op.callData,
-        ));
-        hash_to_field(hash.as_slice())
-    }
+    // }
 }
 
 #[cfg(test)]

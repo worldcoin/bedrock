@@ -11,13 +11,13 @@ use bedrock::{
     primitives::{
         http_client::{
             set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
-        },
-        Network,
+        }, world_id::set_world_id_identity, Network
     },
     smart_account::SafeSmartAccount,
     transaction::RpcProviderName,
 };
 
+use semaphore_rs::identity::Identity;
 use serde::Serialize;
 use serde_json::json;
 
@@ -73,7 +73,8 @@ where
                 message: "invalid json".into(),
             })?;
 
-        let method = root.get("method")
+        let method = root
+            .get("method")
             .and_then(|m| m.as_str())
             .ok_or(HttpError::Generic {
                 message: "invalid json".into(),
@@ -108,16 +109,21 @@ where
             }
             // Forward all other methods to the actual provider
             _ => {
-
                 println!("method: {method}");
                 println!("params: {params}");
 
                 // Forward the JSON-RPC request to the provider
-                let response = self.provider.raw_request::<serde_json::Value, serde_json::Value>(method.into(), params).await
+                let response = self
+                    .provider
+                    .raw_request::<serde_json::Value, serde_json::Value>(
+                        method.into(),
+                        params,
+                    )
+                    .await
                     .map_err(|e| HttpError::Generic {
                         message: format!("Provider request failed: {}", e),
                     })?;
-                
+
                 let resp = json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -132,18 +138,16 @@ where
 // ------------------ The test for the full transaction_transfer flow ------------------
 
 #[tokio::test]
-async fn test_pbh_transaction_transfer_full_flow(
-) -> anyhow::Result<()> {
+async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
     let secrets: String = std::fs::read_to_string("tests/sepolia_secrets.json")?;
-
     let secret: serde_json::Value = serde_json::from_str(&secrets)?;
+    let nullifier = secret["nullifier"].as_str().unwrap();
+    let trapdoor = secret["trapdoor"].as_str().unwrap();
     let private_key = secret["private_key"].as_str().unwrap();
     let safe_address = secret["safe_address"].as_str().unwrap();
     let rpc_url: Url = secret["rpc_url"].as_str().unwrap().parse()?;
 
-    let owner_signer = PrivateKeySigner::from_slice(
-        &hex::decode(private_key)?,
-    )?;
+    let owner_signer = PrivateKeySigner::from_slice(&hex::decode(private_key)?)?;
 
     let owner_key_hex = hex::encode(owner_signer.to_bytes());
 
@@ -157,11 +161,17 @@ async fn test_pbh_transaction_transfer_full_flow(
     };
     let _ = set_http_client(Arc::new(client));
 
+    let identity = Identity {
+        nullifier: nullifier.parse().unwrap(),
+        trapdoor: trapdoor.parse().unwrap(),
+    };
+    let _ = set_world_id_identity(Arc::new(identity));
+
     // 8) Execute high-level transfer via transaction_transfer
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
     let amount = "1";
     let recipient = safe_address;
-    
+
     let _user_op_hash = safe_account
         .transaction_transfer(
             Network::WorldChainSepolia,

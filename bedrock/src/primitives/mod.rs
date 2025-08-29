@@ -62,6 +62,9 @@ pub mod tooling_tests;
 /// Contract interfaces and data structures for ERC-4337 account abstraction
 pub mod contracts;
 
+/// Introduces World ID identity functionality for Bedrock operations
+pub mod world_id;
+
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 #[repr(u32)]
