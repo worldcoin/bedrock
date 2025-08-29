@@ -33,7 +33,7 @@ use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, Proof};
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
 /// Operations are valid for this duration from the time they are signed.
-const USER_OPERATION_VALIDITY_DURATION_HOURS: i64 = 12;
+const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SerializableIdentity {
@@ -152,7 +152,7 @@ pub trait Is4337Encodable {
 
         // Set validUntil to the configured duration from now
         let valid_until_seconds = (Utc::now()
-            + Duration::hours(USER_OPERATION_VALIDITY_DURATION_HOURS))
+            + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
         .timestamp();
         let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
         let valid_until_u48 = U48::from(valid_until_seconds);
