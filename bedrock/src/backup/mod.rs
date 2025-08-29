@@ -1,13 +1,16 @@
 mod backup_format;
 mod manifest;
+mod personal_custody_keypair;
 mod service_client;
 mod signer;
+mod utils;
 
 #[cfg(test)]
 mod test;
 
 use bedrock_macros::bedrock_export;
 pub use manifest::{BackupManifest, GlobalManifestV1, ManifestEntry, ManifestManager};
+use personal_custody_keypair::PersonalCustodyKeypair;
 use regex::Regex;
 pub use signer::SyncSigner;
 
@@ -159,11 +162,11 @@ impl BackupManager {
 
         // 4.1: Create a backup encryption keypair
         // NOTE: Underlying secret key will get zeroized on drop.
-        let backup_encryption_keypair = PersonalCustodyKeypair::new()?;
+        let backup_secret_key = SecretKey::generate(&mut rand::thread_rng());
 
         // 4.2: Encrypt the backup with the backup encryption public key to create the sealed backup
-        let sealed_backup = backup_encryption_keypair
-            .pk()
+        let sealed_backup = backup_secret_key
+            .public_key()
             .seal(&mut rand::thread_rng(), &unsealed_backup)
             .map_err(|_| BackupError::EncryptBackupError)?;
 
@@ -173,10 +176,7 @@ impl BackupManager {
         // reduces the attack surface.
         let encrypted_backup_keypair = factor_secret_key
             .public_key()
-            .seal(
-                &mut rand::thread_rng(),
-                &backup_encryption_keypair.sk().to_bytes(),
-            )
+            .seal(&mut rand::thread_rng(), &backup_secret_key.to_bytes())
             .map_err(|_| BackupError::EncryptBackupError)?;
 
         // 6: Prepare the result
@@ -184,7 +184,7 @@ impl BackupManager {
             sealed_backup_data: sealed_backup,
             encrypted_backup_keypair: hex::encode(encrypted_backup_keypair),
             backup_keypair_public_key: hex::encode(
-                backup_encryption_keypair.pk().as_bytes(),
+                backup_secret_key.public_key().as_bytes(),
             ),
             manifest_hash: ManifestManager::compute_manifest_hash(&GlobalManifestV1 {
                 version: 1,
