@@ -42,45 +42,16 @@ impl Erc20 {
     }
 }
 
-// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
-// NOTE: Ordering should never change, only new values should be added
+/// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
+/// NOTE: Ordering should never change, only new values should be added
+#[derive(Debug, uniffi::Enum)]
 #[repr(u8)]
-#[allow(dead_code)]
-pub enum TransferSource {
-    QrScanner = 1,
-    WalletHome = 2,
-    DollarPage = 3,
-    WorldCoinPage = 4,
-    CryptoPage = 5,
-    ExternalPage = 6,
-    Spending = 7,
-    Savings = 8,
-    TokenUnavailable = 9,
-    SavingsIntro = 10,
-    ContentCard = 11,
-    InfoTabBanner = 12,
-    MiniApp = 13,
-    ClaimToVault = 14,
-    ContactTab = 15,
-    DeleteProfile = 16,
-    NewPaymentFlow = 17,
-    CashSection = 18,
-    CryptoSection = 19,
-    Deeplink = 20,
-    WorldSection = 21,
-}
-
-// Second byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
-// NOTE: Ordering should never change, only new values should be added
-#[repr(u8)]
-#[allow(dead_code)]
 pub enum TransferAssociation {
     None = 1,
     XmtpMessage = 2,
 }
 
 pub struct MetadataArg {
-    pub source: Option<TransferSource>,
     pub association: Option<TransferAssociation>,
 }
 
@@ -108,13 +79,8 @@ impl Is4337Encodable for Erc20 {
 
         let mut metadata_bytes: [u8; 10] = [0u8; 10];
         if let Some(metadata) = metadata {
-            // We use 0 if the individual field is not set
-            // Hence why we use 1 as the first index in enum definition
-            if let Some(source) = metadata.source {
-                metadata_bytes[0] = source as u8;
-            }
             if let Some(association) = metadata.association {
-                metadata_bytes[1] = association as u8;
+                metadata_bytes[0] = association as u8;
             }
         }
 
@@ -195,7 +161,6 @@ mod tests {
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
 
         let metadata = MetadataArg {
-            source: Some(TransferSource::QrScanner),
             association: Some(TransferAssociation::XmtpMessage),
         };
 
@@ -210,9 +175,8 @@ mod tests {
         assert_eq!(be[6], 0u8);
 
         // Check metadata
-        assert_eq!(be[7], TransferSource::QrScanner as u8);
-        assert_eq!(be[8], TransferAssociation::XmtpMessage as u8);
-        assert_eq!(&be[9..=16], &[0u8; 8]);
+        assert_eq!(be[7], TransferAssociation::XmtpMessage as u8);
+        assert_eq!(&be[8..=16], &[0u8; 9]);
 
         // sequence must be zero
         assert_eq!(&be[24..32], &[0u8; 8]);
