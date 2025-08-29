@@ -13,6 +13,7 @@ pub use signer::SyncSigner;
 
 use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
 use crate::backup::backup_format::BackupFormat;
+use crate::secure::RootKey;
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -136,7 +137,7 @@ impl BackupManager {
         log::info!("[BackupManager] creating sealed backup for new user with factor: {factor_type:?}");
 
         // 1: Decode the root secret from multiple formats
-        let root_secret = OxideKey::decode(root_secret)?;
+        let root_secret = Arc::new(RootKey::decode(root_secret));
 
         // 2.1: Decode factor secret from hex
         let factor_secret_bytes = hex::decode(factor_secret)
@@ -222,7 +223,7 @@ impl BackupManager {
         encrypted_backup_keypair: String,
         factor_secret: String,
         factor_type: FactorType,
-    ) -> OxideResult<DecryptedBackup> {
+    ) -> Result<DecryptedBackup, BackupError> {
         log::info!(
             "[BackupManager] decrypting sealed backup with factor: {factor_type:?}"
         );
@@ -457,7 +458,7 @@ impl BackupManager {
     /// * `BackupError::IoError` - if unsealed backup creation fails.
     /// * `BackupError::InvalidRootSecretError` - if the backup root secret is invalid.
     fn generate_sealed_backup_with_files(
-        root_secret: Arc<OxideKey>,
+        root_secret: Arc<RootKey>,
         files: Vec<V0BackupFile>,
         backup_keypair_public_key: String,
     ) -> Result<Vec<u8>, BackupError> {
@@ -621,6 +622,15 @@ pub struct CreatedBackup {
     backup_keypair_public_key: String,
     /// The manifest hash representing the current backup state. Hex-encoded, 32-byte Blake3 hash.
     manifest_hash: String,
+}
+
+#[derive(Debug, uniffi::Record)]
+pub struct DecryptedBackup {
+    /// The unsealed backup data with all the files.
+    backup: BackupFormat,
+    /// The public key of the backup keypair that was used to encrypt the backup. Client will need
+    /// to save it to re-encrypt future backup updates. Hex encoded.
+    backup_keypair_public_key: String,
 }
 
 #[derive(Debug, uniffi::Record)]

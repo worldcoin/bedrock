@@ -4,13 +4,13 @@ use crate::backup::BackupManager;
 use crate::backup::BackupManifest;
 use crate::backup::BackupModule;
 use crate::backup::FactorType;
-use crate::backup::OxideKey;
-use crate::backup::PersonalCustodyKeypair;
 use crate::primitives::filesystem::FileSystem;
+use crate::secure::RootKey;
 use chrono::Utc;
 use crypto_box::{PublicKey, SecretKey};
 use dryoc::rng;
 use std::str::FromStr;
+use std::sync::Arc;
 
 fn helper_write_manifest_file(
     file_system: &dyn FileSystem,
@@ -111,7 +111,7 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
     assert_eq!(
         BackupFormat::from_bytes(&decrypted_backup).unwrap(),
         BackupFormat::V0(V0Backup {
-            root_secret: OxideKey::decode(root_secret.clone()).unwrap(),
+            root_secret: Arc::new(RootKey::decode(root_secret.clone())),
             files: vec![]
         })
     );
@@ -129,7 +129,7 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 
     // Try to re-encrypt the backup using just the public key
     let new_backup = BackupFormat::V0(V0Backup {
-        root_secret: OxideKey::decode(root_secret).unwrap(),
+        root_secret: Arc::new(RootKey::decode(root_secret)),
         files: vec![V0BackupFile {
             data: b"Hello, World!".to_vec(),
             checksum: hex::decode(
@@ -192,7 +192,7 @@ fn test_decrypt_sealed_backup_with_prf() {
     assert_eq!(
         decrypted.backup,
         BackupFormat::V0(V0Backup {
-            root_secret: OxideKey::decode(root_secret).unwrap(),
+            root_secret: Arc::new(RootKey::decode(root_secret)),
             files: vec![]
         })
     );
@@ -288,7 +288,7 @@ fn test_re_encrypt_backup() {
     assert_eq!(
         BackupFormat::from_bytes(&decrypted_backup).unwrap(),
         BackupFormat::V0(V0Backup {
-            root_secret: OxideKey::decode(root_secret).unwrap(),
+            root_secret: Arc::new(RootKey::decode(root_secret)),
             files: vec![]
         })
     );

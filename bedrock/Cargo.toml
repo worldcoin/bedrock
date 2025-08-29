@@ -35,6 +35,7 @@ blake3 = "1.5.5"
 chrono = { version = "0.4.41", default-features = false, features = [
     "now",
     "std",
+    "serde",
 ] }
 dryoc = { git = "https://github.com/brndnmtthws/dryoc", rev = "e0e0ef0" }
 hex = "0.4.3"
@@ -59,10 +60,8 @@ zeroize = "1.8.1"
 ciborium = "0.2.2"
 flate2 = "1.0.28"
 tar = "0.4.40"
-blake3 = "1.5.5"
 strum = { version = "0.26.2", features = ["derive"] }
 uuid = { version = "1.4.1", features = ["v4"], default-features = false }
-dryoc = { git = "https://github.com/brndnmtthws/dryoc", rev = "e0e0ef0" }
 reqwest = { version = "0.12.7", default-features = false, features = [
     "rustls-tls",
     "json",

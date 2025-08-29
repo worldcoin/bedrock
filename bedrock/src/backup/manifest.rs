@@ -10,6 +10,7 @@ use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::primitives::filesystem::{create_middleware, FileSystemMiddleware};
+use crate::secure::RootKey;
 use crate::{
     backup::{
         backup_format::v0::{V0Backup, V0BackupFile, V0BackupManifest},
@@ -292,8 +293,7 @@ impl ManifestManager {
 
         // Materialize files from manifest and build a sealed backup container
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
-        let root = OxideKey::decode(root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let root = Arc::new(RootKey::decode(root_secret));
         let unsealed = V0Backup::new(root, files);
         let unsealed_bytes = unsealed.to_bytes()?;
         // Encrypt with backup keypair public key
@@ -377,8 +377,7 @@ impl ManifestManager {
         let new_manifest_hash = ManifestManager::compute_manifest_hash(&manifest);
 
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
-        let root = OxideKey::decode(root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let root = Arc::new(RootKey::decode(root_secret));
         let unsealed = V0Backup::new(root, files);
         let unsealed_bytes = unsealed.to_bytes()?;
         let pk_bytes = hex::decode(backup_keypair_public_key)

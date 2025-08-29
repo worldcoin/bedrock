@@ -1,4 +1,5 @@
 use crate::backup::{BackupError, BackupModule};
+use crate::secure::RootKey;
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -66,7 +67,7 @@ impl V0BackupManifest {
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct V0Backup {
     /// Root secret that is used to derive the wallet, World ID identity and PCP encryption keys.
-    pub root_secret: Arc<OxideKey>,
+    pub root_secret: Arc<RootKey>,
     /// List of files in the backup determined by the mobile app.
     pub files: Vec<V0BackupFile>,
 }
@@ -98,7 +99,7 @@ impl V0BackupFile {
 }
 
 impl V0Backup {
-    pub const fn new(root_secret: Arc<OxideKey>, files: Vec<V0BackupFile>) -> Self {
+    pub const fn new(root_secret: Arc<RootKey>, files: Vec<V0BackupFile>) -> Self {
         Self { root_secret, files }
     }
 
@@ -184,10 +185,13 @@ impl V0Backup {
         }
 
         // Validate the root secret.
-        let root_secret = OxideKey::decode_from_json_enforced(root_secret)
+        let root_secret = RootKey::decode_from_json_enforced(&root_secret)
             .map_err(|_| BackupError::InvalidRootSecretError)?;
 
-        Ok(Self { root_secret, files })
+        Ok(Self {
+            root_secret: Arc::new(root_secret),
+            files,
+        })
     }
 
     /// Serialize the `BackupFormat` into unencrypted bytes. The encryption is going to be done
@@ -273,7 +277,7 @@ mod tests {
         ];
 
         let backup =
-            V0Backup::new(OxideKey::decode(root_secret).unwrap(), files.clone());
+            V0Backup::new(Arc::new(RootKey::decode(root_secret)), files.clone());
         let bytes = backup.to_bytes().unwrap();
         let deserialized_backup = V0Backup::from_bytes(&bytes).unwrap();
 
@@ -287,8 +291,8 @@ mod tests {
         assert!(V0Backup::peek_version(&bytes));
 
         // Test with v1 key
-        let v1_root_secret = OxideKey::new().unwrap();
-        let v1_backup = V0Backup::new(v1_root_secret.clone(), vec![]);
+        let v1_root_secret = RootKey::new_random();
+        let v1_backup = V0Backup::new(Arc::new(v1_root_secret.clone()), vec![]);
         let v1_bytes = v1_backup.to_bytes().unwrap();
         let v1_deserialized_backup = V0Backup::from_bytes(&v1_bytes).unwrap();
         assert_eq!(
@@ -306,7 +310,7 @@ mod tests {
                 .to_string();
         let files = vec![];
         let backup =
-            V0Backup::new(OxideKey::decode(root_secret).unwrap(), files.clone());
+            V0Backup::new(Arc::new(RootKey::decode(root_secret)), files.clone());
         let bytes = backup.to_bytes().unwrap();
         let deserialized_backup = V0Backup::from_bytes(&bytes).unwrap();
         assert_eq!(
