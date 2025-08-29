@@ -30,7 +30,7 @@ use constants::{
 };
 
 /// Verifies AWS Nitro Enclave attestation documents
-/// 
+///
 /// This class performs comprehensive verification of attestation documents including:
 /// - COSE Sign1 signature verification
 /// - Certificate chain validation against AWS Nitro root certificates
@@ -48,7 +48,6 @@ pub struct EnclaveAttestationVerifier {
 
 #[bedrock_export]
 impl EnclaveAttestationVerifier {
-
     /// Creates a new EnclaveAttestationVerifier
     ///
     /// # Arguments
@@ -64,7 +63,7 @@ impl EnclaveAttestationVerifier {
             BedrockEnvironment::Production => AWS_NITRO_ROOT_CERT_PROD.to_vec(),
             BedrockEnvironment::Staging => AWS_NITRO_ROOT_CERT_STAGING.to_vec(),
         };
-        
+
         Self {
             allowed_pcr_configs,
             root_certificate,
@@ -123,16 +122,8 @@ impl EnclaveAttestationVerifier {
         self.check_attestation_freshness(&attestation)?;
         let public_key = self.extract_public_key(&attestation)?;
 
-        // Convert BTreeMap<usize, ByteBuf> to HashMap<u32, Vec<u8>>
-        let pcr_values_u32: HashMap<u32, Vec<u8>> = attestation
-            .pcrs
-            .into_iter()
-            .map(|(k, v)| (k as u32, v.into_vec()))
-            .collect();
-
         Ok(VerifiedAttestation::new(
             hex::encode(public_key),
-            pcr_values_u32,
             attestation.timestamp,
             attestation.module_id.clone(),
         ))
@@ -144,20 +135,21 @@ impl EnclaveAttestationVerifier {
         let cbor_value: ciborium::Value =
             ciborium::from_reader(bytes).map_err(|e| {
                 EnclaveAttestationError::AttestationDocumentParseError(format!(
-                    "Failed to parse CBOR: {}",
-                    e
+                    "Failed to parse CBOR: {e}"
                 ))
             })?;
 
         CoseSign1::from_cbor_value(cbor_value).map_err(|e| {
             EnclaveAttestationError::AttestationDocumentParseError(format!(
-                "Failed to parse COSE Sign1: {}",
-                e
+                "Failed to parse COSE Sign1: {e}"
             ))
         })
     }
 
-    fn parse_cbor_payload(&self, cose_sign1: &CoseSign1) -> EnclaveAttestationResult<AttestationDoc> {
+    fn parse_cbor_payload(
+        &self,
+        cose_sign1: &CoseSign1,
+    ) -> EnclaveAttestationResult<AttestationDoc> {
         let payload = cose_sign1.payload.as_ref().ok_or_else(|| {
             EnclaveAttestationError::AttestationDocumentParseError(
                 "Missing payload in COSE Sign1".to_string(),
@@ -172,7 +164,10 @@ impl EnclaveAttestationVerifier {
         })
     }
 
-    fn verify_certificate_chain(&self, attestation: &AttestationDoc) -> EnclaveAttestationResult<Certificate> {
+    fn verify_certificate_chain(
+        &self,
+        attestation: &AttestationDoc,
+    ) -> EnclaveAttestationResult<Certificate> {
         // Parse root certificate from PEM
         let pem_str = std::str::from_utf8(&self.root_certificate).map_err(|e| {
             EnclaveAttestationError::AttestationChainInvalid(format!(
@@ -189,12 +184,13 @@ impl EnclaveAttestationVerifier {
         let root_cert_der = pem.contents();
 
         // Create trust anchor from root certificate
-        let trust_anchor = TrustAnchor::try_from_cert_der(&root_cert_der).map_err(|e| {
-            EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Failed to create trust anchor from root certificate: {}",
-                e
-            ))
-        })?;
+        let trust_anchor =
+            TrustAnchor::try_from_cert_der(&root_cert_der).map_err(|e| {
+                EnclaveAttestationError::AttestationChainInvalid(format!(
+                    "Failed to create trust anchor from root certificate: {}",
+                    e
+                ))
+            })?;
 
         // Collect intermediate certificates from cabundle
         let intermediate_certs: Vec<&[u8]> = attestation
@@ -215,7 +211,7 @@ impl EnclaveAttestationVerifier {
                 false
             }
         };
-        
+
         let current_time = if should_skip_time_check {
             // Use the attestation timestamp converted to seconds for certificate validation
             // This ensures we're using the same time context as when the attestation was created
@@ -231,13 +227,15 @@ impl EnclaveAttestationVerifier {
         };
 
         // Create end entity certificate from the leaf certificate
-        let end_entity_cert = EndEntityCert::try_from(attestation.certificate.as_slice())
-            .map_err(|e| {
-                EnclaveAttestationError::AttestationChainInvalid(format!(
-                    "Failed to parse leaf certificate: {}",
-                    e
-                ))
-            })?;
+        let end_entity_cert = EndEntityCert::try_from(
+            attestation.certificate.as_slice(),
+        )
+        .map_err(|e| {
+            EnclaveAttestationError::AttestationChainInvalid(format!(
+                "Failed to parse leaf certificate: {}",
+                e
+            ))
+        })?;
 
         // Verify the certificate chain
         end_entity_cert
@@ -263,7 +261,11 @@ impl EnclaveAttestationVerifier {
         })
     }
 
-    fn verify_cose_signature(&self, cose_sign1: &CoseSign1, leaf_cert: &Certificate) -> EnclaveAttestationResult<()> {
+    fn verify_cose_signature(
+        &self,
+        cose_sign1: &CoseSign1,
+        leaf_cert: &Certificate,
+    ) -> EnclaveAttestationResult<()> {
         // Extract public key from certificate
         let spki = &leaf_cert.tbs_certificate.subject_public_key_info;
         let public_key_bytes = spki.subject_public_key.as_bytes().ok_or_else(|| {
@@ -273,12 +275,13 @@ impl EnclaveAttestationVerifier {
         })?;
 
         // Parse as P-384 public key
-        let verifying_key = VerifyingKey::from_sec1_bytes(public_key_bytes).map_err(|e| {
-            EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                "Failed to parse P-384 public key: {}",
-                e
-            ))
-        })?;
+        let verifying_key =
+            VerifyingKey::from_sec1_bytes(public_key_bytes).map_err(|e| {
+                EnclaveAttestationError::AttestationSignatureInvalid(format!(
+                    "Failed to parse P-384 public key: {}",
+                    e
+                ))
+            })?;
 
         let signature = &cose_sign1.signature;
 
@@ -315,38 +318,46 @@ impl EnclaveAttestationVerifier {
             ciborium::Value::Bytes(payload.clone()),
         ]);
 
-        ciborium::into_writer(&sig_structure_cbor, &mut sig_structure).map_err(|e| {
-            EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                "Failed to encode Sig_structure: {}",
-                e
-            ))
-        })?;
+        ciborium::into_writer(&sig_structure_cbor, &mut sig_structure).map_err(
+            |e| {
+                EnclaveAttestationError::AttestationSignatureInvalid(format!(
+                    "Failed to encode Sig_structure: {}",
+                    e
+                ))
+            },
+        )?;
 
         // Parse and verify the signature
-        let ecdsa_signature = Signature::from_bytes(signature.as_slice().try_into().map_err(|_| {
-            EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                "Invalid signature length: expected 96 bytes, got {}",
-                signature.len()
-            ))
-        })?)
-        .map_err(|e| {
-            EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                "Failed to parse ECDSA signature: {}",
-                e
-            ))
-        })?;
+        let ecdsa_signature =
+            Signature::from_bytes(signature.as_slice().try_into().map_err(|_| {
+                EnclaveAttestationError::AttestationSignatureInvalid(format!(
+                    "Invalid signature length: expected 96 bytes, got {}",
+                    signature.len()
+                ))
+            })?)
+            .map_err(|e| {
+                EnclaveAttestationError::AttestationSignatureInvalid(format!(
+                    "Failed to parse ECDSA signature: {}",
+                    e
+                ))
+            })?;
 
-        verifying_key.verify(&sig_structure, &ecdsa_signature).map_err(|e| {
-            EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                "Signature verification failed: {}",
-                e
-            ))
-        })?;
+        verifying_key
+            .verify(&sig_structure, &ecdsa_signature)
+            .map_err(|e| {
+                EnclaveAttestationError::AttestationSignatureInvalid(format!(
+                    "Signature verification failed: {}",
+                    e
+                ))
+            })?;
 
         Ok(())
     }
 
-    fn validate_pcr_values(&self, attestation: &AttestationDoc) -> EnclaveAttestationResult<()> {
+    fn validate_pcr_values(
+        &self,
+        attestation: &AttestationDoc,
+    ) -> EnclaveAttestationResult<()> {
         if attestation.pcrs.is_empty() {
             return Err(EnclaveAttestationError::CodeUntrusted {
                 pcr_index: 0,
@@ -374,7 +385,10 @@ impl EnclaveAttestationVerifier {
             }
 
             if let Some(allowed_values) = configs_by_index.get(index) {
-                if !allowed_values.iter().any(|allowed| allowed == &actual_value.as_slice()) {
+                if !allowed_values
+                    .iter()
+                    .any(|allowed| allowed == &actual_value.as_slice())
+                {
                     return Err(EnclaveAttestationError::CodeUntrusted {
                         pcr_index: *index,
                         actual: hex::encode(&actual_value),
@@ -386,7 +400,10 @@ impl EnclaveAttestationVerifier {
         Ok(())
     }
 
-    fn check_attestation_freshness(&self, attestation: &AttestationDoc) -> EnclaveAttestationResult<()> {
+    fn check_attestation_freshness(
+        &self,
+        attestation: &AttestationDoc,
+    ) -> EnclaveAttestationResult<()> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| {
@@ -414,7 +431,10 @@ impl EnclaveAttestationVerifier {
         Ok(())
     }
 
-    fn extract_public_key(&self, attestation: &AttestationDoc) -> EnclaveAttestationResult<Vec<u8>> {
+    fn extract_public_key(
+        &self,
+        attestation: &AttestationDoc,
+    ) -> EnclaveAttestationResult<Vec<u8>> {
         attestation
             .public_key
             .clone()
@@ -458,11 +478,12 @@ impl EnclaveAttestationVerifier {
 pub fn verify_enclave_attestation_document(
     attestation_doc: String,
 ) -> EnclaveAttestationResult<VerifiedAttestation> {
-    let config = crate::primitives::config::get_config()
-        .ok_or(EnclaveAttestationError::AttestationDocumentParseError(
+    let config = crate::primitives::config::get_config().ok_or(
+        EnclaveAttestationError::AttestationDocumentParseError(
             "Bedrock config not initialized. Call set_config() first.".to_string(),
-        ))?;
-    
+        ),
+    )?;
+
     let verifier = EnclaveAttestationVerifier::new(&config.environment());
     verifier.verify_attestation_document_base64(&attestation_doc)
 }

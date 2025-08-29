@@ -72,8 +72,7 @@ pub struct PcrConfiguration {
 pub struct VerifiedAttestation {
     /// The hex encoded public key of the enclave
     pub enclave_public_key: String,
-    /// The PCR values of the enclave
-    pub pcr_values: HashMap<u32, Vec<u8>>,
+
     /// The timestamp of the attestation
     pub timestamp: u64,
     /// The module ID of the enclave
@@ -87,15 +86,9 @@ impl VerifiedAttestation {
     /// * `enclave_public_key` - The hex encoded public key of the enclave
     /// * `pcr_values` - The PCR values of the enclave
     /// * `timestamp` - The timestamp of the attestation
-    pub fn new(
-        enclave_public_key: String,
-        pcr_values: HashMap<u32, Vec<u8>>,
-        timestamp: u64,
-        module_id: String,
-    ) -> Self {
+    pub fn new(enclave_public_key: String, timestamp: u64, module_id: String) -> Self {
         Self {
             enclave_public_key,
-            pcr_values,
             timestamp,
             module_id,
         }
