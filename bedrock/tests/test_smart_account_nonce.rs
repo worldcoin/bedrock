@@ -51,6 +51,7 @@ async fn test_rust_nonce_matches_solidity_encoding() -> anyhow::Result<()> {
     let metadata: [u8; 10] = [0x11; 10];
     let random_tail: [u8; 7] = [0x22; 7];
     let rust_nonce = NonceKeyV1::with_random_tail(
+        false,
         TransactionTypeId::Transfer,
         InstructionFlag::Default,
         metadata,

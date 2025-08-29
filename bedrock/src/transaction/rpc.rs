@@ -313,8 +313,37 @@ impl RpcClient {
         entrypoint: Address,
         provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
+
+        // TODO: Move this logic to the right place for serialization
+
+        // Serialize user operation, removing factory and factory_data if factory is address(0)
+        let mut user_op_value = serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?;
+        
+        if let Some(user_op_obj) = user_op_value.as_object_mut() {
+            // Remove factory and factory_data if factory is address(0)
+            if let Some(factory_value) = user_op_obj.get("factory") {
+                if factory_value == "0x0000000000000000000000000000000000000000" {
+                    user_op_obj.remove("factory");
+                    user_op_obj.remove("factoryData");
+                }
+            }
+            
+            // Remove paymaster fields if paymaster is address(0) or None
+            if let Some(paymaster_value) = user_op_obj.get("paymaster") {
+                if paymaster_value == "0x0000000000000000000000000000000000000000" || paymaster_value.is_null() {
+                    user_op_obj.remove("paymaster");
+                    user_op_obj.remove("paymasterData");
+                    user_op_obj.remove("paymasterPostOpGasLimit");
+                    user_op_obj.remove("paymasterVerificationGasLimit");
+                }
+            }
+            
+            // Add aggregator field
+            user_op_obj.insert("aggregator".to_string(), serde_json::Value::String("0x8af27ee9af538c48c7d2a2c8bd6a40ef830e2489".to_string()));
+        }
+        
         let params = vec![
-            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+            user_op_value,
             serde_json::Value::String(format!("{entrypoint:?}")),
         ];
 

@@ -3,10 +3,14 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::contracts::{PBH_ENTRYPOINT_4337, PBH_ENTRYPOINT_4337_MAINNET, PBH_ENTRYPOINT_4337_SEPOLIA};
 use crate::primitives::contracts::{
     EncodedSafeOpStruct, IEntryPoint::PackedUserOperation, IPBHEntryPoint::PBHPayload,
     UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
+};
+
+use alloy_primitives::keccak256;
+use crate::primitives::contracts::{
+    PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_SEPOLIA,
 };
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
@@ -143,6 +147,7 @@ pub trait Is4337Encodable {
         // 4. Compute validity timestamps
         // validAfter = 0 (immediately valid)
         let valid_after_u48 = U48::from(0u64);
+        // TODO: Set real value here?
         let valid_after_bytes: [u8; 6] = [0u8; 6];
 
         // Set validUntil to the configured duration from now
@@ -164,7 +169,8 @@ pub trait Is4337Encodable {
         let signature = safe_account.sign_digest(
             encoded_safe_op.into_transaction_hash(),
             network as u32,
-            Some(*GNOSIS_SAFE_4337_MODULE),
+            // Some(*GNOSIS_SAFE_4337_MODULE),
+            Some(*PBH_SAFE_4337_MODULE_SEPOLIA),
         )?;
 
         // Compose the final signature once (timestamps + actual 65-byte signature)
@@ -173,7 +179,7 @@ pub trait Is4337Encodable {
         full_signature.extend_from_slice(valid_until_bytes);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
-        // // PBH Logic
+        // // // PBH Logic
         if pbh {
             let pbh_payload = Self::generate_pbh_proof(&user_operation).await;
             full_signature.extend_from_slice(
@@ -183,9 +189,13 @@ pub trait Is4337Encodable {
 
         user_operation.signature = full_signature.into();
 
+        // println!("user_operation: {user_operation:?}");
+
         // 5. Submit UserOperation
-        let user_op_hash = rpc_client
-            .send_user_operation(network, &user_operation, entrypoint, provider)
+        let user_op_hash: FixedBytes<32> = rpc_client
+        // Always send to standard 4337 entrypoint even for PBH
+        // The bundler will route it to the PBH entrypoint if it's a PBH transaction
+        .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
             .await?;
 
         Ok(user_op_hash)
@@ -205,17 +215,19 @@ pub trait Is4337Encodable {
         let encoded_external_nullifier =
             EncodedExternalNullifier::from(external_nullifier);
 
-        let identities: Vec<SerializableIdentity> = serde_json::from_reader(
-            std::fs::File::open("test_identities.json").unwrap(),
-        )
-        .unwrap();
-        let identities: Vec<Identity> = identities
-            .into_iter()
-            .map(|identity| Identity {
-                nullifier: identity.nullifier,
-                trapdoor: identity.trapdoor,
-            })
-            .collect();
+
+        let secrets: String = std::fs::read_to_string("tests/sepolia_secrets.json").unwrap();
+
+        let secret: serde_json::Value = serde_json::from_str(&secrets).unwrap();
+        let nullifier = secret["nullifier"].as_str().unwrap();
+        let trapdoor = secret["trapdoor"].as_str().unwrap();
+
+        let identity = Identity {
+            nullifier: nullifier.parse().unwrap(),
+            trapdoor: trapdoor.parse().unwrap(),
+        };
+
+        let identities = vec![identity];
 
         let proofs =
             futures::future::try_join_all(identities.iter().map(|identity| async {
@@ -231,6 +243,8 @@ pub trait Is4337Encodable {
         let identity = identities[0].clone();
         let inclusion_proof = proofs[0].clone();
 
+        // println!("inclusion_proof: {inclusion_proof:?}");
+
         let proof: semaphore_rs_proof::Proof = semaphore_rs::protocol::generate_proof(
             &identity,
             &inclusion_proof.proof,
@@ -238,6 +252,9 @@ pub trait Is4337Encodable {
             signal,
         )
         .expect("Failed to generate semaphore proof");
+
+        // println!("proof: {proof:?}");
+
         let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
             &identity,
             encoded_external_nullifier.0,

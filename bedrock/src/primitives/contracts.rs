@@ -44,6 +44,7 @@ pub static PBH_SAFE_4337_MODULE_SEPOLIA: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
 });
 
+/// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBH4337Module.sol>
 pub static PBH_SAFE_4337_MODULE_MAINNET: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0xb5b2a890a5ED55B07A27d014AdaAC113A545a96c")
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
@@ -174,6 +175,13 @@ impl UserOperation {
             nonce,
             call_data,
             signature: vec![0xff; USER_OPERATION_SIGNATURE_LENGTH].into(),
+            factory: Address::ZERO,
+            factory_data: Bytes::new(),
+            // call_gas_limit: U128::MAX,
+            // verification_gas_limit: U128::MAX,
+            // pre_verification_gas: U256::MAX,
+            // max_priority_fee_per_gas: U128::MAX,
+            // max_fee_per_gas: U128::MAX,
             ..Default::default()
         }
     }
