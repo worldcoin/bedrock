@@ -272,7 +272,9 @@ impl BackupManager {
         let _unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
         Ok(UnpackedBackupResponse {
-            backup_keypair_public_key: hex::encode(backup_secret_key.public_key().as_bytes()),
+            backup_keypair_public_key: hex::encode(
+                backup_secret_key.public_key().as_bytes(),
+            ),
         })
     }
 
