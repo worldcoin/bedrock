@@ -148,7 +148,7 @@ impl BackupManager {
 
         // 2.2: Check that the factor secret is 32 bytes
         if factor_secret_bytes.len() != 32 {
-            return Err(BackupError::InvalidFactorSecretLengthError.into());
+            return Err(BackupError::InvalidFactorSecretLengthError);
         }
 
         // 2.3: Build a crypto_box SecretKey from factor secret
@@ -230,7 +230,7 @@ impl BackupManager {
 
         // 1: Check if sealed backup data is valid
         if sealed_backup_data.is_empty() {
-            return Err(BackupError::InvalidSealedBackupError.into());
+            return Err(BackupError::InvalidSealedBackupError);
         }
 
         // 2.1: Decode factor secret from hex
@@ -238,7 +238,7 @@ impl BackupManager {
             .map_err(|_| BackupError::DecodeFactorSecretError)?;
         // 2.2: Check that the factor secret is 32 bytes
         if factor_secret_bytes.len() != 32 {
-            return Err(BackupError::InvalidFactorSecretLengthError.into());
+            return Err(BackupError::InvalidFactorSecretLengthError);
         }
         // 2.3: Build a crypto_box SecretKey from factor secret
         // NOTE: SecretKey will get zeroized on drop.
@@ -306,7 +306,7 @@ impl BackupManager {
 
         // 1: Check if sealed backup data is valid
         if sealed_backup_data.is_empty() {
-            return Err(BackupError::InvalidSealedBackupError.into());
+            return Err(BackupError::InvalidSealedBackupError);
         }
 
         // 2.1: Decode factor secret from hex
@@ -314,7 +314,7 @@ impl BackupManager {
             .map_err(|_| BackupError::DecodeFactorSecretError)?;
         // 2.2: Check that the factor secret is 32 bytes
         if factor_secret_bytes.len() != 32 {
-            return Err(BackupError::InvalidFactorSecretLengthError.into());
+            return Err(BackupError::InvalidFactorSecretLengthError);
         }
         // 2.3: Build a crypto_box SecretKey from factor secret
         // NOTE: SecretKey will get zeroized on drop.
@@ -389,7 +389,7 @@ impl BackupManager {
             .map_err(|_| BackupError::DecodeFactorSecretError)?;
         // 2.2: Check that the existing factor secret is 32 bytes
         if existing_factor_secret_bytes.len() != 32 {
-            return Err(BackupError::InvalidFactorSecretLengthError.into());
+            return Err(BackupError::InvalidFactorSecretLengthError);
         }
         // 2.3: Build a crypto_box SecretKey from the existing factor secret
         // NOTE: SecretKey will get zeroized on drop.
@@ -402,7 +402,7 @@ impl BackupManager {
             .map_err(|_| BackupError::DecodeFactorSecretError)?;
         // 3.2: Check that the new factor secret is 32 bytes
         if new_factor_secret_bytes.len() != 32 {
-            return Err(BackupError::InvalidFactorSecretLengthError.into());
+            return Err(BackupError::InvalidFactorSecretLengthError);
         }
         // 3.3: Build a crypto_box SecretKey from new factor secret
         // NOTE: SecretKey will get zeroized on drop.
@@ -429,61 +429,6 @@ impl BackupManager {
 
         Ok(result)
     }
-}
-
-/// Internal methods not exposed to foreign code. Cannot be kept in the main `impl` block as
-/// associated functions are not supported with Uniffi.
-impl BackupManager {
-    /// "Updates" the backup with the new root secret and files. The update is performed by generating
-    /// a new unsealed backup and encrypting it with the same backup keypair public key.
-    ///
-    /// The update DOES NOT change any encrypted backup keypair(s) nor the backup keypair (stored in metadata).
-    /// It only updates the sealed backup data.
-    ///
-    /// Note that this function will result in OVERWRITING the existing sealed backup data with the
-    /// new one. If some of the existing files are not present in the `files` list, they will be
-    /// removed from the backup.
-    ///
-    /// New sealed backup data should be sent to backup-service for storage. This handled by the Native App.
-    ///
-    /// * `root_secret` - is the root secret seed of the wallet that is used to derive the wallet,
-    ///   World ID identity and PCP encryption keys. Hex encoded for V0 and JSON encoded for V1.
-    /// * `files` - is the list of files that will be included in the new backup.
-    /// * `backup_keypair_public_key` - is the public key of the backup keypair that was used to
-    ///   encrypt the backup. Hex encoded.
-    ///
-    /// # Errors
-    /// * `BackupError::DecodeBackupKeypairError` - if the backup keypair public key is invalid.
-    /// * `BackupError::EncryptBackupError` - if new backup cannot be encrypted.
-    /// * `BackupError::IoError` - if unsealed backup creation fails.
-    /// * `BackupError::InvalidRootSecretError` - if the backup root secret is invalid.
-    fn generate_sealed_backup_with_files(
-        root_secret: Arc<RootKey>,
-        files: Vec<V0BackupFile>,
-        backup_keypair_public_key: String,
-    ) -> Result<Vec<u8>, BackupError> {
-        log::info!("Updating sealed backup.");
-
-        // 1: Build the unsealed backup
-        let unsealed_backup = BackupFormat::new_v0(V0Backup::new(root_secret, files));
-        let unsealed_backup = unsealed_backup.to_bytes()?;
-
-        // 2: Build a crypto_box PublicKey from the backup keypair public key
-        let backup_keypair_public_key_bytes = hex::decode(backup_keypair_public_key)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        let backup_keypair_public_key =
-            crypto_box::PublicKey::from_slice(&backup_keypair_public_key_bytes)
-                .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-
-        // 3: Encrypt the unsealed backup with the backup keypair public key to create the new sealed backup
-        let sealed_backup = backup_keypair_public_key
-            .seal(&mut rand::thread_rng(), &unsealed_backup)
-            .map_err(|_| BackupError::EncryptBackupError)?;
-
-        Ok(sealed_backup)
-    }
-
-    // compute_manifest_hash_for_files removed; use ManifestManager::compute_manifest_hash over GlobalManifestV1.
 }
 
 /// The modules which are allowed to create a backup manifest and add a file to the backup.
