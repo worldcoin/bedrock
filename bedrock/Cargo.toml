@@ -34,11 +34,20 @@ base64 = "0.22.1"
 bedrock-macros = { path = "../bedrock-macros" }
 blake3 = "1.5.5"
 chrono = { version = "0.4.41", default-features = false, features = ["now", "std"] }
-ciborium = "0.2.2"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 flate2 = "1.0.28"
+aws-nitro-enclaves-nsm-api = "0.4.0"
+base64 = "0.22.1"
+ciborium = "0.2.2"
+bedrock-macros = { path = "../bedrock-macros" }
+chrono = { version = "0.4.41", default-features = false, features = [
+    "now",
+    "std",
+] }
+coset = "0.3.8"
 hex = "0.4.3"
 log = "0.4.22"
+p384 = { version = "0.13", features = ["ecdsa", "sha384"] }
 proc-macro2 = "1.0"
 quote = "1.0"
 rand = { version = "0.8.5", default-features = false, features = ["std"] }
@@ -59,6 +68,9 @@ zeroize = "1.8"
 
 # TODO: once `rand` can be bumped to 0.9, add the explicit feature flag `os_rng`. this explicitly determines no `thread_rng`;
 # bumping this requires crypto_box to update rand: https://github.com/RustCrypto/nacl-compat/issues/176
+x509-cert = { version = "0.2.5", features = ["pem"] }
+pem = "3.0"
+webpki = "0.22"
 
 [dev-dependencies]
 alloy = { version = "1.0.23", default-features = false, features = [

@@ -33,6 +33,8 @@ pub mod primitives;
 /// Tools for storing, retrieving, encrypting and decrypting backup data and metadata.
 /// See `backup::BackupManager` for the high-level API.
 pub mod backup;
+/// Introduces low level operations for interacting with a Nitro Enclave.
+pub mod enclave;
 
 // Re-export commonly used primitives at the crate root for convenience
 pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
