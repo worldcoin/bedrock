@@ -18,7 +18,8 @@ static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
     .expect("error initializing `SAFE_OP_TYPEHASH`")
 });
 
-/// v0.7 `EntryPoint`
+/// v0.7.0 `EntryPoint` contract
+/// Contract reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol>
 pub static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x0000000071727De22E5E9d8BAf0edAc6f37da032")
         .expect("failed to decode ENTRYPOINT_4337")

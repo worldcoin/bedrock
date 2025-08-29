@@ -9,9 +9,7 @@ use crate::primitives::contracts::{
 };
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::SafeSmartAccountSigner;
-use crate::transaction::rpc::{
-    RpcError, RpcProviderName, SponsorUserOperationResponse,
-};
+use crate::transaction::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use alloy::sol_types::SolValue;
@@ -305,7 +303,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        smart_account::SafeSmartAccount, transaction::foreign::UnparsedUserOperation,
+        smart_account::SafeSmartAccount,
+        transaction::{foreign::UnparsedUserOperation, SponsorUserOperationResponse},
     };
 
     #[test]
