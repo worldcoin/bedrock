@@ -9,7 +9,7 @@ mod utils;
 mod test;
 
 use bedrock_macros::bedrock_export;
-pub use manifest::{BackupManifest, GlobalManifestV1, ManifestEntry, ManifestManager};
+pub use manifest::{GlobalManifestV1, ManifestEntry, ManifestManager};
 use personal_custody_keypair::PersonalCustodyKeypair;
 use regex::Regex;
 pub use signer::SyncSigner;
