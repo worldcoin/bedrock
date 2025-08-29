@@ -15,7 +15,7 @@ pub enum RootKeyError {
     KeyParseError,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "version", content = "key")]
 enum VersionedKey {
     V0(String),
@@ -98,13 +98,13 @@ impl RootKey {
     /// Encode the `RootKey` into a JSON string representation.
     ///
     /// The returned string is a JSON object with the shape {"version":"V0|V1","key":"<hex-or-string>"}.
-    // pub fn encode(&self) -> Result<String, RootKeyError> {
-    //     serde_json::to_string(self.inner.expose_secret()).map_err(|_| {
-    //         RootKeyError::Generic {
-    //             message: "Failed to serialize key".to_string(),
-    //         }
-    //     })
-    // }
+    pub fn encode(&self) -> Result<String, RootKeyError> {
+        serde_json::to_string(self.inner.expose_secret()).map_err(|_| {
+            RootKeyError::Generic {
+                message: "Failed to serialize key".to_string(),
+            }
+        })
+    }
 
     /// Decode a `RootKey` from either a hex string (V0) or a JSON string (V0/V1).
     ///
@@ -120,9 +120,17 @@ impl RootKey {
             };
         }
 
-        // Preserve as-is in V0 for compatibility (validation performed elsewhere)
+        // Try hex (V0 legacy)
+        let versioned =
+            if hex::decode(&input).map(|v| v.len()).unwrap_or_default() == KEY_LENGTH {
+                VersionedKey::V0(input)
+            } else {
+                // Fallback: preserve as-is in V0 for compatibility (validation performed elsewhere)
+                VersionedKey::V0(input)
+            };
+
         Self {
-            inner: SecretBox::new(Box::new(VersionedKey::V0(input))),
+            inner: SecretBox::new(Box::new(versioned)),
         }
     }
 
@@ -146,7 +154,6 @@ impl RootKey {
 
     /// Generate a new random V1 `RootKey`.
     #[must_use]
-    #[allow(dead_code)]
     pub fn new_random() -> Self {
         let mut key = [0u8; KEY_LENGTH];
         rand::thread_rng().fill_bytes(&mut key);
@@ -169,23 +176,6 @@ impl RootKey {
         })
     }
 }
-
-impl Clone for RootKey {
-    fn clone(&self) -> Self {
-        let inner = self.inner.expose_secret().clone();
-        Self {
-            inner: SecretBox::new(Box::new(inner)),
-        }
-    }
-}
-
-impl PartialEq for RootKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner.expose_secret() == other.inner.expose_secret()
-    }
-}
-
-impl Eq for RootKey {}
 
 #[cfg(test)]
 mod test;
