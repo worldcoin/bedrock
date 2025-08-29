@@ -48,9 +48,14 @@ where
 {
     let mut s = String::deserialize(deserializer)?;
 
-    let mut decoded_key = hex::decode(&s).map_err(serde::de::Error::custom)?;
+    let mut decoded_key = hex::decode(&s).map_err(|e| {
+        s.zeroize();
+        serde::de::Error::custom(e)
+    })?;
+    s.zeroize();
 
     if decoded_key.len() != KEY_LENGTH {
+        decoded_key.zeroize();
         return Err(serde::de::Error::custom(format!(
             "Key length must be {KEY_LENGTH} bytes",
         )));
@@ -59,7 +64,6 @@ where
     let mut key = [0u8; KEY_LENGTH];
     key.copy_from_slice(&decoded_key);
 
-    s.zeroize();
     decoded_key.zeroize();
 
     Ok(key)
