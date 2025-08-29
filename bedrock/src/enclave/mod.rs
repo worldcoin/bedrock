@@ -205,21 +205,22 @@ impl EnclaveAttestationVerifier {
             .collect();
 
         // Get current time for certificate validity checking
-        #[cfg(test)]
-        let current_time = if self.skip_certificate_time_check {
-            webpki::Time::from_seconds_since_unix_epoch(0)
-        } else {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| {
-                EnclaveAttestationError::AttestationInvalidTimestamp(format!(
-                    "Failed to get current time: {}",
-                    e
-                ))
-            })?;
-            webpki::Time::from_seconds_since_unix_epoch(now.as_secs())
+        let should_skip_time_check = {
+            #[cfg(test)]
+            {
+                self.skip_certificate_time_check
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
         };
         
-        #[cfg(not(test))]
-        let current_time = {
+        let current_time = if should_skip_time_check {
+            // Use the attestation timestamp converted to seconds for certificate validation
+            // This ensures we're using the same time context as when the attestation was created
+            webpki::Time::from_seconds_since_unix_epoch(attestation.timestamp / 1000)
+        } else {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| {
                 EnclaveAttestationError::AttestationInvalidTimestamp(format!(
                     "Failed to get current time: {}",
