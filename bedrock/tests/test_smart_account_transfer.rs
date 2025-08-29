@@ -200,12 +200,16 @@ where
                         }
                     })?;
                 let entry_point = IEntryPoint::new(entry_point_addr, &self.provider);
-                let _tx = entry_point
+                let tx = entry_point
                     .handleOps(vec![packed], user_op.sender)
                     .send()
                     .await
                     .map_err(|e| HttpError::Generic {
                         message: format!("handleOps failed: {e}"),
+                    })?;
+                let _receipt =
+                    tx.get_receipt().await.map_err(|e| HttpError::Generic {
+                        message: format!("handleOps receipt failed: {e}"),
                     })?;
 
                 // Return the chain userOpHash (EntryPoint-wrapped)
@@ -253,11 +257,12 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
 
     // 4) Fund EntryPoint deposit for Safe
     let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
-    let _ = entry_point
+    let deposit_tx = entry_point
         .depositTo(safe_address)
         .value(U256::from(1e18 as u64))
         .send()
         .await?;
+    let _ = deposit_tx.get_receipt().await?;
 
     // 5) Give Safe some ERC-20 balance (WLD on World Chain test contract used in other tests)
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
