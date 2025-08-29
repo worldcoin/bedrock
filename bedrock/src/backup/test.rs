@@ -1,52 +1,15 @@
 use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::BackupManager;
-use crate::backup::BackupManifest;
 use crate::backup::BackupModule;
 use crate::backup::FactorType;
-use crate::backup::PersonalCustodyKeypair;
-use crate::primitives::filesystem::FileSystem;
 use crate::root_key::RootKey;
-use chrono::Utc;
 use crypto_box::{PublicKey, SecretKey};
 use dryoc::rng;
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[allow(dead_code)]
-fn helper_write_manifest_file(
-    file_system: &dyn FileSystem,
-    module_name: &str,
-    data: Option<Vec<u8>>,
-    custom_file_path: Option<String>,
-) {
-    let file_path = custom_file_path.unwrap_or_else(|| {
-        format!(
-            "/somewhere/{}/{module_name}_{}.bin",
-            hex::encode(rng::randombytes_buf(4)),
-            hex::encode(rng::randombytes_buf(4))
-        )
-    });
-
-    let manifest =
-        BackupManifest::new(&file_path, Utc::now(), 1024, module_name.to_string())
-            .unwrap();
-
-    // write the manifest under the backup prefix expected by middleware
-    file_system
-        .write_file(
-            format!("backup/backup_manifests/{module_name}"),
-            serde_json::to_vec(&manifest).unwrap(),
-        )
-        .expect("write manifest succeeds");
-
-    if let Some(data) = data {
-        // write the actual file at its full (prefixed) path
-        file_system
-            .write_file(format!("backup{file_path}"), data)
-            .expect("write file succeeds");
-    }
-}
+// removed old helper for per-module manifests
 
 #[test]
 fn test_backup_module_enum() {
@@ -105,9 +68,8 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
         .unseal(&hex::decode(&result.encrypted_backup_keypair).unwrap())
         .unwrap();
     let decrypted_backup_keypair =
-        PersonalCustodyKeypair::from_private_key_bytes(&decrypted_backup_keypair_bytes);
+        SecretKey::from_slice(&decrypted_backup_keypair_bytes).unwrap();
     let decrypted_backup = decrypted_backup_keypair
-        .sk()
         .unseal(&result.sealed_backup_data)
         .unwrap();
     assert_eq!(
@@ -149,7 +111,6 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 
     // Decrypt the re-encrypted backup using the backup keypair
     let re_decrypted_backup = decrypted_backup_keypair
-        .sk()
         .unseal(&re_encrypted_backup)
         .unwrap();
     assert_eq!(
@@ -281,9 +242,8 @@ fn test_re_encrypt_backup() {
         .expect("Failed to decrypt re-encrypted backup keypair");
 
     let decrypted_backup_keypair =
-        PersonalCustodyKeypair::from_private_key_bytes(&decrypted_backup_keypair_bytes);
+        SecretKey::from_slice(&decrypted_backup_keypair_bytes).unwrap();
     let decrypted_backup = decrypted_backup_keypair
-        .sk()
         .unseal(&create_result.sealed_backup_data)
         .expect("Failed to decrypt backup data");
 

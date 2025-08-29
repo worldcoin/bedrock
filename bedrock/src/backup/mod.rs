@@ -2,7 +2,6 @@ mod backup_format;
 mod manifest;
 mod service_client;
 mod signer;
-mod utils;
 
 #[cfg(test)]
 mod test;
@@ -20,7 +19,6 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -259,10 +257,8 @@ impl BackupManager {
             .map_err(|_| BackupError::DecryptBackupKeypairError)?;
 
         // 4.1: Build a SecretKey from the decrypted backup keypair bytes
-        let backup_secret_key = Zeroizing::new(
-            SecretKey::from_slice(&backup_keypair_bytes)
-                .map_err(|_| BackupError::DecodeBackupKeypairError)?,
-        );
+        let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
         // 4.2: Decrypt the sealed backup with the backup secret key
         let unsealed_backup = backup_secret_key
             .unseal(sealed_backup_data)
@@ -272,6 +268,61 @@ impl BackupManager {
         let _unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
         Ok(UnpackedBackupResponse {
+            backup_keypair_public_key: hex::encode(
+                backup_secret_key.public_key().as_bytes(),
+            ),
+        })
+    }
+
+    /// Decrypts the sealed backup using the factor secret and the encrypted backup keypair.
+    ///
+    /// # Errors
+    /// Propagates decoding/decryption errors when inputs are malformed or do not match.
+    pub fn decrypt_sealed_backup(
+        &self,
+        sealed_backup_data: &[u8],
+        encrypted_backup_keypair: String,
+        factor_secret: String,
+        factor_type: FactorType,
+    ) -> Result<DecryptedBackup, BackupError> {
+        log::info!(
+            "[BackupManager] decrypting sealed backup with factor: {factor_type:?}"
+        );
+
+        if sealed_backup_data.is_empty() {
+            return Err(BackupError::InvalidSealedBackupError);
+        }
+
+        // Decode factor secret
+        let factor_secret_bytes = hex::decode(factor_secret)
+            .map_err(|_| BackupError::DecodeFactorSecretError)?;
+        if factor_secret_bytes.len() != 32 {
+            return Err(BackupError::InvalidFactorSecretLengthError);
+        }
+        let factor_secret_key = SecretKey::from_slice(&factor_secret_bytes)
+            .map_err(|_| BackupError::DecodeFactorSecretError)?;
+
+        // Decrypt backup keypair bytes
+        let encrypted_backup_keypair_bytes = hex::decode(encrypted_backup_keypair)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+        let backup_keypair_bytes = factor_secret_key
+            .unseal(&encrypted_backup_keypair_bytes)
+            .map_err(|_| BackupError::DecryptBackupKeypairError)?;
+
+        // Build SecretKey from decrypted bytes
+        let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+
+        // Decrypt sealed backup
+        let unsealed_backup = backup_secret_key
+            .unseal(sealed_backup_data)
+            .map_err(|_| BackupError::DecryptBackupError)?;
+
+        // Deserialize the unsealed backup
+        let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
+
+        Ok(DecryptedBackup {
+            backup: unsealed_backup,
             backup_keypair_public_key: hex::encode(
                 backup_secret_key.public_key().as_bytes(),
             ),
