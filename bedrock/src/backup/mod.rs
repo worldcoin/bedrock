@@ -1,7 +1,6 @@
 mod backup_format;
 mod manifest;
 mod service_client;
-mod signer;
 
 #[cfg(test)]
 mod test;
@@ -9,7 +8,6 @@ mod test;
 use bedrock_macros::bedrock_export;
 pub use manifest::{GlobalManifestV1, ManifestEntry, ManifestManager};
 use regex::Regex;
-pub use signer::SyncSigner;
 
 use crate::backup::backup_format::v0::V0Backup;
 use crate::backup::backup_format::BackupFormat;

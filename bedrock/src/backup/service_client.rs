@@ -2,8 +2,9 @@ use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
 use reqwest::Client;
 use serde::Deserialize;
 
+use crate::backup::manifest::SyncSigner;
 use crate::primitives::config::{get_config, BedrockEnvironment};
-use crate::{backup::SyncSigner, HttpError};
+use crate::HttpError;
 use serde_json::Value;
 use std::time::Duration;
 

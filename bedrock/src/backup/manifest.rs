@@ -3,9 +3,8 @@
 //! The backup manifest is a local file-based system that any module can set to describe which files should
 //! be included in the backup.
 
-use std::{collections::HashSet, str::FromStr, sync::Arc};
+use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -13,9 +12,9 @@ use crate::primitives::filesystem::{create_middleware, FileSystemMiddleware};
 use crate::root_key::RootKey;
 use crate::{
     backup::{
-        backup_format::v0::{V0Backup, V0BackupFile, V0BackupManifest},
+        backup_format::v0::{V0Backup, V0BackupFile},
         service_client::BackupServiceClient,
-        BackupError, BackupModule, SyncSigner,
+        BackupError, BackupModule,
     },
     primitives::filesystem::get_filesystem_raw,
 };
@@ -44,6 +43,18 @@ pub struct ManifestEntry {
     pub file_path: String,
     /// Lowercase hex-encoded BLAKE3 checksum of the file's raw bytes (32 bytes → 64 chars).
     pub checksum_hex: String,
+}
+
+/// Abstraction for signing backup-service challenges with the sync factor keypair.
+///
+/// Implementations are expected to:
+/// - return the sync factor public key in uncompressed SEC1 form, base64 (standard) encoded
+/// - sign the raw ASCII challenge string with ECDSA P-256, DER-encode the signature, base64 (standard) encode it
+pub trait SyncSigner: Send + Sync {
+    /// Returns the sync factor public key in standard base64 encoding.
+    fn public_key_base64(&self) -> String;
+    /// Signs the provided raw ASCII challenge with ECDSA P-256; returns DER signature, base64 encoded.
+    fn sign_challenge_base64(&self, challenge: &str) -> String;
 }
 
 /// Manager responsible for reading and writing backup manifests and coordinating sync.

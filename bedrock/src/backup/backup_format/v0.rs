@@ -5,7 +5,6 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
-use std::path::{Component, Path};
 use std::sync::Arc;
 use tar::{Archive, Builder, Header};
 
