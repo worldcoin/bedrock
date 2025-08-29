@@ -3,6 +3,7 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
+use crate::primitives::contracts::{PBH_ENTRYPOINT_4337, PBH_ENTRYPOINT_4337_MAINNET, PBH_ENTRYPOINT_4337_SEPOLIA};
 use crate::primitives::contracts::{
     EncodedSafeOpStruct, IEntryPoint::PackedUserOperation, IPBHEntryPoint::PBHPayload,
     UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
@@ -119,12 +120,18 @@ pub trait Is4337Encodable {
             pbh,
         )?;
 
+        let entrypoint = if pbh {
+            *PBH_ENTRYPOINT_4337
+        } else {
+            *ENTRYPOINT_4337
+        };
+
         // 2. Request sponsorship
         let sponsor_response = rpc_client
             .sponsor_user_operation(
                 network,
                 &user_operation,
-                *ENTRYPOINT_4337,
+                entrypoint,
                 self_sponsor_token,
                 provider,
             )
@@ -178,7 +185,7 @@ pub trait Is4337Encodable {
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
+            .send_user_operation(network, &user_operation, entrypoint, provider)
             .await?;
 
         Ok(user_op_hash)
@@ -192,14 +199,14 @@ pub trait Is4337Encodable {
 
         let signal = Self::hash_user_op(&packed_user_op);
 
-        let external_nullifier = ExternalNullifier::v1(1, 2025, 11);
+        let external_nullifier = ExternalNullifier::v1(8, 2025, 0);
 
         // TODO: Autotmatically find an unused one
         let encoded_external_nullifier =
             EncodedExternalNullifier::from(external_nullifier);
 
         let identities: Vec<SerializableIdentity> = serde_json::from_reader(
-            std::fs::File::open("load_test_identities.json").unwrap(),
+            std::fs::File::open("test_identities.json").unwrap(),
         )
         .unwrap();
         let identities: Vec<Identity> = identities

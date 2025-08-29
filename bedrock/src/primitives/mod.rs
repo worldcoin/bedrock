@@ -72,6 +72,8 @@ pub enum Network {
     Optimism = 10,
     /// World Chain (chain ID: 480)
     WorldChain = 480,
+    /// World Chain Sepolia (chain ID: 481)
+    WorldChainSepolia = 4801,
 }
 
 impl Network {
@@ -82,6 +84,7 @@ impl Network {
             Self::Ethereum => "ethereum",
             Self::Optimism => "optimism",
             Self::WorldChain => "worldchain",
+            Self::WorldChainSepolia => "worldchain-sepolia",
         }
     }
 
@@ -92,6 +95,7 @@ impl Network {
             Self::Ethereum => "Ethereum",
             Self::Optimism => "Optimism",
             Self::WorldChain => "World Chain",
+            Self::WorldChainSepolia => "World Chain Sepolia",
         }
     }
 }

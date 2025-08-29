@@ -25,9 +25,27 @@ pub static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode ENTRYPOINT_4337")
 });
 
+/// Multichain address for PBH_ENTRYPOINT_4337
+/// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBHEntryPointImplV1.sol>
+pub static PBH_ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
+    Address::from_str("0x0000000000A21818Ee9F93BB4f2AAad305b5397C")
+        .expect("failed to decode PBH_ENTRYPOINT_4337")
+});
+
 /// Multichain address for the v0.3.0 `Safe4337Module`
 pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x75cf11467937ce3f2f357ce24ffc3dbf8fd5c226")
+        .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
+});
+
+/// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBH4337Module.sol>
+pub static PBH_SAFE_4337_MODULE_SEPOLIA: LazyLock<Address> = LazyLock::new(|| {
+    Address::from_str("0xeA5877676caC52d51DCEc80e4Ff33898d5B0E8D9")
+        .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
+});
+
+pub static PBH_SAFE_4337_MODULE_MAINNET: LazyLock<Address> = LazyLock::new(|| {
+    Address::from_str("0xb5b2a890a5ED55B07A27d014AdaAC113A545a96c")
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
 });
 

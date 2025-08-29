@@ -40,3 +40,5 @@ kotlin/bedrock-tests/bin/
 out/
 
 load_test_identities.json
+test_identities.json
+sepolia_secrets.json
