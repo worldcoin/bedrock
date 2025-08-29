@@ -17,7 +17,7 @@ const ROOT_SECRET_FILE: &str = "root_secret.json";
 pub struct V0BackupManifest {
     /// The path to the file on the file system (relative to the user data directory). It is where the file will be retrieved from to add to the backup, and
     /// where the file will be extracted to when restoring the backup.
-    /// TODO: This needs to be standardized and constrained to relevant relative paths (i.e. personal_custody can only backup files relative to personal_custody)
+    /// TODO: This needs to be standardized and constrained to relevant relative paths (i.e. `personal_custody` can only backup files relative to `personal_custody`)
     file_path: String,
     /// The last time the manifest was updated.
     pub manifest_last_updated_at: DateTime<Utc>,
@@ -29,12 +29,12 @@ pub struct V0BackupManifest {
 
 impl V0BackupManifest {
     pub fn new(
-        file_path: String,
+        file_path: &str,
         manifest_last_updated_at: DateTime<Utc>,
         max_file_size_kb: u64,
         module_name: BackupModule,
     ) -> Result<Self, BackupError> {
-        let unsanitized_path = Path::new(&file_path);
+        let unsanitized_path = Path::new(file_path);
 
         for component in unsanitized_path.components() {
             match component {
@@ -57,6 +57,7 @@ impl V0BackupManifest {
         })
     }
 
+    #[must_use]
     pub fn file_path(&self) -> &str {
         &self.file_path
     }
@@ -271,7 +272,7 @@ mod tests {
             },
             V0BackupFile {
                 data: vec![],
-                checksum: blake3::hash(&vec![]).as_bytes().to_vec(),
+                checksum: blake3::hash(&[]).as_bytes().to_vec(),
                 path: "document_personal_custody/file2.txt".to_string(),
             },
         ];

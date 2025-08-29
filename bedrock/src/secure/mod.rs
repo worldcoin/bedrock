@@ -140,7 +140,7 @@ impl RootKey {
     /// Decodes the key from JSON serialized format.
     ///
     /// This function does not allow the key to be in the raw hex format, like regular `decode`.
-    /// Even it is a v0 key, it has to be serialized in JSON format (for example, after .encode()).
+    /// Even it is a v0 key, it has to be serialized in JSON format (for example, after .`encode()`).
     ///
     /// This function can be used in cases where `RootKey` is decoded regularly (for v0 or v1) and then
     /// re-encoded to full JSON format. For example, backup service parses the key from HEX/JSON

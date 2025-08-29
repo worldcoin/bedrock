@@ -26,11 +26,13 @@ const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
 /// A single, global manifest (v1) that describes the entire backup content.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GlobalManifestV1 {
+    /// Manifest version. Must be 1.
     pub version: u32, // must be 1
     /// Hash of the immediately previous manifest state (hex, 32-byte blake3), if any.
     ///
     /// Used to provide a lightweight chain of states for conflict detection and auditing.
     pub previous_manifest_hash: Option<String>,
+    /// Entries describing each file to be backed up.
     pub files: Vec<ManifestEntry>,
 }
 
@@ -52,6 +54,7 @@ pub struct ManifestEntry {
 /// Each module which adds a file to the backup creates a `BackupManifest`
 #[derive(Debug, Serialize, Deserialize)]
 pub enum BackupManifest {
+    /// Version 0 backup manifest.
     V0(V0BackupManifest),
 }
 
@@ -62,7 +65,7 @@ impl BackupManifest {
     /// - Will error if the module name is invalid  (i.e. is not an allowed `BackupModule`).
     #[allow(clippy::missing_const_for_fn)] // even though it appears const, constructing a DateTime<Utc> cannot be achieved in a const context
     pub fn new(
-        file_path: String,
+        file_path: &str,
         manifest_last_updated_at: DateTime<Utc>,
         max_file_size_kb: u64,
         unparsed_module_name: String,
@@ -97,6 +100,7 @@ impl BackupManifest {
     }
 }
 
+/// Manager responsible for reading and writing backup manifests and coordinating sync.
 #[derive(uniffi::Object)]
 pub struct ManifestManager {
     file_system: FileSystemMiddleware,
@@ -104,6 +108,8 @@ pub struct ManifestManager {
 
 impl ManifestManager {
     #[uniffi::constructor]
+    /// Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             file_system: create_middleware("backup"),
@@ -111,17 +117,15 @@ impl ManifestManager {
     }
 
     /// Returns the absolute path to the global manifest file on disk.
-    fn global_manifest_path(&self) -> String {
-        GLOBAL_MANIFEST_FILE.to_string()
-    }
+    #[allow(clippy::missing_const_for_fn)]
+    fn global_manifest_path() -> &'static str { GLOBAL_MANIFEST_FILE }
 
     /// Reads the global manifest from disk.
     ///
     /// # Errors
     /// Returns an error if the manifest file is missing or cannot be parsed.
     pub fn read_global_manifest(&self) -> Result<GlobalManifestV1, BackupError> {
-        let path = self.global_manifest_path();
-        let result = self.file_system.read_file(&path);
+        let result = self.file_system.read_file(Self::global_manifest_path());
         match result {
             Ok(bytes) => {
                 let manifest: GlobalManifestV1 = serde_json::from_slice(&bytes)
@@ -136,6 +140,10 @@ impl ManifestManager {
     }
 
     /// Writes the provided global manifest to disk.
+    /// Writes the provided global manifest to disk.
+    ///
+    /// # Errors
+    /// Returns an error if the manifest cannot be serialized or written.
     pub fn write_global_manifest(
         &self,
         manifest: &GlobalManifestV1,
@@ -146,8 +154,7 @@ impl ManifestManager {
                 manifest_name: "global_manifest".to_string(),
             }
         })?;
-        let path = self.global_manifest_path();
-        let result = self.file_system.write_file(&path, serialized);
+        let result = self.file_system.write_file(Self::global_manifest_path(), serialized);
         if result.is_err() {
             return Err(BackupError::WriteFileError);
         }
@@ -158,6 +165,7 @@ impl ManifestManager {
     ///
     /// We serialize the full `GlobalManifestV1` to JSON and hash the raw bytes.
     /// Returns lowercase hex string (64 chars).
+    #[must_use]
     pub fn compute_manifest_hash(manifest: &GlobalManifestV1) -> String {
         let serialized = serde_json::to_vec(manifest).unwrap_or_default();
         let hash = blake3::hash(&serialized);
@@ -167,6 +175,9 @@ impl ManifestManager {
     /// Builds unsealed backup files from the global manifest by reading and checksumming the files.
     /// Validates presence and recomputes checksum to ensure manifest correctness.
     /// TODO: verify paths prefixing is correct here.
+    ///
+    /// # Errors
+    /// Returns an error if the files cannot be read or checksums do not match.
     pub fn build_unsealed_backup_files_from_manifest(
         &self,
         manifest: &GlobalManifestV1,
@@ -178,8 +189,8 @@ impl ManifestManager {
             let rel = entry.file_path.trim_start_matches('/');
             let data = fs.read_file(rel.to_string()).map_err(|e| {
                 let msg = format!(
-                    "High Impact. Failed to load file from {:?}: {}",
-                    entry.designator, e
+                    "High Impact. Failed to load file from {:?}: {e}",
+                    entry.designator
                 );
                 log::error!("{msg}");
                 BackupError::InvalidFileForBackup(msg)
@@ -214,6 +225,9 @@ impl ManifestManager {
     /// Returns files recorded in the global manifest after verifying local is not stale vs remote.
     ///
     /// The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
+    ///
+    /// # Errors
+    /// Returns an error if the remote hash does not match local or if network/IO errors occur.
     pub async fn list_files(
         &self,
         signer: &dyn SyncSigner,
@@ -226,7 +240,7 @@ impl ManifestManager {
             .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
 
         let manifest = self.read_global_manifest()?;
-        let local_hash = ManifestManager::compute_manifest_hash(&manifest);
+        let local_hash = Self::compute_manifest_hash(&manifest);
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
         }
@@ -236,6 +250,9 @@ impl ManifestManager {
     /// Adds or replaces the file entry for a given designator and performs a remote-gated update inline.
     ///
     /// TODO: Integrate size validation policies per module when available.
+    ///
+    /// # Errors
+    /// Returns an error if remote hash does not match local or if serialization/IO fails.
     pub async fn store_file(
         &self,
         signer: &dyn SyncSigner,
@@ -254,7 +271,7 @@ impl ManifestManager {
 
         // 2) Local hash
         let mut manifest = self.read_global_manifest()?;
-        let local_hash = ManifestManager::compute_manifest_hash(&manifest);
+        let local_hash = Self::compute_manifest_hash(&manifest);
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
         }
@@ -262,7 +279,7 @@ impl ManifestManager {
         // 3) Compute checksum for provided file
         let rel_path = file_path.trim_start_matches('/').to_string();
         let data = self.file_system.read_file(&rel_path).map_err(|e| {
-            let msg = format!("Failed to load file from {:?}: {e}", designator);
+            let msg = format!("Failed to load file from {designator:?}: {e}");
             log::error!("{msg}");
             BackupError::InvalidFileForBackup(msg)
         })?;
@@ -276,7 +293,7 @@ impl ManifestManager {
         {
             // Persist full global path (prefixed) in the manifest
             entry.file_path = self.file_system.get_full_path_from_file_path(&rel_path);
-            entry.checksum_hex = checksum_hex.clone();
+            entry.checksum_hex.clone_from(&checksum_hex);
         } else {
             manifest.files.push(ManifestEntry {
                 designator,
@@ -289,7 +306,7 @@ impl ManifestManager {
         // 6) Build files from M', generate sealed backup, compute Hnew
         //    Set previous_manifest_hash to the current local hash
         manifest.previous_manifest_hash = Some(local_hash.clone());
-        let new_manifest_hash = ManifestManager::compute_manifest_hash(&manifest);
+        let new_manifest_hash = Self::compute_manifest_hash(&manifest);
 
         // Materialize files from manifest and build a sealed backup container
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
@@ -327,6 +344,9 @@ impl ManifestManager {
     }
 
     /// Replaces the file entry for a given designator with a new file path and performs a remote-gated update inline.
+    ///
+    /// # Errors
+    /// Returns an error if the remote hash does not match local or downstream operations fail.
     pub async fn replace_file(
         &self,
         signer: &dyn SyncSigner,
@@ -347,6 +367,9 @@ impl ManifestManager {
     }
 
     /// Removes the file entry for the given designator, if present, and performs a remote-gated update inline.
+    ///
+    /// # Errors
+    /// Returns an error if the remote hash does not match local or downstream operations fail.
     pub async fn remove_file(
         &self,
         signer: &dyn SyncSigner,
@@ -364,7 +387,7 @@ impl ManifestManager {
 
         // 2) Local manifest
         let mut manifest = self.read_global_manifest()?;
-        let local_hash = ManifestManager::compute_manifest_hash(&manifest);
+        let local_hash = Self::compute_manifest_hash(&manifest);
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
         }
@@ -374,7 +397,7 @@ impl ManifestManager {
 
         // 4) Compute new manifest hash and reseal
         manifest.previous_manifest_hash = Some(local_hash.clone());
-        let new_manifest_hash = ManifestManager::compute_manifest_hash(&manifest);
+        let new_manifest_hash = Self::compute_manifest_hash(&manifest);
 
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
         let root = Arc::new(RootKey::decode(root_secret));
@@ -642,6 +665,10 @@ impl ManifestManager {
     }
 }
 
+impl Default for ManifestManager {
+    fn default() -> Self { Self::new() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,7 +676,7 @@ mod tests {
     #[test]
     fn test_cannot_create_backup_manifest_with_parent_directory() {
         let result = BackupManifest::new(
-            "../../test.txt".to_string(),
+            "../../test.txt",
             Utc::now(),
             1024,
             "test".to_string(),
@@ -657,7 +684,7 @@ mod tests {
         assert!(result.is_err());
 
         let result = BackupManifest::new(
-            "folder/../test.txt".to_string(),
+            "folder/../test.txt",
             Utc::now(),
             1024,
             "test".to_string(),

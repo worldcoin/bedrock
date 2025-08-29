@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::backup::utils::{base64_decode, base64_encode};
-use crate::backup::BackupError;
+use crate::backup::utils::base64_encode;
+// no error type needed after simplifying constructors
 use crypto_box::SecretKey;
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
@@ -20,8 +20,8 @@ impl PersonalCustodyKeypair {
         }
     }
 
-    pub fn from_private_key_bytes(private_key_bytes: Vec<u8>) -> Self {
-        let private_key = SecretKey::from_slice(&private_key_bytes).unwrap();
+    pub fn from_private_key_bytes(private_key_bytes: &[u8]) -> Self {
+        let private_key = SecretKey::from_slice(private_key_bytes).unwrap();
         Self::from_private_key(private_key)
     }
 
@@ -34,7 +34,8 @@ impl PersonalCustodyKeypair {
     }
 
     /// This is backwards compatible with libsodium's `crypto_box_curve25519xsalsa20poly1305_seed_keypair`
-    /// https://github.com/jedisct1/libsodium/blob/59a98bc7f9d507175f551a53bfc0b2081f06e3ba/src/libsodium/crypto_box/curve25519xsalsa20poly1305/box_curve25519xsalsa20poly1305.c#L18
+    /// <https://github.com/jedisct1/libsodium/blob/59a98bc7f9d507175f551a53bfc0b2081f06e3ba/src/libsodium/crypto_box/curve25519xsalsa20poly1305/box_curve25519xsalsa20poly1305.c#L18>
+    #[allow(dead_code)]
     pub fn derive_from_seed(seed: &[u8]) -> Self {
         let mut hasher = Sha512::new();
         hasher.update(seed);
@@ -51,13 +52,12 @@ impl PersonalCustodyKeypair {
 #[uniffi::export]
 impl PersonalCustodyKeypair {
     #[uniffi::constructor]
-    pub fn new() -> Result<Arc<Self>, BackupError> {
+    pub fn new() -> Arc<Self> {
         let private_key = SecretKey::generate(&mut rand::thread_rng());
-
-        Ok(Arc::new(Self {
+        Arc::new(Self {
             pk: private_key.public_key(),
             sk: private_key,
-        }))
+        })
     }
 
     pub fn pk_as_bytes(&self) -> Vec<u8> {
@@ -76,8 +76,7 @@ impl PersonalCustodyKeypair {
         let base64_key = self.pk_as_base64();
 
         let pem = format!(
-            "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----",
-            base64_key
+            "-----BEGIN PUBLIC KEY-----\n{base64_key}\n-----END PUBLIC KEY-----"
         );
 
         pem
@@ -93,9 +92,11 @@ impl Zeroize for PersonalCustodyKeypair {
 
 impl PersonalCustodyKeypair {
     #[cfg(test)]
+    #[allow(clippy::use_self)]
+    #[allow(dead_code)]
     pub fn test_keypair() -> Self {
         let private_key = SecretKey::generate(&mut rand::thread_rng());
-        PersonalCustodyKeypair {
+        Self {
             pk: private_key.public_key(),
             sk: private_key,
         }
@@ -104,14 +105,10 @@ impl PersonalCustodyKeypair {
 
 #[test]
 fn test_print_keys() {
-    let keypair = PersonalCustodyKeypair::new().unwrap();
+    let keypair = PersonalCustodyKeypair::new();
     let pk_as_string = base64_encode(keypair.pk_as_bytes());
     let sk_as_string = base64_encode(keypair.sk_as_bytes());
 
-    println!("Public Key: {}", pk_as_string);
-    println!("Secret Key: {}", sk_as_string);
-
-    let pk_base64 = "MCowBQYDK2VuAyEA2boNBmJX4lGkA9kjthS5crXOBxu2BPycKRMakpzgLG4=";
-    let pk_bytes = base64_decode(pk_base64).unwrap();
-    println!("The public key is {} bytes long.", pk_bytes.len());
+    println!("Public Key: {pk_as_string}");
+    println!("Secret Key: {sk_as_string}");
 }

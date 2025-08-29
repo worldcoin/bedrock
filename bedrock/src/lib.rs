@@ -30,7 +30,8 @@ pub mod transaction;
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
-// Backup module
+/// Tools for storing, retrieving, encrypting and decrypting backup data and metadata.
+/// See `backup::BackupManager` for the high-level API.
 pub mod backup;
 
 // Re-export commonly used primitives at the crate root for convenience

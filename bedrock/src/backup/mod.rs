@@ -14,7 +14,7 @@ use personal_custody_keypair::PersonalCustodyKeypair;
 use regex::Regex;
 pub use signer::SyncSigner;
 
-use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
+use crate::backup::backup_format::v0::V0Backup;
 use crate::backup::backup_format::BackupFormat;
 use crate::secure::RootKey;
 use crypto_box::SecretKey;
@@ -111,6 +111,8 @@ pub struct BackupManager {}
 #[bedrock_export]
 impl BackupManager {
     #[uniffi::constructor]
+    #[must_use]
+    /// Constructs a new `BackupManager` instance.
     pub fn new() -> Self {
         Self {}
     }
@@ -217,6 +219,10 @@ impl BackupManager {
     /// * `BackupError::VersionNotDetectedError` - if the backup version cannot be detected.
     /// * `BackupError::IoError` - if the backup cannot be read.
     ///
+    /// Decrypts a sealed backup using the factor secret and encrypted backup keypair.
+    ///
+    /// # Errors
+    /// Propagates decoding/decryption errors when inputs are malformed or do not match.
     pub fn decrypt_sealed_backup(
         &self,
         sealed_backup_data: &[u8],
@@ -255,7 +261,7 @@ impl BackupManager {
 
         // 4.1: Build a PersonalCustodyKeypair from the decrypted backup keypair
         let backup_keypair = Zeroizing::new(
-            PersonalCustodyKeypair::from_private_key_bytes(backup_keypair_bytes),
+            PersonalCustodyKeypair::from_private_key_bytes(&backup_keypair_bytes),
         );
         // 4.2: Decrypt the sealed backup with the backup keypair
         let unsealed_backup = backup_keypair
@@ -293,6 +299,10 @@ impl BackupManager {
     /// * `BackupError::VersionNotDetectedError` - if the backup version cannot be detected.
     /// * `BackupError::IoError` - if the backup cannot be read.
     ///
+    /// Decrypts the sealed backup and unpacks it to the file system.
+    ///
+    /// # Errors
+    /// Propagates decoding/decryption errors when inputs are malformed or do not match.
     pub fn decrypt_and_unpack_sealed_backup(
         &self,
         sealed_backup_data: &[u8],
@@ -331,7 +341,7 @@ impl BackupManager {
 
         // 4.1: Build a PersonalCustodyKeypair from the decrypted backup keypair
         let backup_keypair = Zeroizing::new(
-            PersonalCustodyKeypair::from_private_key_bytes(backup_keypair_bytes),
+            PersonalCustodyKeypair::from_private_key_bytes(&backup_keypair_bytes),
         );
         // 4.2: Decrypt the sealed backup with the backup keypair
         let unsealed_backup = backup_keypair
@@ -437,7 +447,9 @@ impl BackupManager {
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum BackupModule {
+    /// Personal Custody Package module.
     PersonalCustody,
+    /// Personal Custody for documents module.
     DocumentPersonalCustody,
 }
 
@@ -460,68 +472,100 @@ impl<'de> Deserialize<'de> for BackupModule {
     }
 }
 
+/// Errors that can occur when working with backups and manifests.
 #[crate::bedrock_error]
 pub enum BackupError {
     #[error("Failed to decode factor secret as hex")]
+    /// Failed to decode factor secret as hex.
     DecodeFactorSecretError,
     #[error("Invalid factor secret length")]
+    /// Factor secret is not the expected length.
     InvalidFactorSecretLengthError,
     #[error("Failed to decode backup keypair")]
+    /// Failed to decode backup keypair bytes.
     DecodeBackupKeypairError,
     #[error("Failed to decrypt backup keypair")]
+    /// Failed to decrypt backup keypair with factor secret.
     DecryptBackupKeypairError,
     #[error("Failed to decrypt sealed backup")]
+    /// Failed to decrypt sealed backup data with backup keypair.
     DecryptBackupError,
     #[error("Invalid sealed backup")]
+    /// Provided sealed backup data is empty or malformed.
     InvalidSealedBackupError,
     #[error("Failed to encrypt backup")]
+    /// Failed to encrypt data using provided key.
     EncryptBackupError,
     #[error("IO error: {0}")]
+    /// IO error while reading/writing backup data.
     IoError(#[from] std::io::Error),
     #[error("Invalid root secret in the backup")]
+    /// Root secret inside backup is invalid.
     InvalidRootSecretError,
     #[error("Backup version is not detected")]
+    /// Backup version cannot be detected.
     VersionNotDetectedError,
     #[error("Failed to read file name from archive")]
+    /// Failed to read file name from archive entry.
     ReadFileNameError,
     #[error("Failed to encode root secret to JSON")]
+    /// Failed to encode root secret to JSON.
     EncodeRootSecretError,
     #[error("Failed to write file to file system")]
+    /// Failed to write file to filesystem.
     WriteFileError,
     /// The provided file from a manifest to build the unsealed backup is not valid.
     #[error("Invalid file for backup: {0}")]
+    /// The provided file from a manifest to build the unsealed backup is not valid.
     InvalidFileForBackup(String),
     #[error("Failed to parse backup manifest {manifest_name}: {details}")]
+    /// Failed to parse a backup manifest JSON file.
     ParseBackupManifestError {
+        /// Additional error details for debugging.
         details: String,
+        /// The manifest file name.
         manifest_name: String,
     },
     #[error("CBOR encoding error: {0}")]
+    /// CBOR encoding error while writing a backup file.
     EncodeBackupFileError(#[from] ciborium::ser::Error<std::io::Error>),
     #[error("CBOR decoding error {path}: {}", error.as_sanitized_string())]
+    /// CBOR decoding error while reading a backup file.
     DecodeBackupFileError {
+        /// The underlying decoding error, sanitized for logging.
         error: Box<dyn SanitizeError>,
+        /// The path of the file that failed to decode.
         path: String, // the path of the file that failed to decode
     },
     #[error("Invalid module name: {0}")]
+    /// Invalid module name provided.
     InvalidModuleName(String),
     #[error("global manifest not found")]
+    /// Global manifest file not found.
     GlobalManifestNotFound,
     #[error("local backup checkpoint file does not exist")]
+    /// Local backup checkpoint file does not exist.
     InexistentLocalCheckpointFile,
     #[error("local backup checkpoint error: {0}")]
+    /// Error while reading/writing local backup checkpoint.
     LocalCheckpointError(String),
     #[error("Invalid checksum for file {module_name}")]
-    InvalidChecksumError { module_name: String },
+    /// File checksum does not match the expected value.
+    InvalidChecksumError { /// The module name associated with the file.
+        module_name: String },
     /// Remote manifest head is ahead of local.
     /// Native layer should trigger a download/apply of the latest backup before retrying.
     #[error("remote manifest is ahead of local; fetch and apply latest backup before updating")]
+    /// Remote manifest head is ahead of local; fetch and apply latest backup before retrying.
     RemoteAheadStaleError,
     #[error("unexpected error: {0}")]
+    /// Unexpected error.
     UnexpectedError(String),
 }
 
+/// Trait for errors that can be sanitized for safe logging.
 pub trait SanitizeError: std::fmt::Debug + Send + Sync {
+    /// Converts the error to a sanitized string safe for logging.
     fn as_sanitized_string(&self) -> String;
 }
 
@@ -556,6 +600,7 @@ impl SanitizeError for ciborium::de::Error<std::io::Error> {
     }
 }
 
+/// Result of creating a new sealed backup for a user.
 #[derive(Debug, uniffi::Record)]
 pub struct CreatedBackup {
     /// The backup data, encrypted with the backup keypair.
@@ -569,6 +614,7 @@ pub struct CreatedBackup {
     manifest_hash: String,
 }
 
+/// Result of decrypting a sealed backup.
 #[derive(Debug, uniffi::Record)]
 pub struct DecryptedBackup {
     /// The unsealed backup data with all the files.
@@ -578,6 +624,7 @@ pub struct DecryptedBackup {
     backup_keypair_public_key: String,
 }
 
+/// Result of decrypting and unpacking a sealed backup.
 #[derive(Debug, uniffi::Record)]
 pub struct UnpackedBackupResponse {
     /// The public key of the backup keypair that was used to encrypt the backup. Client will need
@@ -585,6 +632,7 @@ pub struct UnpackedBackupResponse {
     backup_keypair_public_key: String,
 }
 
+/// Result of re-encrypting the backup keypair with a new factor secret.
 #[derive(Debug, uniffi::Record)]
 pub struct AddNewFactorResult {
     /// The re-encrypted backup keypair that can be used to decrypt the backup data. The keypair itself
@@ -592,6 +640,7 @@ pub struct AddNewFactorResult {
     encrypted_backup_keypair_with_new_factor: String,
 }
 
+/// The factor type used to encrypt the backup keypair.
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum FactorType {
     /// Generated using a passkey PRF.

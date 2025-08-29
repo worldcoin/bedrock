@@ -1,6 +1,6 @@
 use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::primitives::config::{get_config, BedrockEnvironment};
 use crate::{backup::SyncSigner, HttpError};
@@ -34,7 +34,7 @@ impl MultipartBuilder {
         self.body
             .extend_from_slice(format!("--{}\r\n", &self.boundary).as_bytes());
         self.body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{}\"\r\n", name).as_bytes(),
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n").as_bytes(),
         );
         self.body
             .extend_from_slice(b"Content-Type: application/json\r\n\r\n");
@@ -58,13 +58,12 @@ impl MultipartBuilder {
             .extend_from_slice(format!("--{}\r\n", &self.boundary).as_bytes());
         self.body.extend_from_slice(
             format!(
-                "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
-                name, filename
+                "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n",
             )
             .as_bytes(),
         );
         self.body.extend_from_slice(
-            format!("Content-Type: {}\r\n\r\n", content_type).as_bytes(),
+            format!("Content-Type: {content_type}\r\n\r\n").as_bytes(),
         );
         self.body.extend_from_slice(bytes);
         self.body.extend_from_slice(crlf);
@@ -89,14 +88,7 @@ pub struct ChallengeResponse {
     pub token: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct EcKeypairAuthorizationPayload {
-    #[serde(rename = "kind")]
-    pub kind: String, // "EC_KEYPAIR"
-    #[serde(rename = "publicKey")]
-    pub public_key: String,
-    pub signature: String,
-}
+// Removed unused EcKeypairAuthorizationPayload; JSON is built inline.
 
 impl BackupServiceClient {
     /// Constructs a new client using reqwest and the configured Bedrock environment.
@@ -141,7 +133,7 @@ impl BackupServiceClient {
         })?;
         if !status.is_success() {
             return Err(HttpError::BadStatusCode {
-                code: status.as_u16() as u64,
+                code: u64::from(status.as_u16()),
                 response_body: bytes.to_vec(),
             });
         }
@@ -222,7 +214,7 @@ impl BackupServiceClient {
         })?;
         if !status.is_success() {
             return Err(HttpError::BadStatusCode {
-                code: status.as_u16() as u64,
+                code: u64::from(status.as_u16()),
                 response_body: bytes.to_vec(),
             });
         }
@@ -259,7 +251,7 @@ impl BackupServiceClient {
         })?;
         if !status.is_success() {
             return Err(HttpError::BadStatusCode {
-                code: status.as_u16() as u64,
+                code: u64::from(status.as_u16()),
                 response_body: bytes.to_vec(),
             });
         }
@@ -314,7 +306,7 @@ impl BackupServiceClient {
         })?;
         if !status.is_success() {
             return Err(HttpError::BadStatusCode {
-                code: status.as_u16() as u64,
+                code: u64::from(status.as_u16()),
                 response_body: bytes.to_vec(),
             });
         }

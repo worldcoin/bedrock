@@ -101,15 +101,20 @@ sol! {
 }
 
 // Safe contract addresses on Worldchain
+#[allow(dead_code)]
 pub const SAFE_PROXY_FACTORY_ADDRESS: Address =
     address!("4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67");
+#[allow(dead_code)]
 pub const SAFE_L2_SINGLETON_ADDRESS: Address =
     address!("29fcB43b46531BcA003ddC8FCB67FFE91900C762");
+#[allow(dead_code)]
 pub const SAFE_4337_MODULE_ADDRESS: Address =
     address!("75cf11467937ce3F2f357CE24ffc3DBF8fD5c226");
+#[allow(dead_code)]
 pub const SAFE_MODULE_SETUP_ADDRESS: Address =
     address!("2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47");
 
+#[allow(dead_code)]
 pub fn setup_anvil() -> AnvilInstance {
     dotenvy::dotenv().ok();
     let rpc_url = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
@@ -120,6 +125,7 @@ pub fn setup_anvil() -> AnvilInstance {
     alloy::node_bindings::Anvil::new().fork(rpc_url).spawn()
 }
 
+#[allow(dead_code)]
 pub async fn deploy_safe<P>(
     provider: &P,
     owner: Address,
