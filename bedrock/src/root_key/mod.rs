@@ -1,4 +1,5 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
+#[cfg(test)]
 use rand::RngCore as _;
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,7 +16,7 @@ pub enum RootKeyError {
     KeyParseError,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(tag = "version", content = "key")]
 enum VersionedKey {
     V0(String),
@@ -93,11 +94,59 @@ impl RootKey {
     }
 }
 
+impl Clone for RootKey {
+    fn clone(&self) -> Self {
+        let inner = self.inner.expose_secret().clone();
+        Self {
+            inner: SecretBox::new(Box::new(inner)),
+        }
+    }
+}
+
+impl PartialEq for RootKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.expose_secret() == other.inner.expose_secret()
+    }
+}
+
+impl Eq for RootKey {}
+
 /// Internal implementation for `RootKey` (methods not exposed to foreign bindings)
 impl RootKey {
-    /// Encode the `RootKey` into a JSON string representation.
+    /// Decodes the key from serialized format.
+    pub fn decode(encoded_key: String) -> Self {
+        // Try JSON first (expects a VersionedKey JSON object)
+        if let Ok(versioned) = serde_json::from_str::<VersionedKey>(&encoded_key) {
+            return Self {
+                inner: SecretBox::new(Box::new(versioned)),
+            };
+        }
+
+        // Fallback: treat as V0 hex string
+        Self {
+            inner: SecretBox::new(Box::new(VersionedKey::V0(encoded_key))),
+        }
+    }
+
+    /// Decodes the key from `JSON` serialized format.
     ///
-    /// The returned string is a JSON object with the shape {"version":"V0|V1","key":"<hex-or-string>"}.
+    /// This function does not allow the key to be in the raw hex format, like regular `decode`.
+    /// Even if it is a `v0` key, it has to be serialized in `JSON` format (for example, after `.encode()`).
+    ///
+    /// This function can be used in cases where `OxideKey` is decoded regularly (for `v0` or `v1`) and then
+    /// re-encoded to full `JSON` format. For example, backup service parses the key from `HEX`/`JSON`
+    /// on enrollment (using regular `decode`) and then re-encodes it to JSON format for storage.
+    /// When recovery is happening, we know the key is in JSON format, so we can use this function
+    /// to decode it at the recovery time.
+    pub fn decode_from_json_enforced(encoded_key: &str) -> Result<Self, RootKeyError> {
+        let versioned = serde_json::from_str::<VersionedKey>(encoded_key)
+            .map_err(|_| RootKeyError::KeyParseError)?;
+        Ok(Self {
+            inner: SecretBox::new(Box::new(versioned)),
+        })
+    }
+
+    /// Encodes the key as JSON.
     pub fn encode(&self) -> Result<String, RootKeyError> {
         serde_json::to_string(self.inner.expose_secret()).map_err(|_| {
             RootKeyError::Generic {
@@ -106,54 +155,9 @@ impl RootKey {
         })
     }
 
-    /// Decode a `RootKey` from either a hex string (V0) or a JSON string (V0/V1).
-    ///
-    /// This is a compatibility shim for legacy call sites that previously accepted
-    /// multiple formats. It never fails; if parsing as JSON fails and the input is
-    /// not valid hex, it will keep the original string as a V0 value.
-    #[must_use]
-    pub fn decode(input: String) -> Self {
-        // Try JSON first
-        if let Ok(key) = serde_json::from_str::<VersionedKey>(&input) {
-            return Self {
-                inner: SecretBox::new(Box::new(key)),
-            };
-        }
-
-        // Try hex (V0 legacy)
-        let versioned =
-            if hex::decode(&input).map(|v| v.len()).unwrap_or_default() == KEY_LENGTH {
-                VersionedKey::V0(input)
-            } else {
-                // Fallback: preserve as-is in V0 for compatibility (validation performed elsewhere)
-                VersionedKey::V0(input)
-            };
-
-        Self {
-            inner: SecretBox::new(Box::new(versioned)),
-        }
-    }
-
-    /// Strictly decode from a JSON string; returns an error if the input is not JSON or invalid.
-    pub fn decode_from_json_enforced(json_str: &str) -> Result<Self, RootKeyError> {
-        let key: VersionedKey =
-            serde_json::from_str(json_str).map_err(|_| RootKeyError::KeyParseError)?;
-
-        // Additional enforcement for V0: ensure it is valid hex of correct length
-        if let VersionedKey::V0(ref s) = key {
-            let decoded = hex::decode(s).map_err(|_| RootKeyError::KeyParseError)?;
-            if decoded.len() != KEY_LENGTH {
-                return Err(RootKeyError::KeyParseError);
-            }
-        }
-
-        Ok(Self {
-            inner: SecretBox::new(Box::new(key)),
-        })
-    }
-
     /// Generate a new random V1 `RootKey`.
     #[must_use]
+    #[cfg(test)]
     pub fn new_random() -> Self {
         let mut key = [0u8; KEY_LENGTH];
         rand::thread_rng().fill_bytes(&mut key);
