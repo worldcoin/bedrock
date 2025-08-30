@@ -5,7 +5,6 @@
 
 use crate::primitives::PrimitiveError;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Represents errors that can occur during enclave attestation verification
 #[crate::bedrock_error]
