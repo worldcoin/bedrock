@@ -39,6 +39,12 @@ allow = [
   "Zlib",
 ]
 
+# webpki has an ISC license but it's just not being detected
+[[licenses.exceptions]]
+allow = ["ISC"]
+name = "webpki"
+version = "*"
+
 # Ignore unmaintained required crates warning
 [advisories]
 ignore = [
