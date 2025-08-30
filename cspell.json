@@ -16,6 +16,7 @@
     "pcrs",
     "repr",
     "ruint",
+    "serde",
     "spki",
     "Uniffi",
     "webpki",

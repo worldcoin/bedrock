@@ -83,7 +83,9 @@ fn test_real_attestation_document() {
                     age_millis,
                     max_age,
                 } => {
-                    println!("❌ Attestation is too old: {age_millis}ms (max: {max_age}ms)");
+                    println!(
+                        "❌ Attestation is too old: {age_millis}ms (max: {max_age}ms)"
+                    );
                 }
                 _ => {
                     println!("❌ Verification failed: {e:?}");
@@ -149,10 +151,9 @@ pub fn generate_simple_fake_attestation_cbor(
 
     // Convert JSON to CBOR (this is a simplified approach)
     ciborium::into_writer(&fake_attestation_map, &mut cbor_data).map_err(|e| {
-        crate::enclave::types::EnclaveAttestationError::AttestationDocumentParseError(format!(
-            "Failed to serialize fake attestation document: {}",
-            e
-        ))
+        crate::enclave::types::EnclaveAttestationError::AttestationDocumentParseError(
+            format!("Failed to serialize fake attestation document: {}", e),
+        )
     })?;
 
     // Wrap in a fake COSE Sign1 structure (this will be invalid but parseable)
