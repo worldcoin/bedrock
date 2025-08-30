@@ -19,7 +19,6 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-
 pub use types::{
     EnclaveAttestationError, EnclaveAttestationResult, PcrConfiguration,
     VerifiedAttestation,

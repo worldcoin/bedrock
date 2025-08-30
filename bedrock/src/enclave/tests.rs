@@ -248,16 +248,14 @@ fn test_attestation_doc_wrong_cert() {
         Ok(_verified) => {
             panic!("❌ Should have failed with bad certificate");
         }
-        Err(e) => {
-            match &e {
-                EnclaveAttestationError::AttestationChainInvalid(_msg) => {
-                    println!("✅ Correctly rejected bad certificate");
-                }
-                _ => {
-                    println!("✅ Rejected with error: {:?}", e);
-                }
+        Err(e) => match &e {
+            EnclaveAttestationError::AttestationChainInvalid(_msg) => {
+                println!("✅ Correctly rejected bad certificate");
             }
-        }
+            _ => {
+                println!("✅ Rejected with error: {:?}", e);
+            }
+        },
     }
 }
 
