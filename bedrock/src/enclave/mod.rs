@@ -125,7 +125,7 @@ impl EnclaveAttestationVerifier {
         Ok(VerifiedAttestation::new(
             hex::encode(public_key),
             attestation.timestamp,
-            attestation.module_id.clone(),
+            attestation.module_id,
         ))
     }
 }
@@ -142,7 +142,7 @@ impl EnclaveAttestationVerifier {
         let first_byte = bytes[0];
         if !(0x80..=0x97).contains(&first_byte) && first_byte != 0x9f {
             return Err(EnclaveAttestationError::AttestationDocumentParseError(
-                format!("Invalid CBOR magic byte: expected array marker (0x80-0x97 or 0x9f), got 0x{:02x}", first_byte)
+                format!("Invalid CBOR magic byte: expected array marker (0x80-0x97 or 0x9f), got 0x{first_byte:02x}")
             ));
         }
 
@@ -172,8 +172,7 @@ impl EnclaveAttestationVerifier {
 
         ciborium::from_reader::<AttestationDoc, _>(payload.as_slice()).map_err(|e| {
             EnclaveAttestationError::AttestationDocumentParseError(format!(
-                "Failed to parse attestation document: {}",
-                e
+                "Failed to parse attestation document: {e}"
             ))
         })
     }
@@ -185,24 +184,21 @@ impl EnclaveAttestationVerifier {
         // Parse root certificate from PEM
         let pem_str = std::str::from_utf8(&self.root_certificate).map_err(|e| {
             EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Invalid PEM encoding: {}",
-                e
+                "Invalid PEM encoding: {e}"
             ))
         })?;
         let pem = pem::parse(pem_str).map_err(|e| {
             EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Failed to parse PEM: {}",
-                e
+                "Failed to parse PEM: {e}"
             ))
         })?;
         let root_cert_der = pem.contents();
 
         // Create trust anchor from root certificate
         let trust_anchor =
-            TrustAnchor::try_from_cert_der(&root_cert_der).map_err(|e| {
+            TrustAnchor::try_from_cert_der(root_cert_der).map_err(|e| {
                 EnclaveAttestationError::AttestationChainInvalid(format!(
-                    "Failed to create trust anchor from root certificate: {}",
-                    e
+                    "Failed to create trust anchor from root certificate: {e}"
                 ))
             })?;
 
@@ -234,8 +230,7 @@ impl EnclaveAttestationVerifier {
         } else {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| {
                 EnclaveAttestationError::AttestationInvalidTimestamp(format!(
-                    "Failed to get current time: {}",
-                    e
+                    "Failed to get current time: {e}"
                 ))
             })?;
             webpki::Time::from_seconds_since_unix_epoch(now.as_secs())
@@ -247,8 +242,7 @@ impl EnclaveAttestationVerifier {
         )
         .map_err(|e| {
             EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Failed to parse leaf certificate: {}",
-                e
+                "Failed to parse leaf certificate: {e}"
             ))
         })?;
 
@@ -262,16 +256,14 @@ impl EnclaveAttestationVerifier {
             )
             .map_err(|e| {
                 EnclaveAttestationError::AttestationChainInvalid(format!(
-                    "Certificate chain validation failed: {}",
-                    e
+                    "Certificate chain validation failed: {e}"
                 ))
             })?;
 
         // Parse the leaf certificate for return
         Certificate::from_der(&attestation.certificate).map_err(|e| {
             EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Failed to parse leaf certificate for return: {}",
-                e
+                "Failed to parse leaf certificate for return: {e}"
             ))
         })
     }
@@ -293,8 +285,7 @@ impl EnclaveAttestationVerifier {
         let verifying_key =
             VerifyingKey::from_sec1_bytes(public_key_bytes).map_err(|e| {
                 EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Failed to parse P-384 public key: {}",
-                    e
+                    "Failed to parse P-384 public key: {e}"
                 ))
             })?;
 
@@ -313,8 +304,7 @@ impl EnclaveAttestationVerifier {
         // Reconstruct the signed data according to COSE Sign1 structure
         let protected_bytes = cose_sign1.protected.clone().to_vec().map_err(|e| {
             EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                "Failed to serialize protected headers: {}",
-                e
+                "Failed to serialize protected headers: {e}"
             ))
         })?;
 
@@ -336,8 +326,7 @@ impl EnclaveAttestationVerifier {
         ciborium::into_writer(&sig_structure_cbor, &mut sig_structure).map_err(
             |e| {
                 EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Failed to encode Sig_structure: {}",
-                    e
+                    "Failed to encode Sig_structure: {e}"
                 ))
             },
         )?;
@@ -352,8 +341,7 @@ impl EnclaveAttestationVerifier {
             })?)
             .map_err(|e| {
                 EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Failed to parse ECDSA signature: {}",
-                    e
+                    "Failed to parse ECDSA signature: {e}"
                 ))
             })?;
 
@@ -361,8 +349,7 @@ impl EnclaveAttestationVerifier {
             .verify(&sig_structure, &ecdsa_signature)
             .map_err(|e| {
                 EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Signature verification failed: {}",
-                    e
+                    "Signature verification failed: {e}"
                 ))
             })?;
 
@@ -384,7 +371,7 @@ impl EnclaveAttestationVerifier {
         for config in &self.allowed_pcr_configs {
             configs_by_index
                 .entry(config.index)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(config.expected_value.clone());
         }
 
@@ -393,8 +380,7 @@ impl EnclaveAttestationVerifier {
             if !VALID_PCR_LENGTHS.contains(&value_len) {
                 return Err(EnclaveAttestationError::AttestationDocumentParseError(
                     format!(
-                        "Invalid PCR{} length: {} bytes. Expected one of {:?}",
-                        index, value_len, VALID_PCR_LENGTHS
+                        "Invalid PCR{index} length: {value_len} bytes. Expected one of {VALID_PCR_LENGTHS:?}"
                     ),
                 ));
             }
@@ -402,11 +388,11 @@ impl EnclaveAttestationVerifier {
             if let Some(allowed_values) = configs_by_index.get(index) {
                 if !allowed_values
                     .iter()
-                    .any(|allowed| allowed == &actual_value.as_slice())
+                    .any(|allowed| allowed == actual_value.as_slice())
                 {
                     return Err(EnclaveAttestationError::CodeUntrusted {
                         pcr_index: *index,
-                        actual: hex::encode(&actual_value),
+                        actual: hex::encode(actual_value),
                     });
                 }
             }
@@ -424,16 +410,14 @@ impl EnclaveAttestationVerifier {
                 .duration_since(UNIX_EPOCH)
                 .map_err(|e| {
                     EnclaveAttestationError::AttestationInvalidTimestamp(format!(
-                        "Failed to get current time: {}",
-                        e
+                        "Failed to get current time: {e}"
                     ))
                 })?
                 .as_millis(),
         )
         .map_err(|e| {
             EnclaveAttestationError::AttestationInvalidTimestamp(format!(
-                "Failed to convert current time to milliseconds: {}",
-                e
+                "Failed to convert current time to milliseconds: {e}"
             ))
         })?;
 
@@ -461,7 +445,7 @@ impl EnclaveAttestationVerifier {
         attestation
             .public_key
             .clone()
-            .map(|key| key.into_vec())
+            .map(|content| content.into_vec())
             .ok_or_else(|| {
                 EnclaveAttestationError::InvalidEnclavePublicKey(
                     "No public key in attestation document".to_string(),
@@ -509,5 +493,5 @@ pub fn verify_enclave_attestation_document(
     )?;
 
     let verifier = EnclaveAttestationVerifier::new(&config.environment());
-    verifier.verify_attestation_document_base64(&attestation_doc)
+    verifier.verify_attestation_document_base64(attestation_doc)
 }
