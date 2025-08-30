@@ -189,10 +189,7 @@ fn generate_fake_attestation_different_root_ca() -> Vec<u8> {
 /// Generate a fake attestation with self-signed certificate
 fn generate_fake_attestation_self_signed() -> Vec<u8> {
     let config = SimpleFakeAttestationConfig::default();
-
-    let fake_cbor = generate_simple_fake_attestation_self_signed(&config).unwrap();
-
-    fake_cbor
+    generate_simple_fake_attestation_self_signed(&config).unwrap()
 }
 
 /// Generate a fake attestation with invalid COSE signature
