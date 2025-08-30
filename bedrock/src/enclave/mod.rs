@@ -48,11 +48,12 @@ pub struct EnclaveAttestationVerifier {
 
 #[bedrock_export]
 impl EnclaveAttestationVerifier {
-    /// Creates a new EnclaveAttestationVerifier
+    /// Creates a new `EnclaveAttestationVerifier`
     ///
     /// # Arguments
     /// * `environment` - The environment to use for this verifier
     #[uniffi::constructor]
+    #[must_use]
     pub fn new(environment: &BedrockEnvironment) -> Self {
         let allowed_pcr_configs = match environment {
             BedrockEnvironment::Production => production_pcr_configs(),
@@ -93,8 +94,7 @@ impl EnclaveAttestationVerifier {
             .decode(attestation_doc_base64)
             .map_err(|e| {
                 EnclaveAttestationError::AttestationDocumentParseError(format!(
-                    "Failed to decode base64 attestation document: {}",
-                    e
+                    "Failed to decode base64 attestation document: {e}"
                 ))
             })?;
 
@@ -104,7 +104,7 @@ impl EnclaveAttestationVerifier {
     /// Verifies the attestation document from the enclave.
     ///
     /// Follows the AWS Nitro Enclave Attestation Document Specification:
-    /// https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-attestation-document.html
+    /// <https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-attestation-document.html>
     pub fn verify_attestation_document(
         &self,
         attestation_doc_bytes: &[u8],
@@ -419,15 +419,23 @@ impl EnclaveAttestationVerifier {
         &self,
         attestation: &AttestationDoc,
     ) -> EnclaveAttestationResult<()> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| {
-                EnclaveAttestationError::AttestationInvalidTimestamp(format!(
-                    "Failed to get current time: {}",
-                    e
-                ))
-            })?
-            .as_millis() as u64;
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| {
+                    EnclaveAttestationError::AttestationInvalidTimestamp(format!(
+                        "Failed to get current time: {}",
+                        e
+                    ))
+                })?
+                .as_millis(),
+        )
+        .map_err(|e| {
+            EnclaveAttestationError::AttestationInvalidTimestamp(format!(
+                "Failed to convert current time to milliseconds: {}",
+                e
+            ))
+        })?;
 
         let age = now.checked_sub(attestation.timestamp).ok_or_else(|| {
             EnclaveAttestationError::AttestationInvalidTimestamp(format!(
@@ -464,7 +472,8 @@ impl EnclaveAttestationVerifier {
 
 #[cfg(test)]
 impl EnclaveAttestationVerifier {
-    /// Creates a new EnclaveAttestationVerifier with custom PCR configurations, used for testing.
+    /// Creates a new `EnclaveAttestationVerifier` with custom PCR configurations, used for testing.
+    #[must_use]
     pub fn new_with_config_and_time_skip(
         allowed_pcr_configs: Vec<PcrConfiguration>,
         root_certificate: Vec<u8>,
@@ -491,7 +500,7 @@ impl EnclaveAttestationVerifier {
 /// and verifies the base64-encoded attestation document.
 #[uniffi::export]
 pub fn verify_enclave_attestation_document(
-    attestation_doc: String,
+    attestation_doc: &str,
 ) -> EnclaveAttestationResult<VerifiedAttestation> {
     let config = crate::primitives::config::get_config().ok_or(
         EnclaveAttestationError::AttestationDocumentParseError(

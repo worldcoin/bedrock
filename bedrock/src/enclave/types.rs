@@ -79,13 +79,14 @@ pub struct VerifiedAttestation {
 }
 
 impl VerifiedAttestation {
-    /// Creates a new VerifiedAttestation
+    /// Creates a new `VerifiedAttestation`
     ///
     /// # Arguments
     /// * `enclave_public_key` - The hex encoded public key of the enclave
     /// * `pcr_values` - The PCR values of the enclave
     /// * `timestamp` - The timestamp of the attestation
-    pub fn new(enclave_public_key: String, timestamp: u64, module_id: String) -> Self {
+    #[must_use]
+    pub const fn new(enclave_public_key: String, timestamp: u64, module_id: String) -> Self {
         Self {
             enclave_public_key,
             timestamp,

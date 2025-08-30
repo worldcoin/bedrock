@@ -58,25 +58,25 @@ fn test_real_attestation_document() {
     let result = verifier.verify_attestation_document(&attestation_doc_bytes);
 
     match result {
-        Ok(verified) => {
+        Ok(attestation_result) => {
             println!("✅ Attestation verified successfully!");
-            println!("Module ID: {}", verified.module_id);
-            println!("Timestamp: {}", verified.timestamp);
+            println!("Module ID: {}", attestation_result.module_id);
+            println!("Timestamp: {}", attestation_result.timestamp);
         }
         Err(e) => {
             // This will help debug what's failing
             match &e {
                 EnclaveAttestationError::AttestationDocumentParseError(msg) => {
-                    println!("❌ Failed to parse attestation document: {}", msg);
+                    println!("❌ Failed to parse attestation document: {msg}");
                 }
                 EnclaveAttestationError::AttestationChainInvalid(msg) => {
-                    println!("❌ Certificate chain validation failed: {}", msg);
+                    println!("❌ Certificate chain validation failed: {msg}");
                 }
                 EnclaveAttestationError::AttestationSignatureInvalid(msg) => {
-                    println!("❌ Signature verification failed: {}", msg);
+                    println!("❌ Signature verification failed: {msg}");
                 }
                 EnclaveAttestationError::CodeUntrusted { pcr_index, actual } => {
-                    println!("❌ PCR{} value not trusted: {}", pcr_index, actual);
+                    println!("❌ PCR{pcr_index} value not trusted: {actual}");
                     println!("   You need to add this PCR value to allowed configs");
                 }
                 EnclaveAttestationError::AttestationStale {
@@ -84,15 +84,14 @@ fn test_real_attestation_document() {
                     max_age,
                 } => {
                     println!(
-                        "❌ Attestation is too old: {}ms (max: {}ms)",
-                        age_millis, max_age
+                        "❌ Attestation is too old: {age_millis}ms (max: {max_age}ms)"
                     );
                 }
                 _ => {
-                    println!("❌ Verification failed: {:?}", e);
+                    println!("❌ Verification failed: {e:?}");
                 }
             }
-            panic!("Attestation verification failed: {:?}", e);
+            panic!("Attestation verification failed: {e:?}");
         }
     }
 }

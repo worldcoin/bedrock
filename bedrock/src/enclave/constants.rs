@@ -1,7 +1,7 @@
 use super::types::PcrConfiguration;
 
 /// AWS Nitro Root Certificate for Production
-/// Source: https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip
+/// Source: <https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip>
 pub const AWS_NITRO_ROOT_CERT_PROD: &[u8] = b"-----BEGIN CERTIFICATE-----
 MIICETCCAZagAwIBAgIRAPkxdWgbkK/hHUbMtOTn+FYwCgYIKoZIzj0EAwMwSTEL
 MAkGA1UEBhMCVVMxDzANBgNVBAoMBkFtYXpvbjEMMAoGA1UECwwDQVdTMRswGQYD
@@ -18,7 +18,7 @@ IwLz3/Y=
 -----END CERTIFICATE-----";
 
 /// AWS Nitro Root Certificate for Staging
-/// Source: https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip
+/// Source: <https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip>
 pub const AWS_NITRO_ROOT_CERT_STAGING: &[u8] = AWS_NITRO_ROOT_CERT_PROD;
 
 /// Compile-time constants for PCR expected values (48 bytes each for SHA-384)
@@ -27,6 +27,7 @@ const PRODUCTION_PCR1_VALUE: &[u8] = &[0; 48];
 const PRODUCTION_PCR2_VALUE: &[u8] = &[0; 48];
 
 /// Expected PCR configurations for production enclaves
+#[must_use]
 pub fn production_pcr_configs() -> Vec<PcrConfiguration> {
     vec![
         PcrConfiguration {
@@ -53,6 +54,7 @@ const STAGING_PCR1_VALUE: &[u8] = &[0; 48];
 const STAGING_PCR2_VALUE: &[u8] = &[0; 48];
 
 /// Expected PCR configurations for staging enclaves
+#[must_use]
 pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
     vec![
         PcrConfiguration {
@@ -77,5 +79,5 @@ pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
 pub const MAX_ATTESTATION_AGE_MILLISECONDS: u64 = 3 * 60 * 60 * 1000; // 3 hours
 
 /// Minimum PCR value lengths
-/// https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html
+/// <https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html>
 pub const VALID_PCR_LENGTHS: &[usize] = &[32, 48, 64];
