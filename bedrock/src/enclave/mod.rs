@@ -100,21 +100,14 @@ impl EnclaveAttestationVerifier {
 
         self.verify_attestation_document(&attestation_doc_bytes)
     }
+}
 
+impl EnclaveAttestationVerifier {
     /// Verifies the attestation document from the enclave.
     ///
     /// Follows the AWS Nitro Enclave Attestation Document Specification:
     /// <https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-attestation-document.html>
-    ///
-    /// # Arguments
-    /// * `attestation_doc_bytes` - The attestation document bytes
-    ///
-    /// # Returns
-    /// A verified attestation containing the enclave's public key
-    ///
-    /// # Errors
-    /// Returns an error if the attestation document verification fails
-    pub fn verify_attestation_document(
+    fn verify_attestation_document(
         &self,
         attestation_doc_bytes: &[u8],
     ) -> EnclaveAttestationResult<VerifiedAttestation> {
@@ -137,9 +130,7 @@ impl EnclaveAttestationVerifier {
             attestation.module_id,
         ))
     }
-}
 
-impl EnclaveAttestationVerifier {
     fn parse_cose_sign1(bytes: &[u8]) -> EnclaveAttestationResult<CoseSign1> {
         // Validate before loading into buffer
         if bytes.is_empty() {
@@ -230,8 +221,8 @@ impl EnclaveAttestationVerifier {
             }
         };
 
-        // This is only used for tests
         let current_time = if should_skip_time_check {
+            // ONLY USED FOR TESTING
             // Use the attestation timestamp converted to seconds for certificate validation
             // This ensures we're using the same time context as when the attestation was created
             webpki::Time::from_seconds_since_unix_epoch(attestation.timestamp / 1000)

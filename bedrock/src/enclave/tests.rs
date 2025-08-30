@@ -97,10 +97,6 @@ fn test_real_attestation_document() {
 }
 
 // Failure cases
-// ============================================================================
-// SIMPLE FAKE ATTESTATION DOCUMENT GENERATION HELPERS
-// ============================================================================
-
 /// Configuration for generating basic fake attestation documents
 #[derive(Debug, Clone)]
 pub struct SimpleFakeAttestationConfig {
@@ -124,7 +120,7 @@ impl Default for SimpleFakeAttestationConfig {
 
 /// Generate a minimal fake attestation document CBOR for testing
 /// This creates invalid attestation documents that can be used to test specific error conditions
-pub fn generate_simple_fake_attestation_cbor(
+pub fn generate_simple_fake_attestation_self_signed(
     config: &SimpleFakeAttestationConfig,
 ) -> EnclaveAttestationResult<Vec<u8>> {
     let timestamp = config.timestamp.unwrap_or_else(|| {
@@ -173,6 +169,90 @@ pub fn generate_simple_fake_attestation_cbor(
     result.extend(vec![0x00; 96]); // Fake signature (all zeros)
 
     Ok(result)
+}
+
+/// Generate a fake attestation document with a different root CA
+/// This creates a completely valid structure but signed by an untrusted root
+fn generate_fake_attestation_different_root_ca() -> Vec<u8> {
+    // Create a fake attestation document using a real structure but with fake certificates
+    let fake_attestation_base64 = "hEShATgioFkRJL9pbW9kdWxlX2lkeCdpLTEyMzQ1Njc4OWFiY2RlZjAtZW5jMTIzNDU2Nzg5YWJjZGVmMGlkaWdlc3RmU0hBMzg0aXRpbWVzdGFtcBsAAAGY+B3NpGRwY3JzgABYMFthEeWnKlv7YK45S6q74fAAAEbOE/fy9n/Wnh4hK6kP5Tr5WgG57unnInldBkBrXQFYMEtNWzZhs+/BKSCQDIDhJuTOeDxSLebAKipb9686K5MnuGd28YjkvhwcQEoSnb2kkwJYMLfGFdnPY8dm2w1zaN6JySxhpKWSupmjauIkzpdsmUIADQb8rT9ivnOZibMmdxyMcANYMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARYMELmSqrPZnIiF9pTbb75I9KvlhGGZlbnSgYnJ0eWZpY2F0ZVkCfzCCAnswggIBoAMCAQICEAGY+BxFd+IhAAAAAGiyNFswCgYIKoZIzj0EAwMwgY4xCzAJBgNVBAYTAlVTMRMwEQYDVQQIDApXYXNoaW5ndG9uMRAwDgYDVQQHDAdTZWF0dGxlMQ8wDQYDVQQKDAZBbWF6b24xDDAKBgNVBAsMA0FXUzE5MDcGA1UEAwwwaS0wNWViYzBkOTYwN2ZjOTZhNS51cy1lYXN0LTEuYXdzLm5pdHJvLWVuY2xhdmVzMB4XDTI1MDgyOTIzMTQzMloXDTI1MDgzMDAyMTQzNVowgZMxCzAJBgNVBAYTAlVTMRMwEQYDVQQIDApXYXNoaW5ndG9uMRAwDgYDVQQHDAdTZWF0dGxlMQ8wDQYDVQQKDAZBbWF6b24xDDAKBgNVBAsMA0FXUzE+MDwGA1UEAww1aS0wNWViYzBkOTYwN2ZjOTZhNS1lbmMwMTk4ZjgxYzQ1NzdlMjIxLnVzLWVhc3QtMS5hd3MwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAATOyNCHap0qOYxq54jrW0Q5lhL8YA5ThPHcEbk82e0xFC3V/1KfoKjL8wb/lWUPsbqteJ9RLFRtMU/9o+qxSpvnbDLRltJ/5EPpoPo/ohDSWPT1uN1Z/Jxx7dWdqjhD1LmjHTAbMAwGA1UdEwEB/wQCMAAwCwYDVR0PBAQDAgbAMAoGCCqGSM49BAMDA2gAMGUCMQDDprlQWWBWoEuZ";
+
+    base64::engine::general_purpose::STANDARD
+        .decode(fake_attestation_base64)
+        .unwrap_or_else(|_| {
+            // Fallback to a minimal fake structure if base64 fails
+            let cfg = SimpleFakeAttestationConfig::default();
+            generate_simple_fake_attestation_self_signed(&cfg).unwrap()
+        })
+}
+
+/// Generate a fake attestation with self-signed certificate
+fn generate_fake_attestation_self_signed() -> Vec<u8> {
+    let config = SimpleFakeAttestationConfig::default();
+
+    let fake_cbor = generate_simple_fake_attestation_self_signed(&config).unwrap();
+
+    fake_cbor
+}
+
+/// Generate a fake attestation with invalid COSE signature
+fn generate_fake_attestation_invalid_cose() -> Vec<u8> {
+    let config = SimpleFakeAttestationConfig::default();
+    let mut fake_cbor = generate_simple_fake_attestation_self_signed(&config).unwrap();
+
+    // Corrupt the signature part (last 96 bytes should be the signature)
+    let signature_start = fake_cbor.len().saturating_sub(96);
+    for byte in fake_cbor.iter_mut().skip(signature_start) {
+        *byte = 0xFF; // Invalid signature bytes
+    }
+
+    fake_cbor
+}
+
+/// Generate a fake attestation with invalid certificate chain
+fn generate_fake_attestation_invalid_cert_chain() -> Vec<u8> {
+    let config = SimpleFakeAttestationConfig::default();
+    let mut fake_cbor = generate_simple_fake_attestation_self_signed(&config).unwrap();
+
+    // Corrupt the certificate data to make the chain invalid
+    // Find and modify certificate bytes in the CBOR structure
+    if fake_cbor.len() > 50 {
+        fake_cbor[30] = 0x00; // Corrupt certificate header
+        fake_cbor[31] = 0x00;
+        fake_cbor[32] = 0x00;
+        fake_cbor[33] = 0x00;
+    }
+
+    fake_cbor
+}
+
+/// Generate a fake attestation with expired certificate timestamps
+fn generate_fake_attestation_expired_cert() -> Vec<u8> {
+    // Create an attestation with a timestamp from the past
+    let now_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    let expired_timestamp = now_ms.saturating_sub(365 * 24 * 60 * 60 * 1000); // 1 year ago
+
+    let config = SimpleFakeAttestationConfig {
+        timestamp: Some(expired_timestamp),
+        ..Default::default()
+    };
+
+    generate_simple_fake_attestation_self_signed(&config).unwrap()
+}
+
+/// Generate a fake attestation with specific PCR values for mismatch testing
+fn generate_fake_attestation_with_pcrs(pcr_values: HashMap<usize, Vec<u8>>) -> Vec<u8> {
+    let config = SimpleFakeAttestationConfig {
+        pcr_values,
+        ..Default::default()
+    };
+    generate_simple_fake_attestation_self_signed(&config).unwrap()
 }
 
 // ============================================================================
@@ -259,97 +339,6 @@ fn test_attestation_doc_wrong_cert() {
             }
         },
     }
-}
-
-/// Generate a fake attestation document with a different root CA
-/// This creates a completely valid structure but signed by an untrusted root
-fn generate_fake_attestation_different_root_ca() -> Vec<u8> {
-    // Create a fake attestation document using a real structure but with fake certificates
-    let fake_attestation_base64 = "hEShATgioFkRJL9pbW9kdWxlX2lkeCdpLTEyMzQ1Njc4OWFiY2RlZjAtZW5jMTIzNDU2Nzg5YWJjZGVmMGlkaWdlc3RmU0hBMzg0aXRpbWVzdGFtcBsAAAGY+B3NpGRwY3JzgABYMFthEeWnKlv7YK45S6q74fAAAEbOE/fy9n/Wnh4hK6kP5Tr5WgG57unnInldBkBrXQFYMEtNWzZhs+/BKSCQDIDhJuTOeDxSLebAKipb9686K5MnuGd28YjkvhwcQEoSnb2kkwJYMLfGFdnPY8dm2w1zaN6JySxhpKWSupmjauIkzpdsmUIADQb8rT9ivnOZibMmdxyMcANYMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARYMELmSqrPZnIiF9pTbb75I9KvlhGGZlbnSgYnJ0eWZpY2F0ZVkCfzCCAnswggIBoAMCAQICEAGY+BxFd+IhAAAAAGiyNFswCgYIKoZIzj0EAwMwgY4xCzAJBgNVBAYTAlVTMRMwEQYDVQQIDApXYXNoaW5ndG9uMRAwDgYDVQQHDAdTZWF0dGxlMQ8wDQYDVQQKDAZBbWF6b24xDDAKBgNVBAsMA0FXUzE5MDcGA1UEAwwwaS0wNWViYzBkOTYwN2ZjOTZhNS51cy1lYXN0LTEuYXdzLm5pdHJvLWVuY2xhdmVzMB4XDTI1MDgyOTIzMTQzMloXDTI1MDgzMDAyMTQzNVowgZMxCzAJBgNVBAYTAlVTMRMwEQYDVQQIDApXYXNoaW5ndG9uMRAwDgYDVQQHDAdTZWF0dGxlMQ8wDQYDVQQKDAZBbWF6b24xDDAKBgNVBAsMA0FXUzE+MDwGA1UEAww1aS0wNWViYzBkOTYwN2ZjOTZhNS1lbmMwMTk4ZjgxYzQ1NzdlMjIxLnVzLWVhc3QtMS5hd3MwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAATOyNCHap0qOYxq54jrW0Q5lhL8YA5ThPHcEbk82e0xFC3V/1KfoKjL8wb/lWUPsbqteJ9RLFRtMU/9o+qxSpvnbDLRltJ/5EPpoPo/ohDSWPT1uN1Z/Jxx7dWdqjhD1LmjHTAbMAwGA1UdEwEB/wQCMAAwCwYDVR0PBAQDAgbAMAoGCCqGSM49BAMDA2gAMGUCMQDDprlQWWBWoEuZ";
-
-    base64::engine::general_purpose::STANDARD
-        .decode(fake_attestation_base64)
-        .unwrap_or_else(|_| {
-            // Fallback to a minimal fake structure if base64 fails
-            let cfg = SimpleFakeAttestationConfig::default();
-            generate_simple_fake_attestation_cbor(&cfg).unwrap()
-        })
-}
-
-/// Generate a fake attestation with self-signed certificate
-fn generate_fake_attestation_self_signed() -> Vec<u8> {
-    // Create an attestation where the leaf cert is the same as root cert
-    let config = SimpleFakeAttestationConfig::default();
-
-    let mut fake_cbor = generate_simple_fake_attestation_cbor(&config).unwrap();
-
-    // Modify the CBOR to have identical cert and cabundle (self-signed scenario)
-    // This is a simplified approach - in reality, you'd generate matching certs
-    if fake_cbor.len() > 20 {
-        fake_cbor[20] = 0xFF; // Modify a byte to make it slightly different but still self-referential
-    }
-
-    fake_cbor
-}
-
-/// Generate a fake attestation with invalid COSE signature
-fn generate_fake_attestation_invalid_cose() -> Vec<u8> {
-    let config = SimpleFakeAttestationConfig::default();
-    let mut fake_cbor = generate_simple_fake_attestation_cbor(&config).unwrap();
-
-    // Corrupt the signature part (last 96 bytes should be the signature)
-    let signature_start = fake_cbor.len().saturating_sub(96);
-    for byte in fake_cbor.iter_mut().skip(signature_start) {
-        *byte = 0xFF; // Invalid signature bytes
-    }
-
-    fake_cbor
-}
-
-/// Generate a fake attestation with invalid certificate chain
-fn generate_fake_attestation_invalid_cert_chain() -> Vec<u8> {
-    let config = SimpleFakeAttestationConfig::default();
-    let mut fake_cbor = generate_simple_fake_attestation_cbor(&config).unwrap();
-
-    // Corrupt the certificate data to make the chain invalid
-    // Find and modify certificate bytes in the CBOR structure
-    if fake_cbor.len() > 50 {
-        fake_cbor[30] = 0x00; // Corrupt certificate header
-        fake_cbor[31] = 0x00;
-        fake_cbor[32] = 0x00;
-        fake_cbor[33] = 0x00;
-    }
-
-    fake_cbor
-}
-
-/// Generate a fake attestation with expired certificate timestamps
-fn generate_fake_attestation_expired_cert() -> Vec<u8> {
-    // Create an attestation with a timestamp from the past
-    let now_ms = u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX);
-    let expired_timestamp = now_ms.saturating_sub(365 * 24 * 60 * 60 * 1000); // 1 year ago
-
-    let config = SimpleFakeAttestationConfig {
-        timestamp: Some(expired_timestamp),
-        ..Default::default()
-    };
-
-    generate_simple_fake_attestation_cbor(&config).unwrap()
-}
-
-/// Generate a fake attestation with specific PCR values for mismatch testing
-fn generate_fake_attestation_with_pcrs(pcr_values: HashMap<usize, Vec<u8>>) -> Vec<u8> {
-    let config = SimpleFakeAttestationConfig {
-        pcr_values,
-        ..Default::default()
-    };
-    generate_simple_fake_attestation_cbor(&config).unwrap()
 }
 
 #[test]
