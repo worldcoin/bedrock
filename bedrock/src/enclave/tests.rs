@@ -125,13 +125,16 @@ impl Default for SimpleFakeAttestationConfig {
 /// Generate a minimal fake attestation document CBOR for testing
 /// This creates invalid attestation documents that can be used to test specific error conditions
 pub fn generate_simple_fake_attestation_cbor(
-    config: SimpleFakeAttestationConfig,
+    config: &SimpleFakeAttestationConfig,
 ) -> EnclaveAttestationResult<Vec<u8>> {
     let timestamp = config.timestamp.unwrap_or_else(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
+        u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX)
     });
 
     // Create a minimal CBOR structure that matches the expected attestation document format
@@ -152,7 +155,7 @@ pub fn generate_simple_fake_attestation_cbor(
     // Convert JSON to CBOR (this is a simplified approach)
     ciborium::into_writer(&fake_attestation_map, &mut cbor_data).map_err(|e| {
         crate::enclave::types::EnclaveAttestationError::AttestationDocumentParseError(
-            format!("Failed to serialize fake attestation document: {}", e),
+            format!("Failed to serialize fake attestation document: {e}"),
         )
     })?;
 
@@ -252,7 +255,7 @@ fn test_attestation_doc_wrong_cert() {
                 println!("✅ Correctly rejected bad certificate");
             }
             _ => {
-                println!("✅ Rejected with error: {:?}", e);
+                println!("✅ Rejected with error: {e:?}");
             }
         },
     }
@@ -268,17 +271,17 @@ fn generate_fake_attestation_different_root_ca() -> Vec<u8> {
         .decode(fake_attestation_base64)
         .unwrap_or_else(|_| {
             // Fallback to a minimal fake structure if base64 fails
-            generate_simple_fake_attestation_cbor(SimpleFakeAttestationConfig::default()).unwrap()
+            let cfg = SimpleFakeAttestationConfig::default();
+            generate_simple_fake_attestation_cbor(&cfg).unwrap()
         })
 }
 
 /// Generate a fake attestation with self-signed certificate
 fn generate_fake_attestation_self_signed() -> Vec<u8> {
     // Create an attestation where the leaf cert is the same as root cert
-    let mut config = SimpleFakeAttestationConfig::default();
-    config.module_id = "i-selfsigned123456789-enc123456789abcdef0".to_string();
+    let config = SimpleFakeAttestationConfig::default();
 
-    let mut fake_cbor = generate_simple_fake_attestation_cbor(config).unwrap();
+    let mut fake_cbor = generate_simple_fake_attestation_cbor(&config).unwrap();
 
     // Modify the CBOR to have identical cert and cabundle (self-signed scenario)
     // This is a simplified approach - in reality, you'd generate matching certs
@@ -292,12 +295,12 @@ fn generate_fake_attestation_self_signed() -> Vec<u8> {
 /// Generate a fake attestation with invalid COSE signature
 fn generate_fake_attestation_invalid_cose() -> Vec<u8> {
     let config = SimpleFakeAttestationConfig::default();
-    let mut fake_cbor = generate_simple_fake_attestation_cbor(config).unwrap();
+    let mut fake_cbor = generate_simple_fake_attestation_cbor(&config).unwrap();
 
     // Corrupt the signature part (last 96 bytes should be the signature)
     let signature_start = fake_cbor.len().saturating_sub(96);
-    for i in signature_start..fake_cbor.len() {
-        fake_cbor[i] = 0xFF; // Invalid signature bytes
+    for byte in fake_cbor.iter_mut().skip(signature_start) {
+        *byte = 0xFF; // Invalid signature bytes
     }
 
     fake_cbor
@@ -306,7 +309,7 @@ fn generate_fake_attestation_invalid_cose() -> Vec<u8> {
 /// Generate a fake attestation with invalid certificate chain
 fn generate_fake_attestation_invalid_cert_chain() -> Vec<u8> {
     let config = SimpleFakeAttestationConfig::default();
-    let mut fake_cbor = generate_simple_fake_attestation_cbor(config).unwrap();
+    let mut fake_cbor = generate_simple_fake_attestation_cbor(&config).unwrap();
 
     // Corrupt the certificate data to make the chain invalid
     // Find and modify certificate bytes in the CBOR structure
@@ -323,18 +326,21 @@ fn generate_fake_attestation_invalid_cert_chain() -> Vec<u8> {
 /// Generate a fake attestation with expired certificate timestamps
 fn generate_fake_attestation_expired_cert() -> Vec<u8> {
     // Create an attestation with a timestamp from the past
-    let expired_timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-        - (365 * 24 * 60 * 60 * 1000); // 1 year ago
+    let now_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    let expired_timestamp = now_ms.saturating_sub(365 * 24 * 60 * 60 * 1000); // 1 year ago
 
     let config = SimpleFakeAttestationConfig {
         timestamp: Some(expired_timestamp),
         ..Default::default()
     };
 
-    generate_simple_fake_attestation_cbor(config).unwrap()
+    generate_simple_fake_attestation_cbor(&config).unwrap()
 }
 
 /// Generate a fake attestation with specific PCR values for mismatch testing
@@ -343,8 +349,7 @@ fn generate_fake_attestation_with_pcrs(pcr_values: HashMap<usize, Vec<u8>>) -> V
         pcr_values,
         ..Default::default()
     };
-
-    generate_simple_fake_attestation_cbor(config).unwrap()
+    generate_simple_fake_attestation_cbor(&config).unwrap()
 }
 
 #[test]
@@ -371,8 +376,7 @@ fn test_attestation_with_different_root_ca() {
         }
         Err(other) => {
             println!(
-                "✅ Rejected attestation with different root CA (error: {:?})",
-                other
+                "✅ Rejected attestation with different root CA (error: {other:?})",
             );
         }
         Ok(_) => {
@@ -417,7 +421,7 @@ fn test_attestation_with_invalid_cose_signature() {
             println!("✅ Correctly rejected invalid COSE signature");
         }
         Err(other) => {
-            println!("✅ Rejected invalid COSE signature (error: {:?})", other);
+            println!("✅ Rejected invalid COSE signature (error: {other:?})");
         }
         Ok(_) => {
             panic!("❌ Should have rejected invalid COSE signature");
@@ -444,7 +448,7 @@ fn test_attestation_with_invalid_certificate_chain() {
             println!("✅ Correctly rejected invalid certificate chain");
         }
         Err(other) => {
-            println!("✅ Rejected invalid certificate chain (error: {:?})", other);
+            println!("✅ Rejected invalid certificate chain (error: {other:?})");
         }
         Ok(_) => {
             panic!("❌ Should have rejected invalid certificate chain");
@@ -472,7 +476,7 @@ fn test_attestation_with_expired_certificate() {
             println!("✅ Correctly rejected expired attestation");
         }
         Err(other) => {
-            println!("✅ Rejected expired certificate (error: {:?})", other);
+            println!("✅ Rejected expired certificate (error: {other:?})");
         }
         Ok(_) => {
             panic!("❌ Should have rejected expired certificate");
@@ -514,13 +518,10 @@ fn test_attestation_with_mismatched_pcrs() {
 
     match result {
         Err(EnclaveAttestationError::CodeUntrusted { pcr_index, actual }) => {
-            println!(
-                "✅ Correctly rejected mismatched PCR{}: {}",
-                pcr_index, actual
-            );
+            println!("✅ Correctly rejected mismatched PCR{pcr_index}: {actual}");
         }
         Err(other) => {
-            println!("✅ Rejected due to PCR mismatch (error: {:?})", other);
+            println!("✅ Rejected due to PCR mismatch (error: {other:?})");
         }
         Ok(_) => {
             // This might happen if PCR validation occurs after other validation steps fail

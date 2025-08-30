@@ -105,22 +105,31 @@ impl EnclaveAttestationVerifier {
     ///
     /// Follows the AWS Nitro Enclave Attestation Document Specification:
     /// <https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-attestation-document.html>
+    ///
+    /// # Arguments
+    /// * `attestation_doc_bytes` - The attestation document bytes
+    ///
+    /// # Returns
+    /// A verified attestation containing the enclave's public key
+    ///
+    /// # Errors
+    /// Returns an error if the attestation document verification fails
     pub fn verify_attestation_document(
         &self,
         attestation_doc_bytes: &[u8],
     ) -> EnclaveAttestationResult<VerifiedAttestation> {
         // 1. Syntactical validation
-        let cose_sign1 = self.parse_cose_sign1(attestation_doc_bytes)?;
-        let attestation = self.parse_cbor_payload(&cose_sign1)?;
+        let cose_sign1 = Self::parse_cose_sign1(attestation_doc_bytes)?;
+        let attestation = Self::parse_cbor_payload(&cose_sign1)?;
 
         // 2. Semantic validation
         let leaf_cert = self.verify_certificate_chain(&attestation)?;
 
         // 3. Cryptographic validation
-        self.verify_cose_signature(&cose_sign1, &leaf_cert)?;
+        Self::verify_cose_signature(&cose_sign1, &leaf_cert)?;
         self.validate_pcr_values(&attestation)?;
         self.check_attestation_freshness(&attestation)?;
-        let public_key = self.extract_public_key(&attestation)?;
+        let public_key = Self::extract_public_key(&attestation)?;
 
         Ok(VerifiedAttestation::new(
             hex::encode(public_key),
@@ -131,7 +140,7 @@ impl EnclaveAttestationVerifier {
 }
 
 impl EnclaveAttestationVerifier {
-    fn parse_cose_sign1(&self, bytes: &[u8]) -> EnclaveAttestationResult<CoseSign1> {
+    fn parse_cose_sign1(bytes: &[u8]) -> EnclaveAttestationResult<CoseSign1> {
         // Validate before loading into buffer
         if bytes.is_empty() {
             return Err(EnclaveAttestationError::AttestationDocumentParseError(
@@ -161,7 +170,6 @@ impl EnclaveAttestationVerifier {
     }
 
     fn parse_cbor_payload(
-        &self,
         cose_sign1: &CoseSign1,
     ) -> EnclaveAttestationResult<AttestationDoc> {
         let payload = cose_sign1.payload.as_ref().ok_or_else(|| {
@@ -269,7 +277,6 @@ impl EnclaveAttestationVerifier {
     }
 
     fn verify_cose_signature(
-        &self,
         cose_sign1: &CoseSign1,
         leaf_cert: &Certificate,
     ) -> EnclaveAttestationResult<()> {
@@ -333,15 +340,9 @@ impl EnclaveAttestationVerifier {
 
         // Parse and verify the signature
         let ecdsa_signature =
-            Signature::from_bytes(signature.as_slice().try_into().map_err(|_| {
+            Signature::try_from(signature.as_slice()).map_err(|e| {
                 EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Invalid signature length: expected 96 bytes, got {}",
-                    signature.len()
-                ))
-            })?)
-            .map_err(|e| {
-                EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Failed to parse ECDSA signature: {e}"
+                    "Failed to parse ECDSA signature (need 96 raw bytes): {e}"
                 ))
             })?;
 
@@ -439,18 +440,16 @@ impl EnclaveAttestationVerifier {
     }
 
     fn extract_public_key(
-        &self,
         attestation: &AttestationDoc,
     ) -> EnclaveAttestationResult<Vec<u8>> {
-        attestation
-            .public_key
-            .clone()
-            .map(|key| key.into_vec())
-            .ok_or_else(|| {
-                EnclaveAttestationError::InvalidEnclavePublicKey(
+        attestation.public_key.clone().map_or_else(
+            || {
+                Err(EnclaveAttestationError::InvalidEnclavePublicKey(
                     "No public key in attestation document".to_string(),
-                )
-            })
+                ))
+            },
+            |key| Ok(key.into_vec()),
+        )
     }
 }
 
@@ -476,22 +475,4 @@ impl EnclaveAttestationVerifier {
     pub fn add_allowed_pcr_config(&mut self, pcr_config: PcrConfiguration) {
         self.allowed_pcr_configs.push(pcr_config);
     }
-}
-
-/// Verify an enclave attestation document and extract the public key
-///
-/// This is a convenience function that creates a verifier from the global config
-/// and verifies the base64-encoded attestation document.
-#[uniffi::export]
-pub fn verify_enclave_attestation_document(
-    attestation_doc: &str,
-) -> EnclaveAttestationResult<VerifiedAttestation> {
-    let config = crate::primitives::config::get_config().ok_or(
-        EnclaveAttestationError::AttestationDocumentParseError(
-            "Bedrock config not initialized. Call set_config() first.".to_string(),
-        ),
-    )?;
-
-    let verifier = EnclaveAttestationVerifier::new(&config.environment());
-    verifier.verify_attestation_document_base64(attestation_doc)
 }
