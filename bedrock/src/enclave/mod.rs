@@ -20,8 +20,7 @@ pub mod types;
 mod tests;
 
 pub use types::{
-    EnclaveAttestationError, EnclaveAttestationResult, PcrConfiguration,
-    VerifiedAttestation,
+    EnclaveAttestationError, EnclaveAttestationResult, PcrConfiguration, VerifiedAttestation,
 };
 
 use constants::{
@@ -146,12 +145,11 @@ impl EnclaveAttestationVerifier {
             ));
         }
 
-        let cbor_value: ciborium::Value =
-            ciborium::from_reader(bytes).map_err(|e| {
-                EnclaveAttestationError::AttestationDocumentParseError(format!(
-                    "Failed to parse CBOR: {e}"
-                ))
-            })?;
+        let cbor_value: ciborium::Value = ciborium::from_reader(bytes).map_err(|e| {
+            EnclaveAttestationError::AttestationDocumentParseError(format!(
+                "Failed to parse CBOR: {e}"
+            ))
+        })?;
 
         CoseSign1::from_cbor_value(cbor_value).map_err(|e| {
             EnclaveAttestationError::AttestationDocumentParseError(format!(
@@ -183,24 +181,19 @@ impl EnclaveAttestationVerifier {
     ) -> EnclaveAttestationResult<Certificate> {
         // Parse root certificate from PEM
         let pem_str = std::str::from_utf8(&self.root_certificate).map_err(|e| {
-            EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Invalid PEM encoding: {e}"
-            ))
+            EnclaveAttestationError::AttestationChainInvalid(format!("Invalid PEM encoding: {e}"))
         })?;
         let pem = pem::parse(pem_str).map_err(|e| {
-            EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Failed to parse PEM: {e}"
-            ))
+            EnclaveAttestationError::AttestationChainInvalid(format!("Failed to parse PEM: {e}"))
         })?;
         let root_cert_der = pem.contents();
 
         // Create trust anchor from root certificate
-        let trust_anchor =
-            TrustAnchor::try_from_cert_der(root_cert_der).map_err(|e| {
-                EnclaveAttestationError::AttestationChainInvalid(format!(
-                    "Failed to create trust anchor from root certificate: {e}"
-                ))
-            })?;
+        let trust_anchor = TrustAnchor::try_from_cert_der(root_cert_der).map_err(|e| {
+            EnclaveAttestationError::AttestationChainInvalid(format!(
+                "Failed to create trust anchor from root certificate: {e}"
+            ))
+        })?;
 
         // Collect intermediate certificates from cabundle,
         let intermediate_certs: Vec<&[u8]> = attestation
@@ -237,14 +230,12 @@ impl EnclaveAttestationVerifier {
         };
 
         // Create end entity certificate from the leaf certificate
-        let end_entity_cert = EndEntityCert::try_from(
-            attestation.certificate.as_slice(),
-        )
-        .map_err(|e| {
-            EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Failed to parse leaf certificate: {e}"
-            ))
-        })?;
+        let end_entity_cert =
+            EndEntityCert::try_from(attestation.certificate.as_slice()).map_err(|e| {
+                EnclaveAttestationError::AttestationChainInvalid(format!(
+                    "Failed to parse leaf certificate: {e}"
+                ))
+            })?;
 
         // Verify the certificate chain
         end_entity_cert
@@ -282,12 +273,11 @@ impl EnclaveAttestationVerifier {
         })?;
 
         // Parse as P-384 public key
-        let verifying_key =
-            VerifyingKey::from_sec1_bytes(public_key_bytes).map_err(|e| {
-                EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Failed to parse P-384 public key: {e}"
-                ))
-            })?;
+        let verifying_key = VerifyingKey::from_sec1_bytes(public_key_bytes).map_err(|e| {
+            EnclaveAttestationError::AttestationSignatureInvalid(format!(
+                "Failed to parse P-384 public key: {e}"
+            ))
+        })?;
 
         let signature = &cose_sign1.signature;
 
@@ -323,13 +313,11 @@ impl EnclaveAttestationVerifier {
             ciborium::Value::Bytes(payload.clone()),
         ]);
 
-        ciborium::into_writer(&sig_structure_cbor, &mut sig_structure).map_err(
-            |e| {
-                EnclaveAttestationError::AttestationSignatureInvalid(format!(
-                    "Failed to encode Sig_structure: {e}"
-                ))
-            },
-        )?;
+        ciborium::into_writer(&sig_structure_cbor, &mut sig_structure).map_err(|e| {
+            EnclaveAttestationError::AttestationSignatureInvalid(format!(
+                "Failed to encode Sig_structure: {e}"
+            ))
+        })?;
 
         // Parse and verify the signature
         let ecdsa_signature =
@@ -356,10 +344,7 @@ impl EnclaveAttestationVerifier {
         Ok(())
     }
 
-    fn validate_pcr_values(
-        &self,
-        attestation: &AttestationDoc,
-    ) -> EnclaveAttestationResult<()> {
+    fn validate_pcr_values(&self, attestation: &AttestationDoc) -> EnclaveAttestationResult<()> {
         if attestation.pcrs.is_empty() {
             return Err(EnclaveAttestationError::CodeUntrusted {
                 pcr_index: 0,
@@ -445,7 +430,7 @@ impl EnclaveAttestationVerifier {
         attestation
             .public_key
             .clone()
-            .map(|content| content.into_vec())
+            .map(|key| key.into_vec())
             .ok_or_else(|| {
                 EnclaveAttestationError::InvalidEnclavePublicKey(
                     "No public key in attestation document".to_string(),
