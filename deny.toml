@@ -39,9 +39,8 @@ allow = [
   "Zlib",
 ]
 
-# webpki has an ISC license but it's just not being detected
+# Allow webpki it has a valid ISC license but cargo-deny has trouble detecting it
 [[licenses.exceptions]]
-allow = ["ISC"]
 name = "webpki"
 version = "*"
 
