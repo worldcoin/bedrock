@@ -3,44 +3,33 @@
 //! The backup manifest is a local file-based system that any module can set to describe which files should
 //! be included in the backup.
 
+use std::sync::Arc;
+
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
-use crate::primitives::filesystem::{create_middleware, FileSystemMiddleware};
+use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
+use crate::backup::BackupFileDesignator;
+use crate::primitives::filesystem::{
+    create_middleware, FileSystemError, FileSystemMiddleware,
+};
 use crate::root_key::RootKey;
 use crate::{
     backup::{
         backup_format::v0::{V0Backup, V0BackupFile},
         service_client::BackupServiceClient,
-        BackupError, BackupModule,
+        BackupError,
     },
     primitives::filesystem::get_filesystem_raw,
 };
 
-const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
-
-/// A single, global manifest (v1) that describes the entire backup content.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GlobalManifestV1 {
-    /// Manifest version. Must be 1.
-    pub version: u32, // must be 1
-    /// Hash of the immediately previous manifest state (hex, 32-byte blake3), if any.
-    ///
-    /// Used to provide a lightweight chain of states for conflict detection and auditing.
-    pub previous_manifest_hash: Option<String>,
-    /// Entries describing each file to be backed up.
-    pub files: Vec<ManifestEntry>,
-}
-
-/// One entry in the global manifest.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ManifestEntry {
-    /// Logical module/designator for the file.
-    pub designator: BackupModule,
-    /// Relative path under the user data directory where the file resides.
-    pub file_path: String,
-    /// Lowercase hex-encoded BLAKE3 checksum of the file's raw bytes (32 bytes → 64 chars).
-    pub checksum_hex: String,
+/// A single, global manifest that describes the backup content.
+///
+/// All operations on the backup use this as a source.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "version", content = "manifest")]
+pub enum BackupManifest {
+    V0(V0BackupManifest),
 }
 
 /// Abstraction for signing backup-service challenges with the sync factor keypair.
@@ -48,137 +37,30 @@ pub struct ManifestEntry {
 /// Implementations are expected to:
 /// - return the sync factor public key in uncompressed SEC1 form, base64 (standard) encoded
 /// - sign the raw ASCII challenge string with ECDSA P-256, DER-encode the signature, base64 (standard) encode it
+#[uniffi::export(with_foreign)]
 pub trait SyncSigner: Send + Sync {
     /// Returns the sync factor public key in standard base64 encoding.
     fn public_key_base64(&self) -> String;
     /// Signs the provided raw ASCII challenge with ECDSA P-256; returns DER signature, base64 encoded.
-    fn sign_challenge_base64(&self, challenge: &str) -> String;
+    fn sign_challenge_base64(&self, challenge: String) -> String;
 }
 
 /// Manager responsible for reading and writing backup manifests and coordinating sync.
 #[derive(uniffi::Object)]
 pub struct ManifestManager {
     file_system: FileSystemMiddleware,
+    signer: Arc<dyn SyncSigner>,
 }
 
 impl ManifestManager {
     #[uniffi::constructor]
     /// Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(signer: Arc<dyn SyncSigner>) -> Self {
         Self {
             file_system: create_middleware("backup"),
+            signer,
         }
-    }
-
-    /// Returns the absolute path to the global manifest file on disk.
-    #[allow(clippy::missing_const_for_fn)]
-    fn global_manifest_path() -> &'static str {
-        GLOBAL_MANIFEST_FILE
-    }
-
-    /// Reads the global manifest from disk.
-    ///
-    /// # Errors
-    /// Returns an error if the manifest file is missing or cannot be parsed.
-    pub fn read_global_manifest(&self) -> Result<GlobalManifestV1, BackupError> {
-        let result = self.file_system.read_file(Self::global_manifest_path());
-        match result {
-            Ok(bytes) => {
-                let manifest: GlobalManifestV1 = serde_json::from_slice(&bytes)
-                    .map_err(|e| BackupError::ParseBackupManifestError {
-                        details: e.to_string(),
-                        manifest_name: "global_manifest".to_string(),
-                    })?;
-                Ok(manifest)
-            }
-            Err(_) => Err(BackupError::GlobalManifestNotFound),
-        }
-    }
-
-    /// Writes the provided global manifest to disk.
-    /// Writes the provided global manifest to disk.
-    ///
-    /// # Errors
-    /// Returns an error if the manifest cannot be serialized or written.
-    pub fn write_global_manifest(
-        &self,
-        manifest: &GlobalManifestV1,
-    ) -> Result<(), BackupError> {
-        let serialized = serde_json::to_vec(manifest).map_err(|e| {
-            BackupError::ParseBackupManifestError {
-                details: e.to_string(),
-                manifest_name: "global_manifest".to_string(),
-            }
-        })?;
-        let result = self
-            .file_system
-            .write_file(Self::global_manifest_path(), serialized);
-        if result.is_err() {
-            return Err(BackupError::WriteFileError);
-        }
-        Ok(())
-    }
-
-    /// Computes a deterministic BLAKE3 hash over the entire manifest bytes.
-    ///
-    /// We serialize the full `GlobalManifestV1` to JSON and hash the raw bytes.
-    /// Returns lowercase hex string (64 chars).
-    #[must_use]
-    pub fn compute_manifest_hash(manifest: &GlobalManifestV1) -> String {
-        let serialized = serde_json::to_vec(manifest).unwrap_or_default();
-        let hash = blake3::hash(&serialized);
-        hex::encode(hash.as_bytes())
-    }
-
-    /// Builds unsealed backup files from the global manifest by reading and checksumming the files.
-    /// Validates presence and recomputes checksum to ensure manifest correctness.
-    /// TODO: verify paths prefixing is correct here.
-    ///
-    /// # Errors
-    /// Returns an error if the files cannot be read or checksums do not match.
-    pub fn build_unsealed_backup_files_from_manifest(
-        &self,
-        manifest: &GlobalManifestV1,
-    ) -> Result<Vec<V0BackupFile>, BackupError> {
-        let mut files = Vec::with_capacity(manifest.files.len());
-        // Use the global filesystem (no prefixing) to read file contents.
-        let fs = get_filesystem_raw()?;
-        for entry in &manifest.files {
-            let rel = entry.file_path.trim_start_matches('/');
-            let data = fs.read_file(rel.to_string()).map_err(|e| {
-                let msg = format!(
-                    "High Impact. Failed to load file from {:?}: {e}",
-                    entry.designator
-                );
-                log::error!("{msg}");
-                BackupError::InvalidFileForBackup(msg)
-            })?;
-
-            // Validate checksum matches manifest
-            let computed = blake3::hash(&data);
-            let expected_bytes = hex::decode(&entry.checksum_hex).map_err(|_| {
-                BackupError::InvalidChecksumError {
-                    module_name: entry.designator.to_string(),
-                }
-            })?;
-            if computed.as_bytes() != expected_bytes.as_slice() {
-                return Err(BackupError::InvalidChecksumError {
-                    module_name: entry.designator.to_string(),
-                });
-            }
-
-            files.push(V0BackupFile {
-                data,
-                checksum: expected_bytes,
-                path: format!(
-                    "{}/{}",
-                    entry.designator,
-                    rel.rsplit('/').next().unwrap_or(rel)
-                ),
-            });
-        }
-        Ok(files)
     }
 
     /// Returns files recorded in the global manifest after verifying local is not stale vs remote.
@@ -189,213 +71,273 @@ impl ManifestManager {
     /// Returns an error if the remote hash does not match local or if network/IO errors occur.
     pub async fn list_files(
         &self,
-        signer: &dyn SyncSigner,
-    ) -> Result<Vec<ManifestEntry>, BackupError> {
-        let client = BackupServiceClient::new()
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
+        designator: BackupFileDesignator,
+    ) -> Result<Vec<String>, BackupError> {
+        let client = BackupServiceClient::new().map_err(|e| BackupError::Generic {
+            message: e.to_string(),
+        })?;
         let remote_hash = client
-            .get_remote_manifest_hash(signer)
+            .get_remote_manifest_hash(&*self.signer)
             .await
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
+            .map_err(|e| BackupError::Generic {
+                message: e.to_string(),
+            })?;
 
-        let manifest = self.read_global_manifest()?;
-        let local_hash = Self::compute_manifest_hash(&manifest);
+        let (manifest, local_hash) = self.read_manifest()?;
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
         }
-        Ok(manifest.files)
+
+        let BackupManifest::V0(manifest) = manifest;
+
+        let files = manifest
+            .files
+            .iter()
+            .filter(|e| e.designator == designator)
+            .map(|e| e.file_path.clone())
+            .collect();
+
+        Ok(files)
     }
 
-    /// Adds or replaces the file entry for a given designator and performs a remote-gated update inline.
-    ///
-    /// TODO: Integrate size validation policies per module when available.
+    /// Adds a file entry for a given designator. Will trigger a backup sync.
     ///
     /// # Errors
-    /// Returns an error if remote hash does not match local or if serialization/IO fails.
+    /// - Returns an error if remote hash does not match local (remote is ahead).
+    /// - Returns an error if serialization fails.
     pub async fn store_file(
         &self,
-        signer: &dyn SyncSigner,
-        designator: BackupModule,
+        designator: BackupFileDesignator,
         file_path: String,
         root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
-        // 1) Remote hash
-        let client = BackupServiceClient::new()
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
-        let remote_hash = client
-            .get_remote_manifest_hash(signer)
-            .await
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
+        // Step 0: Verify inputs
+        let root = RootKey::from_json(root_secret)
+            .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let pk_bytes = hex::decode(backup_keypair_public_key)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+        let pk = PublicKey::from_slice(&pk_bytes)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
-        // 2) Local hash
-        let mut manifest = self.read_global_manifest()?;
-        let local_hash = Self::compute_manifest_hash(&manifest);
+        // Step 1: Fetch the remote hash
+        let client = BackupServiceClient::new().map_err(|e| BackupError::Generic {
+            message: e.to_string(),
+        })?;
+        let remote_hash = client
+            .get_remote_manifest_hash(&*self.signer)
+            .await
+            .map_err(|e| BackupError::Generic {
+                message: e.to_string(),
+            })?;
+
+        // Step 2: Fetch the local hash and compare against the remote hash
+        let (manifest, local_hash) = self.read_manifest()?;
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
         }
+        let BackupManifest::V0(mut manifest) = manifest;
 
-        // 3) Compute checksum for provided file
-        let rel_path = file_path.trim_start_matches('/').to_string();
-        let data = self.file_system.read_file(&rel_path).map_err(|e| {
+        // Step 3: Check the file does not exist in the manifest
+        if manifest.files.iter().any(|e| e.file_path == file_path) {
+            log::warn!("File already exists in the manifest: {file_path}");
+            return Ok(());
+        }
+
+        // Step 4: Compute checksum for provided file
+        let file_path = file_path.trim_start_matches('/').to_string();
+        // FIXME: add checksum computation directly from the FS to avoid loading the entire file into memory
+        // FIXME: `read_file` will read the file prefixed, this won't work.
+        let data = self.file_system.read_file(&file_path).map_err(|e| {
             let msg = format!("Failed to load file from {designator:?}: {e}");
             log::error!("{msg}");
             BackupError::InvalidFileForBackup(msg)
         })?;
         let checksum_hex = hex::encode(blake3::hash(&data).as_bytes());
 
-        // 4) Build candidate manifest M'
-        if let Some(entry) = manifest
-            .files
-            .iter_mut()
-            .find(|e| e.designator == designator)
-        {
-            // Persist full global path (prefixed) in the manifest
-            entry.file_path = self.file_system.get_full_path_from_file_path(&rel_path);
-            entry.checksum_hex.clone_from(&checksum_hex);
-        } else {
-            manifest.files.push(ManifestEntry {
-                designator,
-                // Persist full global path (prefixed) in the manifest
-                file_path: self.file_system.get_full_path_from_file_path(&rel_path),
-                checksum_hex: checksum_hex.clone(),
-            });
-        }
-
-        // 6) Build files from M', generate sealed backup, compute Hnew
-        //    Set previous_manifest_hash to the current local hash
-        manifest.previous_manifest_hash = Some(local_hash.clone());
-        let new_manifest_hash = Self::compute_manifest_hash(&manifest);
-
-        // Materialize files from manifest and build a sealed backup container
-        let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
-        let root = RootKey::from_json(root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
-        let unsealed = V0Backup::new(root, files);
-        let unsealed_bytes = unsealed.to_bytes()?;
-        // Encrypt with backup keypair public key
-        let pk_bytes = hex::decode(backup_keypair_public_key)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        let pk = PublicKey::from_slice(&pk_bytes)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        let sealed_backup = pk
-            .seal(&mut rand::thread_rng(), &unsealed_bytes)
-            .map_err(|_| BackupError::EncryptBackupError)?;
-
-        // 7) Challenge/sign for sync and POST /v1/sync multipart
-        let challenge = client
-            .get_sync_challenge_keypair()
-            .await
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
-        let _resp = client
-            .post_sync_with_keypair(
-                signer,
-                &challenge,
-                local_hash,
-                new_manifest_hash,
-                sealed_backup,
-            )
-            .await
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
-
-        // 8) Commit manifest
-        self.write_global_manifest(&manifest)?;
-        Ok(())
-    }
-
-    /// Replaces the file entry for a given designator with a new file path and performs a remote-gated update inline.
-    ///
-    /// # Errors
-    /// Returns an error if the remote hash does not match local or downstream operations fail.
-    pub async fn replace_file(
-        &self,
-        signer: &dyn SyncSigner,
-        designator: BackupModule,
-        file_path: String,
-        root_secret: &str,
-        backup_keypair_public_key: String,
-    ) -> Result<(), BackupError> {
-        // Delegate to store_file, as replace semantics equal to upsert for this designator.
-        self.store_file(
-            signer,
+        // Step 5: Build candidate manifest M'
+        manifest.files.push(V0BackupManifestEntry {
             designator,
             file_path,
-            root_secret,
-            backup_keypair_public_key,
-        )
-        .await
-    }
+            checksum_hex: checksum_hex.clone(),
+        });
 
-    /// Removes the file entry for the given designator, if present, and performs a remote-gated update inline.
-    ///
-    /// # Errors
-    /// Returns an error if the remote hash does not match local or downstream operations fail.
-    pub async fn remove_file(
-        &self,
-        signer: &dyn SyncSigner,
-        designator: BackupModule,
-        root_secret: &str,
-        backup_keypair_public_key: String,
-    ) -> Result<(), BackupError> {
-        // 1) Remote gate
-        let client = BackupServiceClient::new()
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
-        let remote_hash = client
-            .get_remote_manifest_hash(signer)
-            .await
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
-
-        // 2) Local manifest
-        let mut manifest = self.read_global_manifest()?;
-        let local_hash = Self::compute_manifest_hash(&manifest);
-        if remote_hash != local_hash {
-            return Err(BackupError::RemoteAheadStaleError);
-        }
-
-        // 3) Remove entry if present
-        manifest.files.retain(|e| e.designator != designator);
-
-        // 4) Compute new manifest hash and reseal
-        manifest.previous_manifest_hash = Some(local_hash.clone());
-        let new_manifest_hash = Self::compute_manifest_hash(&manifest);
-
+        // Step 6: Construct new unsealed backup
+        manifest.previous_manifest_hash = Some(hex::encode(local_hash));
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
-        let root = RootKey::from_json(root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
-        let unsealed = V0Backup::new(root, files);
-        let unsealed_bytes = unsealed.to_bytes()?;
-        let pk_bytes = hex::decode(backup_keypair_public_key)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        let pk = PublicKey::from_slice(&pk_bytes)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+
+        let unsealed_backup = V0Backup::new(root, files).to_bytes()?;
+
+        // Step 7: Seal the backup
         let sealed_backup = pk
-            .seal(&mut rand::thread_rng(), &unsealed_bytes)
+            .seal(&mut rand::thread_rng(), &unsealed_backup)
             .map_err(|_| BackupError::EncryptBackupError)?;
 
-        // 5) Sync
-        let challenge = client
-            .get_sync_challenge_keypair()
-            .await
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
+        // Step 8: Sync the backup with the remote
+        let challenge = client.get_sync_challenge_keypair().await.map_err(|e| {
+            BackupError::Generic {
+                message: e.to_string(),
+            }
+        })?;
         let _resp = client
             .post_sync_with_keypair(
-                signer,
+                &*self.signer,
                 &challenge,
-                local_hash,
-                new_manifest_hash,
+                hex::encode(local_hash),
+                "fixme!".to_string(),
                 sealed_backup,
             )
             .await
-            .map_err(|e| BackupError::UnexpectedError(e.to_string()))?;
+            .map_err(|e| BackupError::Generic {
+                message: e.to_string(),
+            })?;
 
-        // 6) Commit
-        self.write_global_manifest(&manifest)?;
+        // Step 9: Commit the manifest
+        self.write_manifest(&BackupManifest::V0(manifest))?;
         Ok(())
+    }
+
+    /// Replaces all the file entries for a given designator by removing all existing entries for a given designator
+    /// and adding a new file.
+    ///
+    /// # Errors
+    /// Returns an error if the remote hash does not match local or downstream operations fail.
+    pub fn replace_all_files_for_designator(
+        &self,
+        _designator: BackupFileDesignator,
+        _new_file_path: String,
+        _root_secret: &str,
+        _backup_keypair_public_key: String,
+    ) -> Result<(), BackupError> {
+        todo!("implement");
+    }
+
+    /// Removes a specific file entry. Triggers a backup sync.
+    ///
+    /// # Errors
+    /// - Returns an error if the file does not exist in the backup.
+    /// - Returns an error if the remote hash does not match local (remote is ahead).
+    /// - Returns an error if serialization fails.
+    pub fn remove_file(
+        &self,
+        _file_path: String,
+        _root_secret: &str,
+        _backup_keypair_public_key: String,
+    ) -> Result<(), BackupError> {
+        // most of the code can be re-used from store_file, abstract as appropriate
+        todo!("implement");
     }
 }
 
-impl Default for ManifestManager {
-    fn default() -> Self {
-        Self::new()
+/// Internal methods for the `ManifestManager` (not exposed to foreign code).
+impl ManifestManager {
+    /// Thepath to the global manifest file
+    const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
+
+    /// Reads the global manifest from disk.
+    ///
+    /// # Errors
+    /// Returns an error if the manifest file is missing or cannot be parsed.
+    fn read_manifest(&self) -> Result<(BackupManifest, [u8; 32]), BackupError> {
+        let result = self.file_system.read_file(Self::GLOBAL_MANIFEST_FILE);
+        match result {
+            Ok(bytes) => {
+                let checksum = blake3::hash(&bytes).into();
+                let manifest: BackupManifest =
+                    serde_json::from_slice(&bytes).map_err(|e| {
+                        BackupError::Generic {
+                            message: (format!(
+                                "Unexpectedly unable to parse BackupManifest: {e}"
+                            )),
+                        }
+                    })?;
+                Ok((manifest, checksum))
+            }
+            Err(e) => match e {
+                FileSystemError::FileDoesNotExist => Err(BackupError::ManifestNotFound),
+                _ => Err(BackupError::Generic {
+                    message: e.to_string(),
+                }),
+            },
+        }
+    }
+
+    /// Writes the updated manifest to disk.
+    ///
+    /// # Errors
+    /// Returns an error if the manifest cannot be serialized or written.
+    pub fn write_manifest(&self, manifest: &BackupManifest) -> Result<(), BackupError> {
+        let serialized =
+            serde_json::to_vec(manifest).map_err(|e| BackupError::Generic {
+                message: (format!(
+                    "Unexpectedly unable to serialize BackupManifest: {e}"
+                )),
+            })?;
+        let result = self
+            .file_system
+            .write_file(Self::GLOBAL_MANIFEST_FILE, serialized);
+        if result.is_err() {
+            return Err(BackupError::Generic {
+                message: "Unable to save the BackupManifest to the filesystem"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Builds unsealed backup files from the global manifest by reading and checksumming the files.
+    /// Validates presence and recomputes checksum to ensure manifest correctness.
+    ///
+    /// # Errors
+    /// Returns an error if the files cannot be read or checksums do not match.
+    pub fn build_unsealed_backup_files_from_manifest(
+        &self,
+        manifest: &V0BackupManifest,
+    ) -> Result<Vec<V0BackupFile>, BackupError> {
+        let mut files = Vec::with_capacity(manifest.files.len());
+        // Use the global filesystem (no prefixing) to read file contents.
+        let fs = get_filesystem_raw()?;
+        for entry in &manifest.files {
+            let rel = entry.file_path.trim_start_matches('/');
+            let data = fs.read_file(rel.to_string()).map_err(|e| {
+                let msg =
+                    format!("Failed to load file from {:?}: {e}", entry.designator);
+                log::error!("{msg}");
+                BackupError::InvalidFileForBackup(msg)
+            })?;
+
+            // Validate checksum matches manifest
+            let computed_checksum = blake3::hash(&data);
+            let expected_checksum: [u8; 32] = hex::decode(&entry.checksum_hex).map_err(|_| {
+                log::error!(
+                    "[Critical] Unable to decode checksum for file with designator: {}. Triggering a fresh fetch.",
+                    entry.designator
+                );
+                BackupError::RemoteAheadStaleError
+            })?.try_into().map_err(|_| {
+                log::error!(
+                    "[Critical] Unable to decode checksum for file with designator: {}. Triggering a fresh fetch.",
+                    entry.designator
+                );
+                BackupError::RemoteAheadStaleError
+            } )?;
+
+            if computed_checksum != expected_checksum {
+                return Err(BackupError::InvalidChecksumError {
+                    designator: entry.designator.to_string(),
+                });
+            }
+
+            files.push(V0BackupFile {
+                data,
+                checksum: computed_checksum.into(),
+                path: format!(
+                    "{}/{}",
+                    entry.designator,
+                    rel.rsplit('/').next().unwrap_or(rel)
+                ),
+            });
+        }
+        Ok(files)
     }
 }

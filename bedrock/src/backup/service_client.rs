@@ -171,7 +171,7 @@ impl BackupServiceClient {
         sealed_backup: Vec<u8>,
     ) -> Result<serde_json::Value, HttpError> {
         // 1) Build authorization JSON from signer: { kind: "EC_KEYPAIR", publicKey, signature }
-        let sig_b64 = signer.sign_challenge_base64(&challenge.challenge);
+        let sig_b64 = signer.sign_challenge_base64(challenge.challenge.clone());
         let pk_b64 = signer.public_key_base64();
         let payload = serde_json::json!({
             "authorization": {
@@ -227,10 +227,12 @@ impl BackupServiceClient {
     }
 
     /// Retrieve metadata via keypair challenge/sign using provided signer.
+    #[allow(clippy::too_many_lines)] // FIXME
     pub async fn get_remote_manifest_hash(
         &self,
         signer: &dyn SyncSigner,
-    ) -> Result<String, HttpError> {
+    ) -> Result<[u8; 32], HttpError> {
+        // FIXME: type requests and responses?
         // 1) Request challenge
         let url_challenge = self.url("/v1/retrieve-metadata/challenge/keypair");
         let mut headers = HeaderMap::new();
@@ -276,7 +278,7 @@ impl BackupServiceClient {
         })?;
 
         // 2) Sign + post solution
-        let sig_b64 = signer.sign_challenge_base64(challenge);
+        let sig_b64 = signer.sign_challenge_base64(challenge.to_string());
         let pk_b64 = signer.public_key_base64();
         let payload = serde_json::json!({
             "authorization": {
@@ -324,7 +326,18 @@ impl BackupServiceClient {
             .ok_or_else(|| HttpError::Generic {
                 message: "missing 'manifestHash'".to_string(),
             })?;
-        Ok(hash.to_string())
+
+        let hash: [u8; 32] = hex::decode(hash)
+            .map_err(|_| HttpError::Generic {
+                message: "unable to hex decode manifest hash".to_string(),
+            })?
+            .try_into()
+            .map_err(|_| HttpError::Generic {
+                message: "unable to convert hex encoded manifest hash to [u8; 32]"
+                    .to_string(),
+            })?;
+
+        Ok(hash)
     }
 }
 

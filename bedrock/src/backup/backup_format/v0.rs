@@ -1,6 +1,6 @@
-use crate::backup::{BackupError, BackupModule};
+use crate::backup::{BackupError, BackupFileDesignator};
 use crate::root_key::RootKey;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
@@ -11,18 +11,25 @@ const VERSION_TAG: &str = "OXIDE_BACKUP_VERSION";
 const ROOT_SECRET_FILE: &str = "root_secret.json";
 
 /// V0 version of the backup manifest. See `BackupManifest` for more details.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V0BackupManifest {
-    /// The path to the file on the file system (relative to the user data directory). It is where the file will be retrieved from to add to the backup, and
-    /// where the file will be extracted to when restoring the backup.
-    /// TODO: This needs to be standardized and constrained to relevant relative paths (i.e. `personal_custody` can only backup files relative to `personal_custody`)
-    file_path: String,
-    /// The last time the manifest was updated.
-    pub manifest_last_updated_at: DateTime<Utc>,
-    /// The maximum file size allowed in kilobytes.
-    pub max_file_size_kb: u64,
-    /// The module that the file belongs to.
-    pub module_name: BackupModule,
+    /// Hash of the immediately previous manifest state (hex, 32-byte blake3), if any.
+    ///
+    /// Used to provide a lightweight chain of states for conflict detection and auditing.
+    pub previous_manifest_hash: Option<String>,
+    /// Entries describing each file to be backed up.
+    pub files: Vec<V0BackupManifestEntry>,
+}
+
+/// One entry in the global manifest.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct V0BackupManifestEntry {
+    /// Logical designator for the file.
+    pub designator: BackupFileDesignator,
+    /// Full path under the user data directory where the file resides.
+    pub file_path: String,
+    /// Lowercase hex-encoded checksum of the file's raw bytes (32 bytes → 64 chars).
+    pub checksum_hex: String,
 }
 
 /// This backup format allows the app to store any files that it wants, primarily, PCPs. Root secret
@@ -40,8 +47,8 @@ pub struct V0Backup {
 pub struct V0BackupFile {
     /// The actual file data (usually binary).
     pub data: Vec<u8>,
-    /// The blake3 hash of the file. A vector is used to be able to pass to foreign code.
-    pub checksum: Vec<u8>,
+    /// The blake3 hash of the file.
+    pub checksum: [u8; 32],
     /// Relative path under the user data directory; also used as archive entry name.
     pub path: String,
 }
@@ -53,9 +60,9 @@ impl V0BackupFile {
     /// * If the checksum is invalid, `BackupError::InvalidChecksumError` is returned.
     pub fn validate_checksum(&self) -> Result<(), BackupError> {
         let computed_checksum = blake3::hash(&self.data);
-        if self.checksum != computed_checksum.as_bytes().to_vec() {
+        if &self.checksum != computed_checksum.as_bytes() {
             return Err(BackupError::InvalidChecksumError {
-                module_name: self.path.clone(),
+                designator: self.path[self.path.len() - 8..].to_string(),
             });
         }
         Ok(())
@@ -229,12 +236,12 @@ mod tests {
         let files = vec![
             V0BackupFile {
                 data: b"Hello, World!".to_vec(),
-                checksum: blake3::hash(b"Hello, World!").as_bytes().to_vec(),
+                checksum: blake3::hash(b"Hello, World!").as_bytes().to_owned(),
                 path: "personal_custody/file1.txt".to_string(),
             },
             V0BackupFile {
                 data: vec![],
-                checksum: blake3::hash(&[]).as_bytes().to_vec(),
+                checksum: blake3::hash(&[]).as_bytes().to_owned(),
                 path: "document_personal_custody/file2.txt".to_string(),
             },
         ];
@@ -315,7 +322,7 @@ mod tests {
 
         let test_file = V0BackupFile {
             data: b"Hello".to_vec(),
-            checksum: blake3::hash(b"Hello").as_bytes().to_vec(),
+            checksum: blake3::hash(b"Hello").as_bytes().to_owned(),
             path: "personal_custody/file.txt".to_string(),
         };
         let mut encoded_file = Vec::new();
@@ -401,17 +408,13 @@ mod tests {
     fn test_encoded_file_with_missing_attributes() {
         #[derive(serde::Serialize)]
         struct MockBackupFile {
-            name: String,
             data: Vec<u8>,
             // no checksum
-            module_name: BackupModule,
             file_path: String,
         }
 
         let mock_file = MockBackupFile {
-            name: "test_file.txt".to_string(),
             data: vec![],
-            module_name: BackupModule::PersonalCustody,
             file_path: "/documents/file.txt".to_string(),
         };
 
@@ -450,7 +453,7 @@ mod tests {
     fn test_invalid_checksum() {
         let file_with_incorrect_checksum = V0BackupFile {
             data: b"Hello, World!".to_vec(),
-            checksum: blake3::hash(b"Goodbye, World!").as_bytes().to_vec(),
+            checksum: blake3::hash(b"Goodbye, World!").as_bytes().to_owned(),
             path: "personal_custody/file.txt".to_string(),
         };
 
@@ -482,7 +485,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Invalid checksum for file personal_custody/file.txt"
+            "[Critical] Checksum for file with designator: file.txt does not match the expected value"
         );
     }
 }

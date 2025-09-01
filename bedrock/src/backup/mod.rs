@@ -6,7 +6,7 @@ mod service_client;
 mod test;
 
 use bedrock_macros::bedrock_export;
-pub use manifest::{GlobalManifestV1, ManifestEntry, ManifestManager};
+pub use manifest::ManifestManager;
 use regex::Regex;
 
 use crate::backup::backup_format::v0::V0Backup;
@@ -182,12 +182,8 @@ impl BackupManager {
             backup_keypair_public_key: hex::encode(
                 backup_secret_key.public_key().as_bytes(),
             ),
-            manifest_hash: ManifestManager::compute_manifest_hash(&GlobalManifestV1 {
-                version: 1,
-                previous_manifest_hash: None,
-                files: vec![],
-            }),
-            // FIXME: check if it's an issue that Bedrock doesn't know whether the backup was actually created or not
+            manifest_hash: "todo!".to_string(),
+            // FIXME: Bedrock should write the manifest here and return the hash
         };
 
         Ok(result)
@@ -361,19 +357,21 @@ impl BackupManager {
     }
 }
 
-/// The modules which are allowed to create a backup manifest and add a file to the backup.
+/// A global identifier that identifies the type of file.
 #[derive(
-    strum::Display, strum::EnumString, Debug, Clone, PartialEq, Eq, uniffi::Enum,
+    strum::Display, strum::EnumString, Debug, Clone, PartialEq, Eq, Hash, uniffi::Enum,
 )]
 #[strum(serialize_all = "snake_case")]
-pub enum BackupModule {
-    /// Personal Custody Package module.
-    PersonalCustody,
-    /// Personal Custody for documents module.
-    DocumentPersonalCustody,
+pub enum BackupFileDesignator {
+    /// Orb Personal Custody Package (PCP) or "Orb Credential"
+    OrbPkg,
+    /// Document (NFC) Personal Custody Package (PCP) or "Document Credential"
+    DocumentPkg,
+    /// Secure Document (NFC) Personal Custody Package (PCP) or "Secure Document Credential"
+    SecureDocumentPkg,
 }
 
-impl Serialize for BackupModule {
+impl Serialize for BackupFileDesignator {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -382,7 +380,7 @@ impl Serialize for BackupModule {
     }
 }
 
-impl<'de> Deserialize<'de> for BackupModule {
+impl<'de> Deserialize<'de> for BackupFileDesignator {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -431,21 +429,10 @@ pub enum BackupError {
     #[error("Failed to encode root secret to JSON")]
     /// Failed to encode root secret to JSON.
     EncodeRootSecretError,
-    #[error("Failed to write file to file system")]
-    /// Failed to write file to filesystem.
-    WriteFileError,
     /// The provided file from a manifest to build the unsealed backup is not valid.
     #[error("Invalid file for backup: {0}")]
     /// The provided file from a manifest to build the unsealed backup is not valid.
     InvalidFileForBackup(String),
-    #[error("Failed to parse backup manifest {manifest_name}: {details}")]
-    /// Failed to parse a backup manifest JSON file.
-    ParseBackupManifestError {
-        /// Additional error details for debugging.
-        details: String,
-        /// The manifest file name.
-        manifest_name: String,
-    },
     #[error("CBOR encoding error: {0}")]
     /// CBOR encoding error while writing a backup file.
     EncodeBackupFileError(#[from] ciborium::ser::Error<std::io::Error>),
@@ -457,32 +444,20 @@ pub enum BackupError {
         /// The path of the file that failed to decode.
         path: String, // the path of the file that failed to decode
     },
-    #[error("Invalid module name: {0}")]
-    /// Invalid module name provided.
-    InvalidModuleName(String),
-    #[error("global manifest not found")]
-    /// Global manifest file not found.
-    GlobalManifestNotFound,
-    #[error("local backup checkpoint file does not exist")]
-    /// Local backup checkpoint file does not exist.
-    InexistentLocalCheckpointFile,
-    #[error("local backup checkpoint error: {0}")]
-    /// Error while reading/writing local backup checkpoint.
-    LocalCheckpointError(String),
-    #[error("Invalid checksum for file {module_name}")]
+    #[error("Manifest not found")]
+    /// Manifest file not found.
+    ManifestNotFound,
+    #[error("[Critical] Checksum for file with designator: {designator} does not match the expected value")]
     /// File checksum does not match the expected value.
     InvalidChecksumError {
-        /// The module name associated with the file.
-        module_name: String,
+        /// The designator associated with the file.
+        designator: String,
     },
     /// Remote manifest head is ahead of local.
     /// Native layer should trigger a download/apply of the latest backup before retrying.
-    #[error("remote manifest is ahead of local; fetch and apply latest backup before updating")]
+    #[error("Remote manifest is ahead of local; fetch and apply latest backup before updating")]
     /// Remote manifest head is ahead of local; fetch and apply latest backup before retrying.
     RemoteAheadStaleError,
-    #[error("unexpected error: {0}")]
-    /// Unexpected error.
-    UnexpectedError(String),
 }
 
 /// Trait for errors that can be sanitized for safe logging.

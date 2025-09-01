@@ -1,8 +1,7 @@
 use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
 use crate::backup::backup_format::BackupFormat;
-use crate::backup::BackupManager;
-use crate::backup::BackupModule;
 use crate::backup::FactorType;
+use crate::backup::{BackupFileDesignator, BackupManager};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
 use std::str::FromStr;
@@ -17,30 +16,30 @@ fn helper_compare_backups(source: &BackupFormat, target: &BackupFormat) -> bool 
 #[test]
 fn test_backup_module_enum() {
     assert_eq!(
-        BackupModule::PersonalCustody.to_string(),
-        "personal_custody".to_string()
+        BackupFileDesignator::OrbPkg.to_string(),
+        "orb_pkg".to_string()
     );
     assert_eq!(
-        BackupModule::DocumentPersonalCustody.to_string(),
-        "document_personal_custody".to_string()
-    );
-
-    assert_eq!(
-        BackupModule::from_str("personal_custody").unwrap(),
-        BackupModule::PersonalCustody
-    );
-    assert_eq!(
-        BackupModule::from_str("document_personal_custody").unwrap(),
-        BackupModule::DocumentPersonalCustody
+        BackupFileDesignator::DocumentPkg.to_string(),
+        "document_pkg".to_string()
     );
 
     assert_eq!(
-        serde_json::to_string(&BackupModule::PersonalCustody).unwrap(),
-        "\"personal_custody\""
+        BackupFileDesignator::from_str("orb_pkg").unwrap(),
+        BackupFileDesignator::OrbPkg
     );
     assert_eq!(
-        serde_json::to_string(&BackupModule::DocumentPersonalCustody).unwrap(),
-        "\"document_personal_custody\""
+        BackupFileDesignator::from_str("document_pkg").unwrap(),
+        BackupFileDesignator::DocumentPkg
+    );
+
+    assert_eq!(
+        serde_json::to_string(&BackupFileDesignator::OrbPkg).unwrap(),
+        "\"orb_pkg\""
+    );
+    assert_eq!(
+        serde_json::to_string(&BackupFileDesignator::DocumentPkg).unwrap(),
+        "\"document_pkg\""
     );
 }
 
@@ -103,6 +102,8 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
             checksum: hex::decode(
                 "288a86a79f20a3d6dccdca7713beaed178798296bdfa7913fa2a62d9727bf8f8",
             )
+            .unwrap()
+            .try_into()
             .unwrap(),
             path: "documents/file1.txt".to_string(),
         }],
