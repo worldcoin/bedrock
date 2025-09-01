@@ -40,10 +40,8 @@ chrono = { version = "0.4.41", default-features = false, features = [
 ] }
 ciborium = "0.2.2"
 crypto_box = { version = "0.9.1", features = ["seal"] }
-dryoc = { version = "0.7.0", default-features = false }
 flate2 = "1.0.28"
 hex = "0.4.3"
-k256 = { version = "0.13.2", default-features = false }
 log = "0.4.22"
 proc-macro2 = "1.0"
 quote = "1.0"
