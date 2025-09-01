@@ -67,10 +67,10 @@ thiserror = "2.0.12"
 tokio = { version = "1.47.1", features = ["time"], optional = true }
 uniffi = { workspace = true, features = ["build", "tokio"] }
 uuid = { version = "1.4.1", features = ["v4"], default-features = false }
+zeroize = "1.8"
 
 # TODO: once `rand` can be bumped to 0.9, add the explicit feature flag `os_rng`. this explicitly determines no `thread_rng`;
 # bumping this requires crypto_box to update rand: https://github.com/RustCrypto/nacl-compat/issues/176
-zeroize = "1.8"
 
 [dev-dependencies]
 alloy = { version = "1.0.23", default-features = false, features = [
