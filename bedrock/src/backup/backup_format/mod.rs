@@ -3,7 +3,7 @@ use crate::backup::BackupError;
 
 pub mod v0;
 
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug)]
 pub enum BackupFormat {
     V0(V0Backup),
 }

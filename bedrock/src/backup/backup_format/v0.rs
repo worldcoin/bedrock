@@ -5,7 +5,6 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
-use std::sync::Arc;
 use tar::{Archive, Builder, Header};
 
 const VERSION_TAG: &str = "OXIDE_BACKUP_VERSION";
@@ -28,15 +27,16 @@ pub struct V0BackupManifest {
 
 /// This backup format allows the app to store any files that it wants, primarily, PCPs. Root secret
 /// is stored separately and specially handled.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug)]
 pub struct V0Backup {
     /// Root secret that is used to derive the wallet, World ID identity and PCP encryption keys.
-    pub root_secret: Arc<RootKey>,
+    pub root_secret: RootKey,
     /// List of files in the backup determined by the mobile app.
     pub files: Vec<V0BackupFile>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Clone))]
 pub struct V0BackupFile {
     /// The actual file data (usually binary).
     pub data: Vec<u8>,
@@ -63,7 +63,7 @@ impl V0BackupFile {
 }
 
 impl V0Backup {
-    pub const fn new(root_secret: Arc<RootKey>, files: Vec<V0BackupFile>) -> Self {
+    pub const fn new(root_secret: RootKey, files: Vec<V0BackupFile>) -> Self {
         Self { root_secret, files }
     }
 
@@ -149,13 +149,10 @@ impl V0Backup {
         }
 
         // Validate the root secret.
-        let root_secret = RootKey::decode_from_json_enforced(&root_secret)
+        let root_secret = RootKey::from_json(&root_secret)
             .map_err(|_| BackupError::InvalidRootSecretError)?;
 
-        Ok(Self {
-            root_secret: Arc::new(root_secret),
-            files,
-        })
+        Ok(Self { root_secret, files })
     }
 
     /// Serialize the `BackupFormat` into unencrypted bytes. The encryption is going to be done
@@ -178,7 +175,8 @@ impl V0Backup {
             &mut archive,
             ROOT_SECRET_FILE,
             self.root_secret
-                .encode()
+                // ok to export the secret as this is included in the secure encrypted backup
+                .danger_to_json()
                 .map_err(|_| BackupError::EncodeRootSecretError)?
                 .as_bytes(),
         )?;
@@ -224,9 +222,10 @@ mod tests {
 
     #[test]
     fn test_v0_backup() {
+        // not an actual secure secret
         let root_secret =
-            "1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b"
-                .to_string();
+            "{\"version\":\"V1\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}".to_string();
+
         let files = vec![
             V0BackupFile {
                 data: b"Hello, World!".to_vec(),
@@ -241,13 +240,13 @@ mod tests {
         ];
 
         let backup =
-            V0Backup::new(Arc::new(RootKey::decode(root_secret)), files.clone());
+            V0Backup::new(RootKey::from_json(&root_secret).unwrap(), files.clone());
         let bytes = backup.to_bytes().unwrap();
         let deserialized_backup = V0Backup::from_bytes(&bytes).unwrap();
 
         assert_eq!(
-            deserialized_backup.root_secret.encode().unwrap(),
-            "{\"version\":\"V0\",\"key\":\"1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b\"}"
+            deserialized_backup.root_secret.danger_to_json().unwrap(),
+            "{\"version\":\"V1\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
         );
         assert_eq!(deserialized_backup.files, files);
 
@@ -256,12 +255,13 @@ mod tests {
 
         // Test with v1 key
         let v1_root_secret = RootKey::new_random();
-        let v1_backup = V0Backup::new(Arc::new(v1_root_secret.clone()), vec![]);
+        let v1_root_secret_json = v1_root_secret.danger_to_json().unwrap();
+        let v1_backup = V0Backup::new(v1_root_secret, vec![]);
         let v1_bytes = v1_backup.to_bytes().unwrap();
         let v1_deserialized_backup = V0Backup::from_bytes(&v1_bytes).unwrap();
         assert_eq!(
-            v1_deserialized_backup.root_secret.encode().unwrap(),
-            v1_root_secret.encode().unwrap()
+            v1_deserialized_backup.root_secret.danger_to_json().unwrap(),
+            v1_root_secret_json
         );
         assert_eq!(v1_deserialized_backup.files, vec![]);
         assert!(V0Backup::peek_version(&v1_bytes));
@@ -270,16 +270,16 @@ mod tests {
     #[test]
     fn test_v0_backup_with_no_files() {
         let root_secret =
-            "1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b"
-                .to_string();
+            "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}".to_string();
+
         let files = vec![];
         let backup =
-            V0Backup::new(Arc::new(RootKey::decode(root_secret)), files.clone());
+            V0Backup::new(RootKey::from_json(&root_secret).unwrap(), files.clone());
         let bytes = backup.to_bytes().unwrap();
         let deserialized_backup = V0Backup::from_bytes(&bytes).unwrap();
         assert_eq!(
-            deserialized_backup.root_secret.encode().unwrap(),
-            "{\"version\":\"V0\",\"key\":\"1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b\"}"
+            deserialized_backup.root_secret.danger_to_json().unwrap(),
+            "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
         );
         assert_eq!(deserialized_backup.files, files);
         assert!(V0Backup::peek_version(&bytes));
@@ -376,7 +376,7 @@ mod tests {
         write_to_archive(
             &mut archive,
             ROOT_SECRET_FILE,
-            "{\"version\":\"V0\",\"key\":\"1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b\"}"
+            "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
                 .as_bytes(),
         )
         .unwrap();
@@ -427,7 +427,7 @@ mod tests {
         write_to_archive(
             &mut archive,
             ROOT_SECRET_FILE,
-            "{\"version\":\"V0\",\"key\":\"1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b\"}"
+            "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
                 .as_bytes(),
         )
         .unwrap();
@@ -443,56 +443,6 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "CBOR decoding error invalid_module_file.txt: Semantic error at None: missing field checksum"
-        );
-    }
-
-    #[test]
-    fn test_invalidly_encoded_file_with_wrong_module_name() {
-        #[derive(serde::Serialize)]
-        struct MockBackupFile {
-            name: String,
-            data: Vec<u8>,
-            checksum: Vec<u8>,
-            module_name: String, // where this can be a String, not a typed BackupModule
-            file_path: String,
-        }
-
-        let mock_file = MockBackupFile {
-            name: "test_file.txt".to_string(),
-            data: vec![],
-            checksum: vec![1, 2, 3, 4],
-            module_name: "invalid_module_name".to_string(),
-            file_path: "/documents/file.txt".to_string(),
-        };
-
-        let mut invalid_cbor = Vec::new();
-        ciborium::into_writer(&mock_file, &mut invalid_cbor).unwrap();
-
-        // Create a backup archive
-        let mut result = Vec::new();
-        let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
-        let mut archive = Builder::new(gz_builder);
-
-        write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
-        write_to_archive(
-            &mut archive,
-            ROOT_SECRET_FILE,
-            "{\"version\":\"V0\",\"key\":\"1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b\"}"
-                .as_bytes(),
-        )
-        .unwrap();
-
-        write_to_archive(&mut archive, "invalid_module_file.txt", &invalid_cbor)
-            .unwrap();
-
-        archive.finish().unwrap();
-        let encoder = archive.into_inner().unwrap();
-        encoder.finish().unwrap();
-
-        let error = V0Backup::from_bytes(&result).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "CBOR decoding error invalid_module_file.txt: Semantic error at None: Matching variant not found"
         );
     }
 
@@ -517,7 +467,7 @@ mod tests {
         write_to_archive(
             &mut archive,
             ROOT_SECRET_FILE,
-            "{\"version\":\"V0\",\"key\":\"1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b\"}"
+            "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
                 .as_bytes(),
         )
         .unwrap();
@@ -532,7 +482,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Invalid checksum for file personal_custody"
+            "Invalid checksum for file personal_custody/file.txt"
         );
     }
 }

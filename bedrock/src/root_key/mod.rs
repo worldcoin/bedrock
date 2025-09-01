@@ -1,6 +1,8 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
+use rand::{rngs::OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 const KEY_LENGTH: usize = 32;
@@ -79,6 +81,21 @@ pub struct RootKey {
 
 #[bedrock_export]
 impl RootKey {
+    /// Generates a new random `RootKey` using the system CSPRNG.
+    ///
+    /// # Panics
+    /// Will panic if there is an error with the CSPRNG. This terminates the app.
+    #[uniffi::constructor]
+    pub fn new_random() -> Self {
+        let mut buf = [0u8; KEY_LENGTH];
+        OsRng
+            .try_fill_bytes(&mut buf)
+            .expect("Fatal CSPRNG error: unable to initialize new OxideKey");
+        let inner = SecretBox::new(Box::new(VersionedKey::V1(buf)));
+        buf.zeroize();
+        Self { inner }
+    }
+
     /// Initialize an existing `RootKey` from a JSON string
     #[uniffi::constructor]
     pub fn from_json(json_str: &str) -> Result<Self, RootKeyError> {
@@ -110,6 +127,23 @@ impl RootKey {
                 message: "Failed to serialize key".to_string(),
             }
         })
+    }
+}
+
+impl PartialEq for RootKey {
+    fn eq(&self, other: &Self) -> bool {
+        let self_secret = self.inner.expose_secret();
+        let other_secret = other.inner.expose_secret();
+
+        match (self_secret, other_secret) {
+            (VersionedKey::V0(self_secret), VersionedKey::V0(other_secret)) => {
+                self_secret.as_bytes().ct_eq(other_secret.as_bytes()).into()
+            }
+            (VersionedKey::V1(self_secret), VersionedKey::V1(other_secret)) => {
+                self_secret.ct_eq(other_secret).into()
+            }
+            _ => false,
+        }
     }
 }
 

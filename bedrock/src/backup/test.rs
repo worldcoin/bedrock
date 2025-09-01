@@ -5,11 +5,14 @@ use crate::backup::BackupModule;
 use crate::backup::FactorType;
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
-use dryoc::rng;
 use std::str::FromStr;
-use std::sync::Arc;
 
-// removed old helper for per-module manifests
+fn helper_compare_backups(source: &BackupFormat, target: &BackupFormat) -> bool {
+    let BackupFormat::V0(source_backup) = source;
+    let BackupFormat::V0(target_backup) = target;
+    source_backup.root_secret == target_backup.root_secret
+        && source_backup.files == target_backup.files
+}
 
 #[test]
 fn test_backup_module_enum() {
@@ -47,14 +50,14 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 
     // Example root secret seed
     let root_secret =
-        "1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b".to_string();
+        "{\"version\":\"V1\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}".to_string();
     // Example passkey PRF result - converted from base64url "Z6myXXzS4Ry6eBrx1L6Rxz01YeWo-8KQTLbC8nSsrjc=" to hex
     let prf_result =
         "67a9b25d7cd2e11cba781af1d4be91c73d3561e5a8fbc2904cb6c2f274acae37".to_string();
 
     let result = manager
         .create_sealed_backup_for_new_user(
-            root_secret.clone(),
+            &root_secret,
             prf_result.clone(),
             FactorType::Prf,
         )
@@ -72,13 +75,14 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
     let decrypted_backup = decrypted_backup_keypair
         .unseal(&result.sealed_backup_data)
         .unwrap();
-    assert_eq!(
-        BackupFormat::from_bytes(&decrypted_backup).unwrap(),
-        BackupFormat::V0(V0Backup {
-            root_secret: Arc::new(RootKey::decode(root_secret.clone())),
+
+    assert!(helper_compare_backups(
+        &BackupFormat::from_bytes(&decrypted_backup).unwrap(),
+        &BackupFormat::V0(V0Backup {
+            root_secret: RootKey::from_json(&root_secret).unwrap(),
             files: vec![]
         })
-    );
+    ));
 
     // The backup shouldn't decrypt using incorrect factor secret
     let original_factor_secret = hex::decode(&prf_result).unwrap();
@@ -93,14 +97,14 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 
     // Try to re-encrypt the backup using just the public key
     let new_backup = BackupFormat::V0(V0Backup {
-        root_secret: Arc::new(RootKey::decode(root_secret)),
+        root_secret: RootKey::from_json(&root_secret).unwrap(),
         files: vec![V0BackupFile {
             data: b"Hello, World!".to_vec(),
             checksum: hex::decode(
                 "288a86a79f20a3d6dccdca7713beaed178798296bdfa7913fa2a62d9727bf8f8",
             )
             .unwrap(),
-            path: "/documents/file1.txt".to_string(),
+            path: "documents/file1.txt".to_string(),
         }],
     });
     let re_encrypted_backup =
@@ -113,10 +117,10 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
     let re_decrypted_backup = decrypted_backup_keypair
         .unseal(&re_encrypted_backup)
         .unwrap();
-    assert_eq!(
-        BackupFormat::from_bytes(&re_decrypted_backup).unwrap(),
-        new_backup
-    );
+    assert!(helper_compare_backups(
+        &BackupFormat::from_bytes(&re_decrypted_backup).unwrap(),
+        &new_backup
+    ));
 }
 
 #[test]
@@ -125,14 +129,14 @@ fn test_decrypt_sealed_backup_with_prf() {
 
     // Example root secret seed
     let root_secret =
-        "1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b".to_string();
+        "{\"version\":\"V1\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}".to_string();
     // Example passkey PRF result - converted from base64url "Z6myXXzS4Ry6eBrx1L6Rxz01YeWo-8KQTLbC8nSsrjc=" to hex
     let prf_result =
         "67a9b25d7cd2e11cba781af1d4be91c73d3561e5a8fbc2904cb6c2f274acae37".to_string();
 
     let create_result = manager
         .create_sealed_backup_for_new_user(
-            root_secret.clone(),
+            &root_secret,
             prf_result.clone(),
             FactorType::Prf,
         )
@@ -140,7 +144,7 @@ fn test_decrypt_sealed_backup_with_prf() {
 
     // Decrypt it
     let decrypted = manager
-        .decrypt_sealed_backup(
+        .decrypt_and_unpack_sealed_backup(
             &create_result.sealed_backup_data,
             create_result.encrypted_backup_keypair.clone(),
             prf_result.clone(),
@@ -153,11 +157,11 @@ fn test_decrypt_sealed_backup_with_prf() {
         create_result.backup_keypair_public_key
     );
     assert_eq!(
-        decrypted.backup,
-        BackupFormat::V0(V0Backup {
-            root_secret: Arc::new(RootKey::decode(root_secret)),
-            files: vec![]
-        })
+        decrypted.root_key_json,
+        RootKey::from_json(&root_secret)
+            .unwrap()
+            .danger_to_json()
+            .unwrap()
     );
 
     // Test with incorrect factor secret
@@ -166,7 +170,7 @@ fn test_decrypt_sealed_backup_with_prf() {
     let incorrect_factor_secret = hex::encode(incorrect_factor_secret);
 
     let decryption_error = manager
-        .decrypt_sealed_backup(
+        .decrypt_and_unpack_sealed_backup(
             &create_result.sealed_backup_data,
             create_result.encrypted_backup_keypair.clone(),
             incorrect_factor_secret,
@@ -186,7 +190,7 @@ fn test_decrypt_sealed_backup_with_prf() {
         hex::encode(incorrect_encrypted_backup_keypair);
 
     let decryption_error = manager
-        .decrypt_sealed_backup(
+        .decrypt_and_unpack_sealed_backup(
             &create_result.sealed_backup_data,
             incorrect_encrypted_backup_keypair,
             prf_result,
@@ -206,8 +210,8 @@ fn test_re_encrypt_backup() {
     let manager = BackupManager::new();
 
     // Example root secret seed
-    let root_secret =
-        "1810f739487f5447c01df40e57d38885caad51912851f1cbdd69117fe3641d1b".to_string();
+    let root_secret: String =
+        "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}".to_string();
     // Example passkey PRF result - converted from base64url "Z6myXXzS4Ry6eBrx1L6Rxz01YeWo-8KQTLbC8nSsrjc=" to hex
     let prf_result =
         "67a9b25d7cd2e11cba781af1d4be91c73d3561e5a8fbc2904cb6c2f274acae37".to_string();
@@ -216,7 +220,7 @@ fn test_re_encrypt_backup() {
 
     let create_result = manager
         .create_sealed_backup_for_new_user(
-            root_secret.clone(),
+            &root_secret,
             prf_result.clone(),
             FactorType::Prf,
         )
@@ -247,13 +251,13 @@ fn test_re_encrypt_backup() {
         .unseal(&create_result.sealed_backup_data)
         .expect("Failed to decrypt backup data");
 
-    assert_eq!(
-        BackupFormat::from_bytes(&decrypted_backup).unwrap(),
-        BackupFormat::V0(V0Backup {
-            root_secret: Arc::new(RootKey::decode(root_secret)),
+    assert!(helper_compare_backups(
+        &BackupFormat::from_bytes(&decrypted_backup).unwrap(),
+        &BackupFormat::V0(V0Backup {
+            root_secret: RootKey::from_json(&root_secret).unwrap(),
             files: vec![]
         })
-    );
+    ));
 
     // Test with incorrect existing factor secret
     let mut incorrect_existing_factor_secret = hex::decode(&prf_result).unwrap();

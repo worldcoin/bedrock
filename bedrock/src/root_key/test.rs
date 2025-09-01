@@ -35,3 +35,5 @@ fn test_decode_invalid_length() {
         "failed to parse key"
     );
 }
+
+// FIXME: new_random tests

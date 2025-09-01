@@ -3,8 +3,6 @@
 //! The backup manifest is a local file-based system that any module can set to describe which files should
 //! be included in the backup.
 
-use std::sync::Arc;
-
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -219,7 +217,7 @@ impl ManifestManager {
         signer: &dyn SyncSigner,
         designator: BackupModule,
         file_path: String,
-        root_secret: String,
+        root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         // 1) Remote hash
@@ -271,7 +269,8 @@ impl ManifestManager {
 
         // Materialize files from manifest and build a sealed backup container
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
-        let root = Arc::new(RootKey::decode(root_secret));
+        let root = RootKey::from_json(root_secret)
+            .map_err(|_| BackupError::InvalidRootSecretError)?;
         let unsealed = V0Backup::new(root, files);
         let unsealed_bytes = unsealed.to_bytes()?;
         // Encrypt with backup keypair public key
@@ -313,7 +312,7 @@ impl ManifestManager {
         signer: &dyn SyncSigner,
         designator: BackupModule,
         file_path: String,
-        root_secret: String,
+        root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         // Delegate to store_file, as replace semantics equal to upsert for this designator.
@@ -335,7 +334,7 @@ impl ManifestManager {
         &self,
         signer: &dyn SyncSigner,
         designator: BackupModule,
-        root_secret: String,
+        root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         // 1) Remote gate
@@ -361,7 +360,8 @@ impl ManifestManager {
         let new_manifest_hash = Self::compute_manifest_hash(&manifest);
 
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
-        let root = Arc::new(RootKey::decode(root_secret));
+        let root = RootKey::from_json(root_secret)
+            .map_err(|_| BackupError::InvalidRootSecretError)?;
         let unsealed = V0Backup::new(root, files);
         let unsealed_bytes = unsealed.to_bytes()?;
         let pk_bytes = hex::decode(backup_keypair_public_key)

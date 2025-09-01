@@ -16,7 +16,6 @@ use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
-use std::sync::Arc;
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -129,14 +128,15 @@ impl BackupManager {
     ///   encrypted.
     pub fn create_sealed_backup_for_new_user(
         &self,
-        root_secret: String,
+        root_secret: &str,
         factor_secret: String,
         factor_type: FactorType,
     ) -> Result<CreatedBackup, BackupError> {
         log::info!("[BackupManager] creating sealed backup for new user with factor: {factor_type:?}");
 
         // 1: Decode the root secret from multiple formats
-        let root_secret = Arc::new(RootKey::decode(root_secret));
+        let root_secret = RootKey::from_json(root_secret)
+            .map_err(|_| BackupError::InvalidRootSecretError)?;
 
         // 2.1: Decode factor secret from hex
         let factor_secret_bytes = hex::decode(factor_secret)
@@ -187,7 +187,7 @@ impl BackupManager {
                 previous_manifest_hash: None,
                 files: vec![],
             }),
-            // FIXME: check if it's an issue that Oxide doesn't know whether the backup was actually created or not
+            // FIXME: check if it's an issue that Bedrock doesn't know whether the backup was actually created or not
         };
 
         Ok(result)
@@ -224,64 +224,6 @@ impl BackupManager {
         encrypted_backup_keypair: String,
         factor_secret: String,
         factor_type: FactorType,
-    ) -> Result<UnpackedBackupResponse, BackupError> {
-        log::info!(
-            "[BackupManager] decrypting sealed backup with factor: {factor_type:?}"
-        );
-
-        // 1: Check if sealed backup data is valid
-        if sealed_backup_data.is_empty() {
-            return Err(BackupError::InvalidSealedBackupError);
-        }
-
-        // 2.1: Decode factor secret from hex
-        let factor_secret_bytes = hex::decode(factor_secret)
-            .map_err(|_| BackupError::DecodeFactorSecretError)?;
-        // 2.2: Check that the factor secret is 32 bytes
-        if factor_secret_bytes.len() != 32 {
-            return Err(BackupError::InvalidFactorSecretLengthError);
-        }
-        // 2.3: Build a crypto_box SecretKey from factor secret
-        // NOTE: SecretKey will get zeroized on drop.
-        let factor_secret_key = SecretKey::from_slice(&factor_secret_bytes)
-            .map_err(|_| BackupError::DecodeFactorSecretError)?;
-
-        // 3.1: Decode the backup keypair that was encrypted with the factor secret
-        let encrypted_backup_keypair_bytes = hex::decode(encrypted_backup_keypair)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        // 3.2: Decrypt the backup keypair with the factor secret
-        let backup_keypair_bytes = factor_secret_key
-            .unseal(&encrypted_backup_keypair_bytes)
-            .map_err(|_| BackupError::DecryptBackupKeypairError)?;
-
-        // 4.1: Build a SecretKey from the decrypted backup keypair bytes
-        let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        // 4.2: Decrypt the sealed backup with the backup secret key
-        let unsealed_backup = backup_secret_key
-            .unseal(sealed_backup_data)
-            .map_err(|_| BackupError::DecryptBackupError)?;
-
-        // 5: Deserialize the unsealed backup
-        let _unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
-
-        Ok(UnpackedBackupResponse {
-            backup_keypair_public_key: hex::encode(
-                backup_secret_key.public_key().as_bytes(),
-            ),
-        })
-    }
-
-    /// Decrypts the sealed backup using the factor secret and the encrypted backup keypair.
-    ///
-    /// # Errors
-    /// Propagates decoding/decryption errors when inputs are malformed or do not match.
-    pub fn decrypt_sealed_backup(
-        &self,
-        sealed_backup_data: &[u8],
-        encrypted_backup_keypair: String,
-        factor_secret: String,
-        factor_type: FactorType,
     ) -> Result<DecryptedBackup, BackupError> {
         log::info!(
             "[BackupManager] decrypting sealed backup with factor: {factor_type:?}"
@@ -303,6 +245,7 @@ impl BackupManager {
         // Decrypt backup keypair bytes
         let encrypted_backup_keypair_bytes = hex::decode(encrypted_backup_keypair)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+
         let backup_keypair_bytes = factor_secret_key
             .unseal(&encrypted_backup_keypair_bytes)
             .map_err(|_| BackupError::DecryptBackupKeypairError)?;
@@ -319,12 +262,19 @@ impl BackupManager {
         // Deserialize the unsealed backup
         let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
-        Ok(DecryptedBackup {
-            backup: unsealed_backup,
-            backup_keypair_public_key: hex::encode(
-                backup_secret_key.public_key().as_bytes(),
-            ),
-        })
+        // FIXME: this isn't actually unpacking anything yet
+
+        match unsealed_backup {
+            BackupFormat::V0(backup) => Ok(DecryptedBackup {
+                root_key_json: backup
+                    .root_secret
+                    .danger_to_json()
+                    .map_err(|_| BackupError::InvalidRootSecretError)?,
+                backup_keypair_public_key: hex::encode(
+                    backup_secret_key.public_key().as_bytes(),
+                ),
+            }),
+        }
     }
 
     /// Adds new factor by re-encrypting the backup keypair (not the backup itself!)
@@ -589,16 +539,10 @@ pub struct CreatedBackup {
 /// Result of decrypting a sealed backup.
 #[derive(Debug, uniffi::Record)]
 pub struct DecryptedBackup {
-    /// The unsealed backup data with all the files.
-    backup: BackupFormat,
-    /// The public key of the backup keypair that was used to encrypt the backup. Client will need
-    /// to save it to re-encrypt future backup updates. Hex encoded.
-    backup_keypair_public_key: String,
-}
-
-/// Result of decrypting and unpacking a sealed backup.
-#[derive(Debug, uniffi::Record)]
-pub struct UnpackedBackupResponse {
+    /// The JSON-encoded root key. Exposed to foreign code to store securely.
+    ///
+    /// TODO: Secure memory pointers.
+    root_key_json: String,
     /// The public key of the backup keypair that was used to encrypt the backup. Client will need
     /// to save it to re-encrypt future backup updates. Hex encoded.
     backup_keypair_public_key: String,
