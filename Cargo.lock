@@ -1317,6 +1317,7 @@ dependencies = [
  "quote",
  "rand 0.9.2",
  "ruint",
+ "secrecy",
  "serde",
  "serde_json",
  "syn 2.0.104",
@@ -1324,6 +1325,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]
@@ -3797,6 +3799,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4387882333d3aa8cb20530a17c69a3752e97837832f34f6dccc760e715001d9"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
+ "serde",
+ "zeroize",
 ]
 
 [[package]]
