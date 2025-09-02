@@ -11,10 +11,13 @@ use regex::Regex;
 
 use crate::backup::backup_format::v0::V0Backup;
 use crate::backup::backup_format::v0::V0BackupManifest;
+use crate::backup::backup_format::v0::V0BackupManifestEntry;
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::create_middleware;
+use crate::primitives::filesystem::get_filesystem_raw;
 use crate::root_key::RootKey;
+use anyhow::Context as _;
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -272,8 +275,10 @@ impl BackupManager {
         // Deserialize the unsealed backup
         let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
-        // FIXME: this isn't actually unpacking anything yet
+        // Unpack files and rebuild manifest
+        unpack_backup_to_filesystem(&unsealed_backup)?;
 
+        // Return decrypted root key and backup pubkey
         match unsealed_backup {
             BackupFormat::V0(backup) => Ok(DecryptedBackup {
                 root_key_json: backup
@@ -368,6 +373,71 @@ impl BackupManager {
         };
 
         Ok(result)
+    }
+}
+
+// Internal helpers (not exported)
+fn unpack_backup_to_filesystem(
+    unsealed_backup: &BackupFormat,
+) -> Result<(), BackupError> {
+    match unsealed_backup {
+        BackupFormat::V0(backup) => unpack_v0_backup_to_filesystem(backup),
+    }
+}
+
+fn unpack_v0_backup_to_filesystem(backup: &V0Backup) -> Result<(), BackupError> {
+    let fs = get_filesystem_raw()?;
+    let mut manifest_entries: Vec<V0BackupManifestEntry> =
+        Vec::with_capacity(backup.files.len());
+
+    for file in &backup.files {
+        let rel_path = file.path.trim_start_matches('/');
+
+        fs.write_file(rel_path.to_string(), file.data.clone())
+            .map_err(|e| {
+                let err = anyhow::Error::from(e)
+                    .context(format!("write unpacked file: {rel_path}"));
+                BackupError::from(err)
+            })?;
+
+        // Infer designator from path
+        let first_segment = rel_path.split('/').next().unwrap_or("");
+        let designator = infer_designator(first_segment)?;
+
+        manifest_entries.push(V0BackupManifestEntry {
+            designator,
+            file_path: rel_path.to_string(),
+            checksum_hex: hex::encode(file.checksum),
+        });
+    }
+
+    let manifest = BackupManifest::V0(V0BackupManifest {
+        previous_manifest_hash: None,
+        files: manifest_entries,
+    });
+    let manifest_bytes =
+        serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
+    let fs_backup = create_middleware("backup");
+    fs_backup
+        .write_file("manifest.json", manifest_bytes)
+        .context("write manifest.json")?;
+
+    Ok(())
+}
+
+fn infer_designator(segment: &str) -> Result<BackupFileDesignator, BackupError> {
+    if let Ok(d) = BackupFileDesignator::from_str(segment) {
+        return Ok(d);
+    }
+    match segment {
+        "personal_custody" => Ok(BackupFileDesignator::OrbPkg),
+        "document_personal_custody" => Ok(BackupFileDesignator::DocumentPkg),
+        "secure_document_personal_custody" | "secure_document" => {
+            Ok(BackupFileDesignator::SecureDocumentPkg)
+        }
+        _ => Err(BackupError::InvalidFileForBackup(format!(
+            "Unknown designator prefix in path: {segment}"
+        ))),
     }
 }
 

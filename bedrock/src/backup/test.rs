@@ -2,6 +2,7 @@ use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
+use crate::primitives::filesystem::{set_filesystem, FileSystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
 use std::str::FromStr;
@@ -126,6 +127,9 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 
 #[test]
 fn test_decrypt_sealed_backup_with_prf() {
+    // Ensure filesystem is set up for unpack
+    let fs = InMemoryFileSystem::new();
+    set_filesystem(std::sync::Arc::new(fs));
     let manager = BackupManager::new();
 
     // Example root secret seed
@@ -204,6 +208,76 @@ fn test_decrypt_sealed_backup_with_prf() {
         decryption_error.to_string(),
         "Failed to decrypt backup keypair"
     );
+}
+
+#[test]
+fn test_unpack_writes_files_and_manifest() {
+    // Arrange global filesystem
+    let fs = InMemoryFileSystem::new();
+    set_filesystem(std::sync::Arc::new(fs.clone()));
+    let manager = BackupManager::new();
+
+    // Create a backup with a couple of files resembling real paths
+    let root_secret = RootKey::new_random();
+    let files = vec![
+        V0BackupFile {
+            data: b"hello-orb".to_vec(),
+            checksum: blake3::hash(b"hello-orb").as_bytes().to_owned(),
+            path: "orb_pkg/personal_custody/pcp-1234.bin".to_string(),
+        },
+        V0BackupFile {
+            data: b"doc-blob".to_vec(),
+            checksum: blake3::hash(b"doc-blob").as_bytes().to_owned(),
+            path: "document_pkg/document_personal_custody/passport-1.bin".to_string(),
+        },
+    ];
+    let unsealed = BackupFormat::V0(V0Backup { root_secret, files });
+    let unsealed_bytes = unsealed.to_bytes().unwrap();
+
+    // Encrypt sealed backup using a one-off keypair and then decrypt via manager path
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let sealed = backup_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &unsealed_bytes)
+        .unwrap();
+
+    // Factor secret wraps the backup keypair
+    let factor_sk = SecretKey::generate(&mut rand::thread_rng());
+    let encrypted_backup_keypair = factor_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &backup_sk.to_bytes())
+        .unwrap();
+
+    // Act: decrypt and unpack
+    let _ = manager
+        .decrypt_and_unpack_sealed_backup(
+            &sealed,
+            hex::encode(encrypted_backup_keypair),
+            hex::encode(factor_sk.to_bytes()),
+            FactorType::Prf,
+        )
+        .unwrap();
+
+    // Assert: files exist at expected paths (global filesystem, no prefix)
+    assert!(fs.contains_file("orb_pkg/personal_custody/pcp-1234.bin"));
+    assert!(fs.contains_file("document_pkg/document_personal_custody/passport-1.bin"));
+
+    // Manifest is written under backup/manifest.json
+    assert!(fs.contains_file("backup/manifest.json"));
+    let manifest_bytes = <InMemoryFileSystem as FileSystem>::read_file(
+        &fs,
+        "backup/manifest.json".to_string(),
+    )
+    .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    assert_eq!(manifest["version"], "V0");
+    let files_array = manifest["manifest"]["files"].as_array().unwrap();
+    assert_eq!(files_array.len(), 2);
+    // Checksums match stored values
+    let checksum0 = &files_array[0]["checksum_hex"];
+    let checksum1 = &files_array[1]["checksum_hex"];
+    assert!(checksum0.is_string());
+    assert!(checksum1.is_string());
 }
 
 #[test]
