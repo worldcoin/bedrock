@@ -454,6 +454,7 @@ sol! {
         }
     }
 
+    #[sol(rpc)]
     contract IEntryPoint {
         #[derive(Default, serde::Serialize, serde::Deserialize, Debug)]
         struct PackedUserOperation {
@@ -476,6 +477,7 @@ sol! {
         }
     }
 
+    #[sol(rpc)]
     contract IPBHEntryPoint {
         #[derive(Default)]
         struct PBHPayload {
@@ -494,6 +496,10 @@ sol! {
             IMulticall3.Call3[] calls,
             PBHPayload payload,
         ) external;
+
+        function getFirstUnspentNullifierHash(uint256[] calldata hashes) external view returns (int256);
+
+        function getUnspentNullifierHashes(uint256[] calldata hashes) external view returns (uint256[] memory);
     }
 }
 

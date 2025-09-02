@@ -1,5 +1,6 @@
 use alloy::sol_types::SolValue;
-use reqwest::Client;
+use chrono::{Datelike, Utc};
+use reqwest::{Client, Url};
 use semaphore_rs::identity::Identity;
 use semaphore_rs::{hash_to_field, Field};
 use serde::{Deserialize, Serialize};
@@ -9,10 +10,25 @@ use world_chain_builder_pbh::{
     payload::{PBHPayload as PbhPayload, Proof},
 };
 
+use crate::primitives::contracts::{IPBHEntryPoint, PBH_ENTRYPOINT_4337};
+use crate::primitives::Network;
+use crate::transaction::rpc::get_rpc_client;
 use crate::{
     primitives::contracts::IEntryPoint::PackedUserOperation,
     smart_account::UserOperation,
 };
+
+use alloy::primitives::U256;
+use alloy::providers::{Provider, ProviderBuilder};
+
+const STAGING_SEQUENCER_URL: &str =
+    "https://signup-orb-ethereum.stage-crypto.worldcoin.dev";
+const PRODUCTION_SEQUENCER_URL: &str =
+    "https://signup-orb-ethereum.crypto.worldcoin.org";
+
+const STAGING_MAX_NONCE: u16 = u16::MAX;
+// TODO: UPDATE THIS ONCE SET IN PRODUCTION
+// const PRODUCTION_MAX_NONCE: u16 = 9000;
 
 /// Inclusion proof for a given identity.
 ///
@@ -71,23 +87,32 @@ pub fn is_world_id_identity_initialized() -> bool {
 }
 
 /// Generates a PBH proof for a given user operation.
-pub async fn generate_pbh_proof(user_op: &UserOperation) -> PbhPayload {
+pub async fn generate_pbh_proof(
+    user_op: &UserOperation,
+    network: Network,
+) -> PbhPayload {
     // Convert from UserOperation to PackedUserOperation
-    // TODO: Fix this
+    // TODO: Clean this up
     let packed_user_op: PackedUserOperation = PackedUserOperation::from(user_op);
 
     let signal = hash_user_op(&packed_user_op);
 
-    let external_nullifier = ExternalNullifier::v1(8, 2025, 1);
+    // TODO: Fix me
+    let external_nullifier =
+        find_unused_nullifier_hash("https://worldchain-sepolia.gateway.tenderly.co")
+            .await
+            .unwrap();
 
-    // TODO: Autotmatically find an unused one
     let encoded_external_nullifier = EncodedExternalNullifier::from(external_nullifier);
 
     let identity = get_world_id_identity().unwrap();
 
     let inclusion_proof = fetch_inclusion_proof(
-        // TODO: Handle different envs
-        "https://signup-orb-ethereum.stage-crypto.worldcoin.dev", // Staging
+        match network {
+            Network::WorldChain => PRODUCTION_SEQUENCER_URL,
+            Network::WorldChainSepolia => STAGING_SEQUENCER_URL,
+            _ => panic!("Invalid network for World ID"),
+        },
         &identity,
     )
     .await
@@ -114,6 +139,80 @@ pub async fn generate_pbh_proof(user_op: &UserOperation) -> PbhPayload {
         root: inclusion_proof.root,
         proof,
     }
+}
+
+/// Finds the first unused nullifier hash for the current World ID identity.
+pub async fn find_unused_nullifier_hash(
+    provider_url: &str,
+) -> Result<ExternalNullifier, Box<dyn std::error::Error>> {
+    let identity = get_world_id_identity().unwrap();
+    let now = Utc::now();
+    let current_year = now.year() as u16;
+    let current_month = now.month() as u16;
+
+    // TODO: get this from global
+    let provider: alloy::providers::fillers::FillProvider<
+        alloy::providers::fillers::JoinFill<
+            alloy::providers::Identity,
+            alloy::providers::fillers::JoinFill<
+                alloy::providers::fillers::GasFiller,
+                alloy::providers::fillers::JoinFill<
+                    alloy::providers::fillers::BlobGasFiller,
+                    alloy::providers::fillers::JoinFill<
+                        alloy::providers::fillers::NonceFiller,
+                        alloy::providers::fillers::ChainIdFiller,
+                    >,
+                >,
+            >,
+        >,
+        alloy::providers::RootProvider,
+    > = ProviderBuilder::new().connect_http(Url::parse(provider_url).unwrap());
+    let contract: IPBHEntryPoint::IPBHEntryPointInstance<
+        alloy::providers::fillers::FillProvider<
+            alloy::providers::fillers::JoinFill<
+                alloy::providers::Identity,
+                alloy::providers::fillers::JoinFill<
+                    alloy::providers::fillers::GasFiller,
+                    alloy::providers::fillers::JoinFill<
+                        alloy::providers::fillers::BlobGasFiller,
+                        alloy::providers::fillers::JoinFill<
+                            alloy::providers::fillers::NonceFiller,
+                            alloy::providers::fillers::ChainIdFiller,
+                        >,
+                    >,
+                >,
+            >,
+            alloy::providers::RootProvider,
+        >,
+    > = IPBHEntryPoint::new(*PBH_ENTRYPOINT_4337, provider);
+
+    // TODO: Batching and env switch
+    for nonce in 0..STAGING_MAX_NONCE {
+        let external_nullifier =
+            ExternalNullifier::v1(current_month as u8, current_year, nonce as u16);
+        let encoded_external_nullifier =
+            EncodedExternalNullifier::from(external_nullifier.clone());
+
+        let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
+            &identity,
+            encoded_external_nullifier.0,
+        );
+
+        let vec = vec![U256::from_be_bytes(nullifier_hash.to_be_bytes::<32>())];
+
+        let first_unused_index =
+            contract.getFirstUnspentNullifierHash(vec).call().await?;
+
+        if first_unused_index.as_i64() != -1 {
+            println!("Month: {:?}", current_month);
+            println!("Year: {:?}", current_year);
+            println!("Nonce: {:?}", nonce);
+
+            return Ok(external_nullifier);
+        }
+    }
+
+    return Err("No PBH transactions remaining".into());
 }
 
 /// Fetches an inclusion proof for a given identity from the signup sequencer.

@@ -173,9 +173,9 @@ pub trait Is4337Encodable {
         full_signature.extend_from_slice(valid_until_bytes);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
-        // // // PBH Logic
+        // PBH Logic
         if pbh {
-            let pbh_payload = generate_pbh_proof(&user_operation).await;
+            let pbh_payload = generate_pbh_proof(&user_operation, network).await;
             full_signature.extend_from_slice(
                 PBHPayload::from(pbh_payload.clone()).abi_encode().as_ref(),
             );

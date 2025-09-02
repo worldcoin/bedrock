@@ -11,7 +11,9 @@ use bedrock::{
     primitives::{
         http_client::{
             set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
-        }, world_id::set_world_id_identity, Network
+        },
+        world_id::set_world_id_identity,
+        Network,
     },
     smart_account::SafeSmartAccount,
     transaction::RpcProviderName,
