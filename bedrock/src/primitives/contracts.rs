@@ -175,13 +175,6 @@ impl UserOperation {
             nonce,
             call_data,
             signature: vec![0xff; USER_OPERATION_SIGNATURE_LENGTH].into(),
-            factory: Address::ZERO,
-            factory_data: Bytes::new(),
-            // call_gas_limit: U128::MAX,
-            // verification_gas_limit: U128::MAX,
-            // pre_verification_gas: U256::MAX,
-            // max_priority_fee_per_gas: U128::MAX,
-            // max_fee_per_gas: U128::MAX,
             ..Default::default()
         }
     }
