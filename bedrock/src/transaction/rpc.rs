@@ -40,7 +40,7 @@ pub enum RpcMethod {
     /// Submit a signed `UserOperation`
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
-    /// Make a generic RPC eth_call to read data from a contract
+    /// Make a generic RPC `eth_call` to read data from a contract
     #[serde(rename = "eth_call")]
     EthCall,
 }

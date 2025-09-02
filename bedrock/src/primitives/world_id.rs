@@ -1,9 +1,9 @@
 use alloy::sol_types::{SolCall, SolValue};
 
-use alloy::primitives::{Address, Bytes};
+use alloy::primitives::Bytes;
 use alloy_primitives::I256;
 use chrono::{Datelike, Utc};
-use reqwest::{Client, Url};
+use reqwest::Client;
 use semaphore_rs::identity::Identity;
 use semaphore_rs::{hash_to_field, Field};
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ use crate::{
 };
 
 use alloy::primitives::U256;
-use alloy::providers::{Provider, ProviderBuilder};
+use alloy::providers::Provider;
 
 const STAGING_SEQUENCER_URL: &str =
     "https://signup-orb-ethereum.stage-crypto.worldcoin.dev";
@@ -168,9 +168,9 @@ pub async fn find_unused_nullifier_hash(
         // Generate a batch of nullifier hashes
         for nonce in batch_start..batch_end {
             let external_nullifier =
-                ExternalNullifier::v1(current_month as u8, current_year, nonce as u16);
+                ExternalNullifier::v1(current_month as u8, current_year, nonce);
             let encoded_external_nullifier =
-                EncodedExternalNullifier::from(external_nullifier.clone());
+                EncodedExternalNullifier::from(external_nullifier);
 
             let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
                 &identity,
@@ -203,16 +203,16 @@ pub async fn find_unused_nullifier_hash(
             let actual_nonce = batch_start + index as u16;
 
             println!("Found unused nullifier!");
-            println!("Month: {:?}", current_month);
-            println!("Year: {:?}", current_year);
-            println!("Actual nonce: {:?}", actual_nonce);
+            println!("Month: {current_month:?}");
+            println!("Year: {current_year:?}");
+            println!("Actual nonce: {actual_nonce:?}");
 
             // Return the external nullifier for the found index
-            return Ok(batch_external_nullifiers[index].clone());
+            return Ok(batch_external_nullifiers[index]);
         }
     }
 
-    return Err("No PBH transactions remaining".into());
+    Err("No PBH transactions remaining".into())
 }
 
 /// Fetches an inclusion proof for a given identity from the signup sequencer.
@@ -230,7 +230,7 @@ pub async fn fetch_inclusion_proof(
 
     let commitment = identity.commitment();
     let response = client
-        .post(format!("{}/inclusionProof", url))
+        .post(format!("{url}/inclusionProof"))
         .json(&serde_json::json! {{
             "identityCommitment": commitment,
         }})
@@ -243,14 +243,14 @@ pub async fn fetch_inclusion_proof(
     Ok(proof)
 }
 
-/// Computes a ZK-friendly hash of a PackedUserOperation.
+/// Computes a ZK-friendly hash of a `PackedUserOperation`.
 ///
-/// This function extracts key fields (sender, nonce, callData) from a PackedUserOperation,
+/// This function extracts key fields (sender, nonce, callData) from a `PackedUserOperation`,
 /// encodes them using ABI packed encoding, and converts the result to a Field element
 /// suitable for use in zero-knowledge proof circuits.
 ///
 /// # Arguments
-/// * `user_op` - The PackedUserOperation to hash
+/// * `user_op` - The `PackedUserOperation` to hash
 ///
 /// # Returns
 /// A Field element representing the hash of the user operation

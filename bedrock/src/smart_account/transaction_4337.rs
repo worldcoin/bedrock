@@ -4,8 +4,8 @@
 //!
 
 use crate::primitives::contracts::{
-    EncodedSafeOpStruct, IEntryPoint::PackedUserOperation, IPBHEntryPoint::PBHPayload,
-    UserOperation, ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
+    EncodedSafeOpStruct, IPBHEntryPoint::PBHPayload,
+    UserOperation, ENTRYPOINT_4337,
 };
 
 use crate::primitives::contracts::{PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_SEPOLIA};
@@ -15,20 +15,13 @@ use crate::smart_account::SafeSmartAccountSigner;
 use crate::primitives::world_id::generate_pbh_proof;
 
 use crate::transaction::rpc::{RpcError, RpcProviderName};
-use alloy_primitives::keccak256;
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use alloy::sol_types::SolValue;
 use chrono::{Duration, Utc};
-use eyre;
-use futures::future;
-use reqwest::Client;
 use semaphore_rs::identity::Identity;
-use semaphore_rs::{hash_to_field, Field};
+use semaphore_rs::Field;
 use serde::{Deserialize, Serialize};
-use world_chain_builder_pbh::external_nullifier::{
-    EncodedExternalNullifier, ExternalNullifier,
-};
 
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
@@ -177,7 +170,7 @@ pub trait Is4337Encodable {
         if pbh {
             let pbh_payload = generate_pbh_proof(&user_operation, network).await;
             full_signature.extend_from_slice(
-                PBHPayload::from(pbh_payload.clone()).abi_encode().as_ref(),
+                PBHPayload::from(pbh_payload).abi_encode().as_ref(),
             );
         }
 

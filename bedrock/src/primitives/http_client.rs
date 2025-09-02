@@ -1,9 +1,5 @@
 use std::sync::{Arc, OnceLock};
 
-use alloy::{
-    network::Ethereum,
-    providers::{Provider, ProviderBuilder, RootProvider},
-};
 
 /// Global HTTP client instance for Bedrock operations
 static HTTP_CLIENT_INSTANCE: OnceLock<Arc<dyn AuthenticatedHttpClient>> =

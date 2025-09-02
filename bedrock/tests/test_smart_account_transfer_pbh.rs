@@ -123,7 +123,7 @@ where
                     )
                     .await
                     .map_err(|e| HttpError::Generic {
-                        message: format!("Provider request failed: {}", e),
+                        message: format!("Provider request failed: {e}"),
                     })?;
 
                 let resp = json!({
@@ -170,15 +170,15 @@ async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
     let _ = set_world_id_identity(Arc::new(identity));
 
     // 8) Execute high-level transfer via transaction_transfer
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)?;
     let amount = "1";
     let recipient = safe_address;
 
     let _user_op_hash = safe_account
         .transaction_transfer(
             Network::WorldChainSepolia,
-            &"0xC82Ea35634BcE95C394B6BC00626f827bB0F4801".to_string(), // WORLD SEPOLIA LINK TOKEN
-            &recipient.to_string(),
+            "0xC82Ea35634BcE95C394B6BC00626f827bB0F4801", // WORLD SEPOLIA LINK TOKEN
+            recipient,
             amount,
             true,
             RpcProviderName::Alchemy,

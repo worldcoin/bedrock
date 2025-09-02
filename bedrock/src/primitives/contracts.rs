@@ -8,7 +8,7 @@ use alloy::sol_types::SolValue;
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
 use world_chain_builder_pbh::external_nullifier::EncodedExternalNullifier;
-use world_chain_builder_pbh::payload::{PBHPayload as PbhPayload, TREE_DEPTH};
+use world_chain_builder_pbh::payload::PBHPayload as PbhPayload;
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
@@ -25,7 +25,7 @@ pub static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode ENTRYPOINT_4337")
 });
 
-/// Multichain address for PBH_ENTRYPOINT_4337
+/// Multichain address for `PBH_ENTRYPOINT_4337`
 /// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBHEntryPointImplV1.sol>
 pub static PBH_ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x0000000000A21818Ee9F93BB4f2AAad305b5397C")
@@ -340,7 +340,7 @@ impl EncodedSafeOpStruct {
 impl From<UserOperation> for EncodedSafeOpStruct {
     /// Converts a `UserOperation` into an `EncodedSafeOpStruct`.
     ///
-    /// This implementation extracts validity timestamps from the UserOperation's signature.
+    /// This implementation extracts validity timestamps from the `UserOperation`'s signature.
     /// If the signature doesn't contain valid timestamps, it uses zero values as defaults.
     ///
     /// # Example
@@ -366,8 +366,8 @@ impl From<UserOperation> for IEntryPoint::PackedUserOperation {
     /// Converts a `UserOperation` into a `PackedUserOperation`.
     ///
     /// This conversion packs gas limits and fees into bytes32 fields as required by EIP-4337.
-    /// - `accountGasLimits`: verification_gas_limit (upper 128 bits) + call_gas_limit (lower 128 bits)
-    /// - `gasFees`: max_priority_fee_per_gas (upper 128 bits) + max_fee_per_gas (lower 128 bits)
+    /// - `accountGasLimits`: `verification_gas_limit` (upper 128 bits) + `call_gas_limit` (lower 128 bits)
+    /// - `gasFees`: `max_priority_fee_per_gas` (upper 128 bits) + `max_fee_per_gas` (lower 128 bits)
     ///
     /// # Example
     /// ```rust
@@ -407,7 +407,7 @@ impl From<&UserOperation> for IEntryPoint::PackedUserOperation {
     /// Converts a `&UserOperation` into a `PackedUserOperation`.
     ///
     /// This conversion packs gas limits and fees into bytes32 fields as required by EIP-4337.
-    /// This implementation works with borrowed UserOperations to avoid unnecessary moves.
+    /// This implementation works with borrowed `UserOperations` to avoid unnecessary moves.
     ///
     /// # Example
     /// ```rust
