@@ -34,7 +34,7 @@ jobs:
 
       - name: Check TOML formatting
         run: |
-          cargo add taplo
+          cargo install taplo-cli
           taplo fmt --check
 
   swift-build-and-test:
