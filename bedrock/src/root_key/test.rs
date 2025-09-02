@@ -36,4 +36,28 @@ fn test_decode_invalid_length() {
     );
 }
 
-// FIXME: new_random tests
+#[test]
+fn test_new_random_v1_and_roundtrip() {
+    let key = RootKey::new_random();
+    assert!(!key.is_v0());
+
+    // Serialize and validate structure
+    let json = key.danger_to_json().unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["version"], "V1");
+    let key_hex = v["key"].as_str().unwrap();
+    assert_eq!(key_hex.len(), 64); // 32 bytes hex-encoded
+    let decoded = hex::decode(key_hex).unwrap();
+    assert_eq!(decoded.len(), KEY_LENGTH);
+
+    // Round-trip back into RootKey and ensure equality
+    let roundtrip = RootKey::from_json(&json).unwrap();
+    assert_eq!(key, roundtrip);
+}
+
+#[test]
+fn test_new_random_uniqueness_basic() {
+    let a = RootKey::new_random();
+    let b = RootKey::new_random();
+    assert_ne!(a, b);
+}
