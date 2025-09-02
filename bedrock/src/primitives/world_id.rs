@@ -1,4 +1,7 @@
-use alloy::sol_types::SolValue;
+use alloy::sol_types::{SolCall, SolValue};
+
+use alloy::primitives::{Address, Bytes};
+use alloy_primitives::I256;
 use chrono::{Datelike, Utc};
 use reqwest::{Client, Url};
 use semaphore_rs::identity::Identity;
@@ -28,7 +31,9 @@ const PRODUCTION_SEQUENCER_URL: &str =
 
 const STAGING_MAX_NONCE: u16 = u16::MAX;
 // TODO: UPDATE THIS ONCE SET IN PRODUCTION
-// const PRODUCTION_MAX_NONCE: u16 = 9000;
+const PRODUCTION_MAX_NONCE: u16 = 9000;
+
+const MAX_NONCE_BATCH_SIZE: u16 = 100;
 
 /// Inclusion proof for a given identity.
 ///
@@ -97,11 +102,7 @@ pub async fn generate_pbh_proof(
 
     let signal = hash_user_op(&packed_user_op);
 
-    // TODO: Fix me
-    let external_nullifier =
-        find_unused_nullifier_hash("https://worldchain-sepolia.gateway.tenderly.co")
-            .await
-            .unwrap();
+    let external_nullifier = find_unused_nullifier_hash(network).await.unwrap();
 
     let encoded_external_nullifier = EncodedExternalNullifier::from(external_nullifier);
 
@@ -143,72 +144,71 @@ pub async fn generate_pbh_proof(
 
 /// Finds the first unused nullifier hash for the current World ID identity.
 pub async fn find_unused_nullifier_hash(
-    provider_url: &str,
+    network: Network,
 ) -> Result<ExternalNullifier, Box<dyn std::error::Error>> {
     let identity = get_world_id_identity().unwrap();
     let now = Utc::now();
     let current_year = now.year() as u16;
     let current_month = now.month() as u16;
 
-    // TODO: get this from global
-    let provider: alloy::providers::fillers::FillProvider<
-        alloy::providers::fillers::JoinFill<
-            alloy::providers::Identity,
-            alloy::providers::fillers::JoinFill<
-                alloy::providers::fillers::GasFiller,
-                alloy::providers::fillers::JoinFill<
-                    alloy::providers::fillers::BlobGasFiller,
-                    alloy::providers::fillers::JoinFill<
-                        alloy::providers::fillers::NonceFiller,
-                        alloy::providers::fillers::ChainIdFiller,
-                    >,
-                >,
-            >,
-        >,
-        alloy::providers::RootProvider,
-    > = ProviderBuilder::new().connect_http(Url::parse(provider_url).unwrap());
-    let contract: IPBHEntryPoint::IPBHEntryPointInstance<
-        alloy::providers::fillers::FillProvider<
-            alloy::providers::fillers::JoinFill<
-                alloy::providers::Identity,
-                alloy::providers::fillers::JoinFill<
-                    alloy::providers::fillers::GasFiller,
-                    alloy::providers::fillers::JoinFill<
-                        alloy::providers::fillers::BlobGasFiller,
-                        alloy::providers::fillers::JoinFill<
-                            alloy::providers::fillers::NonceFiller,
-                            alloy::providers::fillers::ChainIdFiller,
-                        >,
-                    >,
-                >,
-            >,
-            alloy::providers::RootProvider,
-        >,
-    > = IPBHEntryPoint::new(*PBH_ENTRYPOINT_4337, provider);
+    let max_nonce = match network {
+        Network::WorldChain => PRODUCTION_MAX_NONCE,
+        Network::WorldChainSepolia => STAGING_MAX_NONCE,
+        _ => panic!("Invalid network for PBH"),
+    };
 
-    // TODO: Batching and env switch
-    for nonce in 0..STAGING_MAX_NONCE {
-        let external_nullifier =
-            ExternalNullifier::v1(current_month as u8, current_year, nonce as u16);
-        let encoded_external_nullifier =
-            EncodedExternalNullifier::from(external_nullifier.clone());
+    let rpc_client = get_rpc_client().unwrap();
 
-        let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
-            &identity,
-            encoded_external_nullifier.0,
-        );
+    // Process nonces in batches for efficiency
+    for batch_start in (0..max_nonce).step_by(MAX_NONCE_BATCH_SIZE as usize) {
+        let batch_end = std::cmp::min(batch_start + MAX_NONCE_BATCH_SIZE, max_nonce);
+        let mut batch_hashes = Vec::new();
+        let mut batch_external_nullifiers = Vec::new();
 
-        let vec = vec![U256::from_be_bytes(nullifier_hash.to_be_bytes::<32>())];
+        // Generate a batch of nullifier hashes
+        for nonce in batch_start..batch_end {
+            let external_nullifier =
+                ExternalNullifier::v1(current_month as u8, current_year, nonce as u16);
+            let encoded_external_nullifier =
+                EncodedExternalNullifier::from(external_nullifier.clone());
 
-        let first_unused_index =
-            contract.getFirstUnspentNullifierHash(vec).call().await?;
+            let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
+                &identity,
+                encoded_external_nullifier.0,
+            );
 
-        if first_unused_index.as_i64() != -1 {
+            batch_hashes.push(U256::from_be_bytes(nullifier_hash.to_be_bytes::<32>()));
+            batch_external_nullifiers.push(external_nullifier);
+        }
+
+        // Call contract with batch of hashes
+        let call = IPBHEntryPoint::getFirstUnspentNullifierHashCall {
+            hashes: batch_hashes,
+        };
+
+        let result = rpc_client
+            .eth_call(
+                network,
+                *PBH_ENTRYPOINT_4337,
+                Bytes::from(call.abi_encode()),
+            )
+            .await?;
+
+        let unsigned_value = U256::from_be_slice(&result);
+        let signed_from_slice = I256::from_raw(unsigned_value);
+
+        // If result is not -1, we found an unused nullifier hash
+        if signed_from_slice != I256::MINUS_ONE {
+            let index = unsigned_value.to::<usize>();
+            let actual_nonce = batch_start + index as u16;
+
+            println!("Found unused nullifier!");
             println!("Month: {:?}", current_month);
             println!("Year: {:?}", current_year);
-            println!("Nonce: {:?}", nonce);
+            println!("Actual nonce: {:?}", actual_nonce);
 
-            return Ok(external_nullifier);
+            // Return the external nullifier for the found index
+            return Ok(batch_external_nullifiers[index].clone());
         }
     }
 
