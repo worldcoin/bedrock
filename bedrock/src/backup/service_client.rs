@@ -1,11 +1,10 @@
 use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::backup::manifest::SyncSigner;
 use crate::primitives::config::{get_config, BedrockEnvironment};
 use crate::HttpError;
-use serde_json::Value;
 use std::time::Duration;
 
 /// Lightweight multipart/form-data builder to avoid hand-concatenating bytes in callers.
@@ -26,10 +25,10 @@ impl MultipartBuilder {
         format!("multipart/form-data; boundary={}", self.boundary)
     }
 
-    fn add_json_part(
+    fn add_json_part<T: serde::Serialize>(
         &mut self,
         name: &str,
-        json: &serde_json::Value,
+        json: &T,
     ) -> Result<(), HttpError> {
         let crlf = b"\r\n";
         self.body
@@ -91,6 +90,44 @@ pub struct ChallengeResponse {
 
 // Removed unused EcKeypairAuthorizationPayload; JSON is built inline.
 
+#[derive(Debug, Serialize)]
+struct EcKeypairAuthorization {
+    #[serde(rename = "kind")]
+    kind: &'static str,
+    #[serde(rename = "publicKey")]
+    public_key: String,
+    signature: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RetrieveMetadataRequest {
+    authorization: EcKeypairAuthorization,
+    #[serde(rename = "challengeToken")]
+    challenge_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RetrieveMetadataResponse {
+    metadata: RetrieveMetadata,
+}
+
+#[derive(Debug, Deserialize)]
+struct RetrieveMetadata {
+    #[serde(rename = "manifestHash")]
+    manifest_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SyncPayload {
+    authorization: EcKeypairAuthorization,
+    #[serde(rename = "challengeToken")]
+    challenge_token: String,
+    #[serde(rename = "currentManifestHash")]
+    current_manifest_hash: String,
+    #[serde(rename = "newManifestHash")]
+    new_manifest_hash: String,
+}
+
 impl BackupServiceClient {
     /// Constructs a new client using reqwest and the configured Bedrock environment.
     pub fn new() -> Result<Self, HttpError> {
@@ -138,30 +175,15 @@ impl BackupServiceClient {
                 response_body: bytes.to_vec(),
             });
         }
-        let v: Value =
+        let v: ChallengeResponse =
             serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
                 message: e.to_string(),
             })?;
-        let challenge =
-            v.get("challenge").and_then(|x| x.as_str()).ok_or_else(|| {
-                HttpError::Generic {
-                    message: "missing 'challenge' in sync challenge response"
-                        .to_string(),
-                }
-            })?;
-        let token = v.get("token").and_then(|x| x.as_str()).ok_or_else(|| {
-            HttpError::Generic {
-                message: "missing 'token' in sync challenge response".to_string(),
-            }
-        })?;
-        Ok(ChallengeResponse {
-            challenge: challenge.to_string(),
-            token: token.to_string(),
-        })
+        Ok(v)
     }
 
     /// POST /v1/sync (multipart) with payload JSON and backup bytes.
-    /// Returns raw JSON for now; typed response can be added later.
+    /// We do not currently consume any response fields; success status is sufficient.
     pub async fn post_sync_with_keypair(
         &self,
         signer: &dyn SyncSigner,
@@ -169,20 +191,20 @@ impl BackupServiceClient {
         current_manifest_hash: String,
         new_manifest_hash: String,
         sealed_backup: Vec<u8>,
-    ) -> Result<serde_json::Value, HttpError> {
+    ) -> Result<(), HttpError> {
         // 1) Build authorization JSON from signer: { kind: "EC_KEYPAIR", publicKey, signature }
         let sig_b64 = signer.sign_challenge_base64(challenge.challenge.clone());
         let pk_b64 = signer.public_key_base64();
-        let payload = serde_json::json!({
-            "authorization": {
-                "kind": "EC_KEYPAIR",
-                "publicKey": pk_b64,
-                "signature": sig_b64,
+        let payload = SyncPayload {
+            authorization: EcKeypairAuthorization {
+                kind: "EC_KEYPAIR",
+                public_key: pk_b64,
+                signature: sig_b64,
             },
-            "challengeToken": challenge.token,
-            "currentManifestHash": current_manifest_hash,
-            "newManifestHash": new_manifest_hash,
-        });
+            challenge_token: challenge.token.clone(),
+            current_manifest_hash,
+            new_manifest_hash,
+        };
 
         // 2) Build multipart body via helper
         let mut mp = MultipartBuilder::new();
@@ -219,20 +241,15 @@ impl BackupServiceClient {
                 response_body: bytes.to_vec(),
             });
         }
-        let v: Value =
-            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        Ok(v)
+        Ok(())
     }
 
     /// Retrieve metadata via keypair challenge/sign using provided signer.
-    #[allow(clippy::too_many_lines)] // FIXME
+    #[allow(clippy::too_many_lines)]
     pub async fn get_remote_manifest_hash(
         &self,
         signer: &dyn SyncSigner,
     ) -> Result<[u8; 32], HttpError> {
-        // FIXME: type requests and responses?
         // 1) Request challenge
         let url_challenge = self.url("/v1/retrieve-metadata/challenge/keypair");
         let mut headers = HeaderMap::new();
@@ -258,36 +275,22 @@ impl BackupServiceClient {
                 response_body: bytes.to_vec(),
             });
         }
-        let v: Value =
-            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
+        let challenge_resp: ChallengeResponse = serde_json::from_slice(&bytes)
+            .map_err(|e| HttpError::Generic {
                 message: e.to_string(),
             })?;
-        let challenge =
-            v.get("challenge").and_then(|x| x.as_str()).ok_or_else(|| {
-                HttpError::Generic {
-                    message:
-                        "missing 'challenge' in retrieve-metadata challenge response"
-                            .to_string(),
-                }
-            })?;
-        let token = v.get("token").and_then(|x| x.as_str()).ok_or_else(|| {
-            HttpError::Generic {
-                message: "missing 'token' in retrieve-metadata challenge response"
-                    .to_string(),
-            }
-        })?;
 
         // 2) Sign + post solution
-        let sig_b64 = signer.sign_challenge_base64(challenge.to_string());
+        let sig_b64 = signer.sign_challenge_base64(challenge_resp.challenge.clone());
         let pk_b64 = signer.public_key_base64();
-        let payload = serde_json::json!({
-            "authorization": {
-                "kind": "EC_KEYPAIR",
-                "publicKey": pk_b64,
-                "signature": sig_b64,
+        let payload = RetrieveMetadataRequest {
+            authorization: EcKeypairAuthorization {
+                kind: "EC_KEYPAIR",
+                public_key: pk_b64,
+                signature: sig_b64,
             },
-            "challengeToken": token,
-        });
+            challenge_token: challenge_resp.token,
+        };
         let url_retrieve = self.url("/v1/retrieve-metadata");
         let resp = self
             .http
@@ -313,19 +316,11 @@ impl BackupServiceClient {
                 response_body: bytes.to_vec(),
             });
         }
-        let v: Value =
+        let v: RetrieveMetadataResponse =
             serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
                 message: e.to_string(),
             })?;
-        let metadata = v.get("metadata").ok_or_else(|| HttpError::Generic {
-            message: "missing 'metadata'".to_string(),
-        })?;
-        let hash = metadata
-            .get("manifestHash")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| HttpError::Generic {
-                message: "missing 'manifestHash'".to_string(),
-            })?;
+        let hash = &v.metadata.manifest_hash;
 
         let hash: [u8; 32] = hex::decode(hash)
             .map_err(|_| HttpError::Generic {
