@@ -391,6 +391,8 @@ fn unpack_v0_backup_to_filesystem(backup: &V0Backup) -> Result<(), BackupError> 
         Vec::with_capacity(backup.files.len());
 
     for file in &backup.files {
+        // NOTE: we do not prefix with 'backup/' here; we write files to
+        // their actual module-owned locations in the global filesystem.
         let rel_path = file.path.trim_start_matches('/');
 
         fs.write_file(rel_path.to_string(), file.data.clone())
@@ -400,10 +402,13 @@ fn unpack_v0_backup_to_filesystem(backup: &V0Backup) -> Result<(), BackupError> 
                 BackupError::from(err)
             })?;
 
-        // Infer designator from path
+        // Infer logical designator from the first path segment.
+        // Supports both canonical segments (orb_pkg/document_pkg/secure_document_pkg)
+        // and legacy prefixes for backward compatibility.
         let first_segment = rel_path.split('/').next().unwrap_or("");
         let designator = infer_designator(first_segment)?;
 
+        // Record the exact relative path written (used by manifest+sync decisions).
         manifest_entries.push(V0BackupManifestEntry {
             designator,
             file_path: rel_path.to_string(),
@@ -415,6 +420,7 @@ fn unpack_v0_backup_to_filesystem(backup: &V0Backup) -> Result<(), BackupError> 
         previous_manifest_hash: None,
         files: manifest_entries,
     });
+    // Persist reconstructed manifest under 'backup/manifest.json' (scoped middleware).
     let manifest_bytes =
         serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
     let fs_backup = create_middleware("backup");

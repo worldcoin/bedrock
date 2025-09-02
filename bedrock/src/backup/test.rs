@@ -2,7 +2,7 @@ use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
-use crate::primitives::filesystem::{set_filesystem, FileSystem, InMemoryFileSystem};
+use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
 use std::str::FromStr;
@@ -212,9 +212,8 @@ fn test_decrypt_sealed_backup_with_prf() {
 
 #[test]
 fn test_unpack_writes_files_and_manifest() {
-    // Arrange global filesystem
-    let fs = InMemoryFileSystem::new();
-    set_filesystem(std::sync::Arc::new(fs.clone()));
+    // Arrange filesystem: use the already-initialized global filesystem (tests set it once).
+    // We don't replace it if already set; we just assert via the global handle.
     let manager = BackupManager::new();
 
     // Create a backup with a couple of files resembling real paths
@@ -259,16 +258,22 @@ fn test_unpack_writes_files_and_manifest() {
         .unwrap();
 
     // Assert: files exist at expected paths (global filesystem, no prefix)
-    assert!(fs.contains_file("orb_pkg/personal_custody/pcp-1234.bin"));
-    assert!(fs.contains_file("document_pkg/document_personal_custody/passport-1.bin"));
+    let global_fs = crate::primitives::filesystem::get_filesystem_raw()
+        .unwrap()
+        .clone();
+    assert!(global_fs
+        .file_exists("orb_pkg/personal_custody/pcp-1234.bin".to_string())
+        .unwrap());
+    assert!(global_fs
+        .file_exists(
+            "document_pkg/document_personal_custody/passport-1.bin".to_string()
+        )
+        .unwrap());
 
     // Manifest is written under backup/manifest.json
-    assert!(fs.contains_file("backup/manifest.json"));
-    let manifest_bytes = <InMemoryFileSystem as FileSystem>::read_file(
-        &fs,
-        "backup/manifest.json".to_string(),
-    )
-    .unwrap();
+    let manifest_bytes = global_fs
+        .read_file("backup/manifest.json".to_string())
+        .unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(manifest["version"], "V0");
     let files_array = manifest["manifest"]["files"].as_array().unwrap();
