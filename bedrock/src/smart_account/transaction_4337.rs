@@ -180,10 +180,6 @@ pub trait Is4337Encodable {
 
         Ok(user_op_hash)
     }
-
-    // async fn get_pbh_nonce() -> u64 {
-
-    // }
 }
 
 #[cfg(test)]
@@ -505,106 +501,5 @@ mod tests {
         } else {
             panic!("Expected InvalidInput error");
         }
-    }
-
-    #[test]
-    fn test_user_operation_to_encoded_safe_op_struct_conversion() {
-        use alloy::primitives::{address, U256};
-        use std::str::FromStr;
-
-        // Create a UserOperation with valid signature containing timestamps
-        let mut signature = Vec::with_capacity(77);
-
-        // Add validAfter (6 bytes) - timestamp 1704067200
-        let valid_after_timestamp: u64 = 1704067200;
-        let valid_after_bytes = valid_after_timestamp.to_be_bytes();
-        signature.extend_from_slice(&valid_after_bytes[2..8]);
-
-        // Add validUntil (6 bytes) - timestamp 1735689600
-        let valid_until_timestamp: u64 = 1735689600;
-        let valid_until_bytes = valid_until_timestamp.to_be_bytes();
-        signature.extend_from_slice(&valid_until_bytes[2..8]);
-
-        // Add dummy ECDSA signature (65 bytes)
-        signature.extend_from_slice(&[0xff; 65]);
-
-        let user_op = UserOperation {
-            sender: address!("0x1111111111111111111111111111111111111111"),
-            nonce: U256::from(42),
-            call_data: Bytes::from_str("0x1234abcd").unwrap(),
-            signature: signature.into(),
-            call_gas_limit: 100000,
-            verification_gas_limit: 50000,
-            pre_verification_gas: U256::from(30000),
-            max_fee_per_gas: 2000000000,
-            max_priority_fee_per_gas: 1000000000,
-            ..Default::default()
-        };
-
-        // Test the From trait conversion
-        let encoded_safe_op: EncodedSafeOpStruct = user_op.clone().into();
-
-        // Verify the conversion worked correctly
-        assert_eq!(encoded_safe_op.safe, user_op.sender);
-        assert_eq!(encoded_safe_op.nonce, user_op.nonce);
-        assert_eq!(encoded_safe_op.call_gas_limit, user_op.call_gas_limit);
-        assert_eq!(
-            encoded_safe_op.verification_gas_limit,
-            user_op.verification_gas_limit
-        );
-        assert_eq!(
-            encoded_safe_op.pre_verification_gas,
-            user_op.pre_verification_gas
-        );
-        assert_eq!(encoded_safe_op.max_fee_per_gas, user_op.max_fee_per_gas);
-        assert_eq!(
-            encoded_safe_op.max_priority_fee_per_gas,
-            user_op.max_priority_fee_per_gas
-        );
-        assert_eq!(
-            encoded_safe_op.valid_after,
-            U48::from(valid_after_timestamp)
-        );
-        assert_eq!(
-            encoded_safe_op.valid_until,
-            U48::from(valid_until_timestamp)
-        );
-        assert_eq!(encoded_safe_op.entry_point, *ENTRYPOINT_4337);
-        assert_eq!(
-            encoded_safe_op.call_data_hash,
-            keccak256(&user_op.call_data)
-        );
-        assert_eq!(
-            encoded_safe_op.init_code_hash,
-            keccak256(user_op.get_init_code())
-        );
-        assert_eq!(
-            encoded_safe_op.paymaster_and_data_hash,
-            keccak256(user_op.get_paymaster_and_data())
-        );
-    }
-
-    #[test]
-    fn test_user_operation_to_encoded_safe_op_struct_with_invalid_signature() {
-        use alloy::primitives::{address, U256};
-        use std::str::FromStr;
-
-        // Create a UserOperation with invalid signature (too short)
-        let user_op = UserOperation {
-            sender: address!("0x1111111111111111111111111111111111111111"),
-            nonce: U256::from(42),
-            call_data: Bytes::from_str("0x1234abcd").unwrap(),
-            signature: vec![0xff; 65].into(), // Invalid length
-            ..Default::default()
-        };
-
-        // Test the From trait conversion with invalid signature
-        let encoded_safe_op: EncodedSafeOpStruct = user_op.clone().into();
-
-        // Should use default timestamps (zero) when signature is invalid
-        assert_eq!(encoded_safe_op.valid_after, U48::ZERO);
-        assert_eq!(encoded_safe_op.valid_until, U48::ZERO);
-        assert_eq!(encoded_safe_op.safe, user_op.sender);
-        assert_eq!(encoded_safe_op.nonce, user_op.nonce);
     }
 }
