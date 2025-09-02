@@ -403,47 +403,6 @@ impl From<UserOperation> for IEntryPoint::PackedUserOperation {
     }
 }
 
-impl From<&UserOperation> for IEntryPoint::PackedUserOperation {
-    /// Converts a `&UserOperation` into a `PackedUserOperation`.
-    ///
-    /// This conversion packs gas limits and fees into bytes32 fields as required by EIP-4337.
-    /// This implementation works with borrowed `UserOperations` to avoid unnecessary moves.
-    ///
-    /// # Example
-    /// ```rust
-    /// use bedrock::primitives::contracts::{UserOperation, IEntryPoint::PackedUserOperation};
-    ///
-    /// let user_op = UserOperation::default();
-    /// let packed_user_op: PackedUserOperation = (&user_op).into();
-    /// // user_op is still available for use
-    /// ```
-    fn from(user_op: &UserOperation) -> Self {
-        // Pack verification_gas_limit (upper 128 bits) + call_gas_limit (lower 128 bits) into accountGasLimits
-        let verification_gas_u256 = U256::from(user_op.verification_gas_limit);
-        let call_gas_u256 = U256::from(user_op.call_gas_limit);
-        let account_gas_limits: U256 = (verification_gas_u256 << 128) | call_gas_u256;
-
-        // Pack max_priority_fee_per_gas (upper 128 bits) + max_fee_per_gas (lower 128 bits) into gasFees
-        let max_priority_fee_u256 = U256::from(user_op.max_priority_fee_per_gas);
-        let max_fee_u256 = U256::from(user_op.max_fee_per_gas);
-        let gas_fees: U256 = (max_priority_fee_u256 << 128) | max_fee_u256;
-
-        Self {
-            sender: user_op.sender,
-            nonce: user_op.nonce,
-            initCode: user_op.get_init_code(),
-            callData: user_op.call_data.clone(),
-            accountGasLimits: FixedBytes::from_slice(
-                &account_gas_limits.to_be_bytes::<32>(),
-            ),
-            preVerificationGas: user_op.pre_verification_gas,
-            gasFees: FixedBytes::from_slice(&gas_fees.to_be_bytes::<32>()),
-            paymasterAndData: user_op.get_paymaster_and_data(),
-            signature: user_op.signature.clone(),
-        }
-    }
-}
-
 sol! {
     contract IMulticall3 {
         #[derive(Default)]

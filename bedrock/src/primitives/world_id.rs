@@ -65,13 +65,11 @@ static WORLD_ID_IDENTITY_INSTANCE: OnceLock<Arc<Identity>> = OnceLock::new();
 ///
 /// # Errors
 /// This function will return false if the World ID identity is already initialized.
-pub fn set_world_id_identity(identity: Arc<Identity>) -> bool {
+pub fn set_world_id_identity(identity: Arc<Identity>) {
     if WORLD_ID_IDENTITY_INSTANCE.set(identity).is_err() {
         crate::warn!("World ID identity already initialized, ignoring");
-        false
     } else {
         crate::info!("World ID identity initialized successfully");
-        true
     }
 }
 
@@ -93,19 +91,13 @@ pub fn is_world_id_identity_initialized() -> bool {
 
 /// Generates a PBH proof for a given user operation.
 pub async fn generate_pbh_proof(
-    user_op: &UserOperation,
+    user_op: UserOperation,
     network: Network,
 ) -> PbhPayload {
-    // Convert from UserOperation to PackedUserOperation
-    // TODO: Clean this up
     let packed_user_op: PackedUserOperation = PackedUserOperation::from(user_op);
-
     let signal = hash_user_op(&packed_user_op);
-
     let external_nullifier = find_unused_nullifier_hash(network).await.unwrap();
-
     let encoded_external_nullifier = EncodedExternalNullifier::from(external_nullifier);
-
     let identity = get_world_id_identity().unwrap();
 
     let inclusion_proof = fetch_inclusion_proof(
@@ -142,7 +134,7 @@ pub async fn generate_pbh_proof(
     }
 }
 
-/// Finds the first unused nullifier hash for the current World ID identity.
+/// Finds the first unused nullifier hash for the current World ID identity in batches
 pub async fn find_unused_nullifier_hash(
     network: Network,
 ) -> Result<ExternalNullifier, Box<dyn std::error::Error>> {
