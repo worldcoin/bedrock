@@ -20,29 +20,11 @@ use crate::transaction::rpc::{RpcError, RpcProviderName};
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use alloy::sol_types::SolValue;
 use chrono::{Duration, Utc};
-use semaphore_rs::identity::Identity;
-use semaphore_rs::Field;
-use serde::{Deserialize, Serialize};
 
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
 /// Operations are valid for this duration from the time they are signed.
 const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SerializableIdentity {
-    pub nullifier: Field,
-    pub trapdoor: Field,
-}
-
-impl From<&Identity> for SerializableIdentity {
-    fn from(identity: &Identity) -> Self {
-        Self {
-            nullifier: identity.nullifier,
-            trapdoor: identity.trapdoor,
-        }
-    }
-}
 
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]

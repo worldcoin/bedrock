@@ -5,12 +5,17 @@ use alloy_primitives::I256;
 use chrono::{Datelike, Utc};
 use reqwest::Client;
 use semaphore_rs::identity::Identity;
+use semaphore_rs::poseidon_tree::Proof as PoseidonTreeProof;
+use semaphore_rs::protocol::{generate_nullifier_hash, generate_proof};
 use semaphore_rs::{hash_to_field, Field};
+use semaphore_rs_proof::Proof as SemaphoreProof;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 use world_chain_builder_pbh::{
     external_nullifier::{EncodedExternalNullifier, ExternalNullifier},
-    payload::{PBHPayload as RustPBHPayload, Proof},
+    payload::{
+        PBHPayload as WorldchainBuilderPBHPayload, Proof as WorldchainBuilderProof,
+    },
 };
 
 use crate::primitives::contracts::{IPBHEntryPoint, PBH_ENTRYPOINT_4337};
@@ -46,7 +51,7 @@ pub struct InclusionProof {
     /// The root of the Merkle tree
     pub root: Field,
     /// The proof for the given identity
-    pub proof: semaphore_rs::poseidon_tree::Proof,
+    pub proof: PoseidonTreeProof,
 }
 
 /// Global World ID identity instance for Bedrock operations
@@ -92,7 +97,7 @@ pub fn is_world_id_identity_initialized() -> bool {
 pub async fn generate_pbh_proof(
     user_op: UserOperation,
     network: Network,
-) -> RustPBHPayload {
+) -> WorldchainBuilderPBHPayload {
     let packed_user_op: PackedUserOperation = PackedUserOperation::from(user_op);
     let signal = hash_user_op(&packed_user_op);
     let external_nullifier = find_unused_nullifier_hash(network).await.unwrap();
@@ -110,7 +115,7 @@ pub async fn generate_pbh_proof(
     .await
     .unwrap();
 
-    let proof: semaphore_rs_proof::Proof = semaphore_rs::protocol::generate_proof(
+    let proof: SemaphoreProof = generate_proof(
         &identity,
         &inclusion_proof.proof,
         encoded_external_nullifier.0,
@@ -118,14 +123,12 @@ pub async fn generate_pbh_proof(
     )
     .expect("Failed to generate semaphore proof");
 
-    let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
-        &identity,
-        encoded_external_nullifier.0,
-    );
+    let nullifier_hash =
+        generate_nullifier_hash(&identity, encoded_external_nullifier.0);
 
-    let proof = Proof(proof);
+    let proof = WorldchainBuilderProof(proof);
 
-    RustPBHPayload {
+    WorldchainBuilderPBHPayload {
         external_nullifier,
         nullifier_hash,
         root: inclusion_proof.root,
@@ -163,7 +166,7 @@ pub async fn find_unused_nullifier_hash(
             let encoded_external_nullifier =
                 EncodedExternalNullifier::from(external_nullifier);
 
-            let nullifier_hash = semaphore_rs::protocol::generate_nullifier_hash(
+            let nullifier_hash = generate_nullifier_hash(
                 &identity,
                 encoded_external_nullifier.0,
             );
