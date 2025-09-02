@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::BackupFileDesignator;
 use crate::primitives::filesystem::{
-    create_middleware, FileSystemError, FileSystemMiddleware,
+    create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
 };
 use crate::root_key::RootKey;
 use crate::{
@@ -146,14 +146,12 @@ impl ManifestManager {
 
         // Step 4: Compute checksum for provided file
         let file_path = file_path.trim_start_matches('/').to_string();
-        // FIXME: add checksum computation directly from the FS to avoid loading the entire file into memory
-        // FIXME: `read_file` will read the file prefixed, this won't work.
-        let data = self.file_system.read_file(&file_path).map_err(|e| {
-            let msg = format!("Failed to load file from {designator:?}: {e}");
+        let fs = get_filesystem_raw()?;
+        let checksum_hex = fs.calculate_checksum_hex(&file_path).map_err(|e| {
+            let msg = format!("Failed to load file: {e}");
             log::error!("{msg}");
             BackupError::InvalidFileForBackup(msg)
         })?;
-        let checksum_hex = hex::encode(blake3::hash(&data).as_bytes());
 
         // Step 5: Build candidate manifest M'
         manifest.files.push(V0BackupManifestEntry {

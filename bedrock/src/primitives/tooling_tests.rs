@@ -484,4 +484,38 @@ mod tests {
         assert_eq!(fs.file_count(), 0);
         assert!(!fs.contains_file("config.json"));
     }
+
+    #[test]
+    fn test_calculate_checksum_hex_small_file() {
+        use crate::primitives::filesystem::{
+            FileSystem, FileSystemExt, InMemoryFileSystem,
+        };
+
+        let fs = InMemoryFileSystem::new();
+        fs.write_file("greeting.txt".to_string(), b"Hello, World!".to_vec())
+            .unwrap();
+
+        let checksum_hex = FileSystemExt::calculate_checksum_hex(&fs, "greeting.txt")
+            .expect("checksum should compute successfully");
+        let expected = hex::encode(blake3::hash(b"Hello, World!").as_bytes());
+        assert_eq!(checksum_hex, expected);
+    }
+
+    #[test]
+    fn test_calculate_checksum_hex_large_file_streaming() {
+        use crate::primitives::filesystem::{
+            FileSystem, FileSystemExt, InMemoryFileSystem,
+        };
+
+        let fs = InMemoryFileSystem::new();
+        // Create a file larger than the 64 KiB streaming chunk size to ensure multiple iterations
+        let data = vec![0_u8; 200_000];
+        fs.write_file("large.bin".to_string(), data.clone())
+            .unwrap();
+
+        let checksum_hex = FileSystemExt::calculate_checksum_hex(&fs, "large.bin")
+            .expect("checksum should compute successfully");
+        let expected = hex::encode(blake3::hash(&data).as_bytes());
+        assert_eq!(checksum_hex, expected);
+    }
 }
