@@ -32,6 +32,21 @@ pub enum BackupManifest {
     V0(V0BackupManifest),
 }
 
+impl BackupManifest {
+    /// Computes the BLAKE3 hash of the serialized manifest bytes.
+    ///
+    /// This mirrors how the manifest is persisted via `write_manifest` to keep hashes consistent.
+    pub fn calculate_hash(&self) -> Result<[u8; 32], BackupError> {
+        let serialized =
+            serde_json::to_vec(self).map_err(|e| BackupError::Generic {
+                message: (format!(
+                    "Unexpectedly unable to serialize BackupManifest: {e}"
+                )),
+            })?;
+        Ok(blake3::hash(&serialized).into())
+    }
+}
+
 /// Abstraction for signing backup-service challenges with the sync factor keypair.
 ///
 /// Implementations are expected to:
@@ -171,6 +186,10 @@ impl ManifestManager {
             .seal(&mut rand::thread_rng(), &unsealed_backup)
             .map_err(|_| BackupError::EncryptBackupError)?;
 
+        // Step 7.5: Compute new manifest hash (hash of serialized BackupManifest after this change)
+        let updated_manifest = BackupManifest::V0(manifest);
+        let new_manifest_hash = updated_manifest.calculate_hash()?;
+
         // Step 8: Sync the backup with the remote
         let challenge = client.get_sync_challenge_keypair().await.map_err(|e| {
             BackupError::Generic {
@@ -182,7 +201,7 @@ impl ManifestManager {
                 &*self.signer,
                 &challenge,
                 hex::encode(local_hash),
-                "fixme!".to_string(),
+                hex::encode(new_manifest_hash),
                 sealed_backup,
             )
             .await
@@ -191,7 +210,7 @@ impl ManifestManager {
             })?;
 
         // Step 9: Commit the manifest
-        self.write_manifest(&BackupManifest::V0(manifest))?;
+        self.write_manifest(&updated_manifest)?;
         Ok(())
     }
 
