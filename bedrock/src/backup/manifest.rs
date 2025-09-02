@@ -10,6 +10,10 @@ use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
+use crate::backup::service_client::{
+    api_get_remote_manifest_hash, api_get_sync_challenge_keypair,
+    api_post_sync_with_keypair,
+};
 use crate::backup::BackupFileDesignator;
 use crate::primitives::filesystem::{
     create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
@@ -18,7 +22,6 @@ use crate::root_key::RootKey;
 use crate::{
     backup::{
         backup_format::v0::{V0Backup, V0BackupFile},
-        service_client::BackupServiceClient,
         BackupError,
     },
     primitives::filesystem::get_filesystem_raw,
@@ -85,9 +88,7 @@ impl ManifestManager {
         &self,
         designator: BackupFileDesignator,
     ) -> Result<Vec<String>, BackupError> {
-        let client = BackupServiceClient::new().context("client new")?;
-        let remote_hash = client
-            .get_remote_manifest_hash(&*self.signer)
+        let remote_hash = api_get_remote_manifest_hash(&*self.signer)
             .await
             .context("get remote manifest hash")?;
 
@@ -129,9 +130,7 @@ impl ManifestManager {
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
         // Step 1: Fetch the remote hash
-        let client = BackupServiceClient::new().context("client new")?;
-        let remote_hash = client
-            .get_remote_manifest_hash(&*self.signer)
+        let remote_hash = api_get_remote_manifest_hash(&*self.signer)
             .await
             .context("get remote manifest hash")?;
 
@@ -180,20 +179,18 @@ impl ManifestManager {
         let new_manifest_hash = updated_manifest.calculate_hash()?;
 
         // Step 8: Sync the backup with the remote
-        let challenge = client
-            .get_sync_challenge_keypair()
+        let challenge = api_get_sync_challenge_keypair()
             .await
             .context("sync challenge")?;
-        let _resp = client
-            .post_sync_with_keypair(
-                &*self.signer,
-                &challenge,
-                hex::encode(local_hash),
-                hex::encode(new_manifest_hash),
-                sealed_backup,
-            )
-            .await
-            .context("post sync")?;
+        api_post_sync_with_keypair(
+            &*self.signer,
+            &challenge,
+            hex::encode(local_hash),
+            hex::encode(new_manifest_hash),
+            sealed_backup,
+        )
+        .await
+        .context("post sync")?;
 
         // Step 9: Commit the manifest
         self.write_manifest(&updated_manifest)?;
