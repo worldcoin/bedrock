@@ -7,6 +7,381 @@ use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
 use std::str::FromStr;
 
+// =========================
+// ManifestManager tests
+// =========================
+
+use crate::backup::backup_format::v0::V0BackupManifestEntry;
+use crate::backup::manifest::{BackupManifest, ManifestManager, SyncSigner};
+use crate::backup::service_client::{
+    set_backup_service_api, BackupServiceApi, ChallengeResponsePayload,
+    RetrieveMetadataRequestPayload, RetrieveMetadataResponsePayload, SyncSubmitRequest,
+};
+use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
+use base64::Engine as _;
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
+
+struct TestSyncSigner;
+
+impl SyncSigner for TestSyncSigner {
+    fn public_key_base64(&self) -> String {
+        base64::engine::general_purpose::STANDARD.encode(b"TEST_SYNC_PUBKEY")
+    }
+    fn sign_challenge_base64(&self, challenge: String) -> String {
+        let mut m = b"sig:".to_vec();
+        m.extend_from_slice(challenge.as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(m)
+    }
+}
+
+#[derive(Default, Clone, Debug)]
+struct FakeApiState {
+    remote_manifest_hash_hex: Option<String>,
+    last_sync: Option<SyncSubmitRequest>,
+    sync_count: u64,
+    last_retrieve_token: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct FakeBackupServiceApi {
+    state: Arc<Mutex<FakeApiState>>,
+}
+
+impl FakeBackupServiceApi {
+    fn reset(&self) {
+        *self.state.lock().unwrap() = FakeApiState::default();
+    }
+    fn set_remote_hash(&self, hex_hash: String) {
+        self.state.lock().unwrap().remote_manifest_hash_hex = Some(hex_hash);
+    }
+    fn snapshot(&self) -> FakeApiState {
+        self.state.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl BackupServiceApi for FakeBackupServiceApi {
+    async fn get_sync_challenge_keypair(
+        &self,
+    ) -> Result<ChallengeResponsePayload, crate::HttpError> {
+        Ok(ChallengeResponsePayload {
+            challenge: "SYNC_CHALLENGE".to_string(),
+            token: "SYNC_TOKEN".to_string(),
+        })
+    }
+
+    #[allow(clippy::significant_drop_tightening)]
+    async fn post_sync_with_keypair(
+        &self,
+        request: SyncSubmitRequest,
+    ) -> Result<(), crate::HttpError> {
+        let mut s = self.state.lock().unwrap();
+        s.last_sync = Some(request);
+        s.sync_count += 1;
+        if let Some(last) = &s.last_sync {
+            s.remote_manifest_hash_hex = Some(last.new_manifest_hash_hex.clone());
+        }
+        Ok(())
+    }
+
+    async fn get_retrieve_metadata_challenge_keypair(
+        &self,
+    ) -> Result<ChallengeResponsePayload, crate::HttpError> {
+        Ok(ChallengeResponsePayload {
+            challenge: "RETRIEVE_CHALLENGE".to_string(),
+            token: "RETRIEVE_TOKEN".to_string(),
+        })
+    }
+
+    #[allow(clippy::significant_drop_tightening)]
+    async fn post_retrieve_metadata_with_keypair(
+        &self,
+        request: RetrieveMetadataRequestPayload,
+    ) -> Result<RetrieveMetadataResponsePayload, crate::HttpError> {
+        let mut s = self.state.lock().unwrap();
+        s.last_retrieve_token = Some(request.challenge_token);
+        Ok(RetrieveMetadataResponsePayload {
+            manifest_hash_hex: s
+                .remote_manifest_hash_hex
+                .clone()
+                .unwrap_or_else(|| hex::encode(blake3::hash(b"").as_bytes())),
+        })
+    }
+}
+
+static TEST_API: OnceLock<Arc<FakeBackupServiceApi>> = OnceLock::new();
+static TEST_SERIAL: OnceLock<AsyncMutex<()>> = OnceLock::new();
+
+// Serialize these tests because they mutate process-wide globals (OnceLock API, global FS);
+// an async-aware mutex avoids holding a blocking guard across await points.
+async fn serial_guard() -> AsyncMutexGuard<'static, ()> {
+    TEST_SERIAL.get_or_init(|| AsyncMutex::new(())).lock().await
+}
+
+fn init_test_globals() -> Arc<FakeBackupServiceApi> {
+    // Filesystem
+    set_filesystem(Arc::new(InMemoryFileSystem::new()));
+    // API
+    TEST_API.get().cloned().map_or_else(
+        || {
+            let api = Arc::new(FakeBackupServiceApi::default());
+            let _ = set_backup_service_api(api.clone());
+            let _ = TEST_API.set(api.clone());
+            api
+        },
+        |api| api,
+    )
+}
+
+fn write_manifest_with_prefix(manifest: &BackupManifest, prefix: &str) {
+    let bytes = serde_json::to_vec(manifest).unwrap();
+    let mw = create_middleware(prefix);
+    mw.write_file("manifest.json", bytes).unwrap();
+}
+
+fn compute_manifest_hash(manifest: &BackupManifest) -> String {
+    let bytes = serde_json::to_vec(manifest).unwrap();
+    hex::encode(blake3::hash(&bytes).as_bytes())
+}
+
+fn compute_manifest_hash_from_disk(prefix: &str) -> String {
+    let fs = get_filesystem_raw().unwrap().clone();
+    let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
+    hex::encode(blake3::hash(&bytes).as_bytes())
+}
+
+fn write_global_file(path: &str, contents: &[u8]) {
+    let fs = get_filesystem_raw().unwrap().clone();
+    fs.write_file(path.to_string(), contents.to_vec()).unwrap();
+}
+
+#[tokio::test]
+async fn test_list_files_happy_path() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Prepare manifest with two files
+    let m = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::OrbPkg,
+                file_path: "orb_pkg/personal_custody/pcp.bin".to_string(),
+                checksum_hex: hex::encode(blake3::hash(b"abc").as_bytes()),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::DocumentPkg,
+                file_path: "document_pkg/foo.bin".to_string(),
+                checksum_hex: hex::encode(blake3::hash(b"def").as_bytes()),
+            },
+        ],
+    });
+    write_manifest_with_prefix(&m, "backup_test_list_1");
+    api.set_remote_hash(compute_manifest_hash_from_disk("backup_test_list_1"));
+
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_list_1",
+    );
+    let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
+    assert_eq!(list, vec!["orb_pkg/personal_custody/pcp.bin".to_string()]);
+}
+
+#[tokio::test]
+async fn test_list_files_stale_remote() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Local manifest
+    let m = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m, "backup_test_list_2");
+    // Remote is different
+    api.set_remote_hash(hex::encode(blake3::hash(b"different").as_bytes()));
+
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_list_2",
+    );
+    let err = mgr
+        .list_files(BackupFileDesignator::OrbPkg)
+        .await
+        .expect_err("expected stale error");
+    assert_eq!(err.to_string(), "Remote manifest is ahead of local; fetch and apply latest backup before updating");
+}
+
+#[tokio::test]
+async fn test_store_file_happy_path_and_commit() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Local empty manifest and matching remote
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_1");
+    api.set_remote_hash(compute_manifest_hash_from_disk("backup_test_store_1"));
+
+    // Source file to store (in global FS)
+    write_global_file("pcp/source.bin", b"hello-bytes");
+
+    // Backup pubkey
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_store_1",
+    );
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "pcp/source.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // Manifest committed with previous hash == m0 and one entry
+    let fs = get_filesystem_raw().unwrap().clone();
+    let committed = fs
+        .read_file("backup_test_store_1/manifest.json".to_string())
+        .unwrap();
+    let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+    assert_eq!(committed["version"], "V0");
+    assert_eq!(committed["manifest"]["files"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        committed["manifest"]["previous_manifest_hash"],
+        serde_json::Value::String(compute_manifest_hash(&m0))
+    );
+
+    // API observed sync with non-empty sealed backup and updated its remote hash
+    let snap = api.snapshot();
+    assert_eq!(snap.sync_count, 1);
+    let last = snap.last_sync.expect("sync called");
+    assert!(!last.sealed_backup.is_empty());
+    assert_eq!(
+        snap.remote_manifest_hash_hex.unwrap(),
+        last.new_manifest_hash_hex
+    );
+}
+
+#[tokio::test]
+async fn test_store_file_fails_when_remote_ahead() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_2");
+    api.set_remote_hash(hex::encode(blake3::hash(b"different").as_bytes()));
+
+    write_global_file("pcp/source.bin", b"hello-bytes");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_store_2",
+    );
+    let err = mgr
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            "pcp/source.bin".to_string(),
+            &RootKey::new_random().danger_to_json().unwrap(),
+            backup_pk_hex,
+        )
+        .await
+        .expect_err("expected stale error");
+    assert_eq!(err.to_string(), "Remote manifest is ahead of local; fetch and apply latest backup before updating");
+    assert_eq!(api.snapshot().sync_count, 0);
+}
+
+#[tokio::test]
+async fn test_store_file_invalid_source_path() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_3");
+    api.set_remote_hash(compute_manifest_hash_from_disk("backup_test_store_3"));
+
+    // Do not create the source file
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_store_3",
+    );
+    let err = mgr
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            "pcp/missing.bin".to_string(),
+            &RootKey::new_random().danger_to_json().unwrap(),
+            backup_pk_hex,
+        )
+        .await
+        .expect_err("expected invalid file error");
+    assert!(err.to_string().contains("Invalid file for backup"));
+    assert_eq!(api.snapshot().sync_count, 0);
+}
+
+#[tokio::test]
+async fn test_store_file_checksum_mismatch_existing_entry() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Prepare manifest with one entry that has wrong checksum vs actual file
+    write_global_file("orb_pkg/existing.bin", b"ACTUAL");
+    let wrong_checksum = hex::encode(blake3::hash(b"DIFFERENT").as_bytes());
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::OrbPkg,
+            file_path: "orb_pkg/existing.bin".to_string(),
+            checksum_hex: wrong_checksum,
+        }],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_4");
+    api.set_remote_hash(compute_manifest_hash(&m0));
+
+    // Attempt to add new file; build should fail due to mismatch on existing
+    write_global_file("pcp/new.bin", b"HELLO");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_store_4",
+    );
+    let err = mgr
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            "pcp/new.bin".to_string(),
+            &RootKey::new_random().danger_to_json().unwrap(),
+            backup_pk_hex,
+        )
+        .await
+        .expect_err("expected checksum mismatch");
+    assert!(err
+        .to_string()
+        .contains("Checksum for file with designator"));
+    assert_eq!(api.snapshot().sync_count, 0);
+}
+
 fn helper_compare_backups(source: &BackupFormat, target: &BackupFormat) -> bool {
     let BackupFormat::V0(source_backup) = source;
     let BackupFormat::V0(target_backup) = target;

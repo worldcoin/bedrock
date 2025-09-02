@@ -78,6 +78,16 @@ impl ManifestManager {
         }
     }
 
+    #[cfg(test)]
+    /// Test-only constructor allowing a custom filesystem prefix to isolate tests.
+    #[must_use]
+    pub fn new_with_prefix(signer: Arc<dyn SyncSigner>, prefix: &str) -> Self {
+        Self {
+            file_system: FileSystemMiddleware::new(prefix),
+            signer,
+        }
+    }
+
     /// Returns files recorded in the global manifest after verifying local is not stale vs remote.
     ///
     /// The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
