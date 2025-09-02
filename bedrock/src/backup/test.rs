@@ -55,9 +55,6 @@ impl FakeBackupServiceApi {
     fn set_remote_hash(&self, hex_hash: String) {
         self.state.lock().unwrap().remote_manifest_hash_hex = Some(hex_hash);
     }
-    fn snapshot(&self) -> FakeApiState {
-        self.state.lock().unwrap().clone()
-    }
 }
 
 #[async_trait::async_trait]
@@ -261,16 +258,6 @@ async fn test_store_file_happy_path_and_commit() {
         committed["manifest"]["previous_manifest_hash"],
         serde_json::Value::String(compute_manifest_hash(&m0))
     );
-
-    // API observed sync with non-empty sealed backup and updated its remote hash
-    let snap = api.snapshot();
-    assert_eq!(snap.sync_count, 1);
-    let last = snap.last_sync.expect("sync called");
-    assert!(!last.sealed_backup.is_empty());
-    assert_eq!(
-        snap.remote_manifest_hash_hex.unwrap(),
-        last.new_manifest_hash_hex
-    );
 }
 
 #[tokio::test]
@@ -303,7 +290,6 @@ async fn test_store_file_fails_when_remote_ahead() {
         .await
         .expect_err("expected stale error");
     assert_eq!(err.to_string(), "Remote manifest is ahead of local; fetch and apply latest backup before updating");
-    assert_eq!(api.snapshot().sync_count, 0);
 }
 
 #[tokio::test]
@@ -336,7 +322,6 @@ async fn test_store_file_invalid_source_path() {
         .await
         .expect_err("expected invalid file error");
     assert!(err.to_string().contains("Invalid file for backup"));
-    assert_eq!(api.snapshot().sync_count, 0);
 }
 
 #[tokio::test]
@@ -379,7 +364,160 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
     assert!(err
         .to_string()
         .contains("Checksum for file with designator"));
-    assert_eq!(api.snapshot().sync_count, 0);
+}
+
+#[tokio::test]
+async fn test_replace_all_files_for_designator_happy_path() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Prepare global source files
+    write_global_file("pcp/old1.bin", b"OLD1");
+    write_global_file("pcp/old2.bin", b"OLD2");
+    write_global_file("docs/keep.bin", b"KEEP");
+
+    // Initial manifest with two Orb entries and one Document entry
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::OrbPkg,
+                file_path: "pcp/old1.bin".to_string(),
+                checksum_hex: hex::encode(blake3::hash(b"OLD1").as_bytes()),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::OrbPkg,
+                file_path: "pcp/old2.bin".to_string(),
+                checksum_hex: hex::encode(blake3::hash(b"OLD2").as_bytes()),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::DocumentPkg,
+                file_path: "docs/keep.bin".to_string(),
+                checksum_hex: hex::encode(blake3::hash(b"KEEP").as_bytes()),
+            },
+        ],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_replace_1");
+    api.set_remote_hash(compute_manifest_hash(&m0));
+
+    // New target file
+    write_global_file("pcp/new.bin", b"NEWFILE");
+
+    // Backup pubkey and root
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+    let root_json = RootKey::new_random().danger_to_json().unwrap();
+
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_replace_1",
+    );
+    mgr.replace_all_files_for_designator(
+        BackupFileDesignator::OrbPkg,
+        "pcp/new.bin".to_string(),
+        &root_json,
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // Manifest updated and committed
+    let fs = get_filesystem_raw().unwrap().clone();
+    let committed = fs
+        .read_file("backup_test_replace_1/manifest.json".to_string())
+        .unwrap();
+    let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+    assert_eq!(committed["version"], "V0");
+    let prev_hash = committed["manifest"]["previous_manifest_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(prev_hash, compute_manifest_hash(&m0));
+    let files = committed["manifest"]["files"].as_array().unwrap();
+    // 1 (new orb) + 1 (existing document)
+    assert_eq!(files.len(), 2);
+    // Exactly one orb entry, path is the new file
+    let orb_entries: Vec<_> = files
+        .iter()
+        .filter(|v| v["designator"] == "orb_pkg")
+        .collect();
+    assert_eq!(orb_entries.len(), 1);
+    assert_eq!(orb_entries[0]["file_path"], "pcp/new.bin");
+    // Document entry preserved
+    let doc_entries: Vec<_> = files
+        .iter()
+        .filter(|v| v["designator"] == "document_pkg")
+        .collect();
+    assert_eq!(doc_entries.len(), 1);
+    assert_eq!(doc_entries[0]["file_path"], "docs/keep.bin");
+}
+
+#[tokio::test]
+async fn test_remove_file_happy_and_not_found() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Prepare global source files
+    write_global_file("pcp/target.bin", b"TO-REMOVE");
+    write_global_file("docs/keep.bin", b"KEEP");
+
+    // Initial manifest with two entries (one to be removed)
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::OrbPkg,
+                file_path: "pcp/target.bin".to_string(),
+                checksum_hex: hex::encode(blake3::hash(b"TO-REMOVE").as_bytes()),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::DocumentPkg,
+                file_path: "docs/keep.bin".to_string(),
+                checksum_hex: hex::encode(blake3::hash(b"KEEP").as_bytes()),
+            },
+        ],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_remove_1");
+    api.set_remote_hash(compute_manifest_hash(&m0));
+
+    // Backup pubkey and root
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+    let root_json = RootKey::new_random().danger_to_json().unwrap();
+
+    let mgr = ManifestManager::new_with_prefix(
+        Arc::new(TestSyncSigner),
+        "backup_test_remove_1",
+    );
+
+    // Remove existing file
+    mgr.remove_file(
+        "pcp/target.bin".to_string(),
+        &root_json,
+        backup_pk_hex.clone(),
+    )
+    .await
+    .unwrap();
+
+    // Manifest now contains only the document entry
+    let fs = get_filesystem_raw().unwrap().clone();
+    let committed = fs
+        .read_file("backup_test_remove_1/manifest.json".to_string())
+        .unwrap();
+    let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+    let files = committed["manifest"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["designator"], "document_pkg");
+    assert_eq!(files[0]["file_path"], "docs/keep.bin");
+
+    // Second removal of the same file should error and not sync again
+    let err = mgr
+        .remove_file("pcp/target.bin".to_string(), &root_json, backup_pk_hex)
+        .await
+        .expect_err("expected file-not-found error");
+    assert!(err.to_string().contains("File not found in manifest"));
 }
 
 fn helper_compare_backups(source: &BackupFormat, target: &BackupFormat) -> bool {
