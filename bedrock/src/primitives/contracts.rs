@@ -330,31 +330,6 @@ impl EncodedSafeOpStruct {
     }
 }
 
-impl From<UserOperation> for EncodedSafeOpStruct {
-    /// Converts a `UserOperation` into an `EncodedSafeOpStruct`.
-    ///
-    /// This implementation extracts validity timestamps from the `UserOperation`'s signature.
-    /// If the signature doesn't contain valid timestamps, it uses zero values as defaults.
-    ///
-    /// # Example
-    /// ```rust
-    /// use bedrock::primitives::contracts::{UserOperation, EncodedSafeOpStruct};
-    ///
-    /// let user_op = UserOperation::default();
-    /// let encoded_safe_op: EncodedSafeOpStruct = user_op.into();
-    /// ```
-    fn from(user_op: UserOperation) -> Self {
-        // Extract validity timestamps from the signature, or use defaults
-        let (valid_after, valid_until) = user_op
-            .extract_validity_timestamps()
-            .unwrap_or((U48::ZERO, U48::ZERO));
-
-        // Use the existing method to create the struct
-        Self::from_user_op_with_validity(&user_op, valid_after, valid_until)
-            .expect("Failed to convert UserOperation to EncodedSafeOpStruct")
-    }
-}
-
 impl From<UserOperation> for IEntryPoint::PackedUserOperation {
     /// Converts a `UserOperation` into a `PackedUserOperation`.
     ///

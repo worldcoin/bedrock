@@ -166,10 +166,8 @@ pub async fn find_unused_nullifier_hash(
             let encoded_external_nullifier =
                 EncodedExternalNullifier::from(external_nullifier);
 
-            let nullifier_hash = generate_nullifier_hash(
-                &identity,
-                encoded_external_nullifier.0,
-            );
+            let nullifier_hash =
+                generate_nullifier_hash(&identity, encoded_external_nullifier.0);
 
             batch_hashes.push(U256::from_be_bytes(nullifier_hash.to_be_bytes::<32>()));
             batch_external_nullifiers.push(external_nullifier);
