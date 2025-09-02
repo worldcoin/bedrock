@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -38,11 +39,7 @@ impl BackupManifest {
     /// This mirrors how the manifest is persisted via `write_manifest` to keep hashes consistent.
     pub fn calculate_hash(&self) -> Result<[u8; 32], BackupError> {
         let serialized =
-            serde_json::to_vec(self).map_err(|e| BackupError::Generic {
-                message: (format!(
-                    "Unexpectedly unable to serialize BackupManifest: {e}"
-                )),
-            })?;
+            serde_json::to_vec(self).context("serialize BackupManifest")?;
         Ok(blake3::hash(&serialized).into())
     }
 }
@@ -88,15 +85,11 @@ impl ManifestManager {
         &self,
         designator: BackupFileDesignator,
     ) -> Result<Vec<String>, BackupError> {
-        let client = BackupServiceClient::new().map_err(|e| BackupError::Generic {
-            message: e.to_string(),
-        })?;
+        let client = BackupServiceClient::new().context("client new")?;
         let remote_hash = client
             .get_remote_manifest_hash(&*self.signer)
             .await
-            .map_err(|e| BackupError::Generic {
-                message: e.to_string(),
-            })?;
+            .context("get remote manifest hash")?;
 
         let (manifest, local_hash) = self.read_manifest()?;
         if remote_hash != local_hash {
@@ -136,15 +129,11 @@ impl ManifestManager {
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
         // Step 1: Fetch the remote hash
-        let client = BackupServiceClient::new().map_err(|e| BackupError::Generic {
-            message: e.to_string(),
-        })?;
+        let client = BackupServiceClient::new().context("client new")?;
         let remote_hash = client
             .get_remote_manifest_hash(&*self.signer)
             .await
-            .map_err(|e| BackupError::Generic {
-                message: e.to_string(),
-            })?;
+            .context("get remote manifest hash")?;
 
         // Step 2: Fetch the local hash and compare against the remote hash
         let (manifest, local_hash) = self.read_manifest()?;
@@ -191,11 +180,10 @@ impl ManifestManager {
         let new_manifest_hash = updated_manifest.calculate_hash()?;
 
         // Step 8: Sync the backup with the remote
-        let challenge = client.get_sync_challenge_keypair().await.map_err(|e| {
-            BackupError::Generic {
-                message: e.to_string(),
-            }
-        })?;
+        let challenge = client
+            .get_sync_challenge_keypair()
+            .await
+            .context("sync challenge")?;
         let _resp = client
             .post_sync_with_keypair(
                 &*self.signer,
@@ -205,9 +193,7 @@ impl ManifestManager {
                 sealed_backup,
             )
             .await
-            .map_err(|e| BackupError::Generic {
-                message: e.to_string(),
-            })?;
+            .context("post sync")?;
 
         // Step 9: Commit the manifest
         self.write_manifest(&updated_manifest)?;
@@ -261,21 +247,16 @@ impl ManifestManager {
             Ok(bytes) => {
                 let checksum = blake3::hash(&bytes).into();
                 let manifest: BackupManifest =
-                    serde_json::from_slice(&bytes).map_err(|e| {
-                        BackupError::Generic {
-                            message: (format!(
-                                "Unexpectedly unable to parse BackupManifest: {e}"
-                            )),
-                        }
-                    })?;
+                    serde_json::from_slice(&bytes).context("parse BackupManifest")?;
                 Ok((manifest, checksum))
             }
-            Err(e) => match e {
-                FileSystemError::FileDoesNotExist => Err(BackupError::ManifestNotFound),
-                _ => Err(BackupError::Generic {
-                    message: e.to_string(),
-                }),
-            },
+            Err(FileSystemError::FileDoesNotExist) => {
+                Err(BackupError::ManifestNotFound)
+            }
+            Err(e) => {
+                let err = anyhow::Error::from(e).context("read manifest.json");
+                Err(BackupError::from(err))
+            }
         }
     }
 
@@ -285,20 +266,10 @@ impl ManifestManager {
     /// Returns an error if the manifest cannot be serialized or written.
     pub fn write_manifest(&self, manifest: &BackupManifest) -> Result<(), BackupError> {
         let serialized =
-            serde_json::to_vec(manifest).map_err(|e| BackupError::Generic {
-                message: (format!(
-                    "Unexpectedly unable to serialize BackupManifest: {e}"
-                )),
-            })?;
-        let result = self
-            .file_system
-            .write_file(Self::GLOBAL_MANIFEST_FILE, serialized);
-        if result.is_err() {
-            return Err(BackupError::Generic {
-                message: "Unable to save the BackupManifest to the filesystem"
-                    .to_string(),
-            });
-        }
+            serde_json::to_vec(manifest).context("serialize BackupManifest")?;
+        self.file_system
+            .write_file(Self::GLOBAL_MANIFEST_FILE, serialized)
+            .context("write manifest.json")?;
         Ok(())
     }
 
