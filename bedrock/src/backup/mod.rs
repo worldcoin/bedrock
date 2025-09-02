@@ -10,7 +10,10 @@ pub use manifest::ManifestManager;
 use regex::Regex;
 
 use crate::backup::backup_format::v0::V0Backup;
+use crate::backup::backup_format::v0::V0BackupManifest;
 use crate::backup::backup_format::BackupFormat;
+use crate::backup::manifest::BackupManifest;
+use crate::primitives::filesystem::create_middleware;
 use crate::root_key::RootKey;
 use crypto_box::SecretKey;
 use serde::de::Error as _;
@@ -175,6 +178,25 @@ impl BackupManager {
             .seal(&mut rand::thread_rng(), &backup_secret_key.to_bytes())
             .map_err(|_| BackupError::EncryptBackupError)?;
 
+        // 5.1: Initialize and persist the initial manifest (empty files set) and compute its hash
+        let manifest = BackupManifest::V0(V0BackupManifest {
+            previous_manifest_hash: None,
+            files: vec![],
+        });
+        let manifest_bytes =
+            serde_json::to_vec(&manifest).map_err(|e| BackupError::Generic {
+                message: format!(
+                    "Unexpectedly unable to serialize BackupManifest: {e}"
+                ),
+            })?;
+        let manifest_hash_hex = hex::encode(blake3::hash(&manifest_bytes).as_bytes());
+        let fs = create_middleware("backup");
+        fs.write_file("manifest.json", manifest_bytes)
+            .map_err(|_| BackupError::Generic {
+                message: "Unable to save the BackupManifest to the filesystem"
+                    .to_string(),
+            })?;
+
         // 6: Prepare the result
         let result = CreatedBackup {
             sealed_backup_data: sealed_backup,
@@ -182,8 +204,7 @@ impl BackupManager {
             backup_keypair_public_key: hex::encode(
                 backup_secret_key.public_key().as_bytes(),
             ),
-            manifest_hash: "todo!".to_string(),
-            // FIXME: Bedrock should write the manifest here and return the hash
+            manifest_hash: manifest_hash_hex,
         };
 
         Ok(result)
