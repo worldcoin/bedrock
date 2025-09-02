@@ -8,7 +8,7 @@ use alloy::sol_types::SolValue;
 use ruint::aliases::U256;
 use std::{str::FromStr, sync::LazyLock};
 use world_chain_builder_pbh::external_nullifier::EncodedExternalNullifier;
-use world_chain_builder_pbh::payload::PBHPayload as PbhPayload;
+use world_chain_builder_pbh::payload::PBHPayload as RustPBHPayload;
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
 static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
@@ -455,8 +455,8 @@ sol! {
     }
 }
 
-impl From<PbhPayload> for PBHPayload {
-    fn from(val: PbhPayload) -> Self {
+impl From<RustPBHPayload> for PBHPayload {
+    fn from(val: RustPBHPayload) -> Self {
         let p0 = val.proof.0 .0 .0;
         let p1 = val.proof.0 .0 .1;
         let p2 = val.proof.0 .1 .0[0];

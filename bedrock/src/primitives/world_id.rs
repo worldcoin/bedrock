@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 use world_chain_builder_pbh::{
     external_nullifier::{EncodedExternalNullifier, ExternalNullifier},
-    payload::{PBHPayload as PbhPayload, Proof},
+    payload::{PBHPayload as RustPBHPayload, Proof},
 };
 
 use crate::primitives::contracts::{IPBHEntryPoint, PBH_ENTRYPOINT_4337};
@@ -22,7 +22,6 @@ use crate::{
 };
 
 use alloy::primitives::U256;
-use alloy::providers::Provider;
 
 const STAGING_SEQUENCER_URL: &str =
     "https://signup-orb-ethereum.stage-crypto.worldcoin.dev";
@@ -93,7 +92,7 @@ pub fn is_world_id_identity_initialized() -> bool {
 pub async fn generate_pbh_proof(
     user_op: UserOperation,
     network: Network,
-) -> PbhPayload {
+) -> RustPBHPayload {
     let packed_user_op: PackedUserOperation = PackedUserOperation::from(user_op);
     let signal = hash_user_op(&packed_user_op);
     let external_nullifier = find_unused_nullifier_hash(network).await.unwrap();
@@ -126,7 +125,7 @@ pub async fn generate_pbh_proof(
 
     let proof = Proof(proof);
 
-    PbhPayload {
+    RustPBHPayload {
         external_nullifier,
         nullifier_hash,
         root: inclusion_proof.root,
