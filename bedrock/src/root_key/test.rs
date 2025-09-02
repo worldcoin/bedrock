@@ -35,3 +35,39 @@ fn test_decode_invalid_length() {
         "failed to parse key"
     );
 }
+
+/// Generate multiple keys and verify they are all different
+/// We use a simple statistical test to verify that the keys look random. Note this is just a sanity check,
+/// ultimately the randomness depends on the OS's source of randomness. Not on how it's implemented here.
+#[test]
+fn test_new_generates_seemingly_random_keys() {
+    const NUM_KEYS: usize = 100;
+    let mut keys = Vec::with_capacity(NUM_KEYS);
+
+    for _ in 0..NUM_KEYS {
+        let key = RootKey::new_random();
+        let encoded = key.danger_to_json().unwrap();
+        keys.push(encoded);
+    }
+
+    // Check that all keys are unique
+    for i in 0..keys.len() {
+        for j in (i + 1)..keys.len() {
+            assert_ne!(
+                keys[i], keys[j],
+                "Generated duplicate keys at indices {i} and {j}"
+            );
+        }
+    }
+
+    for encoded in &keys {
+        let parsed: serde_json::Value = serde_json::from_str(encoded).unwrap();
+        let hex_key = parsed["key"].as_str().unwrap();
+        let key_bytes = hex::decode(hex_key).unwrap();
+
+        #[allow(clippy::naive_bytecount)] // this is a test, naive byte count is fine
+        let zero_count = key_bytes.iter().filter(|b| **b == 0).count();
+
+        assert!(zero_count < 4); // following a binomial distribution X ~ Bin(32, 1/256), P(X <= 4) = 0.99999+
+    }
+}
