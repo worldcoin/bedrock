@@ -184,18 +184,11 @@ impl BackupManager {
             files: vec![],
         });
         let manifest_bytes =
-            serde_json::to_vec(&manifest).map_err(|e| BackupError::Generic {
-                message: format!(
-                    "Unexpectedly unable to serialize BackupManifest: {e}"
-                ),
-            })?;
+            serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
         let manifest_hash_hex = hex::encode(blake3::hash(&manifest_bytes).as_bytes());
         let fs = create_middleware("backup");
         fs.write_file("manifest.json", manifest_bytes)
-            .map_err(|_| BackupError::Generic {
-                message: "Unable to save the BackupManifest to the filesystem"
-                    .to_string(),
-            })?;
+            .context("write manifest.json")?;
 
         // 6: Prepare the result
         let result = CreatedBackup {
