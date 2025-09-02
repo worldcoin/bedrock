@@ -90,7 +90,7 @@ impl RootKey {
         let mut buf = [0u8; KEY_LENGTH];
         OsRng
             .try_fill_bytes(&mut buf)
-            .expect("Fatal CSPRNG error: unable to initialize new OxideKey");
+            .expect("Fatal CSPRNG error: unable to initialize new RootKey");
         let inner = SecretBox::new(Box::new(VersionedKey::V1(buf)));
         buf.zeroize();
         Self { inner }
