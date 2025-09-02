@@ -4,13 +4,14 @@
 //!
 
 use crate::primitives::contracts::{
-    EncodedSafeOpStruct, IPBHEntryPoint::PBHPayload,
-    UserOperation, ENTRYPOINT_4337,
+    EncodedSafeOpStruct, IPBHEntryPoint::PBHPayload, UserOperation, ENTRYPOINT_4337,
 };
 
-use crate::primitives::contracts::{PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_SEPOLIA};
+use crate::primitives::contracts::{
+    PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_MAINNET, PBH_SAFE_4337_MODULE_SEPOLIA,
+};
 use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::SafeSmartAccountSigner;
+use crate::smart_account::{SafeSmartAccountSigner, GNOSIS_SAFE_4337_MODULE};
 
 use crate::primitives::world_id::generate_pbh_proof;
 
@@ -153,11 +154,24 @@ pub trait Is4337Encodable {
             valid_until_u48,
         )?;
 
+        let domain_separator: Address;
+
+        if pbh {
+            match network {
+                Network::WorldChain => domain_separator = *PBH_SAFE_4337_MODULE_MAINNET,
+                Network::WorldChainSepolia => {
+                    domain_separator = *PBH_SAFE_4337_MODULE_SEPOLIA
+                }
+                _ => panic!("Invalid network for PBH"),
+            }
+        } else {
+            domain_separator = *GNOSIS_SAFE_4337_MODULE;
+        }
+
         let signature = safe_account.sign_digest(
             encoded_safe_op.into_transaction_hash(),
             network as u32,
-            // Some(*GNOSIS_SAFE_4337_MODULE),
-            Some(*PBH_SAFE_4337_MODULE_SEPOLIA),
+            Some(domain_separator),
         )?;
 
         // Compose the final signature once (timestamps + actual 65-byte signature)
@@ -168,10 +182,9 @@ pub trait Is4337Encodable {
 
         // PBH Logic
         if pbh {
-            let pbh_payload = generate_pbh_proof(user_operation, network).await;
-            full_signature.extend_from_slice(
-                PBHPayload::from(pbh_payload).abi_encode().as_ref(),
-            );
+            let pbh_payload = generate_pbh_proof(user_operation.clone(), network).await;
+            full_signature
+                .extend_from_slice(PBHPayload::from(pbh_payload).abi_encode().as_ref());
         }
 
         user_operation.signature = full_signature.into();

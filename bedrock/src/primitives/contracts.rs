@@ -25,7 +25,7 @@ pub static ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode ENTRYPOINT_4337")
 });
 
-/// Multichain address for `PBH_ENTRYPOINT_4337`
+/// Address for `PBH_ENTRYPOINT_4337` - same on sepolia and mainnet
 /// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBHEntryPointImplV1.sol>
 pub static PBH_ENTRYPOINT_4337: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x0000000000A21818Ee9F93BB4f2AAad305b5397C")

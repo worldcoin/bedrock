@@ -1,6 +1,5 @@
 use std::sync::{Arc, OnceLock};
 
-
 /// Global HTTP client instance for Bedrock operations
 static HTTP_CLIENT_INSTANCE: OnceLock<Arc<dyn AuthenticatedHttpClient>> =
     OnceLock::new();
