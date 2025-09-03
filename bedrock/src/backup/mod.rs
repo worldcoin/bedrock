@@ -103,10 +103,10 @@ impl BackupManager {
         let backup_secret_key = SecretKey::generate(&mut rand::thread_rng());
 
         // 4.2: Encrypt the backup with the backup encryption public key to create the sealed backup
-        let sealed_backup = backup_secret_key
-            .public_key()
-            .seal(&mut rand::thread_rng(), &unsealed_backup)
-            .map_err(|_| BackupError::EncryptBackupError)?;
+        let sealed_backup = Self::seal_backup_with_public_key(
+            &unsealed_backup,
+            &backup_secret_key.public_key(),
+        )?;
 
         // 5: Encrypt the backup keypair with the factor secret
         // NOTE: We're using `.public_key()`, because `crypto_box` only exposes a keypair primitive,
@@ -387,6 +387,17 @@ impl BackupManager {
             .context("write manifest.json")?;
 
         Ok(())
+    }
+
+    /// Encrypts the provided unsealed backup bytes using the given backup public key.
+    /// Returns the sealed (encrypted) backup bytes.
+    pub(crate) fn seal_backup_with_public_key(
+        unsealed_backup: &[u8],
+        public_key: &crypto_box::PublicKey,
+    ) -> Result<Vec<u8>, BackupError> {
+        public_key
+            .seal(&mut rand::thread_rng(), unsealed_backup)
+            .map_err(|_| BackupError::EncryptBackupError)
     }
 }
 

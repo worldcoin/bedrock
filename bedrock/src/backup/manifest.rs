@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::service_client::BackupServiceClient;
-use crate::backup::BackupFileDesignator;
+use crate::backup::{BackupFileDesignator, BackupManager};
 use crate::primitives::filesystem::{
     create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
 };
@@ -348,9 +348,8 @@ impl ManifestManager {
 
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
         let unsealed_backup = V0Backup::new(root, files).to_bytes()?;
-        let sealed_backup = pk
-            .seal(&mut rand::thread_rng(), &unsealed_backup)
-            .map_err(|_| BackupError::EncryptBackupError)?;
+        let sealed_backup =
+            BackupManager::seal_backup_with_public_key(&unsealed_backup, &pk)?;
 
         let updated_manifest = BackupManifest::V0(manifest);
         let new_manifest_hash = updated_manifest.calculate_hash()?;
