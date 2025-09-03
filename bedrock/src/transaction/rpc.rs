@@ -377,16 +377,6 @@ impl RpcClient {
         to: Address,
         data: Bytes,
     ) -> Result<Bytes, RpcError> {
-        // var raw = JSON.stringify({
-        // "method": "eth_call",
-        // "params": [
-        //     {
-        //     "to": "0x6b175474e89094c44da98b954eedeac495271d0f",
-        //     "data": "0x70a082310000000000000000000000006E0d01A76C3Cf4288372a29124A26D4353EE51BE"
-        //     },
-        //     "latest", Block number or "latest"
-        // })
-
         let params = vec![
             serde_json::Value::Object(Map::from_iter([
                 (
