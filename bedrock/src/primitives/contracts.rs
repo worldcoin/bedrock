@@ -233,7 +233,6 @@ sol! {
         #[serde(serialize_with = "serialize_u256_as_hex")]
         uint256 nonce;
         /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
-        #[serde(serialize_with = "serialize_if_non_zero_address")]
         address factory;
         /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
         bytes factory_data;
@@ -259,7 +258,6 @@ sol! {
         #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 max_priority_fee_per_gas;
         /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
-        #[serde(serialize_with = "serialize_if_non_zero_address")]
         address paymaster;
         /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
