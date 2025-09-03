@@ -141,7 +141,6 @@ impl RootKey {
     /// # Warning
     ///
     /// This method exports the secret key. Use cautiously.
-    #[allow(dead_code)] // TODO: usage coming soon
     pub fn danger_to_json(&self) -> Result<String, RootKeyError> {
         serde_json::to_string(self.inner.expose_secret()).map_err(|_| {
             RootKeyError::Generic {

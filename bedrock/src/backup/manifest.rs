@@ -49,6 +49,8 @@ impl BackupManifest {
 }
 
 /// Manager responsible for reading and writing backup manifests and coordinating sync.
+///
+/// Documentation: <https://docs.toolsforhumanity.com/world-app/backup/structure-and-sync>
 #[derive(uniffi::Object)]
 pub struct ManifestManager {
     file_system: FileSystemMiddleware,

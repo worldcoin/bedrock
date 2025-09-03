@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_checksum_hex_small_file() {
+    fn test_calculate_checksum_small_file() {
         use crate::primitives::filesystem::{
             FileSystem, FileSystemExt, InMemoryFileSystem,
         };
@@ -495,14 +495,14 @@ mod tests {
         fs.write_file("greeting.txt".to_string(), b"Hello, World!".to_vec())
             .unwrap();
 
-        let checksum_hex = FileSystemExt::calculate_checksum_hex(&fs, "greeting.txt")
+        let checksum = FileSystemExt::calculate_checksum(&fs, "greeting.txt")
             .expect("checksum should compute successfully");
-        let expected = hex::encode(blake3::hash(b"Hello, World!").as_bytes());
-        assert_eq!(checksum_hex, expected);
+        let expected: [u8; 32] = blake3::hash(b"Hello, World!").into();
+        assert_eq!(checksum, expected);
     }
 
     #[test]
-    fn test_calculate_checksum_hex_large_file_streaming() {
+    fn test_calculate_checksum_large_file_streaming() {
         use crate::primitives::filesystem::{
             FileSystem, FileSystemExt, InMemoryFileSystem,
         };
@@ -513,9 +513,9 @@ mod tests {
         fs.write_file("large.bin".to_string(), data.clone())
             .unwrap();
 
-        let checksum_hex = FileSystemExt::calculate_checksum_hex(&fs, "large.bin")
+        let checksum = FileSystemExt::calculate_checksum(&fs, "large.bin")
             .expect("checksum should compute successfully");
-        let expected = hex::encode(blake3::hash(&data).as_bytes());
-        assert_eq!(checksum_hex, expected);
+        let expected: [u8; 32] = blake3::hash(&data).into();
+        assert_eq!(checksum, expected);
     }
 }

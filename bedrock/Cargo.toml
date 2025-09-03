@@ -42,7 +42,6 @@ log = "0.4.22"
 proc-macro2 = "1.0"
 quote = "1.0"
 rand = { version = "0.8.5", default-features = false, features = ["std"] }
-regex = "1.10.6"
 ruint = { version = "1.15.0", default-features = false, features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
 serde = "1.0.219"
