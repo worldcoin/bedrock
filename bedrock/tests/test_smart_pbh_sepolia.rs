@@ -27,7 +27,7 @@ mod common;
 
 // ------------------ Mock HTTP client that actually executes the op on Anvil ------------------
 #[derive(Clone)]
-struct AnvilBackedHttpClient<P>
+struct AlchemyBackedHttpClient<P>
 where
     P: Provider<Ethereum> + Clone + Send + Sync + 'static,
 {
@@ -49,7 +49,7 @@ struct SponsorUserOperationResponseLite<'a> {
 }
 
 #[async_trait::async_trait]
-impl<P> AuthenticatedHttpClient for AnvilBackedHttpClient<P>
+impl<P> AuthenticatedHttpClient for AlchemyBackedHttpClient<P>
 where
     P: Provider<Ethereum> + Clone + Send + Sync + 'static,
 {
@@ -141,6 +141,7 @@ where
 
 #[tokio::test]
 async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
+    // TODO: Read from env so it can pass in CI
     let secrets: String = std::fs::read_to_string("tests/sepolia_secrets.json")?;
     let secret: serde_json::Value = serde_json::from_str(&secrets)?;
     let nullifier = secret["nullifier"].as_str().unwrap();
@@ -157,8 +158,8 @@ async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
         .wallet(owner_signer.clone())
         .connect_http(rpc_url);
 
-    // 7) Install mocked HTTP client that routes calls to Anvil
-    let client = AnvilBackedHttpClient {
+    // 7) HTTP client that routes calls to Alchemy
+    let client = AlchemyBackedHttpClient {
         provider: provider.clone(),
     };
     let _ = set_http_client(Arc::new(client));

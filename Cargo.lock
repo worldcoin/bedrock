@@ -1556,7 +1556,6 @@ dependencies = [
  "bon",
  "chrono",
  "dotenvy",
- "eyre",
  "futures",
  "hex",
  "log",

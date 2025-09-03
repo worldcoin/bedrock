@@ -75,7 +75,7 @@ pub enum Network {
     Optimism = 10,
     /// World Chain (chain ID: 480)
     WorldChain = 480,
-    /// World Chain Sepolia (chain ID: 481)
+    /// World Chain Sepolia (chain ID: 4801)
     WorldChainSepolia = 4801,
 }
 

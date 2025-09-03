@@ -8,7 +8,7 @@ use alloy::sol;
 use alloy::sol_types::SolValue;
 use alloy_primitives::{U128, U64, U8};
 use ruint::aliases::U256;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::{str::FromStr, sync::LazyLock};
 use world_chain_builder_pbh::external_nullifier::EncodedExternalNullifier;
 use world_chain_builder_pbh::payload::PBHPayload as WorldchainBuilderPBHPayload;

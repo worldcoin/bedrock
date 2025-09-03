@@ -67,7 +67,7 @@ impl SafeSmartAccount {
         to_address: &str,
         amount: &str,
         pbh: bool,
-        provider: RpcProviderName,
+        _provider: RpcProviderName,
         transfer_association: Option<TransferAssociation>,
     ) -> Result<HexEncodedData, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
