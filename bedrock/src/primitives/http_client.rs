@@ -116,9 +116,6 @@ pub enum HttpError {
         /// The error message
         message: String,
     },
-    /// Backup service API not initialized
-    #[error("Backup service API is not initialized")]
-    BackupApiNotInitialized,
 }
 
 /// Converts unexpected UniFFI callback errors to `HttpError`.
