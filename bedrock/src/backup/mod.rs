@@ -215,7 +215,7 @@ impl BackupManager {
         let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
         // Unpack files and rebuild manifest using the remote-provided current manifest hash
-        unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
+        Self::unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
 
         // Return decrypted root key and backup pubkey
         match unsealed_backup {
@@ -316,76 +316,78 @@ impl BackupManager {
 }
 
 // Internal helpers (not exported)
-fn unpack_backup_to_filesystem(
-    unsealed_backup: &BackupFormat,
-    current_manifest_hash_hex: String,
-) -> Result<(), BackupError> {
-    let BackupFormat::V0(backup) = unsealed_backup;
-    let fs = get_filesystem_raw()?;
-    let mut manifest_entries: Vec<V0BackupManifestEntry> =
-        Vec::with_capacity(backup.files.len());
+impl BackupManager {
+    fn unpack_backup_to_filesystem(
+        unsealed_backup: &BackupFormat,
+        current_manifest_hash_hex: String,
+    ) -> Result<(), BackupError> {
+        let BackupFormat::V0(backup) = unsealed_backup;
+        let fs = get_filesystem_raw()?;
+        let mut manifest_entries: Vec<V0BackupManifestEntry> =
+            Vec::with_capacity(backup.files.len());
 
-    for file in &backup.files {
-        // NOTE: we do not prefix with 'backup/' here; we write files to
-        // their actual module-owned locations in the global filesystem.
-        let rel_path = file.path.trim_start_matches('/');
+        for file in &backup.files {
+            // NOTE: we do not prefix with 'backup/' here; we write files to
+            // their actual module-owned locations in the global filesystem.
+            let rel_path = file.path.trim_start_matches('/');
 
-        // If a file already exists, verify checksum and log discrepancies before replacing.
-        match fs.file_exists(rel_path.to_string()) {
-            Ok(true) => match fs.calculate_checksum(rel_path) {
-                Ok(local_checksum) => {
-                    if local_checksum != file.checksum {
+            // If a file already exists, verify checksum and log discrepancies before replacing.
+            match fs.file_exists(rel_path.to_string()) {
+                Ok(true) => match fs.calculate_checksum(rel_path) {
+                    Ok(local_checksum) => {
+                        if local_checksum != file.checksum {
+                            log::error!(
+                                    "[BackupManager] checksum mismatch for existing file at {rel_path} (designator: {}). Replacing with remote contents.",
+                                    file.designator
+                                );
+                        }
+                    }
+                    Err(e) => {
                         log::error!(
-                                "[BackupManager] checksum mismatch for existing file at {rel_path} (designator: {}). Replacing with remote contents.",
-                                file.designator
+                                "[BackupManager] failed to compute checksum for existing file at {rel_path}: {e:?}. Replacing with remote contents.",
                             );
                     }
-                }
+                },
+                Ok(false) => {}
                 Err(e) => {
                     log::error!(
-                            "[BackupManager] failed to compute checksum for existing file at {rel_path}: {e:?}. Replacing with remote contents.",
-                        );
+                        "[BackupManager] failed to check existence for {rel_path}: {e:?}. Proceeding to write.",
+                    );
                 }
-            },
-            Ok(false) => {}
-            Err(e) => {
-                log::error!(
-                    "[BackupManager] failed to check existence for {rel_path}: {e:?}. Proceeding to write.",
-                );
             }
+
+            fs.write_file(rel_path.to_string(), file.data.clone())
+                .map_err(|e| {
+                    let err = anyhow::Error::from(e)
+                        .context(format!("write unpacked file: {rel_path}"));
+                    BackupError::from(err)
+                })?;
+
+            let designator = file.designator.clone();
+
+            // Record the exact relative path written (used by manifest+sync decisions).
+            manifest_entries.push(V0BackupManifestEntry {
+                designator,
+                file_path: rel_path.to_string(),
+                checksum_hex: hex::encode(file.checksum),
+            });
         }
 
-        fs.write_file(rel_path.to_string(), file.data.clone())
-            .map_err(|e| {
-                let err = anyhow::Error::from(e)
-                    .context(format!("write unpacked file: {rel_path}"));
-                BackupError::from(err)
-            })?;
-
-        let designator = file.designator.clone();
-
-        // Record the exact relative path written (used by manifest+sync decisions).
-        manifest_entries.push(V0BackupManifestEntry {
-            designator,
-            file_path: rel_path.to_string(),
-            checksum_hex: hex::encode(file.checksum),
+        let manifest = BackupManifest::V0(V0BackupManifest {
+            previous_manifest_hash: Some(current_manifest_hash_hex),
+            files: manifest_entries,
         });
+
+        let manifest_bytes =
+            serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
+        let fs_backup = create_middleware("backup");
+
+        fs_backup
+            .write_file("manifest.json", manifest_bytes)
+            .context("write manifest.json")?;
+
+        Ok(())
     }
-
-    let manifest = BackupManifest::V0(V0BackupManifest {
-        previous_manifest_hash: Some(current_manifest_hash_hex),
-        files: manifest_entries,
-    });
-
-    let manifest_bytes =
-        serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
-    let fs_backup = create_middleware("backup");
-
-    fs_backup
-        .write_file("manifest.json", manifest_bytes)
-        .context("write manifest.json")?;
-
-    Ok(())
 }
 
 /// A global identifier that identifies the type of file.
