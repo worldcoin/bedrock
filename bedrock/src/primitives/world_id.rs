@@ -6,7 +6,7 @@ use chrono::{Datelike, Utc};
 use reqwest::Client;
 use semaphore_rs::identity::Identity;
 use semaphore_rs::poseidon_tree::Proof as PoseidonTreeProof;
-use semaphore_rs::protocol::{generate_nullifier_hash, generate_proof};
+use semaphore_rs::protocol::{generate_nullifier_hash, generate_proof, ProofError};
 use semaphore_rs::{hash_to_field, Field};
 use semaphore_rs_proof::Proof as SemaphoreProof;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,7 @@ use world_chain_builder_pbh::{
 use crate::primitives::contracts::{IPBHEntryPoint, PBH_ENTRYPOINT_4337};
 use crate::primitives::Network;
 use crate::transaction::rpc::get_rpc_client;
+use crate::transaction::RpcError;
 use crate::{
     primitives::contracts::IEntryPoint::PackedUserOperation,
     smart_account::UserOperation,
@@ -52,6 +53,30 @@ pub struct InclusionProof {
     pub root: Field,
     /// The proof for the given identity
     pub proof: PoseidonTreeProof,
+}
+
+/// Errors that can occur when interacting with RPC operations.
+#[crate::bedrock_error]
+#[derive(Debug, Deserialize)]
+pub enum WorldIdError {
+    /// WorldID identity has not been initialized
+    #[error("WorldID identity not initialized. Call set_world_id_identity() first.")]
+    WorldIdIdentityNotInitialized,
+    /// Failed to fetch inclusion proof from sequencer
+    #[error("Inclusion proof error: {0}")]
+    InclusionProofError(String),
+    /// User has no more PBH transactions remaining
+    #[error("No PBH transactions remaining")]
+    NoPBHTransactionsRemaining,
+    /// Invalid network for World ID
+    #[error("Invalid network for World ID: {0}")]
+    InvalidNetworkError(String),
+    /// Proof error
+    #[error("Proof error: {0}")]
+    ProofError(#[from] ProofError),
+    /// RPC error
+    #[error("RPC error: {0}")]
+    RpcError(#[from] RpcError),
 }
 
 /// Global World ID identity instance for Bedrock operations
@@ -97,50 +122,59 @@ pub fn is_world_id_identity_initialized() -> bool {
 pub async fn generate_pbh_proof(
     user_op: UserOperation,
     network: Network,
-) -> WorldchainBuilderPBHPayload {
+) -> Result<WorldchainBuilderPBHPayload, WorldIdError> {
     let packed_user_op: PackedUserOperation = PackedUserOperation::from(user_op);
     let signal = hash_user_op(&packed_user_op);
-    let external_nullifier = find_unused_nullifier_hash(network).await.unwrap();
+    let external_nullifier = find_unused_nullifier_hash(network).await?;
     let encoded_external_nullifier = EncodedExternalNullifier::from(external_nullifier);
-    let identity = get_world_id_identity().unwrap();
+    let identity =
+        get_world_id_identity().ok_or(WorldIdError::WorldIdIdentityNotInitialized)?;
 
     let inclusion_proof = fetch_inclusion_proof(
         match network {
             Network::WorldChain => PRODUCTION_SEQUENCER_URL,
             Network::WorldChainSepolia => STAGING_SEQUENCER_URL,
-            _ => panic!("Invalid network for World ID"),
+            _ => return Err(WorldIdError::InvalidNetworkError(network.to_string())),
         },
-        &identity,
+        (*identity).clone(),
     )
     .await
-    .unwrap();
+    .map_err(|e| {
+        WorldIdError::InclusionProofError(format!(
+            "Failed to fetch inclusion proof: {e}"
+        ))
+    })?;
 
     let proof: SemaphoreProof = generate_proof(
         &identity,
         &inclusion_proof.proof,
         encoded_external_nullifier.0,
         signal,
-    )
-    .expect("Failed to generate semaphore proof");
+    )?;
 
     let nullifier_hash =
         generate_nullifier_hash(&identity, encoded_external_nullifier.0);
 
     let proof = WorldchainBuilderProof(proof);
 
-    WorldchainBuilderPBHPayload {
+    Ok(WorldchainBuilderPBHPayload {
         external_nullifier,
         nullifier_hash,
         root: inclusion_proof.root,
         proof,
-    }
+    })
 }
 
 /// Finds the first unused nullifier hash for the current World ID identity in batches
 pub async fn find_unused_nullifier_hash(
     network: Network,
-) -> Result<ExternalNullifier, Box<dyn std::error::Error>> {
-    let identity = get_world_id_identity().unwrap();
+) -> Result<ExternalNullifier, WorldIdError> {
+    let identity =
+        get_world_id_identity().ok_or(WorldIdError::WorldIdIdentityNotInitialized)?;
+
+    let rpc_client: &'static crate::transaction::RpcClient = get_rpc_client()
+        .map_err(|_| WorldIdError::RpcError(RpcError::HttpClientNotInitialized))?;
+
     let now = Utc::now();
     let current_year = now.year() as u16;
     let current_month = now.month() as u16;
@@ -148,12 +182,10 @@ pub async fn find_unused_nullifier_hash(
     let max_nonce = match network {
         Network::WorldChain => PRODUCTION_MAX_NONCE,
         Network::WorldChainSepolia => STAGING_MAX_NONCE,
-        _ => panic!("Invalid network for PBH"),
+        _ => return Err(WorldIdError::InvalidNetworkError(network.to_string())),
     };
 
-    let rpc_client = get_rpc_client().unwrap();
-
-    // Process nonces in batches for efficiency
+    // Process nonces in batches
     for batch_start in (0..max_nonce).step_by(MAX_NONCE_BATCH_SIZE as usize) {
         let batch_end = std::cmp::min(batch_start + MAX_NONCE_BATCH_SIZE, max_nonce);
         let mut batch_hashes = Vec::new();
@@ -178,13 +210,21 @@ pub async fn find_unused_nullifier_hash(
             hashes: batch_hashes,
         };
 
-        let result = rpc_client
+        // Try the RPC call, but continue to next batch if this one fails
+        let result = match rpc_client
             .eth_call(
                 network,
                 *PBH_ENTRYPOINT_4337,
                 Bytes::from(call.abi_encode()),
             )
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                crate::warn!("Failed to fetch first unused nullifier hash for batch. Continuing to next batch. {e}");
+                continue;
+            }
+        };
 
         let unsigned_value = U256::from_be_slice(&result);
         let signed_from_slice = I256::from_raw(unsigned_value);
@@ -204,7 +244,7 @@ pub async fn find_unused_nullifier_hash(
         }
     }
 
-    Err("No PBH transactions remaining".into())
+    Err(WorldIdError::NoPBHTransactionsRemaining)
 }
 
 /// Fetches an inclusion proof for a given identity from the signup sequencer.
@@ -214,23 +254,36 @@ pub async fn find_unused_nullifier_hash(
 /// # Arguments
 /// * `url` - The URL of the sequencer
 /// * `identity` - The identity to fetch the proof for
+///
+/// # Errors
+/// Returns `WorldIdError::InclusionProofError` if the request fails or response cannot be parsed.
 pub async fn fetch_inclusion_proof(
     url: &str,
-    identity: &Identity,
-) -> eyre::Result<InclusionProof> {
+    identity: Identity,
+) -> Result<InclusionProof, WorldIdError> {
     let client = Client::new();
-
     let commitment = identity.commitment();
+
+    // Make the HTTP request and map all errors to WorldIdError::InclusionProofError
     let response = client
         .post(format!("{url}/inclusionProof"))
         .json(&serde_json::json! {{
             "identityCommitment": commitment,
         }})
         .send()
-        .await?
-        .error_for_status()?;
+        .await
+        .map_err(|e| {
+            WorldIdError::InclusionProofError(format!("HTTP request failed: {e}"))
+        })?
+        .error_for_status()
+        .map_err(|e| {
+            WorldIdError::InclusionProofError(format!("HTTP status error: {e}"))
+        })?;
 
-    let proof: InclusionProof = response.json().await?;
+    // Parse the JSON response and map parsing errors
+    let proof: InclusionProof = response.json().await.map_err(|e| {
+        WorldIdError::InclusionProofError(format!("Failed to parse response: {e}"))
+    })?;
 
     Ok(proof)
 }

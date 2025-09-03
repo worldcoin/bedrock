@@ -150,7 +150,12 @@ pub trait Is4337Encodable {
                     domain_separator = *PBH_SAFE_4337_MODULE_SEPOLIA;
                     aggregator = Some(*PBH_SIGNATURE_AGGREGATOR_SEPOLIA);
                 }
-                _ => return Err(RpcError::InvalidRequest(format!("Invalid network {:?} for PBH", network))),
+                _ => {
+                    return Err(RpcError::InvalidRequest(format!(
+                        "Invalid network {:?} for PBH",
+                        network
+                    )))
+                }
             }
         } else {
             domain_separator = *GNOSIS_SAFE_4337_MODULE;
@@ -171,10 +176,19 @@ pub trait Is4337Encodable {
         // PBH Logic
         if pbh {
             let pbh_payload = generate_pbh_proof(user_operation.clone(), network).await;
-            full_signature
-                .extend_from_slice(PBHPayload::from(pbh_payload).abi_encode().as_ref());
-
-            // user_operation.aggregator = Some(address!("0x8af27ee9af538c48c7d2a2c8bd6a40ef830e2489"));
+            match pbh_payload {
+                Ok(pbh_payload) => {
+                    full_signature.extend_from_slice(
+                        PBHPayload::from(pbh_payload).abi_encode().as_ref(),
+                    );
+                }
+                Err(e) => {
+                    // TODO: Send standard user operation if PBH logic fails at any point
+                    return Err(RpcError::InvalidRequest(format!(
+                        "Failed to generate PBH payload{e}"
+                    )));
+                }
+            }
         }
 
         user_operation.signature = full_signature.into();
@@ -183,7 +197,13 @@ pub trait Is4337Encodable {
         let user_op_hash: FixedBytes<32> = rpc_client
             // Always send to standard 4337 entrypoint even for PBH
             // The bundler will route it to the PBH entrypoint if it's a PBH transaction
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider, aggregator)
+            .send_user_operation(
+                network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                provider,
+                aggregator,
+            )
             .await?;
 
         Ok(user_op_hash)

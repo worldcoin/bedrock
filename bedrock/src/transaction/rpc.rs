@@ -149,10 +149,9 @@ pub enum RpcError {
     #[error("Safe Smart Account operation failed: {0}")]
     SafeSmartAccountError(#[from] SafeSmartAccountError),
 
-    /// Invalid inputs like invalid network
+    /// Invalid inputs
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
-
 }
 
 /// Response from `wa_sponsorUserOperation`
@@ -297,6 +296,7 @@ impl RpcClient {
         // Build params as a positional array. If no token is provided, omit the 3rd param entirely
         // so the backend can auto-fill an empty object as needed.
         let mut params: Vec<serde_json::Value> = Vec::with_capacity(3);
+        // TODO: Should this be RPCUserOperationV0_7?
         params.push(
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
         );
