@@ -180,6 +180,49 @@ async fn test_list_files_stale_remote() {
 }
 
 #[tokio::test]
+async fn test_list_files_missing_manifest() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Do not create a manifest for this prefix
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_missing");
+    let err = mgr
+        .list_files(BackupFileDesignator::OrbPkg)
+        .await
+        .expect_err("expected missing manifest error");
+    assert_eq!(err.to_string(), "Manifest not found");
+}
+
+#[tokio::test]
+async fn test_list_files_corrupted_manifest() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Write an invalid JSON manifest under the backup prefix
+    let mw = create_middleware("backup_test_list_corrupted");
+    mw.write_file("manifest.json", b"not-json".to_vec())
+        .unwrap();
+
+    // Set remote hash to whatever is on disk (parsing will fail before staleness check)
+    api.set_remote_hash(compute_manifest_hash_from_disk(
+        "backup_test_list_corrupted",
+    ));
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_corrupted");
+    let err = mgr
+        .list_files(BackupFileDesignator::OrbPkg)
+        .await
+        .expect_err("expected corrupted manifest error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("parse BackupManifest"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[tokio::test]
 async fn test_store_file_happy_path_and_commit() {
     let _g = serial_guard().await;
     let api = init_test_globals();
