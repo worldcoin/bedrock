@@ -491,7 +491,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "[Critical] Checksum for file with designator: personal_custo does not match the expected value"
+            "[Critical] Checksum for file with designator: orb_pkg does not match the expected value"
         );
     }
 }
