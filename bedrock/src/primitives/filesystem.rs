@@ -99,11 +99,11 @@ pub trait FileSystem: Send + Sync {
     fn delete_file(&self, file_path: String) -> Result<(), FileSystemError>;
 }
 
-/// Extension helpers for `FileSystem` that do not require foreign implementations to change.
+/// Extension helpers for `FileSystem`.
 ///
 /// These are provided as default methods implemented for all `FileSystem`s.
 pub trait FileSystemExt {
-    /// Calculates the BLAKE3 checksum of the file at the given path and returns it as a lowercase hex string.
+    /// Calculates the `blake3` checksum of the file at the given path.
     ///
     /// Implementations should avoid loading the entire file into memory where possible.
     /// Uses `read_file_range` in a loop to stream the file.
@@ -111,23 +111,17 @@ pub trait FileSystemExt {
     /// # Errors
     /// - `FileSystemError::FileDoesNotExist` if the path does not exist
     /// - `FileSystemError::ReadFileError` for unexpected underlying IO/read errors
-    fn calculate_checksum_hex(
-        &self,
-        file_path: &str,
-    ) -> Result<String, FileSystemError>;
+    fn calculate_checksum(&self, file_path: &str) -> Result<[u8; 32], FileSystemError>;
 }
 
 impl<T> FileSystemExt for T
 where
     T: FileSystem + ?Sized,
 {
-    fn calculate_checksum_hex(
-        &self,
-        file_path: &str,
-    ) -> Result<String, FileSystemError> {
+    fn calculate_checksum(&self, file_path: &str) -> Result<[u8; 32], FileSystemError> {
         let mut hasher = blake3::Hasher::new();
         let mut offset: u64 = 0;
-        let chunk_size: u64 = 64 * 1024; // 64 KiB
+        let chunk_size: u64 = 65_536; // 64 KiB (64 * 1024)
         loop {
             let chunk =
                 self.read_file_range(file_path.to_string(), offset, chunk_size)?;
@@ -135,11 +129,14 @@ where
                 break;
             }
             hasher.update(&chunk);
-            // This cannot overflow offset because we break above when chunk is empty
-            offset =
-                offset.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+
+            debug_assert!(
+                u64::try_from(chunk.len()).is_ok(),
+                "chunk.len() cannot overflow because chunk_size is set"
+            );
+            offset = offset.saturating_add(chunk.len() as u64);
         }
-        Ok(hex::encode(hasher.finalize().as_bytes()))
+        Ok(hasher.finalize().into())
     }
 }
 
@@ -214,15 +211,6 @@ impl FileSystemMiddleware {
         } else {
             format!("{}/{}", self.prefix, path.trim_start_matches('/'))
         }
-    }
-
-    /// Returns the full globally-scoped path (with prefix) for a relative file path.
-    ///
-    /// This does not touch the filesystem; it only computes the prefixed path that will be used
-    /// by the underlying global filesystem implementation.
-    #[must_use]
-    pub fn get_full_path_from_file_path(&self, file_path: &str) -> String {
-        self.prefix_path(file_path)
     }
 
     /// Check if a file exists at the given path (with prefix)

@@ -7,7 +7,6 @@ mod test;
 
 use bedrock_macros::bedrock_export;
 pub use manifest::ManifestManager;
-use regex::Regex;
 
 use crate::backup::backup_format::v0::V0Backup;
 use crate::backup::backup_format::v0::V0BackupManifest;
@@ -25,10 +24,10 @@ use std::str::FromStr;
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
-/// Unsealed backups are raw bytes with the root secret and files.
+/// Unsealed backups are raw bytes with the `RootKey` and files.
 ///
 /// Unsealed backups becomes sealed backups when they are encrypted with "a backup keypair".
-/// Backup keypair is a keypair that is used to encrypt the raw backup data and generated
+/// Backup keypair is a keypair that is used to encryp  t the raw backup data and generated
 /// during the backup creation.
 ///
 /// Backup keypair itself is encrypted with "a factor secret" to create "encrypted backup keypair".
@@ -39,71 +38,7 @@ use std::str::FromStr;
 /// "Encrypted backup keypair" is stored alongside the sealed backup data. Both are needed to
 /// decrypt the backup.
 ///
-/// Why is there a level of indirection, why can't factor secret be used to encrypt the backup directly?
-/// Backup keypair can be encrypted multiple times, separately, with different factor secrets.
-/// This allows to build 1-of-N recovery flows, where you recover the backup with any of the
-/// factor secrets. In this case, Backup Service needs to store one sealed backup and multiple
-/// encrypted backup keypairs, one for each factor secret.
-///
-/// Note that the unsealed backup is encrypted with the backup keypair and not a symmetric key.
-/// Users can update the backup content with a new root secret and files, and then re-encrypt the backup
-/// with the public key of the backup keypair. This public key can be stored in a location that
-/// doesn't have to be secure. This update operation also SHOULD NOT change the encrypted backup
-/// keypair(s), making it possible to update the backup content without re-acquiring factor secrets.
-///
-/// "Sealed backup with metadata" is all the information that needs to be stored on device or
-/// in the cloud to enable CRUD operations on the backup and factors (outside of factor secrets
-/// themselves). It includes:
-/// * Sealed backup data
-/// * Encrypted backup keypair(s). Note that all items are encrypting the same backup keypair,
-///   but with different factor secrets.
-/// * Backup keypair public key
-///
-/// # Flows
-///
-/// ## Create
-///
-/// 1. Acquire a factor secret from user. For example, prompt user for a PRF passkey, or generate a
-///    random key and store it in the iCloud Keychain or Turnkey.
-/// 2. Prepare an unsealed backup with the root secret and files.
-/// 3. Generate a backup keypair randomly (cryptographically secure).
-/// 4. Encrypt the unsealed backup with the backup keypair to create a sealed backup.
-/// 5. Encrypt the backup keypair with the factor secret to create an encrypted backup keypair.
-/// 6. Store the sealed backup and the encrypted backup keypair somewhere, e.g. Backup Service.
-///
-/// ## Restore (decrypt backup)
-///
-/// 1. Acquire a factor secret from user. For example, prompt user for a PRF passkey, or generate a
-///    random key and store it in the iCloud Keychain or Turnkey.
-/// 2. Retrieve the sealed backup and the encrypted backup keypair from the Backup Service.
-/// 3. Decrypt the encrypted backup keypair with the factor secret to get the backup keypair.
-/// 4. Decrypt the sealed backup with the backup keypair to get the unsealed backup.
-/// 5. Use the unsealed backup to restore the wallet.
-///
-/// ## Add new factor
-///
-/// 1. Acquire the new factor secret from user. For example, prompt user for a PRF passkey, or generate a
-///    random key and store it in the iCloud Keychain or Turnkey.
-/// 2. Acquire an existing factor secret from the user.
-/// 3. Retrieve the encrypted backup keypair that corresponds to the old factor from the Backup
-///    Service or from the device.
-/// 4. Decrypt the encrypted backup keypair with the old factor secret to get the backup keypair.
-/// 5. Encrypt the backup keypair with the new factor secret to create a new encrypted backup keypair.
-/// 6. Store the new encrypted backup keypair and the old encrypted backup keypair alongside the sealed backup.
-///
-/// Now, the backup can be decrypted with either of the factor secrets.
-///
-/// ## Remove factor
-/// 1. Delete the encrypted backup keypair that corresponds to the factor from the Backup Service.
-///
-/// ## Update backup
-/// 1. Retrieve the public key of the backup keypair from the Backup Service or from the device.
-/// 2. Get the new root secret and files, e.g. from the app.
-/// 3. Re-generate unsealed backup with the new root secret and files.
-/// 4. Encrypt the unsealed backup with the public key of the backup keypair to create a new sealed backup.
-/// 5. Store the new sealed backup instead of the old one in the Backup Service. Note that the
-///    encrypted backup keypair(s) and the backup keypair has not changed.
-///
+/// Documentation: <https://docs.toolsforhumanity.com/world-app/backup>
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct BackupManager {}
 
@@ -562,30 +497,15 @@ pub trait SanitizeError: std::fmt::Debug + Send + Sync {
     fn as_sanitized_string(&self) -> String;
 }
 
-static ERROR_WORD_WHITELIST: &[&str] = &[
-    "missing", "field", "checksum", "invalid", "type", "break", "expected", "map",
-    "matching", "variant", "not", "found", "bool", "tag", "known", "non",
-];
-
 impl SanitizeError for ciborium::de::Error<std::io::Error> {
     fn as_sanitized_string(&self) -> String {
         match self {
             Self::Io(_) | Self::Syntax(_) => self.to_string(), // error is regular IO and only contains the pos offset
             Self::Semantic(pos, msg) => {
-                // generally semantic errors don't contain any payload, but out of an abundance of caution, we sanitize to only
-                // specific whitelisted words.
-                let re = Regex::new(r"[A-Za-z0-9\-]+");
-                re.map_or_else(
-                    |_| format!("Semantic error at {pos:?}. Unable to sanitize error message, skipping."),
-                    |re| {
-                        let sanitized_msg = re
-                            .find_iter(msg)
-                            .map(|m| m.as_str())
-                            .filter(|token| ERROR_WORD_WHITELIST.iter().any(|&w| w.eq_ignore_ascii_case(token)))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        format!("Semantic error at {pos:?}: {sanitized_msg}")
-                    },
+                // generally semantic errors don't contain any payload, but out of an abundance of caution, we only log the first bytes.
+                format!(
+                    "Semantic error at {pos:?}: {}",
+                    msg.get(..14).unwrap_or(msg)
                 )
             }
             Self::RecursionLimitExceeded => "recursion limit exceeded".to_string(),

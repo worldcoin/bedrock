@@ -43,6 +43,8 @@ impl BackupManifest {
 }
 
 /// Manager responsible for reading and writing backup manifests and coordinating sync.
+///
+/// Documentation: <https://docs.toolsforhumanity.com/world-app/backup/structure-and-sync>
 #[derive(uniffi::Object)]
 pub struct ManifestManager {
     file_system: FileSystemMiddleware,
@@ -126,7 +128,7 @@ impl ManifestManager {
         // Step 4: Compute checksum for provided file
         let file_path = file_path.trim_start_matches('/').to_string();
         let fs = get_filesystem_raw()?;
-        let checksum_hex = fs.calculate_checksum_hex(&file_path).map_err(|e| {
+        let checksum = fs.calculate_checksum(&file_path).map_err(|e| {
             let msg = format!("Failed to load file: {e}");
             log::error!("{msg}");
             BackupError::InvalidFileForBackup(msg)
@@ -136,7 +138,7 @@ impl ManifestManager {
         manifest.files.push(V0BackupManifestEntry {
             designator,
             file_path,
-            checksum_hex: checksum_hex.clone(),
+            checksum_hex: hex::encode(checksum),
         });
 
         // Step 6: Construct new unsealed backup
@@ -179,6 +181,7 @@ impl ManifestManager {
         _root_secret: &str,
         _backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
+        // FIXME
         todo!("implement");
     }
 
@@ -194,6 +197,7 @@ impl ManifestManager {
         _root_secret: &str,
         _backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
+        // FIXME
         // most of the code can be re-used from store_file, abstract as appropriate
         todo!("implement");
     }

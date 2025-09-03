@@ -62,7 +62,7 @@ impl V0BackupFile {
         let computed_checksum = blake3::hash(&self.data);
         if &self.checksum != computed_checksum.as_bytes() {
             return Err(BackupError::InvalidChecksumError {
-                designator: self.path[self.path.len() - 8..].to_string(),
+                designator: self.path.get(..14).unwrap_or(&self.path).to_string(),
             });
         }
         Ok(())
