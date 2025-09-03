@@ -12,35 +12,22 @@ use std::str::FromStr;
 // =========================
 
 use crate::backup::backup_format::v0::V0BackupManifestEntry;
-use crate::backup::manifest::{BackupManifest, ManifestManager, SyncSigner};
+use crate::backup::manifest::{BackupManifest, ManifestManager};
 use crate::backup::service_client::{
-    set_backup_service_api, BackupServiceApi, ChallengeResponsePayload,
-    RetrieveMetadataRequestPayload, RetrieveMetadataResponsePayload, SyncSubmitRequest,
+    set_backup_service_api, BackupServiceApi,
+    RetrieveMetadataResponsePayload, SyncSubmitRequest,
 };
 use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
-use base64::Engine as _;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
-struct TestSyncSigner;
-
-impl SyncSigner for TestSyncSigner {
-    fn public_key_base64(&self) -> String {
-        base64::engine::general_purpose::STANDARD.encode(b"TEST_SYNC_PUBKEY")
-    }
-    fn sign_challenge_base64(&self, challenge: String) -> String {
-        let mut m = b"sig:".to_vec();
-        m.extend_from_slice(challenge.as_bytes());
-        base64::engine::general_purpose::STANDARD.encode(m)
-    }
-}
+// No signer needed with new API shape
 
 #[derive(Default, Clone, Debug)]
 struct FakeApiState {
     remote_manifest_hash_hex: Option<String>,
     last_sync: Option<SyncSubmitRequest>,
     sync_count: u64,
-    last_retrieve_token: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -59,17 +46,8 @@ impl FakeBackupServiceApi {
 
 #[async_trait::async_trait]
 impl BackupServiceApi for FakeBackupServiceApi {
-    async fn get_sync_challenge_keypair(
-        &self,
-    ) -> Result<ChallengeResponsePayload, crate::HttpError> {
-        Ok(ChallengeResponsePayload {
-            challenge: "SYNC_CHALLENGE".to_string(),
-            token: "SYNC_TOKEN".to_string(),
-        })
-    }
-
     #[allow(clippy::significant_drop_tightening)]
-    async fn post_sync_with_keypair(
+    async fn sync(
         &self,
         request: SyncSubmitRequest,
     ) -> Result<(), crate::HttpError> {
@@ -77,29 +55,18 @@ impl BackupServiceApi for FakeBackupServiceApi {
         s.last_sync = Some(request);
         s.sync_count += 1;
         if let Some(last) = &s.last_sync {
-            s.remote_manifest_hash_hex = Some(last.new_manifest_hash_hex.clone());
+            s.remote_manifest_hash_hex = Some(last.new_manifest_hash.clone());
         }
         Ok(())
     }
 
-    async fn get_retrieve_metadata_challenge_keypair(
-        &self,
-    ) -> Result<ChallengeResponsePayload, crate::HttpError> {
-        Ok(ChallengeResponsePayload {
-            challenge: "RETRIEVE_CHALLENGE".to_string(),
-            token: "RETRIEVE_TOKEN".to_string(),
-        })
-    }
-
     #[allow(clippy::significant_drop_tightening)]
-    async fn post_retrieve_metadata_with_keypair(
+    async fn retrieve_metadata(
         &self,
-        request: RetrieveMetadataRequestPayload,
     ) -> Result<RetrieveMetadataResponsePayload, crate::HttpError> {
-        let mut s = self.state.lock().unwrap();
-        s.last_retrieve_token = Some(request.challenge_token);
+        let s = self.state.lock().unwrap();
         Ok(RetrieveMetadataResponsePayload {
-            manifest_hash_hex: s
+            manifest_hash: s
                 .remote_manifest_hash_hex
                 .clone()
                 .unwrap_or_else(|| hex::encode(blake3::hash(b"").as_bytes())),
@@ -178,10 +145,7 @@ async fn test_list_files_happy_path() {
     write_manifest_with_prefix(&m, "backup_test_list_1");
     api.set_remote_hash(compute_manifest_hash_from_disk("backup_test_list_1"));
 
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_list_1",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_1");
     let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
     assert_eq!(list, vec!["orb_pkg/personal_custody/pcp.bin".to_string()]);
 }
@@ -201,10 +165,7 @@ async fn test_list_files_stale_remote() {
     // Remote is different
     api.set_remote_hash(hex::encode(blake3::hash(b"different").as_bytes()));
 
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_list_2",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_2");
     let err = mgr
         .list_files(BackupFileDesignator::OrbPkg)
         .await
@@ -233,10 +194,7 @@ async fn test_store_file_happy_path_and_commit() {
     let backup_sk = SecretKey::generate(&mut rand::thread_rng());
     let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
 
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_store_1",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_1");
     mgr.store_file(
         BackupFileDesignator::OrbPkg,
         "pcp/source.bin".to_string(),
@@ -276,10 +234,7 @@ async fn test_store_file_fails_when_remote_ahead() {
     write_global_file("pcp/source.bin", b"hello-bytes");
     let backup_sk = SecretKey::generate(&mut rand::thread_rng());
     let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_store_2",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_2");
     let err = mgr
         .store_file(
             BackupFileDesignator::OrbPkg,
@@ -308,10 +263,7 @@ async fn test_store_file_invalid_source_path() {
     // Do not create the source file
     let backup_sk = SecretKey::generate(&mut rand::thread_rng());
     let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_store_3",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_3");
     let err = mgr
         .store_file(
             BackupFileDesignator::OrbPkg,
@@ -348,10 +300,7 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
     write_global_file("pcp/new.bin", b"HELLO");
     let backup_sk = SecretKey::generate(&mut rand::thread_rng());
     let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_store_4",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_4");
     let err = mgr
         .store_file(
             BackupFileDesignator::OrbPkg,
@@ -409,10 +358,7 @@ async fn test_replace_all_files_for_designator_happy_path() {
     let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
     let root_json = RootKey::new_random().danger_to_json().unwrap();
 
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_replace_1",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_replace_1");
     mgr.replace_all_files_for_designator(
         BackupFileDesignator::OrbPkg,
         "pcp/new.bin".to_string(),
@@ -487,10 +433,7 @@ async fn test_remove_file_happy_and_not_found() {
     let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
     let root_json = RootKey::new_random().danger_to_json().unwrap();
 
-    let mgr = ManifestManager::new_with_prefix(
-        Arc::new(TestSyncSigner),
-        "backup_test_remove_1",
-    );
+    let mgr = ManifestManager::new_with_prefix("backup_test_remove_1");
 
     // Remove existing file
     mgr.remove_file(

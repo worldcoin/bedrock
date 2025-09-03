@@ -8,10 +8,6 @@ use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
-use crate::backup::service_client::{
-    api_get_remote_manifest_hash, api_get_sync_challenge_keypair,
-    api_post_sync_with_keypair,
-};
 use crate::backup::service_client::BackupServiceClient;
 use crate::backup::BackupFileDesignator;
 use crate::primitives::filesystem::{
@@ -71,10 +67,9 @@ impl ManifestManager {
     #[cfg(test)]
     /// Test-only constructor allowing a custom filesystem prefix to isolate tests.
     #[must_use]
-    pub fn new_with_prefix(signer: Arc<dyn SyncSigner>, prefix: &str) -> Self {
+    pub fn new_with_prefix(prefix: &str) -> Self {
         Self {
             file_system: FileSystemMiddleware::new(prefix),
-            signer,
         }
     }
 
@@ -310,9 +305,7 @@ impl ManifestManager {
     async fn load_manifest_gated(
         &self,
     ) -> Result<(V0BackupManifest, [u8; 32]), BackupError> {
-        let remote_hash = api_get_remote_manifest_hash(&*self.signer)
-            .await
-            .context("get remote manifest hash")?;
+        let remote_hash = BackupServiceClient::get_remote_manifest_hash().await?;
         let (manifest, local_hash) = self.read_manifest()?;
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
@@ -358,18 +351,12 @@ impl ManifestManager {
         sealed_backup: Vec<u8>,
     ) -> Result<(), BackupError> {
         let new_manifest_hash = updated_manifest.calculate_hash()?;
-        let challenge = api_get_sync_challenge_keypair()
-            .await
-            .context("sync challenge")?;
-        api_post_sync_with_keypair(
-            &*self.signer,
-            &challenge,
+        BackupServiceClient::sync(
             hex::encode(local_hash),
             hex::encode(new_manifest_hash),
             sealed_backup,
         )
-        .await
-        .context("post sync")?;
+        .await?;
         self.write_manifest(&updated_manifest)?;
         Ok(())
     }
