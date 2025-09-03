@@ -13,9 +13,8 @@ use crate::primitives::contracts::{
 };
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccountSigner, GNOSIS_SAFE_4337_MODULE};
-
 use crate::primitives::world_id::generate_pbh_proof;
-
+use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
 use crate::transaction::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
@@ -64,11 +63,6 @@ pub trait Is4337Encodable {
     ///
     /// Uses the global RPC client automatically.
     ///
-    /// # Arguments
-    /// * `network` - The network to use for the operation
-    /// * `safe_account` - The Safe Smart Account to sign with
-    /// * `self_sponsor_token` - Optional token address for self-sponsorship
-    ///
     /// # Returns
     /// * `Result<FixedBytes<32>, RpcError>` - The `userOpHash` on success
     ///
@@ -78,14 +72,14 @@ pub trait Is4337Encodable {
     /// * Returns `RpcError` if the global HTTP client has not been initialized
     async fn sign_and_execute(
         &self,
+        safe_account: &SafeSmartAccount,
         network: Network,
-        safe_account: &crate::smart_account::SafeSmartAccount,
         self_sponsor_token: Option<Address>,
         metadata: Option<Self::MetadataArg>,
         pbh: bool,
         provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
-        // Get the global RPC client
+        // 0. Get the global RPC client
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
 
         // 1. Create preflight UserOperation using default metadata for this implementation
