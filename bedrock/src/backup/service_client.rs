@@ -68,11 +68,9 @@ pub fn is_backup_service_api_initialized() -> bool {
 
 /// Get a reference to the foreign API or return an error.
 fn get_api() -> Result<&'static Arc<dyn BackupServiceApi>, BackupError> {
-    BACKUP_SERVICE_API_INSTANCE.get().ok_or_else(|| {
-        BackupError::HttpError(HttpError::Generic {
-            message: "Backup service API is not initialized".to_string(),
-        })
-    })
+    BACKUP_SERVICE_API_INSTANCE
+        .get()
+        .ok_or_else(|| BackupError::BackupApiNotInitialized)
 }
 
 pub struct BackupServiceClient;
@@ -100,20 +98,14 @@ impl BackupServiceClient {
         let response = api.retrieve_metadata().await?;
 
         let hash: [u8; 32] = hex::decode(response.manifest_hash)
-            .map_err(|_| {
-                BackupError::HttpError(HttpError::Generic {
-                    message:
-                        "[BackupServiceApi] invalid response from retrieve_metadata"
-                            .to_string(),
-                })
+            .map_err(|_| BackupError::Generic {
+                message: "[BackupServiceApi] invalid response from retrieve_metadata"
+                    .to_string(),
             })?
             .try_into()
-            .map_err(|_| {
-                BackupError::HttpError(HttpError::Generic {
-                    message:
-                        "[BackupServiceApi] invalid response from retrieve_metadata"
-                            .to_string(),
-                })
+            .map_err(|_| BackupError::Generic {
+                message: "[BackupServiceApi] invalid response from retrieve_metadata"
+                    .to_string(),
             })?;
         Ok(hash)
     }

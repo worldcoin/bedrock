@@ -22,12 +22,6 @@ use crate::{
     primitives::filesystem::get_filesystem_raw,
 };
 
-/// Internal signal indicating whether a manifest mutation produced a change.
-enum ManifestMutation {
-    NoChange,
-    Changed,
-}
-
 /// A single, global manifest that describes the backup content.
 ///
 /// All operations on the backup use this as a source.
@@ -325,53 +319,6 @@ impl ManifestManager {
             })
     }
 
-    /// Decodes inputs supplied by the caller into strongly-typed values.
-    fn decode_inputs(
-        root_secret: &str,
-        backup_keypair_public_key: &str,
-    ) -> Result<(RootKey, PublicKey), BackupError> {
-        let root = RootKey::from_json(root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
-        let pk_bytes = hex::decode(backup_keypair_public_key)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        let pk = PublicKey::from_slice(&pk_bytes)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        Ok((root, pk))
-    }
-
-    /// Builds the unsealed backup from the manifest and seals it with the provided public key.
-    fn build_unsealed_then_seal(
-        &self,
-        manifest: &V0BackupManifest,
-        root: RootKey,
-        pk: &PublicKey,
-    ) -> Result<Vec<u8>, BackupError> {
-        let files = self.build_unsealed_backup_files_from_manifest(manifest)?;
-        let unsealed_backup = V0Backup::new(root, files).to_bytes()?;
-        let sealed_backup = pk
-            .seal(&mut rand::thread_rng(), &unsealed_backup)
-            .map_err(|_| BackupError::EncryptBackupError)?;
-        Ok(sealed_backup)
-    }
-
-    /// Syncs the sealed backup and commits the updated manifest to disk.
-    async fn sync_and_commit(
-        &self,
-        local_hash: [u8; 32],
-        updated_manifest: BackupManifest,
-        sealed_backup: Vec<u8>,
-    ) -> Result<(), BackupError> {
-        let new_manifest_hash = updated_manifest.calculate_hash()?;
-        BackupServiceClient::sync(
-            hex::encode(local_hash),
-            hex::encode(new_manifest_hash),
-            sealed_backup,
-        )
-        .await?;
-        self.write_manifest(&updated_manifest)?;
-        Ok(())
-    }
-
     /// Applies a manifest mutation and, if changed, rebuilds, syncs, and commits the update.
     async fn mutate_manifest_and_sync<F>(
         &self,
@@ -382,17 +329,38 @@ impl ManifestManager {
     where
         F: FnOnce(&mut V0BackupManifest) -> Result<ManifestMutation, BackupError>,
     {
+        let root = RootKey::from_json(root_secret)
+            .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let pk_bytes = hex::decode(backup_keypair_public_key)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+        let pk = PublicKey::from_slice(&pk_bytes)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+
         let (mut manifest, local_hash) = self.load_manifest_gated().await?;
+
         match mutator(&mut manifest)? {
             ManifestMutation::NoChange => return Ok(()),
             ManifestMutation::Changed => {}
         }
+
         manifest.previous_manifest_hash = Some(hex::encode(local_hash));
-        let (root, pk) = Self::decode_inputs(root_secret, &backup_keypair_public_key)?;
-        let sealed_backup = self.build_unsealed_then_seal(&manifest, root, &pk)?;
+
+        let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
+        let unsealed_backup = V0Backup::new(root, files).to_bytes()?;
+        let sealed_backup = pk
+            .seal(&mut rand::thread_rng(), &unsealed_backup)
+            .map_err(|_| BackupError::EncryptBackupError)?;
+
         let updated_manifest = BackupManifest::V0(manifest);
-        self.sync_and_commit(local_hash, updated_manifest, sealed_backup)
-            .await
+        let new_manifest_hash = updated_manifest.calculate_hash()?;
+        BackupServiceClient::sync(
+            hex::encode(local_hash),
+            hex::encode(new_manifest_hash),
+            sealed_backup,
+        )
+        .await?;
+        self.write_manifest(&updated_manifest)?;
+        Ok(())
     }
 }
 
@@ -400,4 +368,10 @@ impl Default for ManifestManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Internal signal indicating whether a manifest mutation produced a change.
+enum ManifestMutation {
+    NoChange,
+    Changed,
 }

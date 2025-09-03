@@ -21,8 +21,6 @@ use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
-// No signer needed with new API shape
-
 #[derive(Default, Clone, Debug)]
 struct FakeApiState {
     remote_manifest_hash_hex: Option<String>,
