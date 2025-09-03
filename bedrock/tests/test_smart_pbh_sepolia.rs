@@ -7,6 +7,8 @@ use alloy::{
 };
 use reqwest::Url;
 
+use dotenvy::dotenv;
+
 use bedrock::{
     primitives::{
         http_client::{
@@ -137,14 +139,15 @@ where
 
 #[tokio::test]
 async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
-    // TODO: Read from env so it can pass in CI
-    let secrets: String = std::fs::read_to_string("tests/sepolia_secrets.json")?;
-    let secret: serde_json::Value = serde_json::from_str(&secrets)?;
-    let nullifier = secret["nullifier"].as_str().unwrap();
-    let trapdoor = secret["trapdoor"].as_str().unwrap();
-    let private_key = secret["private_key"].as_str().unwrap();
-    let safe_address = secret["safe_address"].as_str().unwrap();
-    let rpc_url: Url = secret["rpc_url"].as_str().unwrap().parse()?;
+    dotenv().ok();
+
+    let rpc_url: Url = std::env::var("WORLDCHAIN_RPC_URL_SEPOLIA")
+        .unwrap()
+        .parse()?;
+    let nullifier = std::env::var("TESTNET_NULLIFIER").unwrap();
+    let trapdoor = std::env::var("TESTNET_TRAPDOOR").unwrap();
+    let private_key = std::env::var("TESTNET_PRIVATE_KEY").unwrap();
+    let safe_address = std::env::var("TESTNET_SAFE_ADDRESS").unwrap();
 
     let owner_signer = PrivateKeySigner::from_slice(&hex::decode(private_key)?)?;
 
@@ -167,7 +170,7 @@ async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
     set_world_id_identity(Arc::new(identity));
 
     // 8) Execute high-level transfer via transaction_transfer
-    let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)?;
+    let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address.as_str())?;
     let amount = "1";
     let recipient = safe_address;
 
@@ -175,7 +178,7 @@ async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
         .transaction_transfer(
             Network::WorldChainSepolia,
             "0xC82Ea35634BcE95C394B6BC00626f827bB0F4801", // WORLD SEPOLIA LINK TOKEN
-            recipient,
+            recipient.as_str(),
             amount,
             true,
             None,
