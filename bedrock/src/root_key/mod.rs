@@ -151,22 +151,5 @@ impl RootKey {
     }
 }
 
-impl PartialEq for RootKey {
-    fn eq(&self, other: &Self) -> bool {
-        let self_secret = self.inner.expose_secret();
-        let other_secret = other.inner.expose_secret();
-
-        match (self_secret, other_secret) {
-            (VersionedKey::V0(self_secret), VersionedKey::V0(other_secret)) => {
-                self_secret.as_bytes().ct_eq(other_secret.as_bytes()).into()
-            }
-            (VersionedKey::V1(self_secret), VersionedKey::V1(other_secret)) => {
-                self_secret.ct_eq(other_secret).into()
-            }
-            _ => false,
-        }
-    }
-}
-
 #[cfg(test)]
 mod test;
