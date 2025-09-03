@@ -3,15 +3,24 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
+use crate::primitives::contracts::{
+    EncodedSafeOpStruct, IPBHEntryPoint::PBHPayload, UserOperation, ENTRYPOINT_4337,
+};
+
+use crate::primitives::contracts::{
+    PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_MAINNET, PBH_SAFE_4337_MODULE_SEPOLIA,
+    PBH_SIGNATURE_AGGREGATOR_MAINNET, PBH_SIGNATURE_AGGREGATOR_SEPOLIA,
+};
+use crate::primitives::world_id::generate_pbh_proof;
 use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
+use crate::smart_account::{
+    SafeSmartAccount, SafeSmartAccountSigner, GNOSIS_SAFE_4337_MODULE,
+};
 use crate::transaction::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
+use alloy::sol_types::SolValue;
 use chrono::{Duration, Utc};
-
-use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
@@ -43,6 +52,7 @@ pub trait Is4337Encodable {
         &self,
         wallet_address: Address,
         metadata: Option<Self::MetadataArg>,
+        pbh: bool,
     ) -> Result<UserOperation, PrimitiveError>;
 
     /// Signs and executes a 4337 `UserOperation` by:
@@ -67,21 +77,31 @@ pub trait Is4337Encodable {
         network: Network,
         self_sponsor_token: Option<Address>,
         metadata: Option<Self::MetadataArg>,
+        pbh: bool,
         provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
         // 0. Get the global RPC client
         let rpc_client = crate::transaction::rpc::get_rpc_client()?;
 
         // 1. Create preflight UserOperation using default metadata for this implementation
-        let mut user_operation =
-            self.as_preflight_user_operation(safe_account.wallet_address, metadata)?;
+        let mut user_operation = self.as_preflight_user_operation(
+            safe_account.wallet_address,
+            metadata,
+            pbh,
+        )?;
+
+        let entrypoint = if pbh {
+            *PBH_ENTRYPOINT_4337
+        } else {
+            *ENTRYPOINT_4337
+        };
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
             .sponsor_user_operation(
                 network,
                 &user_operation,
-                *ENTRYPOINT_4337,
+                entrypoint,
                 self_sponsor_token,
                 provider,
             )
@@ -93,6 +113,7 @@ pub trait Is4337Encodable {
         // 4. Compute validity timestamps
         // validAfter = 0 (immediately valid)
         let valid_after_u48 = U48::from(0u64);
+        // TODO: Set real value here?
         let valid_after_bytes: [u8; 6] = [0u8; 6];
 
         // Set validUntil to the configured duration from now
@@ -111,23 +132,72 @@ pub trait Is4337Encodable {
             valid_until_u48,
         )?;
 
+        let domain_separator: Address;
+        let mut aggregator: Option<Address> = None;
+
+        if pbh {
+            match network {
+                Network::WorldChain => {
+                    domain_separator = *PBH_SAFE_4337_MODULE_MAINNET;
+                    aggregator = Some(*PBH_SIGNATURE_AGGREGATOR_MAINNET);
+                }
+                Network::WorldChainSepolia => {
+                    domain_separator = *PBH_SAFE_4337_MODULE_SEPOLIA;
+                    aggregator = Some(*PBH_SIGNATURE_AGGREGATOR_SEPOLIA);
+                }
+                _ => {
+                    return Err(RpcError::InvalidRequest(format!(
+                        "Invalid network {network:?} for PBH"
+                    )))
+                }
+            }
+        } else {
+            domain_separator = *GNOSIS_SAFE_4337_MODULE;
+        }
+
         let signature = safe_account.sign_digest(
             encoded_safe_op.into_transaction_hash(),
             network as u32,
-            Some(*GNOSIS_SAFE_4337_MODULE),
+            Some(domain_separator),
         )?;
 
         // Compose the final signature once (timestamps + actual 65-byte signature)
-        let mut full_signature = Vec::with_capacity(77);
+        let mut full_signature = Vec::new();
         full_signature.extend_from_slice(&valid_after_bytes);
         full_signature.extend_from_slice(valid_until_bytes);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
+        // PBH Logic
+        if pbh {
+            let pbh_payload = generate_pbh_proof(user_operation.clone(), network).await;
+            match pbh_payload {
+                Ok(pbh_payload) => {
+                    full_signature.extend_from_slice(
+                        PBHPayload::from(pbh_payload).abi_encode().as_ref(),
+                    );
+                }
+                Err(e) => {
+                    // TODO: Send standard user operation if PBH logic fails at any point
+                    return Err(RpcError::InvalidRequest(format!(
+                        "Failed to generate PBH payload {e}"
+                    )));
+                }
+            }
+        }
+
         user_operation.signature = full_signature.into();
 
         // 5. Submit UserOperation
-        let user_op_hash = rpc_client
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
+        let user_op_hash: FixedBytes<32> = rpc_client
+            // Always send to standard 4337 entrypoint even for PBH
+            // The bundler will route it to the PBH entrypoint if it's a PBH transaction
+            .send_user_operation(
+                network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                provider,
+                aggregator,
+            )
             .await?;
 
         Ok(user_op_hash)

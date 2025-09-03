@@ -3,7 +3,8 @@
     clippy::pedantic,
     clippy::nursery,
     missing_docs,
-    dead_code
+    dead_code,
+    unused_imports
 )]
 
 //! `bedrock` is the foundational library which powers World App's crypto wallet

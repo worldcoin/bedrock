@@ -23,31 +23,48 @@ tooling_tests = ["dep:tokio"]
 
 [dependencies]
 alloy = { version = "1.0.23", default-features = false, features = [
-  "dyn-abi",
-  "eip712",
-  "signer-local",
-  "sol-types",
+    "dyn-abi",
+    "eip712",
+    "signer-local",
+    "sol-types",
+    "rpc",
+    "rpc-types",
+    "providers",
+    "network",
+    "contract",
 ] }
+alloy-primitives = "1.3.1"
+alloy-rlp = "0.3.12"
 anyhow = "1.0"
 async-trait = "0.1"
 bedrock-macros = { path = "../bedrock-macros" }
-chrono = { version = "0.4.41", default-features = false, features = ["now", "std"] }
+bon = "3.7.1"
+chrono = { version = "0.4.41", default-features = false, features = [
+    "now",
+    "std",
+] }
+futures = "0.3.31"
 hex = "0.4.3"
 log = "0.4.22"
 proc-macro2 = "1.0"
 quote = "1.0"
-rand = "0.8.5"
+rand = "0.9.2"
+reqwest = { version = "0.12.19", features = ["json"] }
 ruint = { version = "1.15.0", default-features = false, features = ["serde"] }
-secrecy = { version = "0.10", features = ["serde"] }
+semaphore-rs = "0.3.1"
+semaphore-rs-proof = "0.3.1"
 serde = "1.0.219"
 serde_json = "1.0"
+strum = "0.27.1"
+secrecy = { version = "0.10", features = ["serde"] }
 subtle = "2.6.1"
 syn = { version = "2.0", features = ["full"] }
+test-case = "3.3.1"
 thiserror = "2.0.12"
 tokio = { version = "1.47.1", features = ["time"], optional = true }
 uniffi = { workspace = true, features = ["build", "tokio"] }
+world-chain-builder-pbh = { git = "https://github.com/worldcoin/world-chain", rev = "4f524c6" }
 zeroize = "1.8"
-
 [dev-dependencies]
 alloy = { version = "1.0.23", default-features = false, features = [
   "json",

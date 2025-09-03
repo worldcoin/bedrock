@@ -7,6 +7,7 @@
 use crate::{
     primitives::http_client::{get_http_client, HttpHeader},
     primitives::{
+        contracts::{IEntryPoint::PackedUserOperation, RpcUserOperationV0_7},
         AuthenticatedHttpClient, HttpError, HttpMethod, Network, PrimitiveError,
     },
     smart_account::{SafeSmartAccountError, UserOperation},
@@ -14,7 +15,7 @@ use crate::{
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
 
 /// Global RPC client instance for Bedrock operations
@@ -39,6 +40,9 @@ pub enum RpcMethod {
     /// Submit a signed `UserOperation`
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
+    /// Make a generic RPC `eth_call` to read data from a contract
+    #[serde(rename = "eth_call")]
+    EthCall,
 }
 
 /// 4337 provider selection to be passed by native apps
@@ -68,6 +72,7 @@ impl RpcMethod {
         match self {
             Self::SponsorUserOperation => "wa_sponsorUserOperation",
             Self::SendUserOperation => "eth_sendUserOperation",
+            Self::EthCall => "eth_call",
         }
     }
 }
@@ -106,6 +111,7 @@ struct ErrorPayload {
 
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
+#[derive(Debug, Deserialize)]
 pub enum RpcError {
     /// HTTP request failed
     #[error("HTTP request failed: {0}")]
@@ -142,6 +148,10 @@ pub enum RpcError {
     /// Safe Smart Account operation error
     #[error("Safe Smart Account operation failed: {0}")]
     SafeSmartAccountError(#[from] SafeSmartAccountError),
+
+    /// Invalid inputs
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
 }
 
 /// Response from `wa_sponsorUserOperation`
@@ -188,6 +198,8 @@ impl RpcClient {
     fn rpc_endpoint(network: Network) -> String {
         format!("/v1/rpc/{}", network.network_name())
     }
+
+    // async fn call_pbh_contract
 
     /// Makes a generic RPC call with typed parameters and result, adding provider header
     ///
@@ -284,6 +296,7 @@ impl RpcClient {
         // Build params as a positional array. If no token is provided, omit the 3rd param entirely
         // so the backend can auto-fill an empty object as needed.
         let mut params: Vec<serde_json::Value> = Vec::with_capacity(3);
+        // TODO: Should this be RPCUserOperationV0_7?
         params.push(
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
         );
@@ -297,6 +310,13 @@ impl RpcClient {
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
+    ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `user_operation`: the user operation to submit
+    /// - `entrypoint`: the entry point contract address
+    /// - `provider`: selected 4337 provider to include in headers
+    /// - `aggregator`: optional aggregator address to include in the user operation
     ///
     /// # Errors
     ///
@@ -312,9 +332,24 @@ impl RpcClient {
         user_operation: &UserOperation,
         entrypoint: Address,
         provider: RpcProviderName,
+        aggregator: Option<Address>,
     ) -> Result<FixedBytes<32>, RpcError> {
+        let packed_user_op: PackedUserOperation = user_operation.clone().into();
+
+        // Convert to RpcUserOperationV0_7 based on whether aggregator is provided
+        let rpc_user_op: RpcUserOperationV0_7 = if let Some(agg_addr) = aggregator {
+            (packed_user_op, agg_addr).into()
+        } else {
+            packed_user_op.into()
+        };
+
+        // Serialize the RpcUserOperationV0_7 to JSON
+        // Seralization will remove unused fields like factory and paymaster from JSON
+        let user_op_value =
+            serde_json::to_value(&rpc_user_op).map_err(|_| RpcError::JsonError)?;
+
         let params = vec![
-            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+            user_op_value,
             serde_json::Value::String(format!("{entrypoint:?}")),
         ];
 
@@ -324,6 +359,49 @@ impl RpcClient {
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
             message: format!("Invalid userOpHash format: {e}"),
+        })
+    }
+
+    /// Makes a generic RPC call with typed parameters and result, adding provider header
+    ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `method`: JSON-RPC method to invoke
+    /// - `params`: JSON-RPC params (typed)
+    /// - `provider`: selected 4337 provider to include in headers
+    /// # Errors
+    /// - Will throw an RPC error if the RPC call fails.
+    pub async fn eth_call(
+        &self,
+        network: Network,
+        to: Address,
+        data: Bytes,
+    ) -> Result<Bytes, RpcError> {
+        let params = vec![
+            serde_json::Value::Object(Map::from_iter([
+                (
+                    "to".to_string(),
+                    serde_json::Value::String(format!("{to:?}")),
+                ),
+                (
+                    "data".to_string(),
+                    serde_json::Value::String(format!("{data:?}")),
+                ),
+            ])),
+            serde_json::Value::String("latest".to_string()), // TODO: Allow passing in block number
+        ];
+
+        let result: String = self
+            .rpc_call(
+                network,
+                RpcMethod::EthCall,
+                params,
+                RpcProviderName::Alchemy,
+            )
+            .await?;
+
+        Bytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            message: format!("Invalid eth_call result format: {e}"),
         })
     }
 }

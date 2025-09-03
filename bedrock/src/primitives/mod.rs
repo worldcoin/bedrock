@@ -62,6 +62,9 @@ pub mod tooling_tests;
 /// Contract interfaces and data structures for ERC-4337 account abstraction
 pub mod contracts;
 
+/// Introduces World ID identity functionality for Bedrock operations
+pub mod world_id;
+
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 #[repr(u32)]
@@ -72,6 +75,8 @@ pub enum Network {
     Optimism = 10,
     /// World Chain (chain ID: 480)
     WorldChain = 480,
+    /// World Chain Sepolia (chain ID: 4801)
+    WorldChainSepolia = 4801,
 }
 
 impl Network {
@@ -82,6 +87,7 @@ impl Network {
             Self::Ethereum => "ethereum",
             Self::Optimism => "optimism",
             Self::WorldChain => "worldchain",
+            Self::WorldChainSepolia => "worldchain-sepolia",
         }
     }
 
@@ -92,6 +98,7 @@ impl Network {
             Self::Ethereum => "Ethereum",
             Self::Optimism => "Optimism",
             Self::WorldChain => "World Chain",
+            Self::WorldChainSepolia => "World Chain Sepolia",
         }
     }
 }

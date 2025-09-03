@@ -38,3 +38,5 @@ kotlin/bedrock-tests/bin/
 
 # foundry
 out/
+
+sepolia_secrets.json

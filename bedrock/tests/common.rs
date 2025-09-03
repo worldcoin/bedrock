@@ -113,7 +113,7 @@ pub const SAFE_MODULE_SETUP_ADDRESS: Address =
 #[allow(dead_code)] // this is extensively used in Integration Tests
 pub fn setup_anvil() -> AnvilInstance {
     dotenvy::dotenv().ok();
-    let rpc_url = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
+    let rpc_url: String = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
         // Fallback to a public, no-key RPC if available.
         "https://worldchain-mainnet.g.alchemy.com/v2/demo".to_string()
     });
