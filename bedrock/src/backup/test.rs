@@ -6,6 +6,17 @@ use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
 use std::str::FromStr;
+use std::sync::Mutex;
+
+// Test-only global lock to serialize manifest-affecting tests to avoid races.
+static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn ensure_fs_initialized() {
+    if crate::primitives::filesystem::get_filesystem_raw().is_err() {
+        let fs = InMemoryFileSystem::new();
+        set_filesystem(std::sync::Arc::new(fs));
+    }
+}
 
 // =========================
 // ManifestManager tests
@@ -497,6 +508,8 @@ fn test_backup_module_enum() {
 
 #[test]
 fn test_create_sealed_backup_with_prf_for_new_user() {
+    let _guard = MANIFEST_LOCK.lock().unwrap();
+    ensure_fs_initialized();
     let manager = BackupManager::new();
 
     // Example root secret seed
@@ -578,9 +591,8 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 
 #[test]
 fn test_decrypt_sealed_backup_with_prf() {
-    // Ensure filesystem is set up for unpack
-    let fs = InMemoryFileSystem::new();
-    set_filesystem(std::sync::Arc::new(fs));
+    let _guard = MANIFEST_LOCK.lock().unwrap();
+    ensure_fs_initialized();
     let manager = BackupManager::new();
 
     // Example root secret seed
@@ -663,6 +675,8 @@ fn test_decrypt_sealed_backup_with_prf() {
 
 #[test]
 fn test_unpack_writes_files_and_manifest() {
+    let _guard = MANIFEST_LOCK.lock().unwrap();
+    ensure_fs_initialized();
     // Arrange filesystem: use the already-initialized global filesystem (tests set it once).
     // We don't replace it if already set; we just assert via the global handle.
     let manager = BackupManager::new();
@@ -738,6 +752,8 @@ fn test_unpack_writes_files_and_manifest() {
 
 #[test]
 fn test_re_encrypt_backup() {
+    let _guard = MANIFEST_LOCK.lock().unwrap();
+    ensure_fs_initialized();
     let manager = BackupManager::new();
 
     // Example root secret seed

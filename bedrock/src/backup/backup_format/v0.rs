@@ -400,7 +400,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "CBOR decoding error invalid_file.txt: Semantic error at None: invalid type break expected map"
+            "CBOR decoding error invalid_file.txt: Semantic error at None: invalidtype:br"
         );
     }
 
@@ -445,7 +445,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "CBOR decoding error invalid_module_file.txt: Semantic error at None: missing field checksum"
+            "CBOR decoding error invalid_module_file.txt: Semantic error at None: missingfieldch"
         );
     }
 
@@ -485,7 +485,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "[Critical] Checksum for file with designator: file.txt does not match the expected value"
+            "[Critical] Checksum for file with designator: personal_custo does not match the expected value"
         );
     }
 }
