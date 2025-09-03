@@ -9,6 +9,7 @@ use crate::primitives::contracts::{
 
 use crate::primitives::contracts::{
     PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_MAINNET, PBH_SAFE_4337_MODULE_SEPOLIA,
+    PBH_SIGNATURE_AGGREGATOR_MAINNET, PBH_SIGNATURE_AGGREGATOR_SEPOLIA,
 };
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccountSigner, GNOSIS_SAFE_4337_MODULE};
@@ -137,14 +138,19 @@ pub trait Is4337Encodable {
         )?;
 
         let domain_separator: Address;
+        let mut aggregator: Option<Address> = None;
 
         if pbh {
             match network {
-                Network::WorldChain => domain_separator = *PBH_SAFE_4337_MODULE_MAINNET,
-                Network::WorldChainSepolia => {
-                    domain_separator = *PBH_SAFE_4337_MODULE_SEPOLIA
+                Network::WorldChain => {
+                    domain_separator = *PBH_SAFE_4337_MODULE_MAINNET;
+                    aggregator = Some(*PBH_SIGNATURE_AGGREGATOR_MAINNET);
                 }
-                _ => panic!("Invalid network for PBH"),
+                Network::WorldChainSepolia => {
+                    domain_separator = *PBH_SAFE_4337_MODULE_SEPOLIA;
+                    aggregator = Some(*PBH_SIGNATURE_AGGREGATOR_SEPOLIA);
+                }
+                _ => return Err(RpcError::InvalidRequest(format!("Invalid network {:?} for PBH", network))),
             }
         } else {
             domain_separator = *GNOSIS_SAFE_4337_MODULE;
@@ -167,6 +173,8 @@ pub trait Is4337Encodable {
             let pbh_payload = generate_pbh_proof(user_operation.clone(), network).await;
             full_signature
                 .extend_from_slice(PBHPayload::from(pbh_payload).abi_encode().as_ref());
+
+            // user_operation.aggregator = Some(address!("0x8af27ee9af538c48c7d2a2c8bd6a40ef830e2489"));
         }
 
         user_operation.signature = full_signature.into();
@@ -175,7 +183,7 @@ pub trait Is4337Encodable {
         let user_op_hash: FixedBytes<32> = rpc_client
             // Always send to standard 4337 entrypoint even for PBH
             // The bundler will route it to the PBH entrypoint if it's a PBH transaction
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
+            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider, aggregator)
             .await?;
 
         Ok(user_op_hash)

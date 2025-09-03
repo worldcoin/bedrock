@@ -1,3 +1,4 @@
+use crate::primitives::contracts::IEntryPoint::PackedUserOperation;
 use crate::primitives::contracts::IPBHEntryPoint::PBHPayload;
 use crate::primitives::{HttpError, PrimitiveError};
 use crate::transaction::rpc::SponsorUserOperationResponse;
@@ -5,7 +6,9 @@ use alloy::hex::FromHex;
 use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
 use alloy::sol;
 use alloy::sol_types::SolValue;
+use alloy_primitives::{U128, U64, U8};
 use ruint::aliases::U256;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{str::FromStr, sync::LazyLock};
 use world_chain_builder_pbh::external_nullifier::EncodedExternalNullifier;
 use world_chain_builder_pbh::payload::PBHPayload as WorldchainBuilderPBHPayload;
@@ -16,6 +19,20 @@ static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
         "0xc03dfc11d8b10bf9cf703d558958c8c42777f785d998c62060d85a4f0ef6ea7f",
     )
     .expect("error initializing `SAFE_OP_TYPEHASH`")
+});
+
+/// PBHSignatureAggregator - Sepolia
+/// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBHSignatureAggregator.sol>
+pub static PBH_SIGNATURE_AGGREGATOR_SEPOLIA: LazyLock<Address> = LazyLock::new(|| {
+    Address::from_str("0x8af27Ee9AF538C48C7D2a2c8BD6a40eF830e2489")
+        .expect("failed to decode PBH_SIGNATURE_AGGREGATOR_SEPOLIA")
+});
+
+/// PBHSignatureAggregator - Mainnet
+/// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBHSignatureAggregator.sol>
+pub static PBH_SIGNATURE_AGGREGATOR_MAINNET: LazyLock<Address> = LazyLock::new(|| {
+    Address::from_str("0xd21306c75c956142c73c0c3bab282be68595081e")
+        .expect("failed to decode PBH_SIGNATURE_AGGREGATOR_MAINNET")
 });
 
 /// v0.7.0 `EntryPoint` contract
@@ -54,8 +71,122 @@ pub static PBH_SAFE_4337_MODULE_MAINNET: LazyLock<Address> = LazyLock::new(|| {
 ///
 /// This is the length of a regular ECDSA signature with r,s,v (32 + 32 + 1 = 65 bytes) + 12 bytes for the validity timestamps.
 const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
+/// authorization tuple for 7702 txn support
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcEip7702Auth {
+    /// The chain ID of the authorization.
+    pub chain_id: U64,
+    /// The address of the authorization.
+    pub address: Address,
+    /// The nonce for the authorization.
+    pub nonce: U64,
+    /// signed authorizzation tuple.
+    pub y_parity: U8,
+    /// signed authorizzation tuple.
+    pub r: U256,
+    /// signed authorizzation tuple.
+    pub s: U256,
+}
 
-// --- JSON serialization helpers for ERC-4337 ---
+/// User operation definition for RPC inputs
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcUserOperationV0_7 {
+    sender: Address,
+    nonce: U256,
+    call_data: Bytes,
+    call_gas_limit: U128,
+    verification_gas_limit: U128,
+    pre_verification_gas: U256,
+    max_priority_fee_per_gas: U128,
+    max_fee_per_gas: U128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    factory: Option<Address>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    factory_data: Option<Bytes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paymaster: Option<Address>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paymaster_verification_gas_limit: Option<U128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paymaster_post_op_gas_limit: Option<U128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paymaster_data: Option<Bytes>,
+    signature: Bytes,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eip7702_auth: Option<RpcEip7702Auth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregator: Option<Address>,
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<RpcUserOperationV0_7> for (PackedUserOperation, Address) {
+    fn into(self) -> RpcUserOperationV0_7 {
+        let (user_op, aggregator) = self;
+        RpcUserOperationV0_7 {
+            sender: user_op.sender,
+            nonce: user_op.nonce,
+            factory: None,
+            call_data: user_op.callData,
+            factory_data: None,
+            verification_gas_limit: (U256::from_be_bytes(
+                user_op.accountGasLimits.into(),
+            ) >> U256::from(128))
+            .to(),
+            call_gas_limit: (U256::from_be_bytes(user_op.accountGasLimits.into())
+                & U256::from_str("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF").unwrap())
+            .to(),
+            pre_verification_gas: user_op.preVerificationGas,
+            max_priority_fee_per_gas: (U256::from_be_bytes(user_op.gasFees.into())
+                >> U256::from(128))
+            .to(),
+            max_fee_per_gas: (U256::from_be_bytes(user_op.gasFees.into())
+                & U256::from_str("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF").unwrap())
+            .to(),
+            signature: user_op.signature,
+            paymaster: None,
+            paymaster_data: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_verification_gas_limit: None,
+            aggregator: Some(aggregator),
+            eip7702_auth: None,
+        }
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<RpcUserOperationV0_7> for PackedUserOperation {
+    fn into(self) -> RpcUserOperationV0_7 {
+        RpcUserOperationV0_7 {
+            sender: self.sender,
+            nonce: self.nonce,
+            factory: None,
+            call_data: self.callData,
+            factory_data: None,
+            verification_gas_limit: (U256::from_be_bytes(self.accountGasLimits.into())
+                >> U256::from(128))
+            .to(),
+            call_gas_limit: (U256::from_be_bytes(self.accountGasLimits.into())
+                & U256::from_str("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF").unwrap())
+            .to(),
+            pre_verification_gas: self.preVerificationGas,
+            max_priority_fee_per_gas: (U256::from_be_bytes(self.gasFees.into())
+                >> U256::from(128))
+            .to(),
+            max_fee_per_gas: (U256::from_be_bytes(self.gasFees.into())
+                & U256::from_str("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF").unwrap())
+            .to(),
+            signature: self.signature,
+            paymaster: None,
+            paymaster_data: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_verification_gas_limit: None,
+            aggregator: None,
+            eip7702_auth: None,
+        }
+    }
+}
 
 fn serialize_u128_as_hex<S: serde::Serializer>(
     value: &u128,
@@ -75,7 +206,6 @@ fn serialize_u256_as_hex<S: serde::Serializer>(
 }
 
 sol! {
-
     /// Interface for the `Safe4337Module` contract.
     ///
     /// Reference: <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L172>
@@ -103,6 +233,7 @@ sol! {
         #[serde(serialize_with = "serialize_u256_as_hex")]
         uint256 nonce;
         /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
+        // #[serde(serialize_with = "serialize_if_non_zero_address")]
         address factory;
         /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
         bytes factory_data;
@@ -128,6 +259,7 @@ sol! {
         #[serde(serialize_with = "serialize_u128_as_hex")]
         uint128 max_priority_fee_per_gas;
         /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
+        // #[serde(serialize_with = "serialize_if_non_zero_address")]
         address paymaster;
         /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
         /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.

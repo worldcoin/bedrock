@@ -7,6 +7,7 @@
 use crate::{
     primitives::http_client::{get_http_client, HttpHeader},
     primitives::{
+        contracts::{IEntryPoint::PackedUserOperation, RpcUserOperationV0_7},
         AuthenticatedHttpClient, HttpError, HttpMethod, Network, PrimitiveError,
     },
     smart_account::{SafeSmartAccountError, UserOperation},
@@ -14,8 +15,7 @@ use crate::{
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
 
 /// Global RPC client instance for Bedrock operations
@@ -148,6 +148,11 @@ pub enum RpcError {
     /// Safe Smart Account operation error
     #[error("Safe Smart Account operation failed: {0}")]
     SafeSmartAccountError(#[from] SafeSmartAccountError),
+
+    /// Invalid inputs like invalid network
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
+
 }
 
 /// Response from `wa_sponsorUserOperation`
@@ -306,6 +311,13 @@ impl RpcClient {
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
     ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `user_operation`: the user operation to submit
+    /// - `entrypoint`: the entry point contract address
+    /// - `provider`: selected 4337 provider to include in headers
+    /// - `aggregator`: optional aggregator address to include in the user operation
+    ///
     /// # Errors
     ///
     /// Returns an error if:
@@ -320,42 +332,21 @@ impl RpcClient {
         user_operation: &UserOperation,
         entrypoint: Address,
         provider: RpcProviderName,
+        aggregator: Option<Address>,
     ) -> Result<FixedBytes<32>, RpcError> {
-        // TODO: Move this logic to the right place for serialization
+        let packed_user_op: PackedUserOperation = user_operation.clone().into();
 
-        // Serialize user operation, removing factory and factory_data if factory is address(0)
-        let mut user_op_value =
-            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?;
+        // Convert to RpcUserOperationV0_7 based on whether aggregator is provided
+        let rpc_user_op: RpcUserOperationV0_7 = if let Some(agg_addr) = aggregator {
+            (packed_user_op, agg_addr).into()
+        } else {
+            packed_user_op.into()
+        };
 
-        if let Some(user_op_obj) = user_op_value.as_object_mut() {
-            // Remove factory and factory_data if factory is address(0)
-            if let Some(factory_value) = user_op_obj.get("factory") {
-                if factory_value == "0x0000000000000000000000000000000000000000" {
-                    user_op_obj.remove("factory");
-                    user_op_obj.remove("factoryData");
-                }
-            }
-
-            // Remove paymaster fields if paymaster is address(0) or None
-            if let Some(paymaster_value) = user_op_obj.get("paymaster") {
-                if paymaster_value == "0x0000000000000000000000000000000000000000"
-                    || paymaster_value.is_null()
-                {
-                    user_op_obj.remove("paymaster");
-                    user_op_obj.remove("paymasterData");
-                    user_op_obj.remove("paymasterPostOpGasLimit");
-                    user_op_obj.remove("paymasterVerificationGasLimit");
-                }
-            }
-
-            // Add aggregator field
-            user_op_obj.insert(
-                "aggregator".to_string(),
-                serde_json::Value::String(
-                    "0x8af27ee9af538c48c7d2a2c8bd6a40ef830e2489".to_string(),
-                ),
-            );
-        }
+        // Serialize the RpcUserOperationV0_7 to JSON
+        // Seralization will remove unused fields like factory and paymaster from JSON
+        let user_op_value =
+            serde_json::to_value(&rpc_user_op).map_err(|_| RpcError::JsonError)?;
 
         let params = vec![
             user_op_value,
@@ -405,7 +396,7 @@ impl RpcClient {
                     serde_json::Value::String(format!("{data:?}")),
                 ),
             ])),
-            serde_json::Value::String("latest".to_string()),
+            serde_json::Value::String("latest".to_string()), // TODO: Allow passing in block number
         ];
 
         let result: String = self
