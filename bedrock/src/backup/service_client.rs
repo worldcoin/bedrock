@@ -1,351 +1,112 @@
-use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use crate::{backup::BackupError, HttpError};
+use std::sync::{Arc, OnceLock};
 
-use crate::backup::manifest::SyncSigner;
-use crate::primitives::config::{get_config, BedrockEnvironment};
-use crate::HttpError;
-use std::time::Duration;
+/// Global instance of a foreign-implemented `BackupServiceApi` used by Bedrock if provided.
+static BACKUP_SERVICE_API_INSTANCE: OnceLock<Arc<dyn BackupServiceApi>> =
+    OnceLock::new();
 
-/// Lightweight multipart/form-data builder to avoid hand-concatenating bytes in callers.
-struct MultipartBuilder {
-    boundary: String,
-    body: Vec<u8>,
+/// Foreign trait that native layers implement to perform backup-service network calls.
+///
+/// If set, this will be used by Bedrock instead of any internal HTTP client.
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait BackupServiceApi: Send + Sync {
+    /// Uploads an updated backup using the `/v1/sync` endpoint.
+    ///
+    /// Reference: <https://github.com/worldcoin/backup-service/blob/main/src/routes/sync_backup.rs>
+    async fn sync(&self, request: SyncSubmitRequest) -> Result<(), HttpError>;
+
+    /// Retrieves metadata (manifest head) using the `/v1/retrieve_metadata` endpoint.
+    ///
+    /// Reference: <https://github.com/worldcoin/backup-service/blob/main/src/routes/retrieve_metadata.rs>
+    ///
+    /// # Notes
+    /// This expects specific attributes from the response, not all the response is returned to Bedrock (avoids additional memory allocations)
+    async fn retrieve_metadata(
+        &self,
+    ) -> Result<RetrieveMetadataResponsePayload, HttpError>;
 }
 
-impl MultipartBuilder {
-    fn new() -> Self {
-        Self {
-            boundary: format!("----oxide-boundary-{}", uuid::Uuid::new_v4()),
-            body: Vec::new(),
-        }
-    }
-
-    fn content_type(&self) -> String {
-        format!("multipart/form-data; boundary={}", self.boundary)
-    }
-
-    fn add_json_part<T: serde::Serialize>(
-        &mut self,
-        name: &str,
-        json: &T,
-    ) -> Result<(), HttpError> {
-        let crlf = b"\r\n";
-        self.body
-            .extend_from_slice(format!("--{}\r\n", &self.boundary).as_bytes());
-        self.body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{name}\"\r\n").as_bytes(),
-        );
-        self.body
-            .extend_from_slice(b"Content-Type: application/json\r\n\r\n");
-        let bytes = serde_json::to_vec(json).map_err(|e| HttpError::Generic {
-            message: e.to_string(),
-        })?;
-        self.body.extend_from_slice(&bytes);
-        self.body.extend_from_slice(crlf);
-        Ok(())
-    }
-
-    fn add_bytes_part(
-        &mut self,
-        name: &str,
-        filename: &str,
-        content_type: &str,
-        bytes: &[u8],
-    ) {
-        let crlf = b"\r\n";
-        self.body
-            .extend_from_slice(format!("--{}\r\n", &self.boundary).as_bytes());
-        self.body.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n",
-            )
-            .as_bytes(),
-        );
-        self.body.extend_from_slice(
-            format!("Content-Type: {content_type}\r\n\r\n").as_bytes(),
-        );
-        self.body.extend_from_slice(bytes);
-        self.body.extend_from_slice(crlf);
-    }
-
-    fn build(mut self) -> (String, Vec<u8>) {
-        self.body
-            .extend_from_slice(format!("--{}--\r\n", &self.boundary).as_bytes());
-        (self.content_type(), self.body)
-    }
+/// Response body for retrieve metadata call.
+///
+/// # Notes
+/// Only the required attributes are returned to Bedrock (avoids additional memory allocations)
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RetrieveMetadataResponsePayload {
+    /// The hex-encoded manifest hash.
+    pub manifest_hash: String,
 }
 
-/// Lightweight client responsible for calling backup-service endpoints.
-pub struct BackupServiceClient {
-    http: Client,
-    base_url: String,
+/// Request body for `/v1/sync` (i.e. backup upload)
+///
+/// Reference: <https://github.com/worldcoin/backup-service/blob/main/src/routes/sync_backup.rs>
+///
+/// # Notes
+/// `authorization` and `challenge_token` are skipped because they are handled by the Native App.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SyncSubmitRequest {
+    /// Hex-encoded current manifest hash (client state before the update).
+    pub current_manifest_hash: String,
+    /// Hex-encoded new manifest hash (client state after applying the update).
+    pub new_manifest_hash: String,
+    /// Sealed backup bytes to upload.
+    pub sealed_backup: Vec<u8>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChallengeResponse {
-    pub challenge: String,
-    pub token: String,
+/// Sets the global `BackupServiceApi` instance.
+#[uniffi::export]
+pub fn set_backup_service_api(api: Arc<dyn BackupServiceApi>) -> bool {
+    BACKUP_SERVICE_API_INSTANCE.set(api).is_ok()
 }
 
-// Removed unused EcKeypairAuthorizationPayload; JSON is built inline.
-
-#[derive(Debug, Serialize)]
-struct EcKeypairAuthorization {
-    #[serde(rename = "kind")]
-    kind: &'static str,
-    #[serde(rename = "publicKey")]
-    public_key: String,
-    signature: String,
+/// Returns whether a foreign `BackupServiceApi` has been configured.
+#[uniffi::export]
+#[must_use]
+pub fn is_backup_service_api_initialized() -> bool {
+    BACKUP_SERVICE_API_INSTANCE.get().is_some()
 }
 
-#[derive(Debug, Serialize)]
-struct RetrieveMetadataRequest {
-    authorization: EcKeypairAuthorization,
-    #[serde(rename = "challengeToken")]
-    challenge_token: String,
+/// Get a reference to the foreign API or return an error.
+fn get_api() -> Result<&'static Arc<dyn BackupServiceApi>, BackupError> {
+    BACKUP_SERVICE_API_INSTANCE
+        .get()
+        .ok_or(BackupError::BackupApiNotInitialized)
 }
 
-#[derive(Debug, Deserialize)]
-struct RetrieveMetadataResponse {
-    metadata: RetrieveMetadata,
-}
-
-#[derive(Debug, Deserialize)]
-struct RetrieveMetadata {
-    #[serde(rename = "manifestHash")]
-    manifest_hash: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SyncPayload {
-    authorization: EcKeypairAuthorization,
-    #[serde(rename = "challengeToken")]
-    challenge_token: String,
-    #[serde(rename = "currentManifestHash")]
-    current_manifest_hash: String,
-    #[serde(rename = "newManifestHash")]
-    new_manifest_hash: String,
-}
+pub struct BackupServiceClient;
 
 impl BackupServiceClient {
-    /// Constructs a new client using reqwest and the configured Bedrock environment.
-    pub fn new() -> Result<Self, HttpError> {
-        let base_url = resolve_base_url()?;
-        let http = Client::builder()
-            .use_rustls_tls()
-            .tcp_keepalive(Duration::from_secs(30))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .build()
-            .map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        Ok(Self { http, base_url })
-    }
-
-    fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base_url, path)
-    }
-
-    /// POST /v1/sync/challenge/keypair → { challenge, token }
-    pub async fn get_sync_challenge_keypair(
-        &self,
-    ) -> Result<ChallengeResponse, HttpError> {
-        let url = self.url("/v1/sync/challenge/keypair");
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
-        headers.insert(ACCEPT, "application/json".parse().unwrap());
-        let resp = self
-            .http
-            .post(url)
-            .headers(headers)
-            .body(b"{}".to_vec())
-            .send()
-            .await
-            .map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        let status = resp.status();
-        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
-            message: e.to_string(),
-        })?;
-        if !status.is_success() {
-            return Err(HttpError::BadStatusCode {
-                code: u64::from(status.as_u16()),
-                response_body: bytes.to_vec(),
-            });
-        }
-        let v: ChallengeResponse =
-            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        Ok(v)
-    }
-
-    /// POST /v1/sync (multipart) with payload JSON and backup bytes.
-    /// We do not currently consume any response fields; success status is sufficient.
-    pub async fn post_sync_with_keypair(
-        &self,
-        signer: &dyn SyncSigner,
-        challenge: &ChallengeResponse,
+    /// See `BackupServiceApi::sync`.
+    pub async fn sync(
         current_manifest_hash: String,
         new_manifest_hash: String,
         sealed_backup: Vec<u8>,
-    ) -> Result<(), HttpError> {
-        // 1) Build authorization JSON from signer: { kind: "EC_KEYPAIR", publicKey, signature }
-        let sig_b64 = signer.sign_challenge_base64(challenge.challenge.clone());
-        let pk_b64 = signer.public_key_base64();
-        let payload = SyncPayload {
-            authorization: EcKeypairAuthorization {
-                kind: "EC_KEYPAIR",
-                public_key: pk_b64,
-                signature: sig_b64,
-            },
-            challenge_token: challenge.token.clone(),
+    ) -> Result<(), BackupError> {
+        let api = get_api()?;
+        let req = SyncSubmitRequest {
             current_manifest_hash,
             new_manifest_hash,
+            sealed_backup,
         };
-
-        // 2) Build multipart body via helper
-        let mut mp = MultipartBuilder::new();
-        mp.add_json_part("payload", &payload)?;
-        mp.add_bytes_part(
-            "backup",
-            "backup.bin",
-            "application/octet-stream",
-            &sealed_backup,
-        );
-        let (content_type, body) = mp.build();
-
-        let url = self.url("/v1/sync");
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, content_type.parse().unwrap());
-        headers.insert(ACCEPT, "application/json".parse().unwrap());
-        let resp = self
-            .http
-            .post(url)
-            .headers(headers)
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        let status = resp.status();
-        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
-            message: e.to_string(),
-        })?;
-        if !status.is_success() {
-            return Err(HttpError::BadStatusCode {
-                code: u64::from(status.as_u16()),
-                response_body: bytes.to_vec(),
-            });
-        }
+        api.sync(req).await?;
         Ok(())
     }
 
-    /// Retrieve metadata via keypair challenge/sign using provided signer.
-    #[allow(clippy::too_many_lines)]
-    pub async fn get_remote_manifest_hash(
-        &self,
-        signer: &dyn SyncSigner,
-    ) -> Result<[u8; 32], HttpError> {
-        // 1) Request challenge
-        let url_challenge = self.url("/v1/retrieve-metadata/challenge/keypair");
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
-        headers.insert(ACCEPT, "application/json".parse().unwrap());
-        let resp = self
-            .http
-            .post(url_challenge)
-            .headers(headers.clone())
-            .body(b"{}".to_vec())
-            .send()
-            .await
-            .map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        let status = resp.status();
-        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
-            message: e.to_string(),
-        })?;
-        if !status.is_success() {
-            return Err(HttpError::BadStatusCode {
-                code: u64::from(status.as_u16()),
-                response_body: bytes.to_vec(),
-            });
-        }
-        let challenge_resp: ChallengeResponse = serde_json::from_slice(&bytes)
-            .map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
+    /// See `BackupServiceApi::retrieve_metadata`.
+    pub async fn get_remote_manifest_hash() -> Result<[u8; 32], BackupError> {
+        let api = get_api()?;
+        let response = api.retrieve_metadata().await?;
 
-        // 2) Sign + post solution
-        let sig_b64 = signer.sign_challenge_base64(challenge_resp.challenge.clone());
-        let pk_b64 = signer.public_key_base64();
-        let payload = RetrieveMetadataRequest {
-            authorization: EcKeypairAuthorization {
-                kind: "EC_KEYPAIR",
-                public_key: pk_b64,
-                signature: sig_b64,
-            },
-            challenge_token: challenge_resp.token,
-        };
-        let url_retrieve = self.url("/v1/retrieve-metadata");
-        let resp = self
-            .http
-            .post(url_retrieve)
-            .headers(headers)
-            .body(
-                serde_json::to_vec(&payload).map_err(|e| HttpError::Generic {
-                    message: e.to_string(),
-                })?,
-            )
-            .send()
-            .await
-            .map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        let status = resp.status();
-        let bytes = resp.bytes().await.map_err(|e| HttpError::Generic {
-            message: e.to_string(),
-        })?;
-        if !status.is_success() {
-            return Err(HttpError::BadStatusCode {
-                code: u64::from(status.as_u16()),
-                response_body: bytes.to_vec(),
-            });
-        }
-        let v: RetrieveMetadataResponse =
-            serde_json::from_slice(&bytes).map_err(|e| HttpError::Generic {
-                message: e.to_string(),
-            })?;
-        let hash = &v.metadata.manifest_hash;
-
-        let hash: [u8; 32] = hex::decode(hash)
-            .map_err(|_| HttpError::Generic {
-                message: "unable to hex decode manifest hash".to_string(),
+        let hash: [u8; 32] = hex::decode(response.manifest_hash)
+            .map_err(|_| BackupError::Generic {
+                message: "[BackupServiceApi] invalid response from retrieve_metadata"
+                    .to_string(),
             })?
             .try_into()
-            .map_err(|_| HttpError::Generic {
-                message: "unable to convert hex encoded manifest hash to [u8; 32]"
+            .map_err(|_| BackupError::Generic {
+                message: "[BackupServiceApi] invalid response from retrieve_metadata"
                     .to_string(),
             })?;
-
         Ok(hash)
     }
 }
-
-fn resolve_base_url() -> Result<String, HttpError> {
-    let cfg = get_config().ok_or_else(|| HttpError::Generic {
-        message: "Bedrock config not initialized; call set_config() first".to_string(),
-    })?;
-    let url = match cfg.environment() {
-        BedrockEnvironment::Staging => STAGING_BACKUP_BASE_URL,
-        BedrockEnvironment::Production => PRODUCTION_BACKUP_BASE_URL,
-    };
-    Ok(url.to_string())
-}
-
-const STAGING_BACKUP_BASE_URL: &str = "https://backup-staging.placeholder";
-const PRODUCTION_BACKUP_BASE_URL: &str = "https://backup-prod.placeholder";
