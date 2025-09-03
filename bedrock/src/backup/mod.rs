@@ -15,6 +15,7 @@ use crate::backup::backup_format::BackupFormat;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::create_middleware;
 use crate::primitives::filesystem::get_filesystem_raw;
+use crate::primitives::filesystem::FileSystemExt;
 use crate::root_key::RootKey;
 use anyhow::Context as _;
 use crypto_box::SecretKey;
@@ -328,6 +329,31 @@ fn unpack_backup_to_filesystem(
         // NOTE: we do not prefix with 'backup/' here; we write files to
         // their actual module-owned locations in the global filesystem.
         let rel_path = file.path.trim_start_matches('/');
+
+        // If a file already exists, verify checksum and log discrepancies before replacing.
+        match fs.file_exists(rel_path.to_string()) {
+            Ok(true) => match fs.calculate_checksum(rel_path) {
+                Ok(local_checksum) => {
+                    if local_checksum != file.checksum {
+                        log::error!(
+                                "[BackupManager] checksum mismatch for existing file at {rel_path} (designator: {}). Replacing with remote contents.",
+                                file.designator
+                            );
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                            "[BackupManager] failed to compute checksum for existing file at {rel_path}: {e:?}. Replacing with remote contents.",
+                        );
+                }
+            },
+            Ok(false) => {}
+            Err(e) => {
+                log::error!(
+                    "[BackupManager] failed to check existence for {rel_path}: {e:?}. Proceeding to write.",
+                );
+            }
+        }
 
         fs.write_file(rel_path.to_string(), file.data.clone())
             .map_err(|e| {
