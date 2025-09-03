@@ -3,27 +3,27 @@ members = ["bedrock", "bedrock-macros", "uniffi-bindgen"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.6"
-license = "MIT"
-edition = "2021"
 authors = [
-    "Paolo D'Amico <paolodamico@users.noreply.github.com",
-    "Luke Mann <luke@mann.xyz>",
-    "Seva Zhidkov <zhidkovseva@gmail.com>",
-    "Aurel <105201452+aurel-fr@users.noreply.github.com>",
+  "Paolo D'Amico <paolodamico@users.noreply.github.com",
+  "Luke Mann <luke@mann.xyz>",
+  "Seva Zhidkov <zhidkovseva@gmail.com>",
+  "Aurel <105201452+aurel-fr@users.noreply.github.com>",
 ]
-readme = "./README.md"
-homepage = "https://toolsforhumanity.com/world-app" # TODO: Update to specific Bedrock page
-repository = "https://github.com/worldcoin/bedrock"
-exclude = ["tests/", "uniffi-bindgen/"]
-keywords = ["Ethereum", "WorldChain", "World"]
 categories = ["api-bindings", "cryptography::cryptocurrencies"]
+edition = "2021"
+exclude = ["tests/", "uniffi-bindgen/"]
+homepage = "https://toolsforhumanity.com/world-app" # TODO: Update to specific Bedrock page
+keywords = ["Ethereum", "WorldChain", "World"]
+license = "MIT"
+readme = "./README.md"
+repository = "https://github.com/worldcoin/bedrock"
+version = "0.0.6"
 
 [workspace.dependencies]
 uniffi = { version = "0.29.2", features = ["build", "tokio"] }
 
 [profile.release]
-opt-level = 'z' # Optimize for size.
-lto = true      # Enable Link Time Optimization.
-panic = "abort"
 debug = false
+lto = true      # Enable Link Time Optimization.
+opt-level = 'z' # Optimize for size.
+panic = "abort"

@@ -1,17 +1,17 @@
 [package]
-name = "bedrock"
 description = "Foundational library which powers World App's crypto wallet."
+name = "bedrock"
 
-version.workspace = true
-edition.workspace = true
 authors.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-exclude.workspace = true
-readme.workspace = true
-keywords.workspace = true
 categories.workspace = true
+edition.workspace = true
+exclude.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
 
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
@@ -23,10 +23,10 @@ tooling_tests = ["dep:tokio"]
 
 [dependencies]
 alloy = { version = "1.0.23", default-features = false, features = [
-    "dyn-abi",
-    "eip712",
-    "signer-local",
-    "sol-types",
+  "dyn-abi",
+  "eip712",
+  "signer-local",
+  "sol-types",
 ] }
 anyhow = "1.0"
 async-trait = "0.1"
@@ -36,7 +36,6 @@ blake3 = "1.5.5"
 chrono = { version = "0.4.41", default-features = false, features = [
     "now",
     "std",
-    "serde",
 ] }
 ciborium = "0.2.2"
 crypto_box = { version = "0.9.1", features = ["seal"] }
@@ -71,10 +70,10 @@ zeroize = "1.8"
 
 [dev-dependencies]
 alloy = { version = "1.0.23", default-features = false, features = [
-    "json",
-    "contract",
-    "node-bindings",
-    "reqwest-rustls-tls",
+  "json",
+  "contract",
+  "node-bindings",
+  "reqwest-rustls-tls",
 ] }
 dotenvy = "0.15.7"
 tokio = { version = "1.47.1", features = ["time"] }

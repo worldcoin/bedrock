@@ -90,7 +90,7 @@ impl RootKey {
         let mut buf = [0u8; KEY_LENGTH];
         OsRng
             .try_fill_bytes(&mut buf)
-            .expect("Fatal CSPRNG error: unable to initialize new OxideKey");
+            .expect("Fatal CSPRNG error: unable to initialize new RootKey");
         let inner = SecretBox::new(Box::new(VersionedKey::V1(buf)));
         buf.zeroize();
         Self { inner }
@@ -110,6 +110,27 @@ impl RootKey {
 
     pub fn is_v0(&self) -> bool {
         matches!(self.inner.expose_secret(), VersionedKey::V0(_))
+    }
+
+    pub fn is_equal_to(&self, other: &Self) -> bool {
+        let self_secret = self.inner.expose_secret();
+        let other_secret = other.inner.expose_secret();
+
+        match (self_secret, other_secret) {
+            (VersionedKey::V0(self_secret), VersionedKey::V0(other_secret)) => {
+                self_secret.as_bytes().ct_eq(other_secret.as_bytes()).into()
+            }
+            (VersionedKey::V1(self_secret), VersionedKey::V1(other_secret)) => {
+                self_secret.ct_eq(other_secret).into()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq for RootKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_equal_to(other)
     }
 }
 
