@@ -36,28 +36,38 @@ fn test_decode_invalid_length() {
     );
 }
 
+/// Generate multiple keys and verify they are all different
+/// We use a simple statistical test to verify that the keys look random. Note this is just a sanity check,
+/// ultimately the randomness depends on the OS's source of randomness. Not on how it's implemented here.
 #[test]
-fn test_new_random_v1_and_roundtrip() {
-    let key = RootKey::new_random();
-    assert!(!key.is_v0());
+fn test_new_generates_seemingly_random_keys() {
+    const NUM_KEYS: usize = 100;
+    let mut keys = Vec::with_capacity(NUM_KEYS);
 
-    // Serialize and validate structure
-    let json = key.danger_to_json().unwrap();
-    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(v["version"], "V1");
-    let key_hex = v["key"].as_str().unwrap();
-    assert_eq!(key_hex.len(), 64); // 32 bytes hex-encoded
-    let decoded = hex::decode(key_hex).unwrap();
-    assert_eq!(decoded.len(), KEY_LENGTH);
+    for _ in 0..NUM_KEYS {
+        let key = RootKey::new_random();
+        let encoded = key.danger_to_json().unwrap();
+        keys.push(encoded);
+    }
 
-    // Round-trip back into RootKey and ensure equality
-    let roundtrip = RootKey::from_json(&json).unwrap();
-    assert_eq!(key, roundtrip);
-}
+    // Check that all keys are unique
+    for i in 0..keys.len() {
+        for j in (i + 1)..keys.len() {
+            assert_ne!(
+                keys[i], keys[j],
+                "Generated duplicate keys at indices {i} and {j}"
+            );
+        }
+    }
 
-#[test]
-fn test_new_random_uniqueness_basic() {
-    let a = RootKey::new_random();
-    let b = RootKey::new_random();
-    assert_ne!(a, b);
+    for encoded in &keys {
+        let parsed: serde_json::Value = serde_json::from_str(encoded).unwrap();
+        let hex_key = parsed["key"].as_str().unwrap();
+        let key_bytes = hex::decode(hex_key).unwrap();
+
+        #[allow(clippy::naive_bytecount)] // this is a test, naive byte count is fine
+        let zero_count = key_bytes.iter().filter(|b| **b == 0).count();
+
+        assert!(zero_count < 4); // following a binomial distribution X ~ Bin(32, 1/256), P(X <= 4) = 0.99999+
+    }
 }

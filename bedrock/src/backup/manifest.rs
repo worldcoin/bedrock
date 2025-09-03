@@ -3,8 +3,6 @@
 //! The backup manifest is a local file-based system that any module can set to describe which files should
 //! be included in the backup.
 
-use std::sync::Arc;
-
 use anyhow::Context;
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
@@ -14,6 +12,7 @@ use crate::backup::service_client::{
     api_get_remote_manifest_hash, api_get_sync_challenge_keypair,
     api_post_sync_with_keypair,
 };
+use crate::backup::service_client::BackupServiceClient;
 use crate::backup::BackupFileDesignator;
 use crate::primitives::filesystem::{
     create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
@@ -53,34 +52,19 @@ impl BackupManifest {
     }
 }
 
-/// Abstraction for signing backup-service challenges with the sync factor keypair.
-///
-/// Implementations are expected to:
-/// - return the sync factor public key in uncompressed SEC1 form, base64 (standard) encoded
-/// - sign the raw ASCII challenge string with ECDSA P-256, DER-encode the signature, base64 (standard) encode it
-#[uniffi::export(with_foreign)]
-pub trait SyncSigner: Send + Sync {
-    /// Returns the sync factor public key in standard base64 encoding.
-    fn public_key_base64(&self) -> String;
-    /// Signs the provided raw ASCII challenge with ECDSA P-256; returns DER signature, base64 encoded.
-    fn sign_challenge_base64(&self, challenge: String) -> String;
-}
-
 /// Manager responsible for reading and writing backup manifests and coordinating sync.
 #[derive(uniffi::Object)]
 pub struct ManifestManager {
     file_system: FileSystemMiddleware,
-    signer: Arc<dyn SyncSigner>,
 }
 
 impl ManifestManager {
     #[uniffi::constructor]
     /// Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.
     #[must_use]
-    pub fn new(signer: Arc<dyn SyncSigner>) -> Self {
+    pub fn new() -> Self {
         Self {
             file_system: create_middleware("backup"),
-            signer,
         }
     }
 
@@ -411,5 +395,11 @@ impl ManifestManager {
         let updated_manifest = BackupManifest::V0(manifest);
         self.sync_and_commit(local_hash, updated_manifest, sealed_backup)
             .await
+    }
+}
+
+impl Default for ManifestManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

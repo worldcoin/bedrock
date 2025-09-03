@@ -548,6 +548,12 @@ pub enum BackupError {
     #[error("Remote manifest is ahead of local; fetch and apply latest backup before updating")]
     /// Remote manifest head is ahead of local; fetch and apply latest backup before retrying.
     RemoteAheadStaleError,
+    #[error(transparent)]
+    /// HTTP error.
+    HttpError(#[from] crate::primitives::http_client::HttpError),
+    #[error("Backup API not initialized")]
+    /// Backup API not initialized.
+    BackupApiNotInitialized,
 }
 
 /// Trait for errors that can be sanitized for safe logging.
