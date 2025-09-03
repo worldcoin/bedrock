@@ -1,18 +1,18 @@
 [package]
-name = "uniffi-bindgen"
 description = "Foreign binding generation for Bedrock"
+name = "uniffi-bindgen"
 publish = false
 
-version.workspace = true
-edition.workspace = true
 authors.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-exclude.workspace = true
-readme.workspace = true
-keywords.workspace = true
 categories.workspace = true
+edition.workspace = true
+exclude.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
 
 [[bin]]
 name = "uniffi-bindgen"

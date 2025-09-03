@@ -26,16 +26,16 @@ jobs:
       - name: Check code formatting
         run: cargo fmt -- --check
 
-      - name: Cargo sort
-        run: |
-          cargo install cargo-sort
-          cargo sort --workspace --check
-
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features
 
       - name: Build
         run: cargo build
+
+      - name: Check TOML formatting
+        run: |
+          cargo install taplo-cli
+          taplo fmt --check
 
   swift-build-and-test:
     name: Build and Test Swift Bindings
