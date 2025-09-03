@@ -29,7 +29,7 @@ use crate::backup::service_client::{
     SyncSubmitRequest,
 };
 use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 #[derive(Default, Clone, Debug)]
@@ -468,6 +468,10 @@ async fn test_remove_file_happy_and_not_found() {
         .expect_err("expected file-not-found error");
     assert!(err.to_string().contains("File not found in manifest"));
 }
+
+// =========================
+// BackupManager tests
+// =========================
 
 fn helper_compare_backups(source: &BackupFormat, target: &BackupFormat) -> bool {
     let BackupFormat::V0(source_backup) = source;
