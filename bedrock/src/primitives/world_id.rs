@@ -59,7 +59,7 @@ pub struct InclusionProof {
 #[crate::bedrock_error]
 #[derive(Debug, Deserialize)]
 pub enum WorldIdError {
-    /// WorldID identity has not been initialized
+    /// Identity has not been initialized
     #[error("WorldID identity not initialized. Call set_world_id_identity() first.")]
     WorldIdIdentityNotInitialized,
     /// Failed to fetch inclusion proof from sequencer
