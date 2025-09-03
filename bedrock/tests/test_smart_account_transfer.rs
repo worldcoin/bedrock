@@ -9,11 +9,11 @@ use alloy::{
 };
 
 use bedrock::{
-    primitives::http_client::{
+    primitives::{http_client::{
         set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
-    },
+    }, Network},
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::foreign::UnparsedUserOperation,
+    transaction::{foreign::UnparsedUserOperation, RpcProviderName},
 };
 
 use serde::Serialize;
@@ -294,6 +294,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation_non_pbh(
     let amount = "1000000000000000000"; // 1 WLD
     let _user_op_hash = safe_account
         .transaction_transfer(
+            Network::WorldChain,
             &wld_token_address.to_string(),
             &recipient.to_string(),
             amount,

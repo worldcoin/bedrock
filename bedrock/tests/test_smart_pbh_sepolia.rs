@@ -167,7 +167,7 @@ async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
         nullifier: nullifier.parse().unwrap(),
         trapdoor: trapdoor.parse().unwrap(),
     };
-    let _ = set_world_id_identity(Arc::new(identity));
+    set_world_id_identity(Arc::new(identity));
 
     // 8) Execute high-level transfer via transaction_transfer
     let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)?;

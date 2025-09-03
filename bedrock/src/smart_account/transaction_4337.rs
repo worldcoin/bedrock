@@ -147,8 +147,7 @@ pub trait Is4337Encodable {
                 }
                 _ => {
                     return Err(RpcError::InvalidRequest(format!(
-                        "Invalid network {:?} for PBH",
-                        network
+                        "Invalid network {network:?} for PBH"
                     )))
                 }
             }

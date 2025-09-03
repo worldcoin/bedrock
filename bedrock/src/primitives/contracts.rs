@@ -8,7 +8,7 @@ use alloy::sol;
 use alloy::sol_types::SolValue;
 use alloy_primitives::{U128, U64, U8};
 use ruint::aliases::U256;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use std::{str::FromStr, sync::LazyLock};
 use world_chain_builder_pbh::external_nullifier::EncodedExternalNullifier;
 use world_chain_builder_pbh::payload::PBHPayload as WorldchainBuilderPBHPayload;
@@ -21,14 +21,14 @@ static SAFE_OP_TYPEHASH: LazyLock<FixedBytes<32>> = LazyLock::new(|| {
     .expect("error initializing `SAFE_OP_TYPEHASH`")
 });
 
-/// PBHSignatureAggregator - Sepolia
+/// `PBHSignatureAggregator` - Sepolia
 /// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBHSignatureAggregator.sol>
 pub static PBH_SIGNATURE_AGGREGATOR_SEPOLIA: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x8af27Ee9AF538C48C7D2a2c8BD6a40eF830e2489")
         .expect("failed to decode PBH_SIGNATURE_AGGREGATOR_SEPOLIA")
 });
 
-/// PBHSignatureAggregator - Mainnet
+/// `PBHSignatureAggregator` - Mainnet
 /// Contract reference: <https://github.com/worldcoin/world-chain/blob/main/contracts/src/PBHSignatureAggregator.sol>
 pub static PBH_SIGNATURE_AGGREGATOR_MAINNET: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0xd21306c75c956142c73c0c3bab282be68595081e")
