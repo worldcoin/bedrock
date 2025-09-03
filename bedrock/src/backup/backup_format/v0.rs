@@ -51,6 +51,8 @@ pub struct V0BackupFile {
     pub checksum: [u8; 32],
     /// Relative path under the user data directory; also used as archive entry name.
     pub path: String,
+    /// Logical designator for this file. Stored to avoid inferring from `path`.
+    pub designator: BackupFileDesignator,
 }
 
 impl V0BackupFile {
@@ -62,7 +64,7 @@ impl V0BackupFile {
         let computed_checksum = blake3::hash(&self.data);
         if &self.checksum != computed_checksum.as_bytes() {
             return Err(BackupError::InvalidChecksumError {
-                designator: self.path.get(..14).unwrap_or(&self.path).to_string(),
+                designator: self.designator.to_string(),
             });
         }
         Ok(())
@@ -238,11 +240,13 @@ mod tests {
                 data: b"Hello, World!".to_vec(),
                 checksum: blake3::hash(b"Hello, World!").as_bytes().to_owned(),
                 path: "personal_custody/file1.txt".to_string(),
+                designator: BackupFileDesignator::OrbPkg,
             },
             V0BackupFile {
                 data: vec![],
                 checksum: blake3::hash(&[]).as_bytes().to_owned(),
                 path: "document_personal_custody/file2.txt".to_string(),
+                designator: BackupFileDesignator::DocumentPkg,
             },
         ];
 
@@ -324,6 +328,7 @@ mod tests {
             data: b"Hello".to_vec(),
             checksum: blake3::hash(b"Hello").as_bytes().to_owned(),
             path: "personal_custody/file.txt".to_string(),
+            designator: BackupFileDesignator::OrbPkg,
         };
         let mut encoded_file = Vec::new();
         ciborium::into_writer(&test_file, &mut encoded_file).unwrap();
@@ -455,6 +460,7 @@ mod tests {
             data: b"Hello, World!".to_vec(),
             checksum: blake3::hash(b"Goodbye, World!").as_bytes().to_owned(),
             path: "personal_custody/file.txt".to_string(),
+            designator: BackupFileDesignator::OrbPkg,
         };
 
         let mut encoded_file = Vec::new();

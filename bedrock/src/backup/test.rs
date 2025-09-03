@@ -575,6 +575,7 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
             .try_into()
             .unwrap(),
             path: "documents/file1.txt".to_string(),
+            designator: BackupFileDesignator::DocumentPkg,
         }],
     });
     let re_encrypted_backup =
@@ -692,11 +693,13 @@ fn test_unpack_writes_files_and_manifest() {
             data: b"hello-orb".to_vec(),
             checksum: blake3::hash(b"hello-orb").as_bytes().to_owned(),
             path: "orb_pkg/personal_custody/pcp-1234.bin".to_string(),
+            designator: BackupFileDesignator::OrbPkg,
         },
         V0BackupFile {
             data: b"doc-blob".to_vec(),
             checksum: blake3::hash(b"doc-blob").as_bytes().to_owned(),
             path: "document_pkg/document_personal_custody/passport-1.bin".to_string(),
+            designator: BackupFileDesignator::DocumentPkg,
         },
     ];
     let unsealed = BackupFormat::V0(V0Backup { root_secret, files });

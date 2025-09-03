@@ -332,11 +332,7 @@ fn unpack_backup_to_filesystem(
                 BackupError::from(err)
             })?;
 
-        // Infer logical designator from the first path segment.
-        // Supports both canonical segments (orb_pkg/document_pkg/secure_document_pkg)
-        // and legacy prefixes for backward compatibility.
-        let first_segment = rel_path.split('/').next().unwrap_or("");
-        let designator = infer_designator(first_segment)?;
+        let designator = file.designator.clone();
 
         // Record the exact relative path written (used by manifest+sync decisions).
         manifest_entries.push(V0BackupManifestEntry {
@@ -360,22 +356,6 @@ fn unpack_backup_to_filesystem(
         .context("write manifest.json")?;
 
     Ok(())
-}
-
-fn infer_designator(segment: &str) -> Result<BackupFileDesignator, BackupError> {
-    if let Ok(d) = BackupFileDesignator::from_str(segment) {
-        return Ok(d);
-    }
-    match segment {
-        "personal_custody" => Ok(BackupFileDesignator::OrbPkg),
-        "document_personal_custody" => Ok(BackupFileDesignator::DocumentPkg),
-        "secure_document_personal_custody" | "secure_document" => {
-            Ok(BackupFileDesignator::SecureDocumentPkg)
-        }
-        _ => Err(BackupError::InvalidFileForBackup(format!(
-            "Unknown designator prefix in path: {segment}"
-        ))),
-    }
 }
 
 /// A global identifier that identifies the type of file.

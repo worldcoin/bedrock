@@ -279,6 +279,7 @@ impl ManifestManager {
                     entry.designator,
                     rel.rsplit('/').next().unwrap_or(rel)
                 ),
+                designator: entry.designator.clone(),
             });
         }
         Ok(files)
