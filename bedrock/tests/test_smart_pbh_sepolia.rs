@@ -111,9 +111,6 @@ where
             }
             // Forward all other methods to the actual provider
             _ => {
-                println!("method: {method}");
-                println!("params: {params}");
-
                 // Forward the JSON-RPC request to the provider
                 let response = self
                     .provider

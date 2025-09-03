@@ -233,12 +233,7 @@ pub async fn find_unused_nullifier_hash(
         if signed_from_slice != I256::MINUS_ONE {
             let index = unsigned_value.to::<usize>();
             let actual_nonce = batch_start + index as u16;
-
-            println!("Found unused nullifier!");
-            println!("Month: {current_month:?}");
-            println!("Year: {current_year:?}");
-            println!("Actual nonce: {actual_nonce:?}");
-
+            crate::info!("Found unused nullifier! Month: {current_month:?}, Year: {current_year:?}, Nonce: {actual_nonce:?}");
             // Return the external nullifier for the found index
             return Ok(batch_external_nullifiers[index]);
         }
