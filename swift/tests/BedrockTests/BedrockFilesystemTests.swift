@@ -97,7 +97,7 @@ final class BedrockFilesystemTests: XCTestCase {
 }
 
 /// Mock filesystem implementation for testing
-class MockFileSystemBridge: Bedrock.FileSystem {
+final class MockFileSystemBridge: Bedrock.FileSystem {
     static let shared = MockFileSystemBridge()
     private var files: [String: Data] = [:]
     
@@ -114,6 +114,21 @@ class MockFileSystemBridge: Bedrock.FileSystem {
         return data
     }
     
+    func readFileRange(filePath: String, offset: UInt64, maxLength: UInt64) throws -> Data {
+        guard let data = files[filePath] else {
+            throw Bedrock.FileSystemError.FileDoesNotExist
+        }
+
+        if offset >= UInt64(data.count) {
+            return Data()
+        }
+
+        let startIndex = Int(offset)
+        let safeMaxLength = maxLength > UInt64(Int.max) ? UInt64(Int.max) : maxLength
+        let endIndex = min(data.count, startIndex + Int(safeMaxLength))
+        return data.subdata(in: startIndex..<endIndex)
+    }
+
     func writeFile(filePath: String, fileBuffer: Data) throws {
         // Create any necessary parent directories in our mock
         files[filePath] = fileBuffer
