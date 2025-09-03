@@ -315,12 +315,7 @@ impl BackupManager {
 fn unpack_backup_to_filesystem(
     unsealed_backup: &BackupFormat,
 ) -> Result<(), BackupError> {
-    match unsealed_backup {
-        BackupFormat::V0(backup) => unpack_v0_backup_to_filesystem(backup),
-    }
-}
-
-fn unpack_v0_backup_to_filesystem(backup: &V0Backup) -> Result<(), BackupError> {
+    let BackupFormat::V0(backup) = unsealed_backup;
     let fs = get_filesystem_raw()?;
     let mut manifest_entries: Vec<V0BackupManifestEntry> =
         Vec::with_capacity(backup.files.len());
@@ -355,10 +350,11 @@ fn unpack_v0_backup_to_filesystem(backup: &V0Backup) -> Result<(), BackupError> 
         previous_manifest_hash: None,
         files: manifest_entries,
     });
-    // Persist reconstructed manifest under 'backup/manifest.json' (scoped middleware).
+
     let manifest_bytes =
         serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
     let fs_backup = create_middleware("backup");
+
     fs_backup
         .write_file("manifest.json", manifest_bytes)
         .context("write manifest.json")?;
