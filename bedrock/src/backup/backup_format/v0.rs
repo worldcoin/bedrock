@@ -51,7 +51,7 @@ pub struct V0BackupFile {
     pub checksum: [u8; 32],
     /// Relative path under the user data directory; also used as archive entry name.
     pub path: String,
-    /// Logical designator for this file. Stored to avoid inferring from `path`.
+    /// Logical designator for this file. Required to reconstruct the manifest when unpacking a backup from the remote.
     pub designator: BackupFileDesignator,
 }
 

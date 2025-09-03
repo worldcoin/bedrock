@@ -353,13 +353,17 @@ impl ManifestManager {
 
         let updated_manifest = BackupManifest::V0(manifest);
         let new_manifest_hash = updated_manifest.calculate_hash()?;
+
         BackupServiceClient::sync(
             hex::encode(local_hash),
             hex::encode(new_manifest_hash),
             sealed_backup,
         )
         .await?;
+
+        // commit the updated manifest once the remote sync has been successful
         self.write_manifest(&updated_manifest)?;
+
         Ok(())
     }
 }

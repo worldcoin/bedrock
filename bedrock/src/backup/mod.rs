@@ -8,14 +8,12 @@ mod test;
 use bedrock_macros::bedrock_export;
 pub use manifest::ManifestManager;
 
-use crate::backup::backup_format::v0::V0Backup;
-use crate::backup::backup_format::v0::V0BackupManifest;
-use crate::backup::backup_format::v0::V0BackupManifestEntry;
+use crate::backup::backup_format::v0::{
+    V0Backup, V0BackupManifest, V0BackupManifestEntry,
+};
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::manifest::BackupManifest;
-use crate::primitives::filesystem::create_middleware;
-use crate::primitives::filesystem::get_filesystem_raw;
-use crate::primitives::filesystem::FileSystemExt;
+use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
 use crate::root_key::RootKey;
 use anyhow::Context as _;
 use crypto_box::SecretKey;
@@ -125,8 +123,9 @@ impl BackupManager {
         let manifest_bytes =
             serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
         let manifest_hash_hex = hex::encode(blake3::hash(&manifest_bytes).as_bytes());
-        let fs = create_middleware("backup");
-        fs.write_file("manifest.json", manifest_bytes)
+
+        _bedrock_fs
+            .write_file("manifest.json", manifest_bytes)
             .context("write manifest.json")?;
 
         // 6: Prepare the result
@@ -194,30 +193,24 @@ impl BackupManager {
         let factor_secret_key = SecretKey::from_slice(&factor_secret_bytes)
             .map_err(|_| BackupError::DecodeFactorSecretError)?;
 
-        // Decrypt backup keypair bytes
+        // Decrypt `EncryptedBackupKeypair` (from Factor Secret)
         let encrypted_backup_keypair_bytes = hex::decode(encrypted_backup_keypair)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-
         let backup_keypair_bytes = factor_secret_key
             .unseal(&encrypted_backup_keypair_bytes)
             .map_err(|_| BackupError::DecryptBackupKeypairError)?;
-
-        // Build SecretKey from decrypted bytes
         let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
-        // Decrypt sealed backup
+        // Decrypt Sealed Backup
         let unsealed_backup = backup_secret_key
             .unseal(sealed_backup_data)
             .map_err(|_| BackupError::DecryptBackupError)?;
 
-        // Deserialize the unsealed backup
         let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
-        // Unpack files and rebuild manifest using the remote-provided current manifest hash
         Self::unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
 
-        // Return decrypted root key and backup pubkey
         match unsealed_backup {
             BackupFormat::V0(backup) => Ok(DecryptedBackup {
                 root_key_json: backup
@@ -322,36 +315,38 @@ impl BackupManager {
         current_manifest_hash_hex: String,
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
+
+        // NOTE: we don't use the module's prefix (`backup/`) here; as this
+        // unpacks files directly into their module-owned locations.
         let fs = get_filesystem_raw()?;
         let mut manifest_entries: Vec<V0BackupManifestEntry> =
             Vec::with_capacity(backup.files.len());
 
         for file in &backup.files {
-            // NOTE: we do not prefix with 'backup/' here; we write files to
-            // their actual module-owned locations in the global filesystem.
             let rel_path = file.path.trim_start_matches('/');
 
             // If a file already exists, verify checksum and log discrepancies before replacing.
+            let path_ref = rel_path.get(..14).unwrap_or(rel_path); // don't log the full path to avoid leaking info
             match fs.file_exists(rel_path.to_string()) {
                 Ok(true) => match fs.calculate_checksum(rel_path) {
                     Ok(local_checksum) => {
                         if local_checksum != file.checksum {
                             log::error!(
-                                    "[BackupManager] checksum mismatch for existing file at {rel_path} (designator: {}). Replacing with remote contents.",
+                                    "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
                                     file.designator
                                 );
                         }
                     }
                     Err(e) => {
                         log::error!(
-                                "[BackupManager] failed to compute checksum for existing file at {rel_path}: {e:?}. Replacing with remote contents.",
+                                "[BackupManager] failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
                             );
                     }
                 },
                 Ok(false) => {}
                 Err(e) => {
                     log::error!(
-                        "[BackupManager] failed to check existence for {rel_path}: {e:?}. Proceeding to write.",
+                        "[BackupManager] failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
                     );
                 }
             }
@@ -359,13 +354,12 @@ impl BackupManager {
             fs.write_file(rel_path.to_string(), file.data.clone())
                 .map_err(|e| {
                     let err = anyhow::Error::from(e)
-                        .context(format!("write unpacked file: {rel_path}"));
+                        .context(format!("write unpacked file: {path_ref}"));
                     BackupError::from(err)
                 })?;
 
             let designator = file.designator.clone();
 
-            // Record the exact relative path written (used by manifest+sync decisions).
             manifest_entries.push(V0BackupManifestEntry {
                 designator,
                 file_path: rel_path.to_string(),
@@ -378,13 +372,8 @@ impl BackupManager {
             files: manifest_entries,
         });
 
-        let manifest_bytes =
-            serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
-        let fs_backup = create_middleware("backup");
-
-        fs_backup
-            .write_file("manifest.json", manifest_bytes)
-            .context("write manifest.json")?;
+        let manifest_manager = ManifestManager::new();
+        manifest_manager.write_manifest(&manifest)?;
 
         Ok(())
     }
