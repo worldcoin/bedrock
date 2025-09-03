@@ -445,7 +445,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "CBOR decoding error invalid_module_file.txt: Semantic error at None: missing field checksum"
+            "CBOR decoding error invalid_module_file.txt: Semantic error at None: missingfieldch"
         );
     }
 

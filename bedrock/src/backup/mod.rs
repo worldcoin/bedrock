@@ -505,7 +505,7 @@ impl SanitizeError for ciborium::de::Error<std::io::Error> {
                 // generally semantic errors don't contain any payload, but out of an abundance of caution, we only log the first bytes.
                 format!(
                     "Semantic error at {pos:?}: {}",
-                    msg.get(..14).unwrap_or(msg)
+                    msg.replace([' ', '`'], "").get(..14).unwrap_or(msg)
                 )
             }
             Self::RecursionLimitExceeded => "recursion limit exceeded".to_string(),
