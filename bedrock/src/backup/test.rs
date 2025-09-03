@@ -33,10 +33,18 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 #[derive(Default, Clone, Debug)]
+struct NextSyncErrorConfig {
+    code: u64,
+    response_body: Vec<u8>,
+}
+
+#[derive(Default, Clone, Debug)]
 struct FakeApiState {
     remote_manifest_hash_hex: Option<String>,
     last_sync: Option<SyncSubmitRequest>,
     sync_count: u64,
+    // If set, the next call to sync will fail with this error (one-shot).
+    sync_error: Option<NextSyncErrorConfig>,
 }
 
 #[derive(Clone, Default)]
@@ -51,6 +59,12 @@ impl FakeBackupServiceApi {
     fn set_remote_hash(&self, hex_hash: String) {
         self.state.lock().unwrap().remote_manifest_hash_hex = Some(hex_hash);
     }
+    fn set_sync_error_bad_status(&self, code: u64, response_body: Vec<u8>) {
+        self.state.lock().unwrap().sync_error = Some(NextSyncErrorConfig {
+            code,
+            response_body,
+        });
+    }
 }
 
 #[async_trait::async_trait]
@@ -58,6 +72,12 @@ impl BackupServiceApi for FakeBackupServiceApi {
     #[allow(clippy::significant_drop_tightening)]
     async fn sync(&self, request: SyncSubmitRequest) -> Result<(), crate::HttpError> {
         let mut s = self.state.lock().unwrap();
+        if let Some(err_cfg) = s.sync_error.take() {
+            return Err(crate::HttpError::BadStatusCode {
+                code: err_cfg.code,
+                response_body: err_cfg.response_body,
+            });
+        }
         s.last_sync = Some(request);
         s.sync_count += 1;
         if let Some(last) = &s.last_sync {
@@ -268,6 +288,48 @@ async fn test_store_file_happy_path_and_commit() {
 }
 
 #[tokio::test]
+async fn test_store_file_propagates_sync_failure() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Local empty manifest and matching remote
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_sync_failure");
+    api.set_remote_hash(compute_manifest_hash_from_disk(
+        "backup_test_store_sync_failure",
+    ));
+
+    // Prepare a source file to store
+    write_global_file("pcp/source.bin", b"hello-bytes");
+
+    // Configure API to fail on next sync
+    api.set_sync_error_bad_status(500, b"server error".to_vec());
+
+    // Backup pubkey
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_sync_failure");
+    let err = mgr
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            "pcp/source.bin".to_string(),
+            &RootKey::new_random().danger_to_json().unwrap(),
+            backup_pk_hex,
+        )
+        .await
+        .expect_err("expected HTTP error to propagate from sync");
+
+    // The error should be an HTTP error propagated through BackupError
+    let msg = err.to_string();
+    assert!(msg.contains("Bad status code"), "unexpected error: {msg}");
+}
+
+#[tokio::test]
 async fn test_store_file_fails_when_remote_ahead() {
     let _g = serial_guard().await;
     let api = init_test_globals();
@@ -362,6 +424,93 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
     assert!(err
         .to_string()
         .contains("Checksum for file with designator"));
+}
+
+#[tokio::test]
+async fn test_store_file_checksum_mismatch_when_file_modified() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Prepare manifest with one entry that matches the original file contents
+    write_global_file("pcp/changed.bin", b"ORIGINAL");
+    let correct_checksum = hex::encode(blake3::hash(b"ORIGINAL").as_bytes());
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::OrbPkg,
+            file_path: "pcp/changed.bin".to_string(),
+            checksum_hex: correct_checksum,
+        }],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_checksum_modified");
+    api.set_remote_hash(compute_manifest_hash_from_disk(
+        "backup_test_store_checksum_modified",
+    ));
+
+    // Modify the file on disk so it no longer matches the manifest checksum
+    write_global_file("pcp/changed.bin", b"MODIFIED");
+
+    // Also add a new source file to attempt to store (won't be reached due to mismatch)
+    write_global_file("pcp/new.bin", b"HELLO");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_checksum_modified");
+    let err = mgr
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            "pcp/new.bin".to_string(),
+            &RootKey::new_random().danger_to_json().unwrap(),
+            backup_pk_hex,
+        )
+        .await
+        .expect_err("expected checksum mismatch after file modification");
+    assert!(
+        err.to_string()
+            .contains("Checksum for file with designator"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_store_file_fails_when_manifest_references_missing_file() {
+    let _g = serial_guard().await;
+    let api = init_test_globals();
+    api.reset();
+
+    // Prepare manifest with an entry pointing to a non-existent file
+    let bogus_checksum = hex::encode(blake3::hash(b"ANY").as_bytes());
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::OrbPkg,
+            file_path: "pcp/missing.bin".to_string(),
+            checksum_hex: bogus_checksum,
+        }],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_missing_file");
+    api.set_remote_hash(compute_manifest_hash_from_disk(
+        "backup_test_store_missing_file",
+    ));
+
+    // Create a valid new file to attempt to store (operation should fail before using it)
+    write_global_file("pcp/new.bin", b"HELLO");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_missing_file");
+    let err = mgr
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            "pcp/new.bin".to_string(),
+            &RootKey::new_random().danger_to_json().unwrap(),
+            backup_pk_hex,
+        )
+        .await
+        .expect_err("expected invalid file error due to missing manifest entry file");
+    assert!(
+        err.to_string().contains("Invalid file for backup"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
