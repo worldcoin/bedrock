@@ -14,8 +14,8 @@ use std::str::FromStr;
 use crate::backup::backup_format::v0::V0BackupManifestEntry;
 use crate::backup::manifest::{BackupManifest, ManifestManager};
 use crate::backup::service_client::{
-    set_backup_service_api, BackupServiceApi,
-    RetrieveMetadataResponsePayload, SyncSubmitRequest,
+    set_backup_service_api, BackupServiceApi, RetrieveMetadataResponsePayload,
+    SyncSubmitRequest,
 };
 use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -47,10 +47,7 @@ impl FakeBackupServiceApi {
 #[async_trait::async_trait]
 impl BackupServiceApi for FakeBackupServiceApi {
     #[allow(clippy::significant_drop_tightening)]
-    async fn sync(
-        &self,
-        request: SyncSubmitRequest,
-    ) -> Result<(), crate::HttpError> {
+    async fn sync(&self, request: SyncSubmitRequest) -> Result<(), crate::HttpError> {
         let mut s = self.state.lock().unwrap();
         s.last_sync = Some(request);
         s.sync_count += 1;
