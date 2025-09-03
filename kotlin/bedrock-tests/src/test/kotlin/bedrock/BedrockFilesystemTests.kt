@@ -158,4 +158,17 @@ object MockFileSystemBridge : FileSystem {
             relativePath
         }
     }
+
+    override fun readFileRange(filePath: String, offset: ULong, maxLength: ULong): ByteArray {
+        val data = files[filePath] ?: throw FileSystemException.FileDoesNotExist()
+        val dataSize = data.size.toULong()
+
+        val startULong = if (offset > dataSize) dataSize else offset
+        val remaining = dataSize - startULong
+        val lengthULong = if (maxLength > remaining) remaining else maxLength
+
+        val start = startULong.toInt()
+        val end = (startULong + lengthULong).toInt()
+        return data.copyOfRange(start, end)
+    }
 } 
