@@ -9,9 +9,12 @@ use alloy::{
 };
 
 use bedrock::{
-    primitives::{http_client::{
-        set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
-    }, Network},
+    primitives::{
+        http_client::{
+            set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
+        },
+        Network,
+    },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     transaction::{foreign::UnparsedUserOperation, RpcProviderName},
 };
