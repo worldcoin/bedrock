@@ -296,11 +296,13 @@ impl ManifestManager {
     /// Computes the checksum hex for a given file path using the raw filesystem.
     fn checksum_hex_for(file_path: &str) -> Result<String, BackupError> {
         let fs = get_filesystem_raw()?;
-        fs.calculate_checksum_hex(file_path).map_err(|e| {
-            let msg = format!("Failed to load file: {e}");
-            log::error!("{msg}");
-            BackupError::InvalidFileForBackup(msg)
-        })
+        fs.calculate_checksum(file_path)
+            .map(hex::encode)
+            .map_err(|e| {
+                let msg = format!("Failed to load file: {e}");
+                log::error!("{msg}");
+                BackupError::InvalidFileForBackup(msg)
+            })
     }
 
     /// Gated manifest read that ensures local is not stale vs remote.
