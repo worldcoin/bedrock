@@ -151,6 +151,8 @@ impl BackupManager {
     /// * `factor_secret` - is the factor secret that was used to encrypt the backup keypair. Hex encoded.
     /// * `factor_type` - is the type of factor that was used to encrypt the backup keypair.
     ///   It should mark what kind of key `factor_secret` is.
+    /// * `current_manifest_hash` - hex-encoded 32-byte blake3 hash of the manifest head at the time
+    ///   the fetched backup was created (returned by the remote and provided by the native layer).
     ///
     /// # Errors
     /// * `BackupError::DecodeFactorSecretError` - if the factor secret is invalid, e.g. not hex encoded.
@@ -172,6 +174,7 @@ impl BackupManager {
         encrypted_backup_keypair: String,
         factor_secret: String,
         factor_type: FactorType,
+        current_manifest_hash: String,
     ) -> Result<DecryptedBackup, BackupError> {
         log::info!(
             "[BackupManager] decrypting sealed backup with factor: {factor_type:?}"
@@ -210,8 +213,8 @@ impl BackupManager {
         // Deserialize the unsealed backup
         let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
 
-        // Unpack files and rebuild manifest
-        unpack_backup_to_filesystem(&unsealed_backup)?;
+        // Unpack files and rebuild manifest using the remote-provided current manifest hash
+        unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
 
         // Return decrypted root key and backup pubkey
         match unsealed_backup {
@@ -314,6 +317,7 @@ impl BackupManager {
 // Internal helpers (not exported)
 fn unpack_backup_to_filesystem(
     unsealed_backup: &BackupFormat,
+    current_manifest_hash_hex: String,
 ) -> Result<(), BackupError> {
     let BackupFormat::V0(backup) = unsealed_backup;
     let fs = get_filesystem_raw()?;
@@ -343,7 +347,7 @@ fn unpack_backup_to_filesystem(
     }
 
     let manifest = BackupManifest::V0(V0BackupManifest {
-        previous_manifest_hash: None,
+        previous_manifest_hash: Some(current_manifest_hash_hex),
         files: manifest_entries,
     });
 
