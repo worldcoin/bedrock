@@ -24,38 +24,15 @@ pub enum TransactionError {
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
-    /// Allows executing an ERC-20 token transfer **on World Chain**.
+    /// Allows executing an ERC-20 token transfer
     ///
     /// # Arguments
+    /// - `network`: The network to transfer the tokens on.
     /// - `token_address`: The address of the ERC-20 token to transfer.
     /// - `to_address`: The address of the recipient.
     /// - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
+    /// - `pbh`: Whether to use PBH.
     /// - `transfer_association`: Metadata value. The association of the transfer.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use bedrock::smart_account::SafeSmartAccount;
-    /// use bedrock::transaction::TransactionError;
-    /// use bedrock::primitives::Network;
-    ///
-    /// # async fn example() -> Result<(), TransactionError> {
-    /// // Assume we have a configured SafeSmartAccount
-    /// # let safe_account = SafeSmartAccount::new("test_key".to_string(), "0x1234567890123456789012345678901234567890").unwrap();
-    ///
-    /// // Transfer USDC on World Chain
-    /// let tx_hash = safe_account.transaction_transfer(
-    ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
-    ///     "0x1234567890123456789012345678901234567890",
-    ///     "1000000", // 1 USDC (6 decimals)
-    ///     None,
-    /// ).await?;
-    ///
-    /// println!("Transaction hash: {}", tx_hash.to_hex_string());
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if the transaction submission fails.
@@ -67,7 +44,6 @@ impl SafeSmartAccount {
         to_address: &str,
         amount: &str,
         pbh: bool,
-        _provider: RpcProviderName,
         transfer_association: Option<TransferAssociation>,
     ) -> Result<HexEncodedData, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;

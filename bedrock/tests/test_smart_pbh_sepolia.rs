@@ -16,7 +16,6 @@ use bedrock::{
         Network,
     },
     smart_account::SafeSmartAccount,
-    transaction::RpcProviderName,
 };
 
 use semaphore_rs::identity::Identity;
@@ -179,7 +178,6 @@ async fn test_pbh_transaction_transfer_full_flow() -> anyhow::Result<()> {
             recipient,
             amount,
             true,
-            RpcProviderName::Alchemy,
             None,
         )
         .await

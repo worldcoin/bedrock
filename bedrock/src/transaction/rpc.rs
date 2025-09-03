@@ -369,6 +369,8 @@ impl RpcClient {
     /// - `method`: JSON-RPC method to invoke
     /// - `params`: JSON-RPC params (typed)
     /// - `provider`: selected 4337 provider to include in headers
+    /// # Errors
+    /// - Will throw an RPC error if the RPC call fails.
     pub async fn eth_call(
         &self,
         network: Network,

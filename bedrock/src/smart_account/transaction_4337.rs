@@ -179,7 +179,7 @@ pub trait Is4337Encodable {
                 Err(e) => {
                     // TODO: Send standard user operation if PBH logic fails at any point
                     return Err(RpcError::InvalidRequest(format!(
-                        "Failed to generate PBH payload{e}"
+                        "Failed to generate PBH payload {e}"
                     )));
                 }
             }

@@ -119,6 +119,15 @@ pub fn is_world_id_identity_initialized() -> bool {
 }
 
 /// Generates a PBH proof for a given user operation.
+/// # Arguments
+/// - `user_op`: The user operation to generate the PBH proof for.
+/// - `network`: The network to generate the PBH proof for.
+/// # Errors
+/// - Will throw a `WorldIdError` if the identity is not initialized.
+/// - Will throw a `WorldIdError` if the network is invalid.
+/// - Will throw a `WorldIdError` if the RPC client is not initialized.
+/// - Will throw a `WorldIdError` if the inclusion proof fails.
+/// - Will throw a `WorldIdError` if the unable to find a unused nullifier hash.
 pub async fn generate_pbh_proof(
     user_op: UserOperation,
     network: Network,
@@ -166,6 +175,12 @@ pub async fn generate_pbh_proof(
 }
 
 /// Finds the first unused nullifier hash for the current World ID identity in batches
+/// # Arguments
+/// - `network`: The network to find the unused nullifier hash on.
+/// # Errors
+/// - Will throw a `WorldIdError` if the identity is not initialized.
+/// - Will throw a `WorldIdError` if the RPC client is not initialized.
+/// - Will throw a `WorldIdError` if the network is invalid.
 pub async fn find_unused_nullifier_hash(
     network: Network,
 ) -> Result<ExternalNullifier, WorldIdError> {
@@ -176,7 +191,9 @@ pub async fn find_unused_nullifier_hash(
         .map_err(|_| WorldIdError::RpcError(RpcError::HttpClientNotInitialized))?;
 
     let now = Utc::now();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let current_year = now.year() as u16;
+    #[allow(clippy::cast_possible_truncation)]
     let current_month = now.month() as u16;
 
     let max_nonce = match network {
@@ -193,6 +210,7 @@ pub async fn find_unused_nullifier_hash(
 
         // Generate a batch of nullifier hashes
         for nonce in batch_start..batch_end {
+            #[allow(clippy::cast_possible_truncation)]
             let external_nullifier =
                 ExternalNullifier::v1(current_month as u8, current_year, nonce);
             let encoded_external_nullifier =
@@ -232,6 +250,7 @@ pub async fn find_unused_nullifier_hash(
         // If result is not -1, we found an unused nullifier hash
         if signed_from_slice != I256::MINUS_ONE {
             let index = unsigned_value.to::<usize>();
+            #[allow(clippy::cast_possible_truncation)]
             let actual_nonce = batch_start + index as u16;
             crate::info!("Found unused nullifier! Month: {current_month:?}, Year: {current_year:?}, Nonce: {actual_nonce:?}");
             // Return the external nullifier for the found index
