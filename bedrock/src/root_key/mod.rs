@@ -1,5 +1,5 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::OsRng, RngCore, TryRngCore};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use subtle::ConstantTimeEq;

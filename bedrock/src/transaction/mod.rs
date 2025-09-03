@@ -63,7 +63,6 @@ impl SafeSmartAccount {
     pub async fn transaction_transfer(
         &self,
         network: Network,
-        // TODO: Use struct for transaction parameters
         token_address: &str,
         to_address: &str,
         amount: &str,
@@ -85,7 +84,7 @@ impl SafeSmartAccount {
         let provider = RpcProviderName::Alchemy;
 
         let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, pbh, Some(metadata), provider)
+            .sign_and_execute(self, network, None, Some(metadata), pbh, provider)
             .await
             .map_err(|e| TransactionError::Generic {
                 message: format!("Failed to execute transaction: {e}"),

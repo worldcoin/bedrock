@@ -45,7 +45,6 @@ chrono = { version = "0.4.41", default-features = false, features = [
 ] }
 eyre = "0.6.12"
 futures = "0.3.31"
-chrono = { version = "0.4.41", default-features = false, features = ["now", "std"] }
 hex = "0.4.3"
 log = "0.4.22"
 proc-macro2 = "1.0"
@@ -58,10 +57,7 @@ semaphore-rs-proof = "0.3.1"
 serde = "1.0.219"
 serde_json = "1.0"
 strum = "0.27.1"
-ruint = { version = "1.15.0", default-features = false, features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
-serde = "1.0.219"
-serde_json = "1.0"
 subtle = "2.6.1"
 syn = { version = "2.0", features = ["full"] }
 test-case = "3.3.1"

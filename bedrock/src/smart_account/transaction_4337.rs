@@ -11,10 +11,11 @@ use crate::primitives::contracts::{
     PBH_ENTRYPOINT_4337, PBH_SAFE_4337_MODULE_MAINNET, PBH_SAFE_4337_MODULE_SEPOLIA,
     PBH_SIGNATURE_AGGREGATOR_MAINNET, PBH_SIGNATURE_AGGREGATOR_SEPOLIA,
 };
-use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::{SafeSmartAccountSigner, GNOSIS_SAFE_4337_MODULE};
 use crate::primitives::world_id::generate_pbh_proof;
-use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
+use crate::primitives::{Network, PrimitiveError};
+use crate::smart_account::{
+    SafeSmartAccount, SafeSmartAccountSigner, GNOSIS_SAFE_4337_MODULE,
+};
 use crate::transaction::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
