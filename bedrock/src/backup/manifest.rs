@@ -4,6 +4,7 @@
 //! be included in the backup.
 
 use anyhow::Context;
+use bedrock_macros::bedrock_export;
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,7 @@ pub struct ManifestManager {
     file_system: FileSystemMiddleware,
 }
 
+#[bedrock_export]
 impl ManifestManager {
     #[uniffi::constructor]
     /// Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.
@@ -57,15 +59,6 @@ impl ManifestManager {
     pub fn new() -> Self {
         Self {
             file_system: create_middleware("backup"),
-        }
-    }
-
-    #[cfg(test)]
-    /// Test-only constructor allowing a custom filesystem prefix to isolate tests.
-    #[must_use]
-    pub fn new_with_prefix(prefix: &str) -> Self {
-        Self {
-            file_system: FileSystemMiddleware::new(prefix),
         }
     }
 
@@ -198,6 +191,15 @@ impl ManifestManager {
 impl ManifestManager {
     /// Thepath to the global manifest file
     const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
+
+    /// Test-only constructor allowing a custom filesystem prefix to isolate tests.
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_with_prefix(prefix: &str) -> Self {
+        Self {
+            file_system: FileSystemMiddleware::new(prefix),
+        }
+    }
 
     /// Gated manifest read that ensures local is not stale vs remote.
     ///
