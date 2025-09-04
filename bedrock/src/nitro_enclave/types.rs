@@ -3,7 +3,6 @@
 //! This module contains the core types used for AWS Nitro Enclave attestation
 //! document parsing, verification, and PCR configuration management.
 
-use crate::primitives::PrimitiveError;
 use serde::{Deserialize, Serialize};
 
 /// Represents errors that can occur during enclave attestation verification
@@ -46,10 +45,6 @@ pub enum EnclaveAttestationError {
     /// Invalid enclave public key
     #[error("Invalid enclave public key: {0}")]
     InvalidEnclavePublicKey(String),
-
-    /// Primitive error
-    #[error("Primitive error: {0}")]
-    Primitive(#[from] PrimitiveError),
 }
 
 /// Result type for enclave attestation operations

@@ -8,7 +8,8 @@ use p384::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
 use webpki::{EndEntityCert, TrustAnchor};
 use x509_cert::{der::Decode, Certificate};
 
-use crate::{bedrock_export, primitives::config::BedrockEnvironment};
+use crate::bedrock_export;
+use crate::primitives::config::{get_config, BedrockEnvironment};
 
 /// Constants for enclave verification
 pub mod constants;
@@ -54,13 +55,16 @@ impl EnclaveAttestationVerifier {
     /// * `environment` - The environment to use for this verifier
     #[uniffi::constructor]
     #[must_use]
-    pub fn new(environment: &BedrockEnvironment) -> Self {
-        let allowed_pcr_configs = match environment {
+    pub fn new() -> Self {
+        let env = get_config()
+            .expect("Bedrock config not initialized")
+            .environment();
+        let allowed_pcr_configs = match env {
             BedrockEnvironment::Production => production_pcr_configs(),
             BedrockEnvironment::Staging => staging_pcr_configs(),
         };
 
-        let root_certificate = match environment {
+        let root_certificate = match env {
             BedrockEnvironment::Production => AWS_NITRO_ROOT_CERT_PROD.to_vec(),
             BedrockEnvironment::Staging => AWS_NITRO_ROOT_CERT_STAGING.to_vec(),
         };

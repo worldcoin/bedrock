@@ -58,11 +58,7 @@ fn test_real_attestation_document() {
     let result = verifier.verify_attestation_document(&attestation_doc_bytes);
 
     match result {
-        Ok(attestation_result) => {
-            println!("✅ Attestation verified successfully!");
-            println!("Module ID: {}", attestation_result.module_id);
-            println!("Timestamp: {}", attestation_result.timestamp);
-        }
+        Ok(_) => {}
         Err(e) => {
             // This will help debug what's failing
             match &e {
@@ -150,7 +146,7 @@ pub fn generate_simple_fake_attestation_self_signed(
 
     // Convert JSON to CBOR (this is a simplified approach)
     ciborium::into_writer(&fake_attestation_map, &mut cbor_data).map_err(|e| {
-        crate::enclave::types::EnclaveAttestationError::AttestationDocumentParseError(
+        crate::nitro_enclave::types::EnclaveAttestationError::AttestationDocumentParseError(
             format!("Failed to serialize fake attestation document: {e}"),
         )
     })?;
@@ -345,7 +341,7 @@ fn test_attestation_with_different_root_ca() {
     // Verify with AWS production root CA (should fail)
     let verifier = EnclaveAttestationVerifier::new_with_config_and_time_skip(
         vec![],
-        crate::enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
+        crate::nitro_enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
         60000,
         true,
     );
@@ -377,7 +373,7 @@ fn test_attestation_with_self_signed_certificate() {
 
     let verifier = EnclaveAttestationVerifier::new_with_config_and_time_skip(
         vec![],
-        crate::enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
+        crate::nitro_enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
         60000,
         true,
     );
@@ -394,7 +390,7 @@ fn test_attestation_with_invalid_cose_signature() {
 
     let verifier = EnclaveAttestationVerifier::new_with_config_and_time_skip(
         vec![],
-        crate::enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
+        crate::nitro_enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
         60000,
         true,
     );
@@ -421,7 +417,7 @@ fn test_attestation_with_invalid_certificate_chain() {
 
     let verifier = EnclaveAttestationVerifier::new_with_config_and_time_skip(
         vec![],
-        crate::enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
+        crate::nitro_enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
         60000,
         true,
     );
@@ -449,7 +445,7 @@ fn test_attestation_with_expired_certificate() {
     // Use verifier that doesn't skip time checks
     let verifier = EnclaveAttestationVerifier::new_with_config_and_time_skip(
         vec![],
-        crate::enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
+        crate::nitro_enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
         60000,
         false, // Don't skip certificate time validation
     );
@@ -482,7 +478,7 @@ fn test_attestation_with_mismatched_pcrs() {
     // Configure verifier with different expected PCR values
     let mut verifier = EnclaveAttestationVerifier::new_with_config_and_time_skip(
         vec![],
-        crate::enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
+        crate::nitro_enclave::constants::AWS_NITRO_ROOT_CERT_PROD.to_vec(),
         60000,
         true,
     );
