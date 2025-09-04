@@ -2,6 +2,19 @@
 
 
 
+## [0.0.8] - 2025-09-04
+
+## What's Changed
+* fix: use serial_test instead of custom handler by @paolodamico in https://github.com/worldcoin/bedrock/pull/111
+* chore: add backstage catalog by @paolodamico in https://github.com/worldcoin/bedrock/pull/106
+* fix: ManifestManager not correctly exported by @paolodamico in https://github.com/worldcoin/bedrock/pull/112
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.7...0.0.8
+
+
+
+
 ## [0.0.7] - 2025-09-04
 
 ## What's Changed
