@@ -77,39 +77,29 @@ impl V0Backup {
     }
 
     /// Check if the backup has the correct tag for this version of the backup format.
-    /// Returns true if the correct version tag is present, false otherwise.
-    pub fn peek_version(bytes: &[u8]) -> bool {
+    /// Returns Ok(true) if the correct version tag is present, Ok(false) otherwise.
+    /// Returns an error if there are I/O or parsing errors when reading entries.
+    pub fn peek_version(bytes: &[u8]) -> Result<bool, BackupError> {
         let gz_decoder = GzDecoder::new(Cursor::new(bytes));
         let mut archive = Archive::new(gz_decoder);
-        let Ok(entries) = archive.entries() else {
-            return false;
-        };
+        let entries = archive.entries()?;
 
         // Iterate through the files in the backup and check if the version tag is present
         for entry in entries {
-            let Ok(mut file) = entry else {
-                return false;
-            };
-            let path = if let Ok(path) = file.path() {
-                path.into_owned()
-            } else {
-                return false;
-            };
-            let path = if let Some(path) = path.to_str() {
-                path.to_string()
-            } else {
-                return false;
-            };
+            let mut file = entry?;
+            let path = file.path()?;
+            let path = path
+                .to_str()
+                .ok_or(BackupError::ReadFileNameError)?
+                .to_string();
             // If the version tag is present, check if it has the correct value
             if path == VERSION_TAG {
                 let mut version_data = Vec::new();
-                return match file.read_to_end(&mut version_data) {
-                    Ok(1) => version_data[0] == 0,
-                    _ => false,
-                };
+                file.read_to_end(&mut version_data)?;
+                return Ok(version_data == [0]);
             }
         }
-        false
+        Ok(false)
     }
 
     /// Deserialize the `BackupFormat` from unencrypted bytes.
@@ -264,7 +254,7 @@ mod tests {
         assert_eq!(deserialized_backup.files, files);
 
         // Check if the version tag is present
-        assert!(V0Backup::peek_version(&bytes));
+        assert!(V0Backup::peek_version(&bytes).unwrap());
 
         // Test with v1 key
         let v1_root_secret = RootKey::new_random();
@@ -277,7 +267,7 @@ mod tests {
             v1_root_secret_json
         );
         assert_eq!(v1_deserialized_backup.files, vec![]);
-        assert!(V0Backup::peek_version(&v1_bytes));
+        assert!(V0Backup::peek_version(&v1_bytes).unwrap());
     }
 
     #[test]
@@ -295,7 +285,7 @@ mod tests {
             "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
         );
         assert_eq!(deserialized_backup.files, files);
-        assert!(V0Backup::peek_version(&bytes));
+        assert!(V0Backup::peek_version(&bytes).unwrap());
     }
 
     #[test]
@@ -360,7 +350,7 @@ mod tests {
         let encoder = archive.into_inner().unwrap();
         encoder.finish().unwrap();
 
-        assert!(!V0Backup::peek_version(&result));
+        assert!(!V0Backup::peek_version(&result).unwrap());
     }
 
     #[test]
@@ -375,7 +365,7 @@ mod tests {
         let encoder = archive.into_inner().unwrap();
         encoder.finish().unwrap();
 
-        assert!(!V0Backup::peek_version(&result));
+        assert!(!V0Backup::peek_version(&result).unwrap());
     }
 
     /// Creates a file that is not actually valid CBOR.

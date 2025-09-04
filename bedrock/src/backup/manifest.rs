@@ -251,19 +251,28 @@ impl ManifestManager {
 
             // Validate checksum matches manifest
             let computed_checksum = blake3::hash(&data);
-            let expected_checksum: [u8; 32] = hex::decode(&entry.checksum_hex).map_err(|_| {
-                log::error!(
-                    "[Critical] Unable to decode checksum for file with designator: {}. Triggering a fresh fetch.",
-                    entry.designator
-                );
-                BackupError::RemoteAheadStaleError
-            })?.try_into().map_err(|_| {
-                log::error!(
-                    "[Critical] Unable to decode checksum for file with designator: {}. Triggering a fresh fetch.",
-                    entry.designator
-                );
-                BackupError::RemoteAheadStaleError
-            } )?;
+            let expected_checksum: [u8; 32] = hex::decode(&entry.checksum_hex)
+                .map_err(|_| {
+                    log::error!(
+                        "[Critical] Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
+                        entry.designator
+                    );
+                    BackupError::InvalidFileForBackup(format!(
+                        "Invalid checksum encoding for designator: {}",
+                        entry.designator
+                    ))
+                })?
+                .try_into()
+                .map_err(|_| {
+                    log::error!(
+                        "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
+                        entry.designator
+                    );
+                    BackupError::InvalidFileForBackup(format!(
+                        "Invalid checksum length for designator: {}",
+                        entry.designator
+                    ))
+                })?;
 
             if computed_checksum != expected_checksum {
                 return Err(BackupError::InvalidChecksumError {
