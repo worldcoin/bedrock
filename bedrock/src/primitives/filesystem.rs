@@ -66,6 +66,21 @@ pub trait FileSystem: Send + Sync {
     /// - `FileSystemError::ListFilesError` if the directory cannot be listed
     fn list_files(&self, folder_path: String) -> Result<Vec<String>, FileSystemError>;
 
+    /// Read a specific byte range from a file
+    ///
+    /// Returns up to `max_length` bytes starting at `offset`. Returns an empty vector
+    /// when `offset` is at or beyond the end of the file.
+    ///
+    /// # Errors
+    /// - `FileSystemError::ReadFileError` if the file cannot be read
+    /// - `FileSystemError::FileDoesNotExist` if the file doesn't exist
+    fn read_file_range(
+        &self,
+        file_path: String,
+        offset: u64,
+        max_length: u64,
+    ) -> Result<Vec<u8>, FileSystemError>;
+
     /// Write file contents
     ///
     /// # Errors
@@ -82,6 +97,47 @@ pub trait FileSystem: Send + Sync {
     /// - `FileSystemError::FileDoesNotExist` if the file does not exist
     /// - `FileSystemError::DeleteFileError` if the file cannot be deleted
     fn delete_file(&self, file_path: String) -> Result<(), FileSystemError>;
+}
+
+/// Extension helpers for `FileSystem`.
+///
+/// These are provided as default methods implemented for all `FileSystem`s.
+pub trait FileSystemExt {
+    /// Calculates the `blake3` checksum of the file at the given path.
+    ///
+    /// Implementations should avoid loading the entire file into memory where possible.
+    /// Uses `read_file_range` in a loop to stream the file.
+    ///
+    /// # Errors
+    /// - `FileSystemError::FileDoesNotExist` if the path does not exist
+    /// - `FileSystemError::ReadFileError` for unexpected underlying IO/read errors
+    fn calculate_checksum(&self, file_path: &str) -> Result<[u8; 32], FileSystemError>;
+}
+
+impl<T> FileSystemExt for T
+where
+    T: FileSystem + ?Sized,
+{
+    fn calculate_checksum(&self, file_path: &str) -> Result<[u8; 32], FileSystemError> {
+        let mut hasher = blake3::Hasher::new();
+        let mut offset: u64 = 0;
+        let chunk_size: u64 = 65_536; // 64 KiB (64 * 1024)
+        loop {
+            let chunk =
+                self.read_file_range(file_path.to_string(), offset, chunk_size)?;
+            if chunk.is_empty() {
+                break;
+            }
+            hasher.update(&chunk);
+
+            debug_assert!(
+                u64::try_from(chunk.len()).is_ok(),
+                "chunk.len() cannot overflow because chunk_size is set"
+            );
+            offset = offset.saturating_add(chunk.len() as u64);
+        }
+        Ok(hasher.finalize().into())
+    }
 }
 
 /// A global instance of the user-provided filesystem
@@ -177,6 +233,22 @@ impl FileSystemMiddleware {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
         fs.read_file(prefixed_path)
+    }
+
+    /// Read a specific byte range from a file (with prefix)
+    ///
+    /// # Errors
+    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
+    /// - Any error from the underlying filesystem implementation
+    pub fn read_file_range(
+        &self,
+        file_path: &str,
+        offset: u64,
+        max_length: u64,
+    ) -> Result<Vec<u8>, FileSystemError> {
+        let fs = get_filesystem_raw()?;
+        let prefixed_path = self.prefix_path(file_path);
+        fs.read_file_range(prefixed_path, offset, max_length)
     }
 
     /// List files in a directory (with prefix)
@@ -408,6 +480,36 @@ mod tests {
                 .collect();
 
             Ok(files)
+        }
+
+        #[allow(clippy::manual_let_else)]
+        fn read_file_range(
+            &self,
+            file_path: String,
+            offset: u64,
+            max_length: u64,
+        ) -> Result<Vec<u8>, FileSystemError> {
+            let normalized_path = Self::normalize_path(&file_path);
+            let start_usize =
+                usize::try_from(offset).map_err(|_| FileSystemError::ReadFileError)?;
+            let end_add = offset.saturating_add(max_length);
+            let result = {
+                let files = self.files.lock().unwrap();
+                if let Some(data) = files.get(&normalized_path) {
+                    let data_len_u64 = data.len() as u64;
+                    if offset >= data_len_u64 {
+                        Ok(Vec::new())
+                    } else {
+                        let end_u64 = std::cmp::min(data_len_u64, end_add);
+                        let end_usize = usize::try_from(end_u64)
+                            .map_err(|_| FileSystemError::ReadFileError)?;
+                        Ok(data[start_usize..end_usize].to_vec())
+                    }
+                } else {
+                    Err(FileSystemError::FileDoesNotExist)
+                }
+            };
+            result
         }
 
         fn write_file(

@@ -484,4 +484,38 @@ mod tests {
         assert_eq!(fs.file_count(), 0);
         assert!(!fs.contains_file("config.json"));
     }
+
+    #[test]
+    fn test_calculate_checksum_small_file() {
+        use crate::primitives::filesystem::{
+            FileSystem, FileSystemExt, InMemoryFileSystem,
+        };
+
+        let fs = InMemoryFileSystem::new();
+        fs.write_file("greeting.txt".to_string(), b"Hello, World!".to_vec())
+            .unwrap();
+
+        let checksum = FileSystemExt::calculate_checksum(&fs, "greeting.txt")
+            .expect("checksum should compute successfully");
+        let expected: [u8; 32] = blake3::hash(b"Hello, World!").into();
+        assert_eq!(checksum, expected);
+    }
+
+    #[test]
+    fn test_calculate_checksum_large_file_streaming() {
+        use crate::primitives::filesystem::{
+            FileSystem, FileSystemExt, InMemoryFileSystem,
+        };
+
+        let fs = InMemoryFileSystem::new();
+        // Create a file larger than the 64 KiB streaming chunk size to ensure multiple iterations
+        let data = vec![0_u8; 200_000];
+        fs.write_file("large.bin".to_string(), data.clone())
+            .unwrap();
+
+        let checksum = FileSystemExt::calculate_checksum(&fs, "large.bin")
+            .expect("checksum should compute successfully");
+        let expected: [u8; 32] = blake3::hash(&data).into();
+        assert_eq!(checksum, expected);
+    }
 }

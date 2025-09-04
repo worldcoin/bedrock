@@ -50,14 +50,29 @@ echo -e "${GREEN}✅ Kotlin bindings built${NC}"
 echo -e "${BLUE}📦 Step 2: Setting up Gradle test environment${NC}"
 cd "$ROOT_DIR/kotlin"
 
-# Generate Gradle wrapper if missing (use host gradle)
+# Generate Gradle wrapper if missing (bootstrap a pinned Gradle 8.x to avoid host Gradle version)
 if [ ! -f "gradlew" ]; then
   echo "Gradle wrapper missing, generating..."
-  if ! command -v gradle &> /dev/null; then
-    echo -e "${RED}✗ Gradle is required but not installed. Aborting.${NC}" >&2
-    exit 1
+  GRADLE_VERSION="${GRADLE_VERSION:-8.14.3}"
+  DIST_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+  TMP_DIR="$(mktemp -d)"
+  ZIP_PATH="$TMP_DIR/gradle-${GRADLE_VERSION}.zip"
+  UNZIP_DIR="$TMP_DIR/unzip"
+
+  echo "Downloading Gradle ${GRADLE_VERSION}..."
+  curl -sSL "$DIST_URL" -o "$ZIP_PATH"
+  mkdir -p "$UNZIP_DIR"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$ZIP_PATH" -d "$UNZIP_DIR"
+  else
+    (cd "$UNZIP_DIR" && jar xvf "$ZIP_PATH" >/dev/null)
   fi
-  gradle wrapper --gradle-version 8.7 # same version as in publish-release.yml
+
+  echo "Bootstrapping wrapper with Gradle ${GRADLE_VERSION}..."
+  "$UNZIP_DIR/gradle-${GRADLE_VERSION}/bin/gradle" wrapper --gradle-version "$GRADLE_VERSION"
+
+  # Cleanup temp dir
+  rm -rf "$TMP_DIR"
 fi
 echo -e "${GREEN}✅ Gradle test environment ready${NC}"
 
