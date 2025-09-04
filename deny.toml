@@ -44,13 +44,11 @@ allow = [
 name = "webpki"
 version = "0.22.4"
 expression = "ISC"
-license-files = [
-  { path = "LICENSE", hash = 0x001c7e6c },
-]
+license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 
 # Ignore unmaintained required crates warning
 [advisories]
 ignore = [
-    "RUSTSEC-2024-0436", # Unmaintained `paste` (2025-04-04)
-    "RUSTSEC-2021-0127", # serde_cbor is unmaintained. We use this in AWS NSM package but just for the AttestationDocument Type
+  "RUSTSEC-2024-0436", # Unmaintained `paste` (2025-04-04)
+  "RUSTSEC-2021-0127", # serde_cbor is unmaintained. We use this in AWS NSM package but just for the AttestationDocument Type
 ]
