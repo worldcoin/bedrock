@@ -45,7 +45,7 @@ name = "webpki"
 version = "0.22.4"
 expression = "ISC"
 license-files = [
-  { path = "LICENSE", hash = 0x001c7e6c }
+  { path = "LICENSE", hash = 0x001c7e6c },
 ]
 
 # Ignore unmaintained required crates warning
