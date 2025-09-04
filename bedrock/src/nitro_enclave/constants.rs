@@ -1,4 +1,5 @@
 use super::types::PcrConfiguration;
+use once_cell::sync::OnceCell;
 
 /// AWS Nitro Root Certificate for Production
 /// Source: <https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip>
@@ -15,25 +16,32 @@ const PRODUCTION_PCR1_VALUE: &[u8] = &[0; 48];
 const PRODUCTION_PCR2_VALUE: &[u8] = &[0; 48];
 
 /// Expected PCR configurations for production enclaves
+static PRODUCTION_PCR_CONFIGS: OnceCell<Vec<PcrConfiguration>> = OnceCell::new();
+
+/// Returns the lazily-initialized PCR configurations for production.
 #[must_use]
 pub fn production_pcr_configs() -> Vec<PcrConfiguration> {
-    vec![
-        PcrConfiguration {
-            index: 0,
-            expected_value: PRODUCTION_PCR0_VALUE.to_vec(),
-            description: "Production enclave image v1.0.0".to_string(),
-        },
-        PcrConfiguration {
-            index: 1,
-            expected_value: PRODUCTION_PCR1_VALUE.to_vec(),
-            description: "Production kernel and bootstrap".to_string(),
-        },
-        PcrConfiguration {
-            index: 2,
-            expected_value: PRODUCTION_PCR2_VALUE.to_vec(),
-            description: "Production application layer".to_string(),
-        },
-    ]
+    PRODUCTION_PCR_CONFIGS
+        .get_or_init(|| {
+            vec![
+                PcrConfiguration {
+                    index: 0,
+                    expected_value: PRODUCTION_PCR0_VALUE.to_vec(),
+                    description: "Production enclave image v1.0.0".to_string(),
+                },
+                PcrConfiguration {
+                    index: 1,
+                    expected_value: PRODUCTION_PCR1_VALUE.to_vec(),
+                    description: "Production kernel and bootstrap".to_string(),
+                },
+                PcrConfiguration {
+                    index: 2,
+                    expected_value: PRODUCTION_PCR2_VALUE.to_vec(),
+                    description: "Production application layer".to_string(),
+                },
+            ]
+        })
+        .clone()
 }
 
 // Compile-time constants for staging PCR expected values (48 bytes each for SHA-384)
@@ -42,25 +50,32 @@ const STAGING_PCR1_VALUE: &[u8] = &[0; 48];
 const STAGING_PCR2_VALUE: &[u8] = &[0; 48];
 
 /// Expected PCR configurations for staging enclaves
+static STAGING_PCR_CONFIGS: OnceCell<Vec<PcrConfiguration>> = OnceCell::new();
+
+/// Returns the lazily-initialized PCR configurations for staging.
 #[must_use]
 pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
-    vec![
-        PcrConfiguration {
-            index: 0,
-            expected_value: STAGING_PCR0_VALUE.to_vec(),
-            description: "Staging enclave image v1.0.0-staging".to_string(),
-        },
-        PcrConfiguration {
-            index: 1,
-            expected_value: STAGING_PCR1_VALUE.to_vec(),
-            description: "Staging kernel and bootstrap".to_string(),
-        },
-        PcrConfiguration {
-            index: 2,
-            expected_value: STAGING_PCR2_VALUE.to_vec(),
-            description: "Staging application layer".to_string(),
-        },
-    ]
+    STAGING_PCR_CONFIGS
+        .get_or_init(|| {
+            vec![
+                PcrConfiguration {
+                    index: 0,
+                    expected_value: STAGING_PCR0_VALUE.to_vec(),
+                    description: "Staging enclave image v1.0.0-staging".to_string(),
+                },
+                PcrConfiguration {
+                    index: 1,
+                    expected_value: STAGING_PCR1_VALUE.to_vec(),
+                    description: "Staging kernel and bootstrap".to_string(),
+                },
+                PcrConfiguration {
+                    index: 2,
+                    expected_value: STAGING_PCR2_VALUE.to_vec(),
+                    description: "Staging application layer".to_string(),
+                },
+            ]
+        })
+        .clone()
 }
 
 /// Maximum age for attestation documents (in milliseconds)

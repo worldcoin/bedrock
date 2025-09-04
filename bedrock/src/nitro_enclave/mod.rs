@@ -47,16 +47,25 @@ pub struct EnclaveAttestationVerifier {
     skip_certificate_time_check: bool,
 }
 
+impl Default for EnclaveAttestationVerifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[bedrock_export]
 impl EnclaveAttestationVerifier {
     /// Creates a new `EnclaveAttestationVerifier`
     ///
     /// # Arguments
     /// * `environment` - The environment to use for this verifier
+    ///
+    /// # Panics
+    /// Panics if the Bedrock config is not initialized.
     #[uniffi::constructor]
     #[must_use]
     pub fn new() -> Self {
-        let env = get_config()
+        let env: BedrockEnvironment = get_config()
             .expect("Bedrock config not initialized")
             .environment();
         let allowed_pcr_configs = match env {

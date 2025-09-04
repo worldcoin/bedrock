@@ -1350,6 +1350,7 @@ dependencies = [
  "flate2",
  "hex",
  "log",
+ "once_cell",
  "p384",
  "pem",
  "proc-macro2",
