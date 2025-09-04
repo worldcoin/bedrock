@@ -1,12 +1,20 @@
+use crate::backup::backup_format::v0::V0BackupManifestEntry;
 use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
 use crate::backup::backup_format::BackupFormat;
+use crate::backup::manifest::{BackupManifest, ManifestManager};
+use crate::backup::service_client::{
+    set_backup_service_api, BackupServiceApi, RetrieveMetadataResponsePayload,
+    SyncSubmitRequest,
+};
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
+use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
 use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
 use std::str::FromStr;
 use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
 
 // Test-only global lock to serialize manifest-affecting tests to avoid races.
 static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
@@ -21,16 +29,6 @@ fn ensure_fs_initialized() {
 // =========================
 // ManifestManager tests
 // =========================
-
-use crate::backup::backup_format::v0::V0BackupManifestEntry;
-use crate::backup::manifest::{BackupManifest, ManifestManager};
-use crate::backup::service_client::{
-    set_backup_service_api, BackupServiceApi, RetrieveMetadataResponsePayload,
-    SyncSubmitRequest,
-};
-use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
-use std::sync::{Arc, OnceLock};
-use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 #[derive(Default, Clone, Debug)]
 struct NextSyncErrorConfig {
@@ -101,13 +99,6 @@ impl BackupServiceApi for FakeBackupServiceApi {
 }
 
 static TEST_API: OnceLock<Arc<FakeBackupServiceApi>> = OnceLock::new();
-static TEST_SERIAL: OnceLock<AsyncMutex<()>> = OnceLock::new();
-
-// Serialize these tests because they mutate process-wide globals (OnceLock API, global FS);
-// an async-aware mutex avoids holding a blocking guard across await points.
-async fn serial_guard() -> AsyncMutexGuard<'static, ()> {
-    TEST_SERIAL.get_or_init(|| AsyncMutex::new(())).lock().await
-}
 
 fn init_test_globals() -> Arc<FakeBackupServiceApi> {
     // Filesystem
@@ -147,8 +138,8 @@ fn write_global_file(path: &str, contents: &[u8]) {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_list_files_happy_path() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -177,8 +168,8 @@ async fn test_list_files_happy_path() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_list_files_stale_remote() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -200,8 +191,8 @@ async fn test_list_files_stale_remote() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_list_files_missing_manifest() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -215,8 +206,8 @@ async fn test_list_files_missing_manifest() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_list_files_corrupted_manifest() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -243,8 +234,8 @@ async fn test_list_files_corrupted_manifest() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_store_file_happy_path_and_commit() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -288,8 +279,8 @@ async fn test_store_file_happy_path_and_commit() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_store_file_propagates_sync_failure() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -330,8 +321,8 @@ async fn test_store_file_propagates_sync_failure() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_store_file_fails_when_remote_ahead() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -359,8 +350,8 @@ async fn test_store_file_fails_when_remote_ahead() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_store_file_invalid_source_path() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -388,8 +379,8 @@ async fn test_store_file_invalid_source_path() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_store_file_checksum_mismatch_existing_entry() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -427,8 +418,8 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_store_file_checksum_mismatch_when_file_modified() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -473,8 +464,8 @@ async fn test_store_file_checksum_mismatch_when_file_modified() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_store_file_fails_when_manifest_references_missing_file() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -514,8 +505,8 @@ async fn test_store_file_fails_when_manifest_references_missing_file() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_replace_all_files_for_designator_happy_path() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
@@ -598,8 +589,8 @@ async fn test_replace_all_files_for_designator_happy_path() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_remove_file_happy_and_not_found() {
-    let _g = serial_guard().await;
     let api = init_test_globals();
     api.reset();
 
