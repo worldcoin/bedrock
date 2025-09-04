@@ -116,9 +116,10 @@ impl V0Backup {
     ///
     /// # Errors
     /// * If the archive cannot be decompressed or read, `BackupError::IoError` is returned.
-    /// * If the root secret is invalid, `BackupError::InvalidRootSecretError` is returned.
-    /// * If the version tag is not present, `BackupError::VersionNotDetectedError` is returned.
     /// * If the file name cannot be read, `BackupError::ReadFileNameError` is returned.
+    /// * If a file cannot be decoded from CBOR, `BackupError::DecodeBackupFileError` is returned.
+    /// * If a file checksum does not match, `BackupError::InvalidChecksumError` is returned.
+    /// * If the root secret is invalid, `BackupError::InvalidRootSecretError` is returned.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BackupError> {
         let gz_decoder = GzDecoder::new(Cursor::new(bytes));
         let mut archive = Archive::new(gz_decoder);
@@ -169,7 +170,8 @@ impl V0Backup {
     ///
     /// # Errors
     /// * If the bytes cannot be compressed or written, `BackupError::IoError` is returned.
-    /// * If the root secret is invalid, `BackupError::InvalidRootSecretError` is returned.
+    /// * If the root secret cannot be encoded to JSON, `BackupError::EncodeRootSecretError` is returned.
+    /// * If a backup file cannot be CBOR-encoded, `BackupError::EncodeBackupFileError` is returned.
     /// * If any of the metadata or files cannot be written, `BackupError::IoError` is returned.
     pub fn to_bytes(&self) -> Result<Vec<u8>, BackupError> {
         let mut result = Vec::new();
