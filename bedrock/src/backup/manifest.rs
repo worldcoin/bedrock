@@ -283,11 +283,17 @@ impl ManifestManager {
             files.push(V0BackupFile {
                 data,
                 checksum: computed_checksum.into(),
-                path: format!(
-                    "{}/{}",
-                    entry.designator,
-                    rel.rsplit('/').next().unwrap_or(rel)
-                ),
+                path: {
+                    let designator_prefix = entry.designator.to_string();
+                    // Preserve full relative path; prefix with designator if not already present
+                    if rel == designator_prefix
+                        || rel.starts_with(format!("{designator_prefix}/").as_str())
+                    {
+                        rel.to_string()
+                    } else {
+                        format!("{designator_prefix}/{rel}")
+                    }
+                },
                 designator: entry.designator.clone(),
             });
         }
