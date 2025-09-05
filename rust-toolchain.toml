@@ -12,4 +12,6 @@ targets = [
   "armv7-linux-androideabi",
   # 64-bit ARM
   "aarch64-linux-android",
+  # 32-bit x86
+  "i686-linux-android",
 ]

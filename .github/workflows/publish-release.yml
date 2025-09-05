@@ -144,6 +144,7 @@ jobs:
           - target: aarch64-linux-android
           - target: armv7-linux-androideabi
           - target: x86_64-linux-android
+          - target: i686-linux-android
 
     steps:
       - name: Checkout code
