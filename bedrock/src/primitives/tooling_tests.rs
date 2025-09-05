@@ -307,8 +307,8 @@ impl FileSystemTester {
     ///
     /// # Errors
     /// - `FileSystemError` if filesystem operations fail
-    pub fn test_list_files(&self) -> Result<Vec<String>, FileSystemError> {
-        _bedrock_fs.list_files(".")
+    pub fn test_list_files_at_directory(&self) -> Result<Vec<String>, FileSystemError> {
+        _bedrock_fs.list_files_at_directory(".")
     }
 
     /// Tests file existence check
@@ -483,6 +483,24 @@ mod tests {
         fs.clear();
         assert_eq!(fs.file_count(), 0);
         assert!(!fs.contains_file("config.json"));
+    }
+
+    #[test]
+    fn test_in_memory_filesystem_list_files_at_directory() {
+        use crate::primitives::filesystem::{FileSystem, InMemoryFileSystem};
+
+        // Test creating filesystem with initial files
+        let fs = InMemoryFileSystem::with_files(&[
+            ("config.json", r#"{"app": "bedrock"}"#),
+            ("data/users.txt", "alice\nbob\ncharlie"),
+            ("data/metadata.txt", "metadata"),
+            ("data/subdir/file.txt", "subdir file"),
+            ("data/subdir/subsubdir/file2.txt", "subsubdir file"),
+            ("logs/app.log", "Starting application..."),
+        ]);
+
+        let file_list = fs.list_files_at_directory("data".to_string()).unwrap();
+        assert_eq!(file_list, vec!["metadata.txt", "users.txt"]); // note non recursiveness
     }
 
     #[test]
