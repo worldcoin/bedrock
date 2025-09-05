@@ -2,6 +2,21 @@
 
 
 
+## [0.0.9] - 2025-09-05
+
+## What's Changed
+* fix: improve error handling for FS by @paolodamico in https://github.com/worldcoin/bedrock/pull/114
+* fix: attempt fix 16kb + add i686-linux-android target by @lukejmann in https://github.com/worldcoin/bedrock/pull/115
+* chore: only allow releases from main by @paolodamico in https://github.com/worldcoin/bedrock/pull/119
+* chore: update CODEOWNERS by @paolodamico in https://github.com/worldcoin/bedrock/pull/118
+* fix: disambiguate listFiles with listFilesAtDirectory by @paolodamico in https://github.com/worldcoin/bedrock/pull/117
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.8...0.0.9
+
+
+
+
 ## [0.0.8] - 2025-09-04
 
 ## What's Changed
