@@ -2,6 +2,17 @@
 
 
 
+## [0.0.9] - 2025-09-05
+
+## What's Changed
+* fix: improve error handling for FS by @paolodamico in https://github.com/worldcoin/bedrock/pull/114
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.8...0.0.9
+
+
+
+
 ## [0.0.8] - 2025-09-04
 
 ## What's Changed
