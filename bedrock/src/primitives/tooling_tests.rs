@@ -330,6 +330,8 @@ impl FileSystemTester {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -499,8 +501,15 @@ mod tests {
             ("logs/app.log", "Starting application..."),
         ]);
 
-        let file_list = fs.list_files_at_directory("data".to_string()).unwrap();
-        assert_eq!(file_list, vec!["metadata.txt", "users.txt"]); // note non recursiveness
+        let file_list: HashSet<String> = fs
+            .list_files_at_directory("data".to_string())
+            .unwrap()
+            .into_iter()
+            .collect();
+        let expected = ["metadata.txt".to_string(), "users.txt".to_string()] // note non recursiveness
+            .into_iter()
+            .collect::<HashSet<String>>();
+        assert_eq!(file_list, expected);
     }
 
     #[test]
