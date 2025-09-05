@@ -1352,7 +1352,6 @@ dependencies = [
  "log",
  "once_cell",
  "p384",
- "pem",
  "proc-macro2",
  "quote",
  "rand 0.8.5",

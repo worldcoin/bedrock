@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use coset::{AsCborValue, CborSerializable, CoseSign1};
 use p384::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
@@ -103,9 +104,8 @@ impl EnclaveAttestationVerifier {
         &self,
         attestation_doc_base64: &str,
     ) -> EnclaveAttestationResult<VerifiedAttestation> {
-        let attestation_doc_bytes = base64::engine::general_purpose::STANDARD
-            .decode(attestation_doc_base64)
-            .map_err(|e| {
+        let attestation_doc_bytes =
+            STANDARD.decode(attestation_doc_base64).map_err(|e| {
                 EnclaveAttestationError::AttestationDocumentParseError(format!(
                     "Failed to decode base64 attestation document: {e}"
                 ))
@@ -138,7 +138,7 @@ impl EnclaveAttestationVerifier {
         let public_key = Self::extract_public_key(&attestation)?;
 
         Ok(VerifiedAttestation::new(
-            hex::encode(public_key),
+            STANDARD.encode(public_key),
             attestation.timestamp,
             attestation.module_id,
         ))
@@ -193,18 +193,7 @@ impl EnclaveAttestationVerifier {
         &self,
         attestation: &AttestationDoc,
     ) -> EnclaveAttestationResult<Certificate> {
-        // Parse root certificate from PEM
-        let pem_str = std::str::from_utf8(&self.root_certificate).map_err(|e| {
-            EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Invalid PEM encoding: {e}"
-            ))
-        })?;
-        let pem = pem::parse(pem_str).map_err(|e| {
-            EnclaveAttestationError::AttestationChainInvalid(format!(
-                "Failed to parse PEM: {e}"
-            ))
-        })?;
-        let root_cert_der = pem.contents();
+        let root_cert_der = self.root_certificate.as_slice();
 
         // Create trust anchor from root certificate
         let trust_anchor =

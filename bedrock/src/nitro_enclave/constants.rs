@@ -3,8 +3,8 @@ use once_cell::sync::OnceCell;
 
 /// AWS Nitro Root Certificate for Production
 /// Source: <https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip>
-/// Stored at `bedrock/src/nitro_enclave/aws_nitro_root_g1.pem`
-pub const AWS_NITRO_ROOT_CERT_PROD: &[u8] = include_bytes!("aws_nitro_root_g1.pem");
+/// Stored at `bedrock/src/nitro_enclave/aws_nitro_root_g1.der`
+pub const AWS_NITRO_ROOT_CERT_PROD: &[u8] = include_bytes!("aws_nitro_root_g1.der");
 
 /// AWS Nitro Root Certificate for Staging
 /// Source: <https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip>

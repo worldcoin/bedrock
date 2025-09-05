@@ -42,7 +42,6 @@ coset = "0.3.8"
 hex = "0.4.3"
 log = "0.4.22"
 p384 = { version = "0.13", features = ["ecdsa", "sha384"] }
-pem = "3.0"
 proc-macro2 = "1.0"
 quote = "1.0"
 rand = { version = "0.8.5", default-features = false, features = ["std"] }
