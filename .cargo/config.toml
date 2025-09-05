@@ -9,32 +9,32 @@
 # -z max-page-size=16384 is what makes the ELF safely load on 16 KB-page kernels. Bumping -z common-page-size to 16 KB doesn’t improve compatibility, but it does increase padding and memory waste on 4 KB devices.
 [target.aarch64-linux-android]
 rustflags = [
-    "-Clink-arg=-z",
-    "-Clink-arg=max-page-size=16384",
-    "-Clink-arg=-z",
-    "-Clink-arg=common-page-size=4096",
+  "-Clink-arg=-z",
+  "-Clink-arg=max-page-size=16384",
+  "-Clink-arg=-z",
+  "-Clink-arg=common-page-size=4096",
 ]
 
 [target.armv7-linux-androideabi]
 rustflags = [
-    "-Clink-arg=-z",
-    "-Clink-arg=max-page-size=16384",
-    "-Clink-arg=-z",
-    "-Clink-arg=common-page-size=4096",
+  "-Clink-arg=-z",
+  "-Clink-arg=max-page-size=16384",
+  "-Clink-arg=-z",
+  "-Clink-arg=common-page-size=4096",
 ]
 
 [target.i686-linux-android]
 rustflags = [
-    "-Clink-arg=-z",
-    "-Clink-arg=max-page-size=16384",
-    "-Clink-arg=-z",
-    "-Clink-arg=common-page-size=4096",
+  "-Clink-arg=-z",
+  "-Clink-arg=max-page-size=16384",
+  "-Clink-arg=-z",
+  "-Clink-arg=common-page-size=4096",
 ]
 
 [target.x86_64-linux-android]
 rustflags = [
-    "-Clink-arg=-z",
-    "-Clink-arg=max-page-size=16384",
-    "-Clink-arg=-z",
-    "-Clink-arg=common-page-size=4096",
+  "-Clink-arg=-z",
+  "-Clink-arg=max-page-size=16384",
+  "-Clink-arg=-z",
+  "-Clink-arg=common-page-size=4096",
 ]
