@@ -16,6 +16,8 @@ on:
 jobs:
   initiate-release:
     runs-on: ubuntu-latest
+    # running releases is only allowed on main
+    if: github.ref == 'refs/heads/main'
 
     permissions:
       contents: write # required to open the PR and generate release notes
