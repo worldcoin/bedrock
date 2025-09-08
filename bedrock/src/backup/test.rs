@@ -929,9 +929,9 @@ fn test_unpack_writes_files_and_manifest() {
         )
         .unwrap());
 
-    // Manifest is written under backup/manifest.json
+    // Manifest is written under backup_manager/manifest.json
     let manifest_bytes = global_fs
-        .read_file("backup/manifest.json".to_string())
+        .read_file("backup_manager/manifest.json".to_string())
         .unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(manifest["version"], "V0");
