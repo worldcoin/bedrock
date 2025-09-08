@@ -361,6 +361,7 @@ impl EnclaveAttestationVerifier {
             });
         }
 
+        // Build maps for index-to-values for precise matching
         let mut configs_by_index: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for config in &self.allowed_pcr_configs {
             configs_by_index
@@ -369,8 +370,22 @@ impl EnclaveAttestationVerifier {
                 .push(config.expected_value.clone());
         }
 
-        for (index, actual_value) in &attestation.pcrs {
+        let mut pcrs_by_index: HashMap<usize, &[u8]> = HashMap::new();
+        for (idx, val) in &attestation.pcrs {
+            pcrs_by_index.insert(*idx, val.as_slice());
+        }
+
+        // For each configured PCR index, require presence and exact match to one of its allowed values
+        for (index, allowed_values) in configs_by_index {
+            let Some(actual_value) = pcrs_by_index.get(&index).copied() else {
+                return Err(EnclaveAttestationError::CodeUntrusted {
+                    pcr_index: index,
+                    actual: "missing".to_string(),
+                });
+            };
+
             let value_len = actual_value.len();
+            // Check it's generically of valid lengths
             if !VALID_PCR_LENGTHS.contains(&value_len) {
                 return Err(EnclaveAttestationError::AttestationDocumentParseError(
                     format!(
@@ -379,16 +394,15 @@ impl EnclaveAttestationVerifier {
                 ));
             }
 
-            if let Some(allowed_values) = configs_by_index.get(index) {
-                if !allowed_values
-                    .iter()
-                    .any(|allowed| allowed == actual_value.as_slice())
-                {
-                    return Err(EnclaveAttestationError::CodeUntrusted {
-                        pcr_index: *index,
-                        actual: hex::encode(actual_value),
-                    });
-                }
+            // Check it's exactly one of the allowed values for that specific index
+            let matches_allowed = allowed_values
+                .iter()
+                .any(|allowed| allowed.as_slice() == actual_value);
+            if !matches_allowed {
+                return Err(EnclaveAttestationError::CodeUntrusted {
+                    pcr_index: index,
+                    actual: hex::encode(actual_value),
+                });
             }
         }
 
