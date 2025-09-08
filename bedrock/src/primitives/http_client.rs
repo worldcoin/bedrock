@@ -42,7 +42,17 @@ pub trait AuthenticatedHttpClient: Send + Sync {
     /// * `HttpError::SslError` - When SSL/TLS validation fails
     /// * `HttpError::Cancelled` - When the request is cancelled
     /// * `HttpError::Generic` - For other unexpected errors
-    async fn fetch_from_app_backend(
+    async fn fetch_from_app_backend_main(
+        &self,
+        url: String,
+        method: HttpMethod,
+        headers: Vec<HttpHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError>;
+
+    /// Fetches data from the specified URL using the app-backend-rest networking infrastructure.
+    /// The same expectations apply as for `fetch_from_app_backend_main`.
+    async fn fetch_from_app_backend_rest(
         &self,
         url: String,
         method: HttpMethod,
@@ -212,7 +222,17 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AuthenticatedHttpClient for MockHttpClient {
-        async fn fetch_from_app_backend(
+        async fn fetch_from_app_backend_main(
+            &self,
+            _url: String,
+            _method: HttpMethod,
+            _headers: Vec<HttpHeader>,
+            _body: Option<Vec<u8>>,
+        ) -> Result<Vec<u8>, HttpError> {
+            Ok(b"mock response".to_vec())
+        }
+
+        async fn fetch_from_app_backend_rest(
             &self,
             _url: String,
             _method: HttpMethod,

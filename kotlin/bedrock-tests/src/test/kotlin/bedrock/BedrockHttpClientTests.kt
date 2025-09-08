@@ -24,7 +24,8 @@ class BedrockHttpClientTests {
             responses[url] = result
         }
         
-        override suspend fun fetchFromAppBackend(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
+        // Convenience helper used by tests
+        suspend fun fetchFromAppBackend(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
             requestHistory.add(url)
             methodHistory.add(method)
             headersHistory.add(headers)
@@ -34,6 +35,15 @@ class BedrockHttpClientTests {
                 ?: throw HttpException.Generic("No response configured for URL: $url")
                 
             return response.getOrThrow()
+        }
+
+        // New interface requirements - delegate to unified helper
+        override suspend fun fetchFromAppBackendMain(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
+            return fetchFromAppBackend(url, method, headers, body)
+        }
+
+        override suspend fun fetchFromAppBackendRest(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
+            return fetchFromAppBackend(url, method, headers, body)
         }
     }
     

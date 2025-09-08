@@ -5,12 +5,15 @@
 
 use anyhow::Context;
 use bedrock_macros::bedrock_export;
+use chrono::Utc;
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::service_client::BackupServiceClient;
-use crate::backup::{BackupFileDesignator, BackupManager};
+use crate::backup::{
+    BackupFileDesignator, BackupManager, ClientEventsReporter, EventKind,
+};
 use crate::primitives::filesystem::{
     create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
 };
@@ -22,6 +25,10 @@ use crate::{
     },
     primitives::filesystem::get_filesystem_raw,
 };
+
+fn display_to_string<E: core::fmt::Display>(e: &E) -> String {
+    e.to_string()
+}
 
 /// A single, global manifest that describes the backup content.
 ///
@@ -98,31 +105,48 @@ impl ManifestManager {
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         let normalized_path = file_path.trim_start_matches('/').to_string();
-        self.mutate_manifest_and_sync(
-            root_secret,
-            backup_keypair_public_key,
-            |manifest| {
-                if manifest
-                    .files
-                    .iter()
-                    .any(|e| e.file_path == normalized_path)
-                {
-                    log::warn!(
-                        "File already exists in the manifest: {}",
-                        normalized_path.get(..14).unwrap_or(&normalized_path)
-                    );
-                    return Ok(ManifestMutation::NoChange);
-                }
-                let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
-                manifest.files.push(V0BackupManifestEntry {
-                    designator,
-                    file_path: normalized_path,
-                    checksum_hex,
-                });
-                Ok(ManifestMutation::Changed)
-            },
-        )
-        .await
+        let result = self
+            .mutate_manifest_and_sync(
+                root_secret,
+                backup_keypair_public_key,
+                |manifest| {
+                    if manifest
+                        .files
+                        .iter()
+                        .any(|e| e.file_path == normalized_path)
+                    {
+                        log::warn!(
+                            "File already exists in the manifest: {}",
+                            normalized_path.get(..14).unwrap_or(&normalized_path)
+                        );
+                        return Ok(ManifestMutation::NoChange);
+                    }
+                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
+                    manifest.files.push(V0BackupManifestEntry {
+                        designator,
+                        file_path: normalized_path,
+                        checksum_hex,
+                    });
+                    Ok(ManifestMutation::Changed)
+                },
+            )
+            .await;
+
+        // Best-effort event emission; never alter the primary result
+        if let Err(err) = &result {
+            if let Err(e) = ClientEventsReporter::new()
+                .send_event(
+                    EventKind::StoreFile,
+                    Some(display_to_string(err)),
+                    Utc::now().to_rfc3339(),
+                )
+                .await
+            {
+                log::warn!("[ClientEvents] failed to send StoreFile event: {e:?}");
+            }
+        }
+
+        result
     }
 
     /// Replaces all the file entries for a given designator by removing all existing entries for a given designator
@@ -138,21 +162,40 @@ impl ManifestManager {
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         let normalized_path = new_file_path.trim_start_matches('/').to_string();
-        self.mutate_manifest_and_sync(
-            root_secret,
-            backup_keypair_public_key,
-            |manifest| {
-                let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
-                manifest.files.retain(|e| e.designator != designator);
-                manifest.files.push(V0BackupManifestEntry {
-                    designator,
-                    file_path: normalized_path,
-                    checksum_hex,
-                });
-                Ok(ManifestMutation::Changed)
-            },
-        )
-        .await
+        let result = self
+            .mutate_manifest_and_sync(
+                root_secret,
+                backup_keypair_public_key,
+                |manifest| {
+                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
+                    manifest.files.retain(|e| e.designator != designator);
+                    manifest.files.push(V0BackupManifestEntry {
+                        designator,
+                        file_path: normalized_path,
+                        checksum_hex,
+                    });
+                    Ok(ManifestMutation::Changed)
+                },
+            )
+            .await;
+
+        // Best-effort event emission; never alter the primary result
+        if let Err(err) = &result {
+            if let Err(e) = ClientEventsReporter::new()
+                .send_event(
+                    EventKind::StoreFile,
+                    Some(display_to_string(err)),
+                    Utc::now().to_rfc3339(),
+                )
+                .await
+            {
+                log::warn!(
+                    "[ClientEvents] failed to send StoreFile event (replace): {e:?}"
+                );
+            }
+        }
+
+        result
     }
 
     /// Removes a specific file entry. Triggers a backup sync.
@@ -168,23 +211,40 @@ impl ManifestManager {
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         let normalized_path = file_path.trim_start_matches('/').to_string();
-        self.mutate_manifest_and_sync(
-            root_secret,
-            backup_keypair_public_key,
-            |manifest| {
-                let before_len = manifest.files.len();
-                manifest.files.retain(|e| e.file_path != normalized_path);
-                if manifest.files.len() == before_len {
-                    return Err(BackupError::InvalidFileForBackup(format!(
-                        "File not found in manifest: {}",
-                        // only log the first 14 characters of the path to avoid leaking info
-                        normalized_path.get(..14).unwrap_or(&normalized_path)
-                    )));
-                }
-                Ok(ManifestMutation::Changed)
-            },
-        )
-        .await
+        let result = self
+            .mutate_manifest_and_sync(
+                root_secret,
+                backup_keypair_public_key,
+                |manifest| {
+                    let before_len = manifest.files.len();
+                    manifest.files.retain(|e| e.file_path != normalized_path);
+                    if manifest.files.len() == before_len {
+                        return Err(BackupError::InvalidFileForBackup(format!(
+                            "File not found in manifest: {}",
+                            // only log the first 14 characters of the path to avoid leaking info
+                            normalized_path.get(..14).unwrap_or(&normalized_path)
+                        )));
+                    }
+                    Ok(ManifestMutation::Changed)
+                },
+            )
+            .await;
+
+        // Best-effort event emission; never alter the primary result
+        if let Err(err) = &result {
+            if let Err(e) = ClientEventsReporter::new()
+                .send_event(
+                    EventKind::RemoveFile,
+                    Some(display_to_string(err)),
+                    Utc::now().to_rfc3339(),
+                )
+                .await
+            {
+                log::warn!("[ClientEvents] failed to send RemoveFile event: {e:?}");
+            }
+        }
+
+        result
     }
 }
 
@@ -349,7 +409,7 @@ impl ManifestManager {
 
         match mutator(&mut manifest)? {
             ManifestMutation::NoChange => return Ok(()),
-            ManifestMutation::Changed => {}
+            ManifestMutation::Changed => (),
         }
 
         manifest.previous_manifest_hash = Some(hex::encode(local_hash));
@@ -362,12 +422,27 @@ impl ManifestManager {
         let updated_manifest = BackupManifest::V0(manifest);
         let new_manifest_hash = updated_manifest.calculate_hash()?;
 
-        BackupServiceClient::sync(
+        let result = BackupServiceClient::sync(
             hex::encode(local_hash),
             hex::encode(new_manifest_hash),
             sealed_backup,
         )
-        .await?;
+        .await;
+
+        if let Err(err) = &result {
+            if let Err(e) = ClientEventsReporter::new()
+                .send_event(
+                    EventKind::Sync,
+                    Some(display_to_string(err)),
+                    chrono::Utc::now().to_rfc3339(),
+                )
+                .await
+            {
+                log::warn!("[ClientEvents] failed to send Sync event: {e:?}");
+            }
+        }
+
+        result?;
 
         // commit the updated manifest once the remote sync has been successful
         self.write_manifest(&updated_manifest)?;

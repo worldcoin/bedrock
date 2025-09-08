@@ -1,4 +1,5 @@
 mod backup_format;
+mod client_events;
 mod manifest;
 mod service_client;
 
@@ -6,6 +7,10 @@ mod service_client;
 mod test;
 
 use bedrock_macros::bedrock_export;
+pub use client_events::{
+    BaseReport, ClientEventsError, ClientEventsReporter, EventKind, MainFactor,
+    PlatformKind,
+};
 pub use manifest::ManifestManager;
 
 use crate::backup::backup_format::v0::{

@@ -6,7 +6,7 @@ import Foundation
 final class BedrockHttpClientTests: XCTestCase {
     
     // Test implementation of AuthenticatedHttpClient
-    class TestAuthenticatedHttpClient: AuthenticatedHttpClient {
+    final class TestAuthenticatedHttpClient: AuthenticatedHttpClient {
         var responses: [String: Result<Data, HttpError>] = [:]
         var requestHistory: [String] = []
         var methodHistory: [HttpMethod] = []
@@ -33,6 +33,15 @@ final class BedrockHttpClientTests: XCTestCase {
             case .failure(let error):
                 throw error
             }
+        }
+
+        // New protocol requirements: delegate to unified helper above
+        func fetchFromAppBackendMain(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws -> Data {
+            return try await fetchFromAppBackend(url: url, method: method, headers: headers, body: body)
+        }
+
+        func fetchFromAppBackendRest(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws -> Data {
+            return try await fetchFromAppBackend(url: url, method: method, headers: headers, body: body)
         }
     }
     
