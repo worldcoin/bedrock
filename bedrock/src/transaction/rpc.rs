@@ -227,7 +227,7 @@ impl RpcClient {
         let response_bytes = self
             .http_client
             .as_ref()
-            .fetch_from_app_backend_main(
+            .fetch_from_app_backend(
                 Self::rpc_endpoint(network),
                 HttpMethod::Post,
                 headers,

@@ -380,7 +380,7 @@ impl ClientEventsReporter {
             name: "Content-Type".to_string(),
             value: "application/json".to_string(),
         }];
-        http.fetch_from_app_backend_rest(
+        http.fetch_from_app_backend(
             Self::EVENTS_ENDPOINT.to_string(),
             HttpMethod::Post,
             headers,

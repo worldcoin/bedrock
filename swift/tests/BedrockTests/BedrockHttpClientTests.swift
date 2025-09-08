@@ -34,14 +34,6 @@ final class BedrockHttpClientTests: XCTestCase {
                 throw error
             }
         }
-
-        func fetchFromAppBackendMain(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws -> Data {
-            return try await fetchFromAppBackend(url: url, method: method, headers: headers, body: body)
-        }
-
-        func fetchFromAppBackendRest(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws -> Data {
-            return try await fetchFromAppBackend(url: url, method: method, headers: headers, body: body)
-        }
     }
     
     func testSuccessfulGetRequest() async throws {
