@@ -26,10 +26,6 @@ use crate::{
     primitives::filesystem::get_filesystem_raw,
 };
 
-fn display_to_string<E: core::fmt::Display>(e: &E) -> String {
-    e.to_string()
-}
-
 /// A single, global manifest that describes the backup content.
 ///
 /// All operations on the backup use this as a source.
@@ -132,12 +128,11 @@ impl ManifestManager {
             )
             .await;
 
-        // Best-effort event emission; never alter the primary result
         if let Err(err) = &result {
             if let Err(e) = ClientEventsReporter::new()
                 .send_event(
                     EventKind::StoreFile,
-                    Some(display_to_string(err)),
+                    Some(err.to_string()),
                     Utc::now().to_rfc3339(),
                 )
                 .await
@@ -179,12 +174,11 @@ impl ManifestManager {
             )
             .await;
 
-        // Best-effort event emission; never alter the primary result
         if let Err(err) = &result {
             if let Err(e) = ClientEventsReporter::new()
                 .send_event(
                     EventKind::StoreFile,
-                    Some(display_to_string(err)),
+                    Some(err.to_string()),
                     Utc::now().to_rfc3339(),
                 )
                 .await
@@ -230,12 +224,11 @@ impl ManifestManager {
             )
             .await;
 
-        // Best-effort event emission; never alter the primary result
         if let Err(err) = &result {
             if let Err(e) = ClientEventsReporter::new()
                 .send_event(
                     EventKind::RemoveFile,
-                    Some(display_to_string(err)),
+                    Some(err.to_string()),
                     Utc::now().to_rfc3339(),
                 )
                 .await
@@ -433,7 +426,7 @@ impl ManifestManager {
             if let Err(e) = ClientEventsReporter::new()
                 .send_event(
                     EventKind::Sync,
-                    Some(display_to_string(err)),
+                    Some(err.to_string()),
                     chrono::Utc::now().to_rfc3339(),
                 )
                 .await

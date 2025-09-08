@@ -37,7 +37,6 @@ class BedrockHttpClientTests {
             return response.getOrThrow()
         }
 
-        // New interface requirements - delegate to unified helper
         override suspend fun fetchFromAppBackendMain(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
             return fetchFromAppBackend(url, method, headers, body)
         }

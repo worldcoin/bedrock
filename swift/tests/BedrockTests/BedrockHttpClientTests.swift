@@ -35,7 +35,6 @@ final class BedrockHttpClientTests: XCTestCase {
             }
         }
 
-        // New protocol requirements: delegate to unified helper above
         func fetchFromAppBackendMain(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws -> Data {
             return try await fetchFromAppBackend(url: url, method: method, headers: headers, body: body)
         }
