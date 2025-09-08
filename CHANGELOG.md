@@ -2,6 +2,17 @@
 
 
 
+## [0.0.10] - 2025-09-08
+
+## What's Changed
+* fix: manifest initialization on new backup by @paolodamico in https://github.com/worldcoin/bedrock/pull/121
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.9...0.0.10
+
+
+
+
 ## [0.0.9] - 2025-09-05
 
 ## What's Changed
