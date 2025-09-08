@@ -1,7 +1,3 @@
-//! Client Event Streams (Usability & Error Tracking)
-//!
-//! Minimal file-backed base report with simple event reporting via the app-backend.
-
 use bedrock_macros::{bedrock_error, bedrock_export};
 use serde::{Deserialize, Serialize};
 
