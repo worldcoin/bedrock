@@ -15,7 +15,7 @@ use crate::backup::{
     BackupFileDesignator, BackupManager, ClientEventsReporter, EventKind,
 };
 use crate::primitives::filesystem::{
-    create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
+    create_middleware, FileSystemError, FileSystemMiddleware,
 };
 use crate::root_key::RootKey;
 use crate::{
@@ -36,12 +36,47 @@ pub enum BackupManifest {
 }
 
 impl BackupManifest {
-    /// Computes the BLAKE3 hash of the serialized manifest bytes.
+    /// Computes the BLAKE3 hash of the manifest, ignoring non-semantic/cache fields.
     ///
-    /// This mirrors how the manifest is persisted via `write_manifest` to keep hashes consistent.
+    /// Currently, this ignores `file_size_bytes` in each file entry so telemetry can
+    /// cache sizes locally without affecting the manifest head.
     pub fn calculate_hash(&self) -> Result<[u8; 32], BackupError> {
+        #[derive(serde::Serialize)]
+        struct HashableV0Entry {
+            designator: BackupFileDesignator,
+            file_path: String,
+            checksum_hex: String,
+        }
+
+        #[derive(serde::Serialize)]
+        struct HashableV0Manifest {
+            previous_manifest_hash: Option<String>,
+            files: Vec<HashableV0Entry>,
+        }
+
+        let value = match self {
+            Self::V0(v0) => {
+                let hashable = HashableV0Manifest {
+                    previous_manifest_hash: v0.previous_manifest_hash.clone(),
+                    files: v0
+                        .files
+                        .iter()
+                        .map(|e| HashableV0Entry {
+                            designator: e.designator.clone(),
+                            file_path: e.file_path.clone(),
+                            checksum_hex: e.checksum_hex.clone(),
+                        })
+                        .collect(),
+                };
+                serde_json::json!({
+                    "version": "V0",
+                    "manifest": hashable,
+                })
+            }
+        };
+
         let serialized =
-            serde_json::to_vec(self).context("serialize BackupManifest")?;
+            serde_json::to_vec(&value).context("serialize hashable BackupManifest")?;
         Ok(blake3::hash(&serialized).into())
     }
 }
@@ -117,11 +152,13 @@ impl ManifestManager {
                         );
                         return Ok(ManifestMutation::NoChange);
                     }
-                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
+                    let (checksum_hex, file_size_bytes) =
+                        Self::checksum_and_size_for_file(&normalized_path)?;
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
                         file_path: normalized_path,
                         checksum_hex,
+                        file_size_bytes,
                     });
                     Ok(ManifestMutation::Changed)
                 },
@@ -130,14 +167,14 @@ impl ManifestManager {
 
         if let Err(e) = ClientEventsReporter::new()
             .send_event(
-                EventKind::StoreFile,
+                EventKind::Sync,
                 result.is_ok(),
                 result.as_ref().err().map(std::string::ToString::to_string),
                 Utc::now().to_rfc3339(),
             )
             .await
         {
-            log::warn!("[ClientEvents] failed to send StoreFile event: {e:?}");
+            log::warn!("[ClientEvents] failed to send Sync event (store): {e:?}");
         }
 
         result
@@ -161,12 +198,14 @@ impl ManifestManager {
                 root_secret,
                 backup_keypair_public_key,
                 |manifest| {
-                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
+                    let (checksum_hex, file_size_bytes) =
+                        Self::checksum_and_size_for_file(&normalized_path)?;
                     manifest.files.retain(|e| e.designator != designator);
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
                         file_path: normalized_path,
                         checksum_hex,
+                        file_size_bytes,
                     });
                     Ok(ManifestMutation::Changed)
                 },
@@ -175,16 +214,14 @@ impl ManifestManager {
 
         if let Err(e) = ClientEventsReporter::new()
             .send_event(
-                EventKind::StoreFile,
+                EventKind::Sync,
                 result.is_ok(),
                 result.as_ref().err().map(std::string::ToString::to_string),
                 Utc::now().to_rfc3339(),
             )
             .await
         {
-            log::warn!(
-                "[ClientEvents] failed to send StoreFile event (replace): {e:?}"
-            );
+            log::warn!("[ClientEvents] failed to send Sync event (replace): {e:?}");
         }
 
         result
@@ -224,14 +261,14 @@ impl ManifestManager {
 
         if let Err(e) = ClientEventsReporter::new()
             .send_event(
-                EventKind::RemoveFile,
+                EventKind::Sync,
                 result.is_ok(),
                 result.as_ref().err().map(std::string::ToString::to_string),
                 Utc::now().to_rfc3339(),
             )
             .await
         {
-            log::warn!("[ClientEvents] failed to send RemoveFile event: {e:?}");
+            log::warn!("[ClientEvents] failed to send Sync event (remove): {e:?}");
         }
 
         result
@@ -351,9 +388,9 @@ impl ManifestManager {
         let result = self.file_system.read_file(Self::GLOBAL_MANIFEST_FILE);
         match result {
             Ok(bytes) => {
-                let checksum = blake3::hash(&bytes).into();
                 let manifest: BackupManifest =
                     serde_json::from_slice(&bytes).context("parse BackupManifest")?;
+                let checksum = manifest.calculate_hash()?;
                 Ok((manifest, checksum))
             }
             Err(FileSystemError::FileDoesNotExist) => {
@@ -366,16 +403,31 @@ impl ManifestManager {
         }
     }
 
-    /// Computes the checksum hex for a given file path using the raw filesystem.
-    fn checksum_hex_for_file(file_path: &str) -> Result<String, BackupError> {
+    /// Computes both checksum hex and size (bytes) for a given file path using the raw filesystem.
+    fn checksum_and_size_for_file(
+        file_path: &str,
+    ) -> Result<(String, u64), BackupError> {
         let fs = get_filesystem_raw()?;
-        fs.calculate_checksum(file_path)
-            .map(hex::encode)
-            .map_err(|e| {
-                let msg = format!("Failed to load file: {e}");
-                log::error!("{msg}");
-                BackupError::InvalidFileForBackup(msg)
-            })
+        let mut hasher = blake3::Hasher::new();
+        let mut offset: u64 = 0;
+        let chunk_size: u64 = 65_536; // 64 KiB
+        let mut total: u64 = 0;
+        loop {
+            let chunk = fs
+                .read_file_range(file_path.to_string(), offset, chunk_size)
+                .map_err(|e| {
+                    let msg = format!("Failed to load file: {e}");
+                    log::error!("{msg}");
+                    BackupError::InvalidFileForBackup(msg)
+                })?;
+            if chunk.is_empty() {
+                break;
+            }
+            hasher.update(&chunk);
+            total = total.saturating_add(chunk.len() as u64);
+            offset = offset.saturating_add(chunk.len() as u64);
+        }
+        Ok((hex::encode(hasher.finalize().as_bytes()), total))
     }
 
     /// Applies a manifest mutation and, if changed, rebuilds, syncs, and commits the update.

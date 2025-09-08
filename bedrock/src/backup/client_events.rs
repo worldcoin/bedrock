@@ -56,7 +56,7 @@ impl PlatformKind {
 /// High-level event kinds we care to report
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum)]
 pub enum EventKind {
-    /// Backup sync occurred
+    /// Backup sync or any backup file changes (store/remove)
     #[serde(rename = "sync")]
     Sync,
     /// Backup enabled
@@ -77,12 +77,22 @@ pub enum EventKind {
     /// Remove sync factor
     #[serde(rename = "remove_sync_factor")]
     RemoveSyncFactor,
-    /// Store file into backup
-    #[serde(rename = "store_file")]
-    StoreFile,
-    /// Remove file from backup
-    #[serde(rename = "remove_file")]
-    RemoveFile,
+}
+
+impl EventKind {
+    #[must_use]
+    /// Returns the lowercase string for wire format
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Sync => "sync",
+            Self::Enable => "enable",
+            Self::Disable => "disable",
+            Self::AddMainFactor => "add_main_factor",
+            Self::RemoveMainFactor => "remove_main_factor",
+            Self::AddSyncFactor => "add_sync_factor",
+            Self::RemoveSyncFactor => "remove_sync_factor",
+        }
+    }
 }
 
 /// Minimal representation of an OIDC factor for reporting
@@ -260,7 +270,7 @@ impl ClientEventsReporter {
     /// Constructs a new `ClientEventsReporter` with a scoped filesystem middleware.
     pub fn new() -> Self {
         Self {
-            fs: create_middleware("client_events"),
+            fs: create_middleware("backup_client_events"),
         }
     }
 
@@ -272,7 +282,7 @@ impl ClientEventsReporter {
         &self,
         input: RecalculateInput,
     ) -> Result<(), ClientEventsError> {
-        let mut base = self.load_base_report_internal().unwrap_or_default();
+        let mut base = self.load_base_report().unwrap_or_default();
         base.user_pkid = input.user_pkid;
         base.installation_id = input.installation_id;
         base.is_user_orb_verified = input.is_user_orb_verified;
@@ -314,7 +324,7 @@ impl ClientEventsReporter {
         let http =
             get_http_client().ok_or(ClientEventsError::HttpClientNotInitialized)?;
 
-        let mut base = self.load_base_report_internal().unwrap_or_default();
+        let mut base = self.load_base_report().unwrap_or_default();
 
         // Compute dynamic attributes from manifest/files just-in-time
         let fs = get_filesystem_raw()?;
@@ -331,13 +341,14 @@ impl ClientEventsReporter {
             let mut designators: std::collections::BTreeSet<String> =
                 std::collections::BTreeSet::new();
             let mut total_size_bytes: u64 = 0;
+
             let BackupManifest::V0(v0) = manifest;
             for entry in v0.files {
                 designators.insert(entry.designator.to_string());
-                let rel = entry.file_path.trim_start_matches('/');
-                total_size_bytes = total_size_bytes
-                    .saturating_add(Self::compute_file_size_bytes(fs, rel)?);
+                total_size_bytes =
+                    total_size_bytes.saturating_add(entry.file_size_bytes);
             }
+
             base.is_backup_enabled = Some(true);
             base.backup_file_designators = Some(designators.into_iter().collect());
             base.backup_size_kb = Some(total_size_bytes.div_ceil(1024));
@@ -350,7 +361,7 @@ impl ClientEventsReporter {
         let event = EventPayload {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: timestamp_iso8601,
-            event: Self::event_str(kind).to_string(),
+            event: kind.as_str().to_string(),
             success,
             latest_error: error_message,
             user_pk_id: base.user_pkid,
@@ -404,48 +415,14 @@ impl ClientEventsReporter {
     const BASE_FILE: &'static str = "base_report.json";
     const EVENTS_ENDPOINT: &'static str = "/v1/backup/status";
 
-    #[allow(clippy::option_if_let_else)]
-    fn load_base_report_internal(&self) -> Result<BaseReport, ClientEventsError> {
-        match self.fs.read_file(Self::BASE_FILE) {
-            Ok(bytes) => {
+    fn load_base_report(&self) -> Result<BaseReport, ClientEventsError> {
+        self.fs.read_file(Self::BASE_FILE).map_or_else(
+            |_| Ok(BaseReport::default()),
+            |bytes| {
                 serde_json::from_slice(&bytes).map_err(|e| ClientEventsError::Json {
                     message: e.to_string(),
                 })
-            }
-            Err(_) => Ok(BaseReport::default()),
-        }
-    }
-
-    const fn event_str(kind: EventKind) -> &'static str {
-        match kind {
-            EventKind::Sync | EventKind::StoreFile | EventKind::RemoveFile => "sync",
-            EventKind::Enable => "enable",
-            EventKind::Disable => "disable",
-            EventKind::AddMainFactor => "add_main_factor",
-            EventKind::RemoveMainFactor => "remove_main_factor",
-            EventKind::AddSyncFactor => "add_sync_factor",
-            EventKind::RemoveSyncFactor => "remove_sync_factor",
-        }
-    }
-
-    /// Streams a file and returns its size in bytes.
-    fn compute_file_size_bytes(
-        fs: &std::sync::Arc<dyn crate::primitives::filesystem::FileSystem>,
-        path: &str,
-    ) -> Result<u64, ClientEventsError> {
-        let mut offset: u64 = 0;
-        let chunk_size: u64 = 65_536; // 64 KiB
-        let mut total: u64 = 0;
-
-        loop {
-            let chunk = fs.read_file_range(path.to_string(), offset, chunk_size)?;
-            if chunk.is_empty() {
-                break;
-            }
-            total = total.saturating_add(chunk.len() as u64);
-            offset = offset.saturating_add(chunk.len() as u64);
-        }
-
-        Ok(total)
+            },
+        )
     }
 }

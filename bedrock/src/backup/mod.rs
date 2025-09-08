@@ -20,7 +20,6 @@ use crate::backup::backup_format::BackupFormat;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
 use crate::root_key::RootKey;
-use anyhow::Context as _;
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -125,9 +124,7 @@ impl BackupManager {
             previous_manifest_hash: None,
             files: vec![],
         });
-        let manifest_bytes =
-            serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
-        let manifest_hash_hex = hex::encode(blake3::hash(&manifest_bytes).as_bytes());
+        let manifest_hash_hex = hex::encode(manifest.calculate_hash()?);
 
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
@@ -368,6 +365,7 @@ impl BackupManager {
                 designator,
                 file_path: rel_path.to_string(),
                 checksum_hex: hex::encode(file.checksum),
+                file_size_bytes: u64::try_from(file.data.len()).unwrap_or(u64::MAX),
             });
         }
 

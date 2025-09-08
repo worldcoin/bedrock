@@ -8,7 +8,9 @@ use crate::backup::service_client::{
 };
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
-use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
+use crate::primitives::filesystem::{
+    create_middleware, get_filesystem_raw, FileSystem,
+};
 use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
@@ -122,14 +124,14 @@ fn write_manifest_with_prefix(manifest: &BackupManifest, prefix: &str) {
 }
 
 fn compute_manifest_hash(manifest: &BackupManifest) -> String {
-    let bytes = serde_json::to_vec(manifest).unwrap();
-    hex::encode(blake3::hash(&bytes).as_bytes())
+    hex::encode(manifest.calculate_hash().unwrap())
 }
 
 fn compute_manifest_hash_from_disk(prefix: &str) -> String {
-    let fs = get_filesystem_raw().unwrap().clone();
+    let fs: Arc<dyn FileSystem> = get_filesystem_raw().unwrap().clone();
     let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
-    hex::encode(blake3::hash(&bytes).as_bytes())
+    let manifest: BackupManifest = serde_json::from_slice(&bytes).unwrap();
+    hex::encode(manifest.calculate_hash().unwrap())
 }
 
 fn write_global_file(path: &str, contents: &[u8]) {
@@ -151,11 +153,13 @@ async fn test_list_files_happy_path() {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "orb_pkg/personal_custody/pcp.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"abc").as_bytes()),
+                file_size_bytes: 3,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::DocumentPkg,
                 file_path: "document_pkg/foo.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"def").as_bytes()),
+                file_size_bytes: 3,
             },
         ],
     });
@@ -216,10 +220,7 @@ async fn test_list_files_corrupted_manifest() {
     mw.write_file("manifest.json", b"not-json".to_vec())
         .unwrap();
 
-    // Set remote hash to whatever is on disk (parsing will fail before staleness check)
-    api.set_remote_hash(compute_manifest_hash_from_disk(
-        "backup_test_list_corrupted",
-    ));
+    api.set_remote_hash(hex::encode(blake3::hash(b"").as_bytes()));
 
     let mgr = ManifestManager::new_with_prefix("backup_test_list_corrupted");
     let err = mgr
@@ -393,6 +394,7 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "orb_pkg/existing.bin".to_string(),
             checksum_hex: wrong_checksum,
+            file_size_bytes: 6,
         }],
     });
     write_manifest_with_prefix(&m0, "backup_test_store_4");
@@ -432,6 +434,7 @@ async fn test_store_file_checksum_mismatch_when_file_modified() {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "pcp/changed.bin".to_string(),
             checksum_hex: correct_checksum,
+            file_size_bytes: 8,
         }],
     });
     write_manifest_with_prefix(&m0, "backup_test_store_checksum_modified");
@@ -477,6 +480,7 @@ async fn test_store_file_fails_when_manifest_references_missing_file() {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "pcp/missing.bin".to_string(),
             checksum_hex: bogus_checksum,
+            file_size_bytes: 3,
         }],
     });
     write_manifest_with_prefix(&m0, "backup_test_store_missing_file");
@@ -523,16 +527,19 @@ async fn test_replace_all_files_for_designator_happy_path() {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "pcp/old1.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"OLD1").as_bytes()),
+                file_size_bytes: 4,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "pcp/old2.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"OLD2").as_bytes()),
+                file_size_bytes: 4,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::DocumentPkg,
                 file_path: "docs/keep.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"KEEP").as_bytes()),
+                file_size_bytes: 4,
             },
         ],
     });
@@ -606,11 +613,13 @@ async fn test_remove_file_happy_and_not_found() {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "pcp/target.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"TO-REMOVE").as_bytes()),
+                file_size_bytes: 9,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::DocumentPkg,
                 file_path: "docs/keep.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"KEEP").as_bytes()),
+                file_size_bytes: 4,
             },
         ],
     });

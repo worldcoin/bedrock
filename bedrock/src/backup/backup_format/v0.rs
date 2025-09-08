@@ -30,6 +30,9 @@ pub struct V0BackupManifestEntry {
     pub file_path: String,
     /// Lowercase hex-encoded checksum of the file's raw bytes (32 bytes → 64 chars).
     pub checksum_hex: String,
+    /// Size of the file in bytes. Optional for backwards compatibility; defaults to 0 when absent.
+    #[serde(default)]
+    pub file_size_bytes: u64,
 }
 
 /// This backup format allows the app to store any files that it wants, primarily, PCPs. Root secret
