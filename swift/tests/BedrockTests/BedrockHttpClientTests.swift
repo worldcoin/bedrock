@@ -6,7 +6,7 @@ import Foundation
 final class BedrockHttpClientTests: XCTestCase {
     
     // Test implementation of AuthenticatedHttpClient
-    final class TestAuthenticatedHttpClient: AuthenticatedHttpClient {
+    class TestAuthenticatedHttpClient: AuthenticatedHttpClient {
         var responses: [String: Result<Data, HttpError>] = [:]
         var requestHistory: [String] = []
         var methodHistory: [HttpMethod] = []

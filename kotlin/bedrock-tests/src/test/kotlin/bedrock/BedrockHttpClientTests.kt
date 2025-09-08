@@ -25,7 +25,7 @@ class BedrockHttpClientTests {
         }
         
         // Unified method used by tests and trait implementation
-        suspend fun fetchFromAppBackend(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
+        override suspend fun fetchFromAppBackend(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
             requestHistory.add(url)
             methodHistory.add(method)
             headersHistory.add(headers)
@@ -37,9 +37,6 @@ class BedrockHttpClientTests {
             return response.getOrThrow()
         }
 
-        override suspend fun fetchFromAppBackend(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
-            return fetchFromAppBackend(url, method, headers, body)
-        }
     }
     
     @Test
