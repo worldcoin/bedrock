@@ -124,9 +124,8 @@ impl BackupManager {
             serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
         let manifest_hash_hex = hex::encode(blake3::hash(&manifest_bytes).as_bytes());
 
-        _bedrock_fs
-            .write_file("manifest.json", manifest_bytes)
-            .context("write manifest.json")?;
+        let manifest_manager = ManifestManager::new();
+        manifest_manager.write_manifest(&manifest)?;
 
         // 6: Prepare the result
         let result = CreatedBackup {

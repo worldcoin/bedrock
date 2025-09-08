@@ -58,7 +58,8 @@ impl ManifestManager {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            file_system: create_middleware("backup"),
+            // The prefix must follow the `BackupManager` struct name.
+            file_system: create_middleware("backup_manager"),
         }
     }
 
