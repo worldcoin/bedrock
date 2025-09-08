@@ -196,6 +196,9 @@ struct EventPayload {
     /// Event kind string
     #[serde(rename = "event")]
     event: String,
+    /// Whether the event was successful
+    #[serde(rename = "success")]
+    success: bool,
     /// Generic error message if any
     #[serde(rename = "latestError", skip_serializing_if = "Option::is_none")]
     latest_error: Option<String>,
@@ -304,6 +307,7 @@ impl ClientEventsReporter {
     pub async fn send_event(
         &self,
         kind: EventKind,
+        success: bool,
         error_message: Option<String>,
         timestamp_iso8601: String,
     ) -> Result<(), ClientEventsError> {
@@ -347,6 +351,7 @@ impl ClientEventsReporter {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: timestamp_iso8601,
             event: Self::event_str(kind).to_string(),
+            success,
             latest_error: error_message,
             user_pk_id: base.user_pkid,
             installation_id: base.installation_id,

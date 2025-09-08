@@ -128,17 +128,16 @@ impl ManifestManager {
             )
             .await;
 
-        if let Err(err) = &result {
-            if let Err(e) = ClientEventsReporter::new()
-                .send_event(
-                    EventKind::StoreFile,
-                    Some(err.to_string()),
-                    Utc::now().to_rfc3339(),
-                )
-                .await
-            {
-                log::warn!("[ClientEvents] failed to send StoreFile event: {e:?}");
-            }
+        if let Err(e) = ClientEventsReporter::new()
+            .send_event(
+                EventKind::StoreFile,
+                result.is_ok(),
+                result.as_ref().err().map(std::string::ToString::to_string),
+                Utc::now().to_rfc3339(),
+            )
+            .await
+        {
+            log::warn!("[ClientEvents] failed to send StoreFile event: {e:?}");
         }
 
         result
@@ -174,19 +173,18 @@ impl ManifestManager {
             )
             .await;
 
-        if let Err(err) = &result {
-            if let Err(e) = ClientEventsReporter::new()
-                .send_event(
-                    EventKind::StoreFile,
-                    Some(err.to_string()),
-                    Utc::now().to_rfc3339(),
-                )
-                .await
-            {
-                log::warn!(
-                    "[ClientEvents] failed to send StoreFile event (replace): {e:?}"
-                );
-            }
+        if let Err(e) = ClientEventsReporter::new()
+            .send_event(
+                EventKind::StoreFile,
+                result.is_ok(),
+                result.as_ref().err().map(std::string::ToString::to_string),
+                Utc::now().to_rfc3339(),
+            )
+            .await
+        {
+            log::warn!(
+                "[ClientEvents] failed to send StoreFile event (replace): {e:?}"
+            );
         }
 
         result
@@ -224,17 +222,16 @@ impl ManifestManager {
             )
             .await;
 
-        if let Err(err) = &result {
-            if let Err(e) = ClientEventsReporter::new()
-                .send_event(
-                    EventKind::RemoveFile,
-                    Some(err.to_string()),
-                    Utc::now().to_rfc3339(),
-                )
-                .await
-            {
-                log::warn!("[ClientEvents] failed to send RemoveFile event: {e:?}");
-            }
+        if let Err(e) = ClientEventsReporter::new()
+            .send_event(
+                EventKind::RemoveFile,
+                result.is_ok(),
+                result.as_ref().err().map(std::string::ToString::to_string),
+                Utc::now().to_rfc3339(),
+            )
+            .await
+        {
+            log::warn!("[ClientEvents] failed to send RemoveFile event: {e:?}");
         }
 
         result
@@ -422,17 +419,16 @@ impl ManifestManager {
         )
         .await;
 
-        if let Err(err) = &result {
-            if let Err(e) = ClientEventsReporter::new()
-                .send_event(
-                    EventKind::Sync,
-                    Some(err.to_string()),
-                    chrono::Utc::now().to_rfc3339(),
-                )
-                .await
-            {
-                log::warn!("[ClientEvents] failed to send Sync event: {e:?}");
-            }
+        if let Err(e) = ClientEventsReporter::new()
+            .send_event(
+                EventKind::Sync,
+                result.is_ok(),
+                result.as_ref().err().map(std::string::ToString::to_string),
+                Utc::now().to_rfc3339(),
+            )
+            .await
+        {
+            log::warn!("[ClientEvents] failed to send Sync event: {e:?}");
         }
 
         result?;
