@@ -4,10 +4,10 @@ resolver = "2"
 
 [workspace.package]
 authors = [
-  "Paolo D'Amico <paolodamico@users.noreply.github.com",
-  "Luke Mann <luke@mann.xyz>",
-  "Seva Zhidkov <zhidkovseva@gmail.com>",
-  "Aurel <105201452+aurel-fr@users.noreply.github.com>",
+    "Paolo D'Amico <paolodamico@users.noreply.github.com",
+    "Luke Mann <luke@mann.xyz>",
+    "Seva Zhidkov <zhidkovseva@gmail.com>",
+    "Aurel <105201452+aurel-fr@users.noreply.github.com>",
 ]
 categories = ["api-bindings", "cryptography::cryptocurrencies"]
 edition = "2021"
