@@ -91,9 +91,6 @@ pub struct BaseReport {
     /// Whether backup is enabled
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_backup_enabled: Option<bool>,
-    /// Whether user is orb verified
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_user_orb_verified: Option<bool>,
     /// Whether orb verification happened after Sep 2025
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orb_verified_after_sep25: Option<bool>,
@@ -139,8 +136,6 @@ pub struct RecalculateInput {
     pub user_pkid: Option<String>,
     /// Installation ID (low entropy, cached, cleared on uninstall)
     pub installation_id: Option<String>,
-    /// Whether user is orb verified
-    pub is_user_orb_verified: Option<bool>,
     /// Whether orb verification happened after Sep 2025
     pub orb_verified_after_sep25: Option<bool>,
     /// Whether user is document verified
@@ -189,8 +184,6 @@ struct EventPayload {
     installation_id: Option<String>,
     #[serde(rename = "isBackupEnabled", skip_serializing_if = "Option::is_none")]
     is_backup_enabled: Option<bool>,
-    #[serde(rename = "isUserOrbVerified", skip_serializing_if = "Option::is_none")]
-    is_user_orb_verified: Option<bool>,
     #[serde(
         rename = "orbVerifiedAfterJul25",
         skip_serializing_if = "Option::is_none"
@@ -260,8 +253,6 @@ impl ClientEventsReporter {
         let mut base = self.read_base_report().unwrap_or_default();
         base.user_pkid = input.user_pkid.or(base.user_pkid);
         base.installation_id = input.installation_id.or(base.installation_id);
-        base.is_user_orb_verified =
-            input.is_user_orb_verified.or(base.is_user_orb_verified);
         base.orb_verified_after_sep25 = input
             .orb_verified_after_sep25
             .or(base.orb_verified_after_sep25);
@@ -316,7 +307,6 @@ impl ClientEventsReporter {
             user_pk_id: base.user_pkid,
             installation_id: Some(ensured_installation_id),
             is_backup_enabled: base.is_backup_enabled,
-            is_user_orb_verified: base.is_user_orb_verified,
             orb_verified_after_jul25: base.orb_verified_after_sep25,
             is_user_document_verified: base.is_user_document_verified,
             has_turnkey_account: base.has_turnkey_account,
