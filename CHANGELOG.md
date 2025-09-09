@@ -2,6 +2,20 @@
 
 
 
+## [0.0.11] - 2025-09-09
+
+## What's Changed
+* feat: Enclave Verify Attestation Document by @andy-t-wang in https://github.com/worldcoin/bedrock/pull/99
+* fix: backup manifest default hash by @paolodamico in https://github.com/worldcoin/bedrock/pull/125
+
+## New Contributors
+* @andy-t-wang made their first contribution in https://github.com/worldcoin/bedrock/pull/99
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.10...0.0.11
+
+
+
+
 ## [0.0.10] - 2025-09-08
 
 ## What's Changed
