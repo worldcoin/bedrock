@@ -6,6 +6,7 @@ use crate::primitives::filesystem::create_middleware;
 use crate::primitives::filesystem::get_filesystem_raw;
 use crate::primitives::filesystem::FileSystemMiddleware;
 use crate::primitives::http_client::{get_http_client, HttpHeader};
+use crate::primitives::platform::PlatformKind;
 use crate::HttpMethod;
 
 /// Errors that can occur when reporting client events.
@@ -25,28 +26,6 @@ pub enum ClientEventsError {
     /// HTTP error when sending events
     #[error(transparent)]
     HttpError(#[from] crate::primitives::http_client::HttpError),
-}
-
-/// Platform enum as reported by clients
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum)]
-pub enum PlatformKind {
-    /// Android platform
-    #[serde(rename = "android")]
-    Android,
-    /// iOS platform
-    #[serde(rename = "ios")]
-    Ios,
-}
-
-impl PlatformKind {
-    #[must_use]
-    /// Returns the lowercase string representation for wire format
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Android => "android",
-            Self::Ios => "ios",
-        }
-    }
 }
 
 /// High-level event kinds we care to report
