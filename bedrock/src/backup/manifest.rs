@@ -36,7 +36,13 @@ pub enum BackupManifest {
 }
 
 impl BackupManifest {
-    /// Computes the BLAKE3 hash of the manifest, ignoring non-semantic/cache fields.
+    /// The hash of the `Default` manifest (i.e. genesis, no files).
+    ///
+    /// See `test_backup_manifest_default_hash` for computation and updates.
+    pub const DEFAULT_HASH: &str =
+        "471f87ee6c873ccd523bcd669aa253361e711d8613b9a1f4a6a92f28bc8c64a6";
+
+    /// Computes the BLAKE3 hash of the serialized manifest bytes.
     ///
     /// Currently, this ignores `file_size_bytes` in each file entry so telemetry can
     /// cache sizes locally without affecting the manifest head.
@@ -78,6 +84,15 @@ impl BackupManifest {
         let serialized =
             serde_json::to_vec(&value).context("serialize hashable BackupManifest")?;
         Ok(blake3::hash(&serialized).into())
+    }
+}
+
+impl Default for BackupManifest {
+    fn default() -> Self {
+        Self::V0(V0BackupManifest {
+            previous_manifest_hash: None,
+            files: vec![],
+        })
     }
 }
 

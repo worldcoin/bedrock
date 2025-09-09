@@ -126,6 +126,7 @@ impl BackupManager {
         });
         let manifest_hash_hex = hex::encode(manifest.calculate_hash()?);
 
+
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
 
@@ -203,7 +204,7 @@ impl BackupManager {
         let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
-        // Decrypt Sealed Backup
+        // Decrypt the Sealed Backup
         let unsealed_backup = backup_secret_key
             .unseal(sealed_backup_data)
             .map_err(|_| BackupError::DecryptBackupError)?;
@@ -369,8 +370,18 @@ impl BackupManager {
             });
         }
 
+        // If the current manifest hash is the default hash, then there is no previous manifest hash
+        // this must be set as `None`, otherwise the remote will appear ahead when it's not.
+        // See: `test_decrypt_and_unpack_default_manifest_hash`
+        let previous_manifest_hash =
+            if current_manifest_hash_hex == BackupManifest::DEFAULT_HASH {
+                None
+            } else {
+                Some(current_manifest_hash_hex)
+            };
+
         let manifest = BackupManifest::V0(V0BackupManifest {
-            previous_manifest_hash: Some(current_manifest_hash_hex),
+            previous_manifest_hash,
             files: manifest_entries,
         });
 
