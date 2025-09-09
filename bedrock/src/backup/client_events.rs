@@ -29,45 +29,34 @@ pub enum ClientEventsError {
 }
 
 /// High-level event kinds we care to report
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    uniffi::Enum,
+    strum::Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum EventKind {
     /// Backup sync or any backup file changes (store/remove)
-    #[serde(rename = "sync")]
     Sync,
     /// Backup enabled
-    #[serde(rename = "enable")]
     Enable,
     /// Backup disabled
-    #[serde(rename = "disable")]
     Disable,
     /// Add main factor
-    #[serde(rename = "add_main_factor")]
     AddMainFactor,
     /// Remove main factor
-    #[serde(rename = "remove_main_factor")]
     RemoveMainFactor,
     /// Add sync factor
-    #[serde(rename = "add_sync_factor")]
     AddSyncFactor,
     /// Remove sync factor
-    #[serde(rename = "remove_sync_factor")]
     RemoveSyncFactor,
-}
-
-impl EventKind {
-    #[must_use]
-    /// Returns the lowercase string for wire format
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Sync => "sync",
-            Self::Enable => "enable",
-            Self::Disable => "disable",
-            Self::AddMainFactor => "add_main_factor",
-            Self::RemoveMainFactor => "remove_main_factor",
-            Self::AddSyncFactor => "add_sync_factor",
-            Self::RemoveSyncFactor => "remove_sync_factor",
-        }
-    }
 }
 
 /// Minimal representation of an OIDC factor for reporting
@@ -302,7 +291,7 @@ impl ClientEventsReporter {
         let event = EventPayload {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: timestamp_iso8601,
-            event: kind.as_str().to_string(),
+            event: kind.to_string(),
             success,
             latest_error: error_message,
             user_pk_id: base.user_pkid,
