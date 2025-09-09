@@ -1,8 +1,10 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 use super::manifest::ManifestManager;
+use crate::backup::BackupFileDesignator;
 use crate::primitives::filesystem::create_middleware;
 use crate::primitives::filesystem::get_filesystem_raw;
 use crate::primitives::filesystem::FileSystemMiddleware;
@@ -79,6 +81,18 @@ pub struct MainFactor {
     pub created_at: String,
 }
 
+/// Kinds of encryption keys present in backup metadata
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum)]
+#[serde(rename_all = "snake_case")]
+pub enum EncryptionKeyKind {
+    /// Passkey PRF-derived key
+    Prf,
+    /// Turnkey-stored random key
+    Turnkey,
+    /// iCloud Keychain-stored random key (iOS < 18 path)
+    IcloudKeychain,
+}
+
 /// Base report stored locally and merged into outgoing events.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, uniffi::Record)]
 pub struct BaseReport {
@@ -105,13 +119,13 @@ pub struct BaseReport {
     pub sync_factor_count: Option<u32>,
     /// Encryption keys present (e.g., prf, turnkey)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub encryption_keys: Option<Vec<String>>,
+    pub encryption_keys: Option<Vec<EncryptionKeyKind>>,
     /// Main factors present
     #[serde(skip_serializing_if = "Option::is_none")]
     pub main_factors: Option<Vec<MainFactor>>,
     /// Backup file designators present
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub backup_file_designators: Option<Vec<String>>,
+    pub backup_file_designators: Option<Vec<BackupFileDesignator>>,
     /// Approx backup size in KB
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_size_kb: Option<u64>,
@@ -145,7 +159,7 @@ pub struct RecalculateInput {
     /// Number of sync factors
     pub sync_factor_count: Option<u32>,
     /// Encryption keys present (e.g., prf, turnkey)
-    pub encryption_keys: Option<Vec<String>>,
+    pub encryption_keys: Option<Vec<EncryptionKeyKind>>,
     /// Main factors present
     pub main_factors: Option<Vec<MainFactor>>,
     /// Device-local sync counter
@@ -199,11 +213,11 @@ struct EventPayload {
     #[serde(rename = "syncFactorCount", skip_serializing_if = "Option::is_none")]
     sync_factor_count: Option<u32>,
     #[serde(rename = "encryptionKeys", skip_serializing_if = "Option::is_none")]
-    encryption_keys: Option<Vec<String>>,
+    encryption_keys: Option<Vec<EncryptionKeyKind>>,
     #[serde(rename = "mainFactors", skip_serializing_if = "Option::is_none")]
     main_factors: Option<Vec<MainFactor>>, // same shape
     #[serde(rename = "backupFilesModules", skip_serializing_if = "Option::is_none")]
-    backup_files_modules: Option<Vec<String>>,
+    backup_files_modules: Option<Vec<BackupFileDesignator>>,
     #[serde(rename = "backupFileSizeKb", skip_serializing_if = "Option::is_none")]
     backup_file_size_kb: Option<u64>,
     #[serde(rename = "deviceSyncCount", skip_serializing_if = "Option::is_none")]
@@ -444,7 +458,12 @@ impl ClientEventsReporter {
         }
 
         base.is_backup_enabled = Some(true);
-        base.backup_file_designators = Some(designators.into_iter().collect());
+        base.backup_file_designators = Some(
+            designators
+                .into_iter()
+                .filter_map(|s| BackupFileDesignator::from_str(&s).ok())
+                .collect(),
+        );
         base.backup_size_kb = Some(total_size_bytes.div_ceil(1024));
 
         self.write_base_report(&base)?;

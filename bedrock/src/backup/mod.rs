@@ -8,7 +8,8 @@ mod test;
 
 use bedrock_macros::bedrock_export;
 pub use client_events::{
-    BaseReport, ClientEventsError, ClientEventsReporter, EventKind, MainFactor,
+    BaseReport, ClientEventsError, ClientEventsReporter, EncryptionKeyKind, EventKind,
+    MainFactor,
 };
 pub use manifest::ManifestManager;
 
