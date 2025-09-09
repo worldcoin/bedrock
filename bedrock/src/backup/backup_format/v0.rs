@@ -11,6 +11,8 @@ const VERSION_TAG: &str = "OXIDE_BACKUP_VERSION";
 const ROOT_SECRET_FILE: &str = "root_secret.json";
 
 /// V0 version of the backup manifest. See `BackupManifest` for more details.
+///
+/// NOTE: Important not to incorporate types with undefined iteration order into this struct (e.g. `HashMap`)
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V0BackupManifest {
     /// Hash of the immediately previous manifest state (hex, 32-byte blake3), if any.
