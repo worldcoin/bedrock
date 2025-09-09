@@ -1,4 +1,5 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use super::manifest::ManifestManager;
@@ -20,6 +21,13 @@ pub enum ClientEventsError {
     #[error("JSON error: {message}")]
     Json {
         /// The JSON error message
+        message: String,
+    },
+
+    /// Random number generation error
+    #[error("RNG error: {message}")]
+    Rng {
+        /// The RNG error message
         message: String,
     },
 
@@ -238,6 +246,14 @@ impl ClientEventsReporter {
         }
     }
 
+    /// Returns the installation ID, generating and persisting it if missing.
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing the base report fails, or if the RNG fails.
+    pub fn installation_id(&self) -> Result<String, ClientEventsError> {
+        self.ensure_installation_id()
+    }
+
     /// Set non-dynamic report attributes provided by native.
     ///
     /// # Errors
@@ -267,6 +283,11 @@ impl ClientEventsReporter {
         base.platform = input.platform.or(base.platform);
         base.last_synced_at = input.last_synced_at.or(base.last_synced_at);
 
+        // If no installation ID provided and none persisted yet, generate and persist now.
+        if base.installation_id.is_none() {
+            base.installation_id = Some(Self::generate_installation_id()?);
+        }
+
         self.write_base_report(&base)
     }
 
@@ -283,6 +304,9 @@ impl ClientEventsReporter {
         error_message: Option<String>,
         timestamp_iso8601: String,
     ) -> Result<(), ClientEventsError> {
+        // Ensure installation ID exists before sending
+        let ensured_installation_id = self.ensure_installation_id()?;
+
         let http =
             get_http_client().ok_or(ClientEventsError::HttpClientNotInitialized)?;
 
@@ -295,7 +319,7 @@ impl ClientEventsReporter {
             success,
             latest_error: error_message,
             user_pk_id: base.user_pkid,
-            installation_id: base.installation_id,
+            installation_id: Some(ensured_installation_id),
             device_id: base.device_id,
             is_backup_enabled: base.is_backup_enabled,
             is_user_orb_verified: base.is_user_orb_verified,
@@ -344,6 +368,30 @@ impl Default for ClientEventsReporter {
 impl ClientEventsReporter {
     const BASE_FILE: &'static str = "base_report.json";
     const EVENTS_ENDPOINT: &'static str = "/v1/backup/status";
+
+    /// Ensure an installation ID exists and is persisted. Returns the ID.
+    fn ensure_installation_id(&self) -> Result<String, ClientEventsError> {
+        let mut base = self.read_base_report().unwrap_or_default();
+        if let Some(id) = &base.installation_id {
+            return Ok(id.clone());
+        }
+
+        let id = Self::generate_installation_id()?;
+        base.installation_id = Some(id.clone());
+        self.write_base_report(&base)?;
+        Ok(id)
+    }
+
+    /// Generate a new 3-byte lowercase hex installation ID.
+    fn generate_installation_id() -> Result<String, ClientEventsError> {
+        let mut buf = [0u8; 3];
+        match rand::rngs::OsRng.try_fill_bytes(&mut buf) {
+            Ok(()) => Ok(hex::encode(buf)),
+            Err(e) => Err(ClientEventsError::Rng {
+                message: e.to_string(),
+            }),
+        }
+    }
 
     fn read_base_report(&self) -> Result<BaseReport, ClientEventsError> {
         self.fs.read_file(Self::BASE_FILE).map_or_else(
