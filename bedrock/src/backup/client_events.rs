@@ -1,7 +1,7 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
 use serde::{Deserialize, Serialize};
 
-use super::manifest::BackupManifest;
+use super::manifest::ManifestManager;
 use crate::primitives::filesystem::create_middleware;
 use crate::primitives::filesystem::get_filesystem_raw;
 use crate::primitives::filesystem::FileSystemMiddleware;
@@ -278,30 +278,28 @@ impl ClientEventsReporter {
         &self,
         input: RecalculateInput,
     ) -> Result<(), ClientEventsError> {
-        let mut base = self.load_base_report().unwrap_or_default();
-        base.user_pkid = input.user_pkid;
-        base.installation_id = input.installation_id;
-        base.is_user_orb_verified = input.is_user_orb_verified;
-        base.orb_verified_after_sep25 = input.orb_verified_after_sep25;
-        base.is_user_document_verified = input.is_user_document_verified;
-        base.has_turnkey_account = input.has_turnkey_account;
-        base.sync_factor_count = input.sync_factor_count;
-        base.encryption_keys = input.encryption_keys;
-        base.main_factors = input.main_factors;
-        base.device_sync_count = input.device_sync_count;
-        base.app_version = input.app_version;
-        base.platform = input.platform;
-        base.last_synced_at = input.last_synced_at;
+        let mut base = self.read_base_report().unwrap_or_default();
+        base.user_pkid = input.user_pkid.or(base.user_pkid);
+        base.installation_id = input.installation_id.or(base.installation_id);
+        base.is_user_orb_verified =
+            input.is_user_orb_verified.or(base.is_user_orb_verified);
+        base.orb_verified_after_sep25 = input
+            .orb_verified_after_sep25
+            .or(base.orb_verified_after_sep25);
+        base.is_user_document_verified = input
+            .is_user_document_verified
+            .or(base.is_user_document_verified);
+        base.has_turnkey_account =
+            input.has_turnkey_account.or(base.has_turnkey_account);
+        base.sync_factor_count = input.sync_factor_count.or(base.sync_factor_count);
+        base.encryption_keys = input.encryption_keys.or(base.encryption_keys);
+        base.main_factors = input.main_factors.or(base.main_factors);
+        base.device_sync_count = input.device_sync_count.or(base.device_sync_count);
+        base.app_version = input.app_version.or(base.app_version);
+        base.platform = input.platform.or(base.platform);
+        base.last_synced_at = input.last_synced_at.or(base.last_synced_at);
 
-        let serialized =
-            serde_json::to_vec(&base).map_err(|e| ClientEventsError::Json {
-                message: e.to_string(),
-            })?;
-        self.fs
-            .write_file(Self::BASE_FILE, serialized)
-            .map_err(|e| ClientEventsError::from(anyhow::Error::from(e)))?;
-
-        Ok(())
+        self.write_base_report(&base)
     }
 
     /// Send a single event by merging with base report and posting to backend.
@@ -320,39 +318,7 @@ impl ClientEventsReporter {
         let http =
             get_http_client().ok_or(ClientEventsError::HttpClientNotInitialized)?;
 
-        let mut base = self.load_base_report().unwrap_or_default();
-
-        // Compute dynamic attributes from manifest/files just-in-time
-        let fs = get_filesystem_raw()?;
-        let manifest_path = "backup_manager/manifest.json";
-        if fs.file_exists(manifest_path.to_string())? {
-            let bytes = fs.read_file(manifest_path.to_string())?;
-            let manifest: BackupManifest =
-                serde_json::from_slice(&bytes).map_err(|e| {
-                    ClientEventsError::Json {
-                        message: e.to_string(),
-                    }
-                })?;
-
-            let mut designators: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
-            let mut total_size_bytes: u64 = 0;
-
-            let BackupManifest::V0(v0) = manifest;
-            for entry in v0.files {
-                designators.insert(entry.designator.to_string());
-                total_size_bytes =
-                    total_size_bytes.saturating_add(entry.file_size_bytes);
-            }
-
-            base.is_backup_enabled = Some(true);
-            base.backup_file_designators = Some(designators.into_iter().collect());
-            base.backup_size_kb = Some(total_size_bytes.div_ceil(1024));
-        } else {
-            base.is_backup_enabled = Some(false);
-            base.backup_file_designators = Some(Vec::new());
-            base.backup_size_kb = Some(0);
-        }
+        let base = self.read_base_report().unwrap_or_default();
 
         let event = EventPayload {
             id: uuid::Uuid::new_v4().to_string(),
@@ -411,7 +377,7 @@ impl ClientEventsReporter {
     const BASE_FILE: &'static str = "base_report.json";
     const EVENTS_ENDPOINT: &'static str = "/v1/backup/status";
 
-    fn load_base_report(&self) -> Result<BaseReport, ClientEventsError> {
+    fn read_base_report(&self) -> Result<BaseReport, ClientEventsError> {
         self.fs.read_file(Self::BASE_FILE).map_or_else(
             |_| Ok(BaseReport::default()),
             |bytes| {
@@ -420,5 +386,68 @@ impl ClientEventsReporter {
                 })
             },
         )
+    }
+
+    fn write_base_report(&self, base: &BaseReport) -> Result<(), ClientEventsError> {
+        let serialized =
+            serde_json::to_vec(base).map_err(|e| ClientEventsError::Json {
+                message: e.to_string(),
+            })?;
+        self.fs
+            .write_file(Self::BASE_FILE, serialized)
+            .map_err(|e| ClientEventsError::from(anyhow::Error::from(e)))
+    }
+
+    /// Recalculate backup size from manifest and update base report.
+    ///
+    /// Iterates all files listed in the global manifest, streams each file to calculate
+    /// its size, and writes the aggregate (in KB, rounded up) to `backup_size_kb`.
+    /// Also updates `is_backup_enabled` and `backup_file_designators`.
+    ///
+    /// # Errors
+    /// Returns an error if manifest or base report cannot be read/written.
+    pub fn recalculate_backup_size(&self) -> Result<(), ClientEventsError> {
+        let fs = get_filesystem_raw()?;
+        let mut base = self.read_base_report().unwrap_or_default();
+
+        // Load manifest via manager (unchecked, no remote gate)
+        let mgr = ManifestManager::new();
+        let Ok(manifest) = mgr.load_manifest_unchecked() else {
+            base.is_backup_enabled = Some(false);
+            base.backup_file_designators = Some(Vec::new());
+            base.backup_size_kb = Some(0);
+            self.write_base_report(&base)?;
+            return Ok(());
+        };
+
+        let mut designators: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        let mut total_size_bytes: u64 = 0;
+
+        for entry in manifest.files {
+            designators.insert(entry.designator.to_string());
+
+            // Stream file to count its size
+            let mut offset: u64 = 0;
+            let chunk_size: u64 = 65_536;
+            loop {
+                let chunk = fs
+                    .read_file_range(entry.file_path.clone(), offset, chunk_size)
+                    .map_err(|e| ClientEventsError::from(anyhow::Error::from(e)))?;
+                if chunk.is_empty() {
+                    break;
+                }
+                total_size_bytes = total_size_bytes
+                    .saturating_add(u64::try_from(chunk.len()).unwrap_or(0));
+                offset = offset.saturating_add(u64::try_from(chunk.len()).unwrap_or(0));
+            }
+        }
+
+        base.is_backup_enabled = Some(true);
+        base.backup_file_designators = Some(designators.into_iter().collect());
+        base.backup_size_kb = Some(total_size_bytes.div_ceil(1024));
+
+        self.write_base_report(&base)?;
+        Ok(())
     }
 }

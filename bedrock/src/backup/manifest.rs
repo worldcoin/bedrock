@@ -305,6 +305,21 @@ impl ManifestManager {
         Ok((manifest, local_hash))
     }
 
+    /// Reads the manifest from disk without checking against the remote hash.
+    ///
+    /// This is intended for local computations (e.g., size telemetry) that must not fail
+    /// due to remote staleness and that don't mutate state.
+    ///
+    /// # Errors
+    /// Returns an error if the manifest file is missing or cannot be parsed.
+    pub(crate) fn load_manifest_unchecked(
+        &self,
+    ) -> Result<V0BackupManifest, BackupError> {
+        let (manifest, _checksum) = self.read_manifest()?;
+        let BackupManifest::V0(manifest) = manifest;
+        Ok(manifest)
+    }
+
     /// Writes the updated manifest to disk.
     ///
     /// # Errors
@@ -411,7 +426,6 @@ impl ManifestManager {
         let mut hasher = blake3::Hasher::new();
         let mut offset: u64 = 0;
         let chunk_size: u64 = 65_536; // 64 KiB
-        let mut total: u64 = 0;
         loop {
             let chunk = fs
                 .read_file_range(file_path.to_string(), offset, chunk_size)
@@ -424,10 +438,9 @@ impl ManifestManager {
                 break;
             }
             hasher.update(&chunk);
-            total = total.saturating_add(chunk.len() as u64);
             offset = offset.saturating_add(chunk.len() as u64);
         }
-        Ok((hex::encode(hasher.finalize().as_bytes()), total))
+        Ok((hex::encode(hasher.finalize().as_bytes()), offset))
     }
 
     /// Applies a manifest mutation and, if changed, rebuilds, syncs, and commits the update.
@@ -487,6 +500,13 @@ impl ManifestManager {
 
         // commit the updated manifest once the remote sync has been successful
         self.write_manifest(&updated_manifest)?;
+
+        // Refresh backup report from manifest; ignore errors
+        if let Err(e) = ClientEventsReporter::new().recalculate_backup_size() {
+            log::warn!(
+                "[ClientEvents] failed to refresh backup report after manifest update: {e:?}"
+            );
+        }
 
         Ok(())
     }
