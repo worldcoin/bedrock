@@ -88,9 +88,6 @@ pub struct BaseReport {
     /// Installation ID (low entropy, cached, cleared on uninstall)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installation_id: Option<String>,
-    /// Device identifier (only for users with opt-in analytics)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_id: Option<String>,
     /// Whether backup is enabled
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_backup_enabled: Option<bool>,
@@ -190,8 +187,6 @@ struct EventPayload {
     user_pk_id: Option<String>,
     #[serde(rename = "installationId", skip_serializing_if = "Option::is_none")]
     installation_id: Option<String>,
-    #[serde(rename = "deviceId", skip_serializing_if = "Option::is_none")]
-    device_id: Option<String>,
     #[serde(rename = "isBackupEnabled", skip_serializing_if = "Option::is_none")]
     is_backup_enabled: Option<bool>,
     #[serde(rename = "isUserOrbVerified", skip_serializing_if = "Option::is_none")]
@@ -320,7 +315,6 @@ impl ClientEventsReporter {
             latest_error: error_message,
             user_pk_id: base.user_pkid,
             installation_id: Some(ensured_installation_id),
-            device_id: base.device_id,
             is_backup_enabled: base.is_backup_enabled,
             is_user_orb_verified: base.is_user_orb_verified,
             orb_verified_after_jul25: base.orb_verified_after_sep25,
