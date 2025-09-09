@@ -142,7 +142,7 @@ fn write_global_file(path: &str, contents: &[u8]) {
 }
 
 #[test]
-fn test_v0_backup_manifest_default_hash() {
+fn test_backup_manifest_default_hash() {
     let manifest = BackupManifest::V0(V0BackupManifest {
         previous_manifest_hash: None,
         files: vec![],

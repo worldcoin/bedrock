@@ -33,6 +33,9 @@ pub enum BackupManifest {
 }
 
 impl BackupManifest {
+    /// The hash of the `Default` manifest (i.e. genesis, no files).
+    ///
+    /// See `test_backup_manifest_default_hash` for computation and updates.
     pub const DEFAULT_HASH: &str =
         "471f87ee6c873ccd523bcd669aa253361e711d8613b9a1f4a6a92f28bc8c64a6";
 
