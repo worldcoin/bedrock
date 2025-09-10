@@ -112,7 +112,7 @@ impl ManifestManager {
         root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
-        let normalized_path = file_path.trim_start_matches('/').to_string();
+        let normalized_path = Self::normalize_input_path(&file_path).to_string();
         self.mutate_manifest_and_sync(
             root_secret,
             backup_keypair_public_key,
@@ -152,7 +152,7 @@ impl ManifestManager {
         root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
-        let normalized_path = new_file_path.trim_start_matches('/').to_string();
+        let normalized_path = Self::normalize_input_path(&new_file_path).to_string();
         self.mutate_manifest_and_sync(
             root_secret,
             backup_keypair_public_key,
@@ -182,7 +182,7 @@ impl ManifestManager {
         root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
-        let normalized_path = file_path.trim_start_matches('/').to_string();
+        let normalized_path = Self::normalize_input_path(&file_path).to_string();
         self.mutate_manifest_and_sync(
             root_secret,
             backup_keypair_public_key,
@@ -205,6 +205,23 @@ impl ManifestManager {
 
 /// Internal methods for the `ManifestManager` (not exposed to foreign code).
 impl ManifestManager {
+    /// Normalizes an input path by stripping any leading "./" or "/" segments.
+    /// This is tolerant to multiple occurrences (e.g., "././path" or "///path").
+    fn normalize_input_path(path: &str) -> &str {
+        let mut p = path;
+        loop {
+            if let Some(rest) = p.strip_prefix("./") {
+                p = rest;
+                continue;
+            }
+            if let Some(rest) = p.strip_prefix('/') {
+                p = rest;
+                continue;
+            }
+            break;
+        }
+        p
+    }
     /// Thepath to the global manifest file
     const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
 
@@ -259,7 +276,7 @@ impl ManifestManager {
         // Use the global filesystem (no prefixing) to read file contents.
         let fs = get_filesystem_raw()?;
         for entry in &manifest.files {
-            let rel = entry.file_path.trim_start_matches('/');
+            let rel = Self::normalize_input_path(&entry.file_path);
             let data = fs.read_file(rel.to_string()).map_err(|e| {
                 let msg =
                     format!("Failed to load file from {:?}: {e}", entry.designator);
@@ -334,7 +351,8 @@ impl ManifestManager {
     /// Computes the checksum hex for a given file path using the raw filesystem.
     fn checksum_hex_for_file(file_path: &str) -> Result<String, BackupError> {
         let fs = get_filesystem_raw()?;
-        fs.calculate_checksum(file_path)
+        let normalized = Self::normalize_input_path(file_path);
+        fs.calculate_checksum(normalized)
             .map(hex::encode)
             .map_err(|e| {
                 let msg = format!("Failed to load file: {e}");
