@@ -126,7 +126,6 @@ impl BackupManager {
         });
         let manifest_hash_hex = hex::encode(manifest.calculate_hash()?);
 
-
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
 
@@ -366,7 +365,6 @@ impl BackupManager {
                 designator,
                 file_path: rel_path.to_string(),
                 checksum_hex: hex::encode(file.checksum),
-                file_size_bytes: u64::try_from(file.data.len()).unwrap_or(u64::MAX),
             });
         }
 

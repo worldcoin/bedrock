@@ -44,45 +44,10 @@ impl BackupManifest {
 
     /// Computes the BLAKE3 hash of the serialized manifest bytes.
     ///
-    /// Currently, this ignores `file_size_bytes` in each file entry so telemetry can
-    /// cache sizes locally without affecting the manifest head.
+    /// Computes the BLAKE3 hash of the serialized manifest bytes.
     pub fn calculate_hash(&self) -> Result<[u8; 32], BackupError> {
-        #[derive(serde::Serialize)]
-        struct HashableV0Entry {
-            designator: BackupFileDesignator,
-            file_path: String,
-            checksum_hex: String,
-        }
-
-        #[derive(serde::Serialize)]
-        struct HashableV0Manifest {
-            previous_manifest_hash: Option<String>,
-            files: Vec<HashableV0Entry>,
-        }
-
-        let value = match self {
-            Self::V0(v0) => {
-                let hashable = HashableV0Manifest {
-                    previous_manifest_hash: v0.previous_manifest_hash.clone(),
-                    files: v0
-                        .files
-                        .iter()
-                        .map(|e| HashableV0Entry {
-                            designator: e.designator.clone(),
-                            file_path: e.file_path.clone(),
-                            checksum_hex: e.checksum_hex.clone(),
-                        })
-                        .collect(),
-                };
-                serde_json::json!({
-                    "version": "V0",
-                    "manifest": hashable,
-                })
-            }
-        };
-
         let serialized =
-            serde_json::to_vec(&value).context("serialize hashable BackupManifest")?;
+            serde_json::to_vec(self).context("serialize hashable BackupManifest")?;
         Ok(blake3::hash(&serialized).into())
     }
 }
@@ -167,13 +132,12 @@ impl ManifestManager {
                         );
                         return Ok(ManifestMutation::NoChange);
                     }
-                    let (checksum_hex, file_size_bytes) =
+                    let (checksum_hex, _file_size_bytes) =
                         Self::checksum_and_size_for_file(&normalized_path)?;
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
                         file_path: normalized_path,
                         checksum_hex,
-                        file_size_bytes,
                     });
                     Ok(ManifestMutation::Changed)
                 },
@@ -213,14 +177,13 @@ impl ManifestManager {
                 root_secret,
                 backup_keypair_public_key,
                 |manifest| {
-                    let (checksum_hex, file_size_bytes) =
+                    let (checksum_hex, _file_size_bytes) =
                         Self::checksum_and_size_for_file(&normalized_path)?;
                     manifest.files.retain(|e| e.designator != designator);
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
                         file_path: normalized_path,
                         checksum_hex,
-                        file_size_bytes,
                     });
                     Ok(ManifestMutation::Changed)
                 },

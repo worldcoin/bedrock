@@ -149,9 +149,7 @@ fn test_backup_manifest_default_hash() {
         previous_manifest_hash: None,
         files: vec![],
     });
-    let serialized = serde_json::to_vec(&manifest).unwrap();
-    let hash = blake3::hash(&serialized);
-    let hash = hex::encode(hash.as_bytes());
+    let hash = hex::encode(manifest.calculate_hash().unwrap());
     assert_eq!(hash, BackupManifest::DEFAULT_HASH);
 }
 
@@ -169,13 +167,11 @@ async fn test_list_files_happy_path() {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "orb_pkg/personal_custody/pcp.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"abc").as_bytes()),
-                file_size_bytes: 3,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::DocumentPkg,
                 file_path: "document_pkg/foo.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"def").as_bytes()),
-                file_size_bytes: 3,
             },
         ],
     });
@@ -410,7 +406,6 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "orb_pkg/existing.bin".to_string(),
             checksum_hex: wrong_checksum,
-            file_size_bytes: 6,
         }],
     });
     write_manifest_with_prefix(&m0, "backup_test_store_4");
@@ -450,7 +445,6 @@ async fn test_store_file_checksum_mismatch_when_file_modified() {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "pcp/changed.bin".to_string(),
             checksum_hex: correct_checksum,
-            file_size_bytes: 8,
         }],
     });
     write_manifest_with_prefix(&m0, "backup_test_store_checksum_modified");
@@ -496,7 +490,6 @@ async fn test_store_file_fails_when_manifest_references_missing_file() {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "pcp/missing.bin".to_string(),
             checksum_hex: bogus_checksum,
-            file_size_bytes: 3,
         }],
     });
     write_manifest_with_prefix(&m0, "backup_test_store_missing_file");
@@ -543,19 +536,16 @@ async fn test_replace_all_files_for_designator_happy_path() {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "pcp/old1.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"OLD1").as_bytes()),
-                file_size_bytes: 4,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "pcp/old2.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"OLD2").as_bytes()),
-                file_size_bytes: 4,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::DocumentPkg,
                 file_path: "docs/keep.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"KEEP").as_bytes()),
-                file_size_bytes: 4,
             },
         ],
     });
@@ -629,13 +619,11 @@ async fn test_remove_file_happy_and_not_found() {
                 designator: BackupFileDesignator::OrbPkg,
                 file_path: "pcp/target.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"TO-REMOVE").as_bytes()),
-                file_size_bytes: 9,
             },
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::DocumentPkg,
                 file_path: "docs/keep.bin".to_string(),
                 checksum_hex: hex::encode(blake3::hash(b"KEEP").as_bytes()),
-                file_size_bytes: 4,
             },
         ],
     });
