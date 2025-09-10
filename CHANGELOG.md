@@ -2,6 +2,59 @@
 
 
 
+## [0.0.11] - 2025-09-09
+
+## What's Changed
+* feat: Enclave Verify Attestation Document by @andy-t-wang in https://github.com/worldcoin/bedrock/pull/99
+* fix: backup manifest default hash by @paolodamico in https://github.com/worldcoin/bedrock/pull/125
+
+## New Contributors
+* @andy-t-wang made their first contribution in https://github.com/worldcoin/bedrock/pull/99
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.10...0.0.11
+
+
+
+
+## [0.0.10] - 2025-09-08
+
+## What's Changed
+* fix: manifest initialization on new backup by @paolodamico in https://github.com/worldcoin/bedrock/pull/121
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.9...0.0.10
+
+
+
+
+## [0.0.9] - 2025-09-05
+
+## What's Changed
+* fix: improve error handling for FS by @paolodamico in https://github.com/worldcoin/bedrock/pull/114
+* fix: attempt fix 16kb + add i686-linux-android target by @lukejmann in https://github.com/worldcoin/bedrock/pull/115
+* chore: only allow releases from main by @paolodamico in https://github.com/worldcoin/bedrock/pull/119
+* chore: update CODEOWNERS by @paolodamico in https://github.com/worldcoin/bedrock/pull/118
+* fix: disambiguate listFiles with listFilesAtDirectory by @paolodamico in https://github.com/worldcoin/bedrock/pull/117
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.8...0.0.9
+
+
+
+
+## [0.0.8] - 2025-09-04
+
+## What's Changed
+* fix: use serial_test instead of custom handler by @paolodamico in https://github.com/worldcoin/bedrock/pull/111
+* chore: add backstage catalog by @paolodamico in https://github.com/worldcoin/bedrock/pull/106
+* fix: ManifestManager not correctly exported by @paolodamico in https://github.com/worldcoin/bedrock/pull/112
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.7...0.0.8
+
+
+
+
 ## [0.0.7] - 2025-09-04
 
 ## What's Changed

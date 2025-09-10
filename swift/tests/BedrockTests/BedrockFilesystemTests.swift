@@ -37,7 +37,7 @@ final class BedrockFilesystemTests: XCTestCase {
     
 
     
-    func testFileSystemTesterListFiles() throws {
+    func testFileSystemTesterListFilesAtDirectory() throws {
         let tester = FileSystemTester()
         
         // Write multiple files
@@ -46,10 +46,11 @@ final class BedrockFilesystemTests: XCTestCase {
         try tester.testWriteFile(filename: "subdir/file3.txt", content: "content3")
         
         // List files in current directory
-        let files = try tester.testListFiles()
+        let files = try tester.testListFilesAtDirectory()
+        print("files: \(files)")
         XCTAssertTrue(files.contains("file1.txt"), "Should list file1.txt")
         XCTAssertTrue(files.contains("file2.txt"), "Should list file2.txt")
-        // Note: subdir/file3.txt might not appear depending on how listFiles is implemented
+        XCTAssertFalse(files.contains("file3.txt"), "Should not list subdir/file3.txt")
     }
     
     func testFileSystemTesterDeleteFile() throws {
@@ -138,21 +139,29 @@ final class MockFileSystemBridge: Bedrock.FileSystem {
         files.removeValue(forKey: filePath)
     }
     
-    func listFiles(folderPath: String) throws -> [String] {
-        // Normalize the folder path by removing trailing "/."
-        let normalizedFolderPath = folderPath.hasSuffix("/.") ? String(folderPath.dropLast(2)) : folderPath
-        
-        return files.keys.compactMap { filePath in
-            // Check if the file is in the specified directory
-            if filePath.hasPrefix(normalizedFolderPath + "/") {
-                let relativePath = String(filePath.dropFirst(normalizedFolderPath.count + 1))
-                
-                // Return only files in the immediate directory (no subdirectories)
-                if !relativePath.contains("/") {
-                    return relativePath
-                }
-            }
-            return nil
+    func listFilesAtDirectory(folderPath: String) throws -> [String] {
+        var base = folderPath
+        if base.hasSuffix("/.") { base.removeLast(2) }
+        if base.hasSuffix("/")  { base.removeLast() }
+
+        // Root: only file names without "/"
+        if base.isEmpty {
+            return files.keys
+                .filter { !$0.contains("/") }
+                .sorted()
         }
+
+        let prefix = base + "/"
+
+        // Immediate children only: remainder contains no "/"
+        // Return just the remainder (the file name)
+        return files.keys
+            .filter { $0.hasPrefix(prefix) }
+            .compactMap { path -> String? in
+                let rest = String(path.dropFirst(prefix.count))
+                guard !rest.isEmpty, !rest.contains("/") else { return nil }
+                return rest // <-- name only
+            }
+            .sorted()
     }
 } 

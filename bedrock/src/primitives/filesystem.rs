@@ -4,21 +4,12 @@ use thiserror::Error;
 /// Errors that can occur during filesystem operations
 #[derive(Debug, Error, uniffi::Error)]
 pub enum FileSystemError {
-    /// Failed to read the file
-    #[error("failed to read the file")]
-    ReadFileError,
     /// Tried to read a file that doesn't exist
     #[error("requested file does not exist")]
     FileDoesNotExist,
-    /// Failed to write file
-    #[error("failed to write file: {0}")]
-    WriteFileError(String),
-    /// Failed to delete file
-    #[error("failed to delete file")]
-    DeleteFileError,
-    /// Failed to list files
-    #[error("failed to list files: {0}")]
-    ListFilesError(String),
+    /// Something went wrong with the filesystem operation
+    #[error("IO failure: {0}")]
+    IoFailure(String),
     /// Filesystem not initialized
     #[error("filesystem not initialized")]
     NotInitialized,
@@ -56,15 +47,21 @@ pub trait FileSystem: Send + Sync {
     /// Read file contents
     ///
     /// # Errors
-    /// - `FileSystemError::ReadFileError` if the file cannot be read
+    /// - `FileSystemError::IoFailure` if the file cannot be read
     /// - `FileSystemError::FileDoesNotExist` if the file doesn't exist
     fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError>;
 
-    /// List files in a directory
+    /// List files in a specific directory. No recursion and no subdirectories are returned.
+    ///
+    /// # Notes
+    /// Files are returned without the directory path. Only the file name is returned.
     ///
     /// # Errors
-    /// - `FileSystemError::ListFilesError` if the directory cannot be listed
-    fn list_files(&self, folder_path: String) -> Result<Vec<String>, FileSystemError>;
+    /// - `FileSystemError::IoFailure` if the directory cannot be listed
+    fn list_files_at_directory(
+        &self,
+        folder_path: String,
+    ) -> Result<Vec<String>, FileSystemError>;
 
     /// Read a specific byte range from a file
     ///
@@ -72,7 +69,7 @@ pub trait FileSystem: Send + Sync {
     /// when `offset` is at or beyond the end of the file.
     ///
     /// # Errors
-    /// - `FileSystemError::ReadFileError` if the file cannot be read
+    /// - `FileSystemError::IoFailure` if the file cannot be read
     /// - `FileSystemError::FileDoesNotExist` if the file doesn't exist
     fn read_file_range(
         &self,
@@ -84,7 +81,7 @@ pub trait FileSystem: Send + Sync {
     /// Write file contents
     ///
     /// # Errors
-    /// - `FileSystemError::WriteFileError` if the file cannot be written, with details about the failure
+    /// - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
     fn write_file(
         &self,
         file_path: String,
@@ -95,7 +92,7 @@ pub trait FileSystem: Send + Sync {
     ///
     /// # Errors
     /// - `FileSystemError::FileDoesNotExist` if the file does not exist
-    /// - `FileSystemError::DeleteFileError` if the file cannot be deleted
+    /// - `FileSystemError::IoFailure` if the file cannot be deleted
     fn delete_file(&self, file_path: String) -> Result<(), FileSystemError>;
 }
 
@@ -110,7 +107,7 @@ pub trait FileSystemExt {
     ///
     /// # Errors
     /// - `FileSystemError::FileDoesNotExist` if the path does not exist
-    /// - `FileSystemError::ReadFileError` for unexpected underlying IO/read errors
+    /// - `FileSystemError::IoFailure` for unexpected underlying IO/read errors
     fn calculate_checksum(&self, file_path: &str) -> Result<[u8; 32], FileSystemError>;
 }
 
@@ -256,13 +253,13 @@ impl FileSystemMiddleware {
     /// # Errors
     /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
     /// - Any error from the underlying filesystem implementation
-    pub fn list_files(
+    pub fn list_files_at_directory(
         &self,
         folder_path: &str,
     ) -> Result<Vec<String>, FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(folder_path);
-        fs.list_files(prefixed_path)
+        fs.list_files_at_directory(prefixed_path)
     }
 
     /// Write file contents (with prefix)
@@ -452,7 +449,7 @@ mod tests {
                 .ok_or(FileSystemError::FileDoesNotExist)
         }
 
-        fn list_files(
+        fn list_files_at_directory(
             &self,
             folder_path: String,
         ) -> Result<Vec<String>, FileSystemError> {
@@ -472,11 +469,22 @@ mod tests {
                 .keys()
                 .filter(|path| {
                     // Exclude directory markers
-                    !path.ends_with("__DIR__") &&
-                    // Include files in the specified folder
-                    (folder_prefix.is_empty() || path.starts_with(&folder_prefix))
+                    if path.ends_with("__DIR__") {
+                        return false;
+                    }
+
+                    if folder_prefix.is_empty() {
+                        // Root listing: only items with no '/' are immediate children
+                        !path.contains('/')
+                    } else if path.starts_with(&folder_prefix) {
+                        // Strip the prefix and ensure there is no further '/' => immediate child
+                        let rest = &path[folder_prefix.len()..];
+                        !rest.is_empty() && !rest.contains('/')
+                    } else {
+                        false
+                    }
                 })
-                .cloned()
+                .map(|path| path.split('/').next_back().unwrap().to_string())
                 .collect();
 
             Ok(files)
@@ -490,8 +498,8 @@ mod tests {
             max_length: u64,
         ) -> Result<Vec<u8>, FileSystemError> {
             let normalized_path = Self::normalize_path(&file_path);
-            let start_usize =
-                usize::try_from(offset).map_err(|_| FileSystemError::ReadFileError)?;
+            let start_usize = usize::try_from(offset)
+                .map_err(|_| FileSystemError::IoFailure("offset".to_string()))?;
             let end_add = offset.saturating_add(max_length);
             let result = {
                 let files = self.files.lock().unwrap();
@@ -501,8 +509,9 @@ mod tests {
                         Ok(Vec::new())
                     } else {
                         let end_u64 = std::cmp::min(data_len_u64, end_add);
-                        let end_usize = usize::try_from(end_u64)
-                            .map_err(|_| FileSystemError::ReadFileError)?;
+                        let end_usize = usize::try_from(end_u64).map_err(|_| {
+                            FileSystemError::IoFailure("end_u64".to_string())
+                        })?;
                         Ok(data[start_usize..end_usize].to_vec())
                     }
                 } else {

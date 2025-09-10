@@ -49,7 +49,7 @@ class BedrockFilesystemTests {
 
     
     @Test
-    fun testFileSystemTesterListFiles() {
+    fun testFileSystemTesterListFilesAtDirectory() {
         val tester = FileSystemTester()
         
         // Write multiple files
@@ -58,10 +58,9 @@ class BedrockFilesystemTests {
         tester.testWriteFile("subdir/file3.txt", "content3")
         
         // List files in current directory
-        val files = tester.testListFiles()
+        val files = tester.testListFilesAtDirectory()
         assertTrue(files.contains("file1.txt"), "Should list file1.txt")
         assertTrue(files.contains("file2.txt"), "Should list file2.txt")
-        // Note: subdir/file3.txt might not appear depending on how listFiles is implemented
     }
     
     @Test
@@ -132,31 +131,27 @@ object MockFileSystemBridge : FileSystem {
         files.remove(filePath)
     }
     
-    override fun listFiles(folderPath: String): List<String> {
-        // Normalize the folder path by removing trailing "/." 
-        val normalizedFolderPath = if (folderPath.endsWith("/.")) {
-            folderPath.dropLast(2)
-        } else {
-            folderPath
+    override fun listFilesAtDirectory(folderPath: String): List<String> {
+        var base = folderPath
+        if (base.endsWith("/.")) base = base.dropLast(2)
+        if (base.endsWith("/")) base = base.dropLast(1)
+        
+        // Root listing when base == "" or "." → only files without "/" (immediate children of root)
+        if (base.isEmpty() || base == ".") {
+            return files.keys
+                .filter { !it.contains("/") }
+                .sorted()
         }
         
-        // Return files that are in the specified folder
-        return files.keys.filter { filePath ->
-            // Files must start with the normalized folder path
-            if (!filePath.startsWith("$normalizedFolderPath/")) {
-                return@filter false
+        val prefix = "$base/"
+        
+        return files.keys
+            .filter { it.startsWith(prefix) }
+            .mapNotNull { path ->
+                val rest = path.removePrefix(prefix)
+                if (rest.isNotEmpty() && !rest.contains("/")) rest else null
             }
-            
-            // Get the relative path within the folder
-            val relativePath = filePath.removePrefix("$normalizedFolderPath/")
-            
-            // For the immediate directory, don't include files from subdirectories
-            !relativePath.contains("/")
-        }.map { filePath ->
-            // Return just the filename 
-            val relativePath = filePath.removePrefix("$normalizedFolderPath/")
-            relativePath
-        }
+            .sorted()
     }
 
     override fun readFileRange(filePath: String, offset: ULong, maxLength: ULong): ByteArray {

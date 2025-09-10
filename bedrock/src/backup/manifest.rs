@@ -4,6 +4,7 @@
 //! be included in the backup.
 
 use anyhow::Context;
+use bedrock_macros::bedrock_export;
 use crypto_box::PublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,12 @@ pub enum BackupManifest {
 }
 
 impl BackupManifest {
+    /// The hash of the `Default` manifest (i.e. genesis, no files).
+    ///
+    /// See `test_backup_manifest_default_hash` for computation and updates.
+    pub const DEFAULT_HASH: &str =
+        "471f87ee6c873ccd523bcd669aa253361e711d8613b9a1f4a6a92f28bc8c64a6";
+
     /// Computes the BLAKE3 hash of the serialized manifest bytes.
     ///
     /// This mirrors how the manifest is persisted via `write_manifest` to keep hashes consistent.
@@ -39,6 +46,15 @@ impl BackupManifest {
         let serialized =
             serde_json::to_vec(self).context("serialize BackupManifest")?;
         Ok(blake3::hash(&serialized).into())
+    }
+}
+
+impl Default for BackupManifest {
+    fn default() -> Self {
+        Self::V0(V0BackupManifest {
+            previous_manifest_hash: None,
+            files: vec![],
+        })
     }
 }
 
@@ -50,22 +66,15 @@ pub struct ManifestManager {
     file_system: FileSystemMiddleware,
 }
 
+#[bedrock_export]
 impl ManifestManager {
     #[uniffi::constructor]
     /// Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            file_system: create_middleware("backup"),
-        }
-    }
-
-    #[cfg(test)]
-    /// Test-only constructor allowing a custom filesystem prefix to isolate tests.
-    #[must_use]
-    pub fn new_with_prefix(prefix: &str) -> Self {
-        Self {
-            file_system: FileSystemMiddleware::new(prefix),
+            // The prefix must follow the `BackupManager` struct name.
+            file_system: create_middleware("backup_manager"),
         }
     }
 
@@ -198,6 +207,15 @@ impl ManifestManager {
 impl ManifestManager {
     /// Thepath to the global manifest file
     const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
+
+    /// Test-only constructor allowing a custom filesystem prefix to isolate tests.
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_with_prefix(prefix: &str) -> Self {
+        Self {
+            file_system: FileSystemMiddleware::new(prefix),
+        }
+    }
 
     /// Gated manifest read that ensures local is not stale vs remote.
     ///

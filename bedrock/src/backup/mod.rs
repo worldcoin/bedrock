@@ -116,17 +116,13 @@ impl BackupManager {
             .map_err(|_| BackupError::EncryptBackupError)?;
 
         // 5.1: Initialize and persist the initial manifest (empty files set) and compute its hash
-        let manifest = BackupManifest::V0(V0BackupManifest {
-            previous_manifest_hash: None,
-            files: vec![],
-        });
+        let manifest = BackupManifest::default();
         let manifest_bytes =
             serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
         let manifest_hash_hex = hex::encode(blake3::hash(&manifest_bytes).as_bytes());
 
-        _bedrock_fs
-            .write_file("manifest.json", manifest_bytes)
-            .context("write manifest.json")?;
+        let manifest_manager = ManifestManager::new();
+        manifest_manager.write_manifest(&manifest)?;
 
         // 6: Prepare the result
         let result = CreatedBackup {
@@ -202,7 +198,7 @@ impl BackupManager {
         let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
-        // Decrypt Sealed Backup
+        // Decrypt the Sealed Backup
         let unsealed_backup = backup_secret_key
             .unseal(sealed_backup_data)
             .map_err(|_| BackupError::DecryptBackupError)?;
@@ -367,8 +363,18 @@ impl BackupManager {
             });
         }
 
+        // If the current manifest hash is the default hash, then there is no previous manifest hash
+        // this must be set as `None`, otherwise the remote will appear ahead when it's not.
+        // See: `test_decrypt_and_unpack_default_manifest_hash`
+        let previous_manifest_hash =
+            if current_manifest_hash_hex == BackupManifest::DEFAULT_HASH {
+                None
+            } else {
+                Some(current_manifest_hash_hex)
+            };
+
         let manifest = BackupManifest::V0(V0BackupManifest {
-            previous_manifest_hash: Some(current_manifest_hash_hex),
+            previous_manifest_hash,
             files: manifest_entries,
         });
 
