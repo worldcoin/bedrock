@@ -22,7 +22,7 @@ default = ["tooling_tests"]
 tooling_tests = ["dep:tokio"]
 
 [dependencies]
-alloy = { version = "1.0.23", default-features = false, features = [
+alloy = { version = "1.0.30", default-features = false, features = [
   "dyn-abi",
   "eip712",
   "signer-local",
@@ -67,7 +67,7 @@ webpki = "0.22"
 once_cell = "1.19"
 
 [dev-dependencies]
-alloy = { version = "1.0.23", default-features = false, features = [
+alloy = { version = "1.0.30", default-features = false, features = [
   "json",
   "contract",
   "node-bindings",
