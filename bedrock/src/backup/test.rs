@@ -1,5 +1,5 @@
-use crate::backup::backup_format::v0::V0BackupManifestEntry;
 use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
+use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::manifest::{BackupManifest, ManifestManager};
 use crate::backup::service_client::{
@@ -12,12 +12,10 @@ use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
 use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
+use serial_test::serial;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
-
-// Test-only global lock to serialize manifest-affecting tests to avoid races.
-static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn ensure_fs_initialized() {
     if crate::primitives::filesystem::get_filesystem_raw().is_err() {
@@ -121,6 +119,12 @@ fn write_manifest_with_prefix(manifest: &BackupManifest, prefix: &str) {
     mw.write_file("manifest.json", bytes).unwrap();
 }
 
+fn get_manifest_from_disk(prefix: &str) -> BackupManifest {
+    let fs = get_filesystem_raw().unwrap().clone();
+    let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
 fn compute_manifest_hash(manifest: &BackupManifest) -> String {
     let bytes = serde_json::to_vec(manifest).unwrap();
     hex::encode(blake3::hash(&bytes).as_bytes())
@@ -137,8 +141,20 @@ fn write_global_file(path: &str, contents: &[u8]) {
     fs.write_file(path.to_string(), contents.to_vec()).unwrap();
 }
 
+#[test]
+fn test_backup_manifest_default_hash() {
+    let manifest = BackupManifest::V0(V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    let serialized = serde_json::to_vec(&manifest).unwrap();
+    let hash = blake3::hash(&serialized);
+    let hash = hex::encode(hash.as_bytes());
+    assert_eq!(hash, BackupManifest::DEFAULT_HASH);
+}
+
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_list_files_happy_path() {
     let api = init_test_globals();
     api.reset();
@@ -168,7 +184,7 @@ async fn test_list_files_happy_path() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_list_files_stale_remote() {
     let api = init_test_globals();
     api.reset();
@@ -191,7 +207,7 @@ async fn test_list_files_stale_remote() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_list_files_missing_manifest() {
     let api = init_test_globals();
     api.reset();
@@ -206,7 +222,7 @@ async fn test_list_files_missing_manifest() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_list_files_corrupted_manifest() {
     let api = init_test_globals();
     api.reset();
@@ -234,7 +250,7 @@ async fn test_list_files_corrupted_manifest() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_store_file_happy_path_and_commit() {
     let api = init_test_globals();
     api.reset();
@@ -279,7 +295,52 @@ async fn test_store_file_happy_path_and_commit() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
+async fn test_store_file_accepts_dot_slash_path() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Local empty manifest and matching remote
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_dot_path");
+    api.set_remote_hash(compute_manifest_hash_from_disk(
+        "backup_test_store_dot_path",
+    ));
+
+    // Source file to store (in global FS)
+    write_global_file("pcp/source.bin", b"hello-bytes");
+
+    // Backup pubkey
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_dot_path");
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "./pcp/source.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // Manifest committed with previous hash == m0 and one entry with normalized path
+    let fs = get_filesystem_raw().unwrap().clone();
+    let committed = fs
+        .read_file("backup_test_store_dot_path/manifest.json".to_string())
+        .unwrap();
+    let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+    assert_eq!(committed["version"], "V0");
+    let files = committed["manifest"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["file_path"], "pcp/source.bin");
+}
+
+#[tokio::test]
+#[serial]
 async fn test_store_file_propagates_sync_failure() {
     let api = init_test_globals();
     api.reset();
@@ -321,7 +382,7 @@ async fn test_store_file_propagates_sync_failure() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_store_file_fails_when_remote_ahead() {
     let api = init_test_globals();
     api.reset();
@@ -350,7 +411,7 @@ async fn test_store_file_fails_when_remote_ahead() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_store_file_invalid_source_path() {
     let api = init_test_globals();
     api.reset();
@@ -379,7 +440,7 @@ async fn test_store_file_invalid_source_path() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_store_file_checksum_mismatch_existing_entry() {
     let api = init_test_globals();
     api.reset();
@@ -418,7 +479,7 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_store_file_checksum_mismatch_when_file_modified() {
     let api = init_test_globals();
     api.reset();
@@ -464,7 +525,7 @@ async fn test_store_file_checksum_mismatch_when_file_modified() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_store_file_fails_when_manifest_references_missing_file() {
     let api = init_test_globals();
     api.reset();
@@ -505,7 +566,7 @@ async fn test_store_file_fails_when_manifest_references_missing_file() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_replace_all_files_for_designator_happy_path() {
     let api = init_test_globals();
     api.reset();
@@ -589,7 +650,7 @@ async fn test_replace_all_files_for_designator_happy_path() {
 }
 
 #[tokio::test]
-#[serial_test::serial]
+#[serial]
 async fn test_remove_file_happy_and_not_found() {
     let api = init_test_globals();
     api.reset();
@@ -694,8 +755,8 @@ fn test_backup_module_enum() {
 }
 
 #[test]
+#[serial]
 fn test_create_sealed_backup_with_prf_for_new_user() {
-    let _guard = MANIFEST_LOCK.lock().unwrap();
     ensure_fs_initialized();
     let manager = BackupManager::new();
 
@@ -778,8 +839,8 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 }
 
 #[test]
+#[serial]
 fn test_decrypt_sealed_backup_with_prf() {
-    let _guard = MANIFEST_LOCK.lock().unwrap();
     ensure_fs_initialized();
     let manager = BackupManager::new();
 
@@ -864,9 +925,55 @@ fn test_decrypt_sealed_backup_with_prf() {
     );
 }
 
+/// This test the case where the user creates a backup with no files. The user then restores
+/// the backup to a new device. This ensures the user ends up with the same manifest hash as the
+/// original device and the remote.
+#[tokio::test]
+#[serial]
+async fn test_decrypt_and_unpack_default_manifest_hash() {
+    let manager = BackupManager::new();
+    ensure_fs_initialized();
+
+    // Example root secret seed
+    let root_secret =
+        "{\"version\":\"V1\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}".to_string();
+    let prf_result =
+        "67a9b25d7cd2e11cba781af1d4be91c73d3561e5a8fbc2904cb6c2f274acae37".to_string();
+
+    let create_result = manager
+        .create_sealed_backup_for_new_user(
+            &root_secret,
+            prf_result.clone(),
+            FactorType::Prf,
+        )
+        .expect("Failed to create sealed backup with PRF for new user");
+
+    let decrypted = manager
+        .decrypt_and_unpack_sealed_backup(
+            &create_result.sealed_backup_data,
+            create_result.encrypted_backup_keypair.clone(),
+            prf_result,
+            FactorType::Prf,
+            create_result.manifest_hash.clone(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        decrypted.backup_keypair_public_key,
+        create_result.backup_keypair_public_key
+    );
+
+    let manifest = get_manifest_from_disk("backup_manager");
+    let unpacked_manifest_hash = compute_manifest_hash(&manifest);
+    let BackupManifest::V0(manifest) = manifest;
+
+    assert_eq!(manifest.previous_manifest_hash, None);
+    assert_eq!(unpacked_manifest_hash, create_result.manifest_hash);
+}
+
 #[test]
+#[serial]
 fn test_unpack_writes_files_and_manifest() {
-    let _guard = MANIFEST_LOCK.lock().unwrap();
     ensure_fs_initialized();
     // Arrange filesystem: use the already-initialized global filesystem (tests set it once).
     // We don't replace it if already set; we just assert via the global handle.
@@ -945,8 +1052,8 @@ fn test_unpack_writes_files_and_manifest() {
 }
 
 #[test]
+#[serial]
 fn test_re_encrypt_backup() {
-    let _guard = MANIFEST_LOCK.lock().unwrap();
     ensure_fs_initialized();
     let manager = BackupManager::new();
 
