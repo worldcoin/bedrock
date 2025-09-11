@@ -2,14 +2,15 @@ use bedrock_macros::{bedrock_error, bedrock_export};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use strum::Display;
 
 use super::manifest::ManifestManager;
 use crate::backup::BackupFileDesignator;
-use crate::primitives::filesystem::create_middleware;
-use crate::primitives::filesystem::get_filesystem_raw;
-use crate::primitives::filesystem::FileSystemMiddleware;
+use crate::primitives::config::Os;
+use crate::primitives::filesystem::{
+    create_middleware, get_filesystem_raw, FileSystemMiddleware,
+};
 use crate::primitives::http_client::{get_http_client, HttpHeader};
-use crate::primitives::platform::PlatformKind;
 use crate::HttpMethod;
 
 /// Errors that can occur when reporting client events.
@@ -20,18 +21,12 @@ pub enum ClientEventsError {
     HttpClientNotInitialized,
 
     /// JSON serialization/deserialization error
-    #[error("JSON error: {message}")]
-    Json {
-        /// The JSON error message
-        message: String,
-    },
+    #[error("JSON error")]
+    Json,
 
     /// Random number generation error
-    #[error("RNG error: {message}")]
-    Rng {
-        /// The RNG error message
-        message: String,
-    },
+    #[error("RNG error")]
+    Rng,
 
     /// HTTP error when sending events
     #[error(transparent)]
@@ -39,17 +34,7 @@ pub enum ClientEventsError {
 }
 
 /// High-level event kinds we care to report
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    uniffi::Enum,
-    strum::Display,
-)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventKind {
@@ -137,7 +122,7 @@ pub struct BaseReport {
     pub app_version: Option<String>,
     /// Platform
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub platform: Option<PlatformKind>,
+    pub platform: Option<Os>,
     /// Last synced at (ISO8601)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_synced_at: Option<String>,
@@ -167,7 +152,7 @@ pub struct RecalculateInput {
     /// App version
     pub app_version: Option<String>,
     /// Platform
-    pub platform: Option<PlatformKind>,
+    pub platform: Option<Os>,
     /// Last synced at (ISO8601)
     pub last_synced_at: Option<String>,
 }
@@ -193,7 +178,7 @@ struct EventPayload {
 
     // merged base report fields
     #[serde(rename = "userPkId", skip_serializing_if = "Option::is_none")]
-    user_pk_id: Option<String>,
+    user_pkid: Option<String>,
     #[serde(rename = "installationId", skip_serializing_if = "Option::is_none")]
     installation_id: Option<String>,
     #[serde(rename = "isBackupEnabled", skip_serializing_if = "Option::is_none")]
@@ -318,7 +303,7 @@ impl ClientEventsReporter {
             event: kind.to_string(),
             success,
             latest_error: error_message,
-            user_pk_id: base.user_pkid,
+            user_pkid: base.user_pkid,
             installation_id: Some(ensured_installation_id),
             is_backup_enabled: base.is_backup_enabled,
             orb_verified_after_jul25: base.orb_verified_after_sep25,
@@ -335,9 +320,7 @@ impl ClientEventsReporter {
             last_synced_at: base.last_synced_at,
         };
 
-        let body = serde_json::to_vec(&event).map_err(|e| ClientEventsError::Json {
-            message: e.to_string(),
-        })?;
+        let body = serde_json::to_vec(&event).map_err(|_| ClientEventsError::Json)?;
 
         let headers: Vec<HttpHeader> = vec![HttpHeader {
             name: "Content-Type".to_string(),
@@ -385,28 +368,20 @@ impl ClientEventsReporter {
         let mut buf = [0u8; 3];
         match rand::rngs::OsRng.try_fill_bytes(&mut buf) {
             Ok(()) => Ok(hex::encode(buf)),
-            Err(e) => Err(ClientEventsError::Rng {
-                message: e.to_string(),
-            }),
+            Err(_) => Err(ClientEventsError::Rng),
         }
     }
 
     fn read_base_report(&self) -> Result<BaseReport, ClientEventsError> {
         self.fs.read_file(Self::BASE_FILE).map_or_else(
             |_| Ok(BaseReport::default()),
-            |bytes| {
-                serde_json::from_slice(&bytes).map_err(|e| ClientEventsError::Json {
-                    message: e.to_string(),
-                })
-            },
+            |bytes| serde_json::from_slice(&bytes).map_err(|_| ClientEventsError::Json),
         )
     }
 
     fn write_base_report(&self, base: &BaseReport) -> Result<(), ClientEventsError> {
         let serialized =
-            serde_json::to_vec(base).map_err(|e| ClientEventsError::Json {
-                message: e.to_string(),
-            })?;
+            serde_json::to_vec(base).map_err(|_| ClientEventsError::Json)?;
         self.fs
             .write_file(Self::BASE_FILE, serialized)
             .map_err(|e| ClientEventsError::from(anyhow::Error::from(e)))

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 
 use crate::bedrock_export;
@@ -12,6 +13,28 @@ pub enum BedrockEnvironment {
     Staging,
     /// Production environment
     Production,
+}
+
+/// Platform enum as reported by clients
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum)]
+pub enum Os {
+    /// Android platform
+    #[serde(rename = "android")]
+    Android,
+    /// iOS platform
+    #[serde(rename = "ios")]
+    Ios,
+}
+
+impl Os {
+    #[must_use]
+    /// Returns the lowercase string representation for wire format
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Android => "android",
+            Self::Ios => "ios",
+        }
+    }
 }
 
 impl BedrockEnvironment {
@@ -35,6 +58,7 @@ impl std::fmt::Display for BedrockEnvironment {
 #[derive(Debug, Clone, uniffi::Object)]
 pub struct BedrockConfig {
     environment: BedrockEnvironment,
+    os: Os,
 }
 
 #[bedrock_export]
@@ -53,14 +77,20 @@ impl BedrockConfig {
     /// ```
     #[uniffi::constructor]
     #[must_use]
-    pub fn new(environment: BedrockEnvironment) -> Self {
-        Self { environment }
+    pub fn new(environment: BedrockEnvironment, os: Os) -> Self {
+        Self { environment, os }
     }
 
     /// Gets the current environment
     #[must_use]
     pub fn environment(&self) -> BedrockEnvironment {
         self.environment
+    }
+
+    /// Gets the current OS
+    #[must_use]
+    pub fn os(&self) -> Os {
+        self.os
     }
 }
 
@@ -83,8 +113,8 @@ impl BedrockConfig {
 /// setConfig(environment: .staging)
 /// ```
 #[uniffi::export]
-pub fn set_config(environment: BedrockEnvironment) {
-    let config = BedrockConfig::new(environment);
+pub fn set_config(environment: BedrockEnvironment, os: Os) {
+    let config = BedrockConfig::new(environment, os);
 
     match CONFIG_INSTANCE.set(Arc::new(config)) {
         Ok(()) => {
