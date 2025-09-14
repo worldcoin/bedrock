@@ -90,7 +90,7 @@ pub struct BaseReport {
     /// Whether backup is enabled
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_backup_enabled: Option<bool>,
-    /// Whether orb verification happened after Sep 2025
+    /// Whether orb verification happened after Sep 2025 Paolo
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orb_verified_after_sep25: Option<bool>,
     /// Whether user is document verified
@@ -123,7 +123,7 @@ pub struct BaseReport {
     /// Platform
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<Os>,
-    /// Last synced at (ISO8601)
+    /// Last synced at (ISO8601) Paolo
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_synced_at: Option<String>,
 }
@@ -133,8 +133,6 @@ pub struct BaseReport {
 pub struct RecalculateInput {
     /// User PKID
     pub user_pkid: Option<String>,
-    /// Installation ID (low entropy, cached, cleared on uninstall)
-    pub installation_id: Option<String>,
     /// Whether orb verification happened after Sep 2025
     pub orb_verified_after_sep25: Option<bool>,
     /// Whether user is document verified
