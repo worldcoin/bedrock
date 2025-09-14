@@ -7,11 +7,10 @@ targets = [
   "aarch64-apple-ios-sim",
   "aarch64-apple-ios",
   "x86_64-apple-ios",
-  "x86_64-unknown-linux-gnu",
-  # 32-bit ARM
-  "armv7-linux-androideabi",
-  # 64-bit ARM
-  "aarch64-linux-android",
-  # 32-bit x86
-  "i686-linux-android",
+
+  # Android
+  "aarch64-linux-android", # 64-bit ARM
+  "armv7-linux-androideabi", # 32-bit ARM
+  "x86_64-linux-android", # 32-bit x86_64. Generally used for the Android Emulator.
+  "i686-linux-android", # 32-bit x86. In the process of final deprecation, very old with very limited install base (see MCORE-340).
 ]
