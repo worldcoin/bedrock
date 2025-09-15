@@ -1,4 +1,5 @@
 use super::types::PcrConfiguration;
+use hex::FromHex;
 use once_cell::sync::OnceCell;
 
 /// AWS Nitro Root Certificate for Production
@@ -11,9 +12,9 @@ pub const AWS_NITRO_ROOT_CERT_PROD: &[u8] = include_bytes!("aws_nitro_root_g1.de
 pub const AWS_NITRO_ROOT_CERT_STAGING: &[u8] = AWS_NITRO_ROOT_CERT_PROD;
 
 /// Compile-time constants for PCR expected values (48 bytes each for SHA-384)
-const PRODUCTION_PCR0_VALUE: &[u8] = &[0; 48];
-const PRODUCTION_PCR1_VALUE: &[u8] = &[0; 48];
-const PRODUCTION_PCR2_VALUE: &[u8] = &[0; 48];
+const PRODUCTION_PCR0_VALUE: [u8; 48] = [0; 48];
+const PRODUCTION_PCR1_VALUE: [u8; 48] = [0; 48];
+const PRODUCTION_PCR2_VALUE: [u8; 48] = [0; 48];
 
 /// Expected PCR configurations for production enclaves
 static PRODUCTION_PCR_CONFIGS: OnceCell<Vec<PcrConfiguration>> = OnceCell::new();
@@ -26,17 +27,17 @@ pub fn production_pcr_configs() -> Vec<PcrConfiguration> {
             vec![
                 PcrConfiguration {
                     index: 0,
-                    expected_value: PRODUCTION_PCR0_VALUE.to_vec(),
+                    expected_value: PRODUCTION_PCR0_VALUE,
                     description: "Production enclave image v1.0.0".to_string(),
                 },
                 PcrConfiguration {
                     index: 1,
-                    expected_value: PRODUCTION_PCR1_VALUE.to_vec(),
+                    expected_value: PRODUCTION_PCR1_VALUE,
                     description: "Production kernel and bootstrap".to_string(),
                 },
                 PcrConfiguration {
                     index: 2,
-                    expected_value: PRODUCTION_PCR2_VALUE.to_vec(),
+                    expected_value: PRODUCTION_PCR2_VALUE,
                     description: "Production application layer".to_string(),
                 },
             ]
@@ -45,9 +46,9 @@ pub fn production_pcr_configs() -> Vec<PcrConfiguration> {
 }
 
 // Compile-time constants for staging PCR expected values (48 bytes each for SHA-384)
-const STAGING_PCR0_VALUE: &[u8] = &[0; 48];
-const STAGING_PCR1_VALUE: &[u8] = &[0; 48];
-const STAGING_PCR2_VALUE: &[u8] = &[0; 48];
+const STAGING_PCR0_VALUE: [u8; 48] = [0; 48];
+const STAGING_PCR1_VALUE: [u8; 48] = [0; 48];
+const STAGING_PCR2_VALUE: [u8; 48] = [0; 48];
 
 /// Expected PCR configurations for staging enclaves
 static STAGING_PCR_CONFIGS: OnceCell<Vec<PcrConfiguration>> = OnceCell::new();
@@ -60,17 +61,25 @@ pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
             vec![
                 PcrConfiguration {
                     index: 0,
-                    expected_value: STAGING_PCR0_VALUE.to_vec(),
+                    expected_value: STAGING_PCR0_VALUE,
                     description: "Staging enclave image v1.0.0-staging".to_string(),
                 },
                 PcrConfiguration {
                     index: 1,
-                    expected_value: STAGING_PCR1_VALUE.to_vec(),
+                    expected_value: STAGING_PCR1_VALUE,
                     description: "Staging kernel and bootstrap".to_string(),
                 },
                 PcrConfiguration {
                     index: 2,
-                    expected_value: STAGING_PCR2_VALUE.to_vec(),
+                    expected_value: STAGING_PCR2_VALUE,
+                    description: "Staging application layer".to_string(),
+                },
+                PcrConfiguration {
+                    index: 8,
+                    expected_value: <[u8; 48]>::from_hex(
+                        "b38251662033340b540c2d7e5f49e7ec6d10afcb5f17c72132e20a7f0a54576dc4d2c6ce062ed2ed2b6ae01815d69c8d",
+                    )
+                    .unwrap(),
                     description: "Staging application layer".to_string(),
                 },
             ]
@@ -81,6 +90,6 @@ pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
 /// Maximum age for attestation documents (in milliseconds)
 pub const MAX_ATTESTATION_AGE_MILLISECONDS: u64 = 3 * 60 * 60 * 1000; // 3 hours
 
-/// Minimum PCR value lengths
-/// <https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html>
-pub const VALID_PCR_LENGTHS: &[usize] = &[32, 48, 64];
+/// Expected PCR length for SHA-384
+/// More info: <https://docs.aws.amazon.com/enclaves/latest/user/set-up-attestation.html>
+pub const VALID_PCR_LENGTH_SHA384: usize = 48;

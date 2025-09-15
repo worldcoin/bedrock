@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
@@ -28,7 +27,8 @@ pub use types::{
 
 use constants::{
     production_pcr_configs, staging_pcr_configs, AWS_NITRO_ROOT_CERT_PROD,
-    AWS_NITRO_ROOT_CERT_STAGING, MAX_ATTESTATION_AGE_MILLISECONDS, VALID_PCR_LENGTHS,
+    AWS_NITRO_ROOT_CERT_STAGING, MAX_ATTESTATION_AGE_MILLISECONDS,
+    VALID_PCR_LENGTH_SHA384,
 };
 
 /// Verifies AWS Nitro Enclave attestation documents
@@ -361,47 +361,42 @@ impl EnclaveAttestationVerifier {
             });
         }
 
-        // Build maps for index-to-values for precise matching
-        let mut configs_by_index: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
-        for config in &self.allowed_pcr_configs {
-            configs_by_index
-                .entry(config.index)
-                .or_default()
-                .push(config.expected_value.clone());
+        // Digest must be SHA-384
+        if attestation.digest != aws_nitro_enclaves_nsm_api::api::Digest::SHA384 {
+            return Err(EnclaveAttestationError::CodeUntrusted {
+                pcr_index: 0,
+                actual: "invalid digest".to_string(),
+            });
         }
 
-        let mut pcrs_by_index: HashMap<usize, &[u8]> = HashMap::new();
-        for (idx, val) in &attestation.pcrs {
-            pcrs_by_index.insert(*idx, val.as_slice());
-        }
-
-        // For each configured PCR index, require presence and exact match to one of its allowed values
-        for (index, allowed_values) in configs_by_index {
-            let Some(actual_value) = pcrs_by_index.get(&index).copied() else {
-                return Err(EnclaveAttestationError::CodeUntrusted {
-                    pcr_index: index,
+        for pcr_config in &self.allowed_pcr_configs {
+            // Get the PCR value from the attestation
+            let attestation_pcr_value = attestation.pcrs.get(&pcr_config.index).ok_or(
+                EnclaveAttestationError::CodeUntrusted {
+                    pcr_index: pcr_config.index,
                     actual: "missing".to_string(),
-                });
-            };
+                },
+            )?;
 
-            let value_len = actual_value.len();
-            // Check it's generically of valid lengths
-            if !VALID_PCR_LENGTHS.contains(&value_len) {
-                return Err(EnclaveAttestationError::AttestationDocumentParseError(
-                    format!(
-                        "Invalid PCR{index} length: {value_len} bytes. Expected one of {VALID_PCR_LENGTHS:?}"
+            // Validate the PCR value length
+            if attestation_pcr_value.len() != VALID_PCR_LENGTH_SHA384 {
+                return Err(EnclaveAttestationError::CodeUntrusted {
+                    pcr_index: pcr_config.index,
+                    actual: format!(
+                        "Invalid PCR{} length: {}, expected: {}",
+                        pcr_config.index,
+                        attestation_pcr_value.len(),
+                        VALID_PCR_LENGTH_SHA384
                     ),
-                ));
+                });
             }
 
-            // Check it's exactly one of the allowed values for that specific index
-            let matches_allowed = allowed_values
-                .iter()
-                .any(|allowed| allowed.as_slice() == actual_value);
-            if !matches_allowed {
+            // Validate the PCR value matches the expected value
+            if attestation_pcr_value.as_slice() != pcr_config.expected_value.as_slice()
+            {
                 return Err(EnclaveAttestationError::CodeUntrusted {
-                    pcr_index: index,
-                    actual: hex::encode(actual_value),
+                    pcr_index: pcr_config.index,
+                    actual: hex::encode(attestation_pcr_value),
                 });
             }
         }
