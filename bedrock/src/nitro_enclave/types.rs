@@ -5,8 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::VALID_PCR_LENGTH_SHA384;
-
 /// Represents errors that can occur during enclave attestation verification
 #[crate::bedrock_error]
 pub enum EnclaveAttestationError {
@@ -59,7 +57,7 @@ pub struct PcrConfiguration {
     /// eg. 0, 1, 2, 3, 4, 8
     pub index: usize,
     /// The expected value of the PCR
-    pub expected_value: [u8; VALID_PCR_LENGTH_SHA384],
+    pub expected_value: Vec<u8>,
     /// The description of the PCR
     pub description: String,
 }

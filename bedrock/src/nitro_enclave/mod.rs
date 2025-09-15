@@ -26,9 +26,9 @@ pub use types::{
 };
 
 use constants::{
-    production_pcr_configs, staging_pcr_configs, AWS_NITRO_ROOT_CERT_PROD,
-    AWS_NITRO_ROOT_CERT_STAGING, MAX_ATTESTATION_AGE_MILLISECONDS,
-    VALID_PCR_LENGTH_SHA384,
+    get_expected_pcr_length, production_pcr_configs, staging_pcr_configs,
+    AWS_NITRO_ROOT_CERT_PROD, AWS_NITRO_ROOT_CERT_STAGING,
+    MAX_ATTESTATION_AGE_MILLISECONDS,
 };
 
 /// Verifies AWS Nitro Enclave attestation documents
@@ -361,13 +361,9 @@ impl EnclaveAttestationVerifier {
             });
         }
 
-        // Digest must be SHA-384
-        if attestation.digest != aws_nitro_enclaves_nsm_api::api::Digest::SHA384 {
-            return Err(EnclaveAttestationError::CodeUntrusted {
-                pcr_index: 0,
-                actual: "invalid digest".to_string(),
-            });
-        }
+        // Get the expected PCR length depending on the hashing algorithm used
+        // As of right now, only SHA-384 is used
+        let expected_pcr_length = get_expected_pcr_length(attestation.digest);
 
         for pcr_config in &self.allowed_pcr_configs {
             // Get the PCR value from the attestation
@@ -380,14 +376,14 @@ impl EnclaveAttestationVerifier {
                 })?;
 
             // Validate the PCR value length
-            if attestation_pcr_value.len() != VALID_PCR_LENGTH_SHA384 {
+            if attestation_pcr_value.len() != expected_pcr_length {
                 return Err(EnclaveAttestationError::CodeUntrusted {
                     pcr_index: pcr_config.index,
                     actual: format!(
                         "Invalid PCR{} length: {}, expected: {}",
                         pcr_config.index,
                         attestation_pcr_value.len(),
-                        VALID_PCR_LENGTH_SHA384
+                        expected_pcr_length
                     ),
                 });
             }

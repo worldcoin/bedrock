@@ -1,4 +1,5 @@
 use super::types::PcrConfiguration;
+use aws_nitro_enclaves_nsm_api::api::Digest;
 use once_cell::sync::OnceCell;
 
 /// AWS Nitro Root Certificate for Production
@@ -26,17 +27,17 @@ pub fn production_pcr_configs() -> Vec<PcrConfiguration> {
             vec![
                 PcrConfiguration {
                     index: 0,
-                    expected_value: PRODUCTION_PCR0_VALUE,
+                    expected_value: PRODUCTION_PCR0_VALUE.to_vec(),
                     description: "Production enclave image v1.0.0".to_string(),
                 },
                 PcrConfiguration {
                     index: 1,
-                    expected_value: PRODUCTION_PCR1_VALUE,
+                    expected_value: PRODUCTION_PCR1_VALUE.to_vec(),
                     description: "Production kernel and bootstrap".to_string(),
                 },
                 PcrConfiguration {
                     index: 2,
-                    expected_value: PRODUCTION_PCR2_VALUE,
+                    expected_value: PRODUCTION_PCR2_VALUE.to_vec(),
                     description: "Production application layer".to_string(),
                 },
             ]
@@ -60,17 +61,17 @@ pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
             vec![
                 PcrConfiguration {
                     index: 0,
-                    expected_value: STAGING_PCR0_VALUE,
+                    expected_value: STAGING_PCR0_VALUE.to_vec(),
                     description: "Staging enclave image v1.0.0-staging".to_string(),
                 },
                 PcrConfiguration {
                     index: 1,
-                    expected_value: STAGING_PCR1_VALUE,
+                    expected_value: STAGING_PCR1_VALUE.to_vec(),
                     description: "Staging kernel and bootstrap".to_string(),
                 },
                 PcrConfiguration {
                     index: 2,
-                    expected_value: STAGING_PCR2_VALUE,
+                    expected_value: STAGING_PCR2_VALUE.to_vec(),
                     description: "Staging application layer".to_string(),
                 },
             ]
@@ -81,6 +82,14 @@ pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
 /// Maximum age for attestation documents (in milliseconds)
 pub const MAX_ATTESTATION_AGE_MILLISECONDS: u64 = 3 * 60 * 60 * 1000; // 3 hours
 
-/// Expected PCR length for SHA-384
+/// Get the expected PCR length depending on the hashing algorithm used
+/// As of right now, only SHA-384 is used
 /// More info: <https://docs.aws.amazon.com/enclaves/latest/user/set-up-attestation.html>
-pub const VALID_PCR_LENGTH_SHA384: usize = 48;
+#[must_use]
+pub const fn get_expected_pcr_length(digest: Digest) -> usize {
+    match digest {
+        Digest::SHA384 => 48,
+        Digest::SHA256 => 32,
+        Digest::SHA512 => 64,
+    }
+}
