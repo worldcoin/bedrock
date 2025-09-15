@@ -1,5 +1,4 @@
 use super::types::PcrConfiguration;
-use hex::FromHex;
 use once_cell::sync::OnceCell;
 
 /// AWS Nitro Root Certificate for Production
@@ -72,14 +71,6 @@ pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
                 PcrConfiguration {
                     index: 2,
                     expected_value: STAGING_PCR2_VALUE,
-                    description: "Staging application layer".to_string(),
-                },
-                PcrConfiguration {
-                    index: 8,
-                    expected_value: <[u8; 48]>::from_hex(
-                        "b38251662033340b540c2d7e5f49e7ec6d10afcb5f17c72132e20a7f0a54576dc4d2c6ce062ed2ed2b6ae01815d69c8d",
-                    )
-                    .unwrap(),
                     description: "Staging application layer".to_string(),
                 },
             ]

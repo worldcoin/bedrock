@@ -371,12 +371,13 @@ impl EnclaveAttestationVerifier {
 
         for pcr_config in &self.allowed_pcr_configs {
             // Get the PCR value from the attestation
-            let attestation_pcr_value = attestation.pcrs.get(&pcr_config.index).ok_or(
-                EnclaveAttestationError::CodeUntrusted {
+            let attestation_pcr_value = attestation
+                .pcrs
+                .get(&pcr_config.index)
+                .ok_or_else(|| EnclaveAttestationError::CodeUntrusted {
                     pcr_index: pcr_config.index,
                     actual: "missing".to_string(),
-                },
-            )?;
+                })?;
 
             // Validate the PCR value length
             if attestation_pcr_value.len() != VALID_PCR_LENGTH_SHA384 {
