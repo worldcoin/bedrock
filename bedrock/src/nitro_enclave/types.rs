@@ -53,7 +53,8 @@ pub type EnclaveAttestationResult<T, E = EnclaveAttestationError> = Result<T, E>
 /// PCR configuration
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PcrConfiguration {
-    /// The index of the PCR value
+    /// The index of the PCR{index} value
+    /// eg. 0, 1, 2, 3, 4, 8
     pub index: usize,
     /// The expected value of the PCR
     pub expected_value: Vec<u8>,
