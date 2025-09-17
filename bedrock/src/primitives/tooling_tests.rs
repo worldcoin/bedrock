@@ -522,8 +522,9 @@ mod tests {
         fs.write_file("greeting.txt".to_string(), b"Hello, World!".to_vec())
             .unwrap();
 
-        let checksum = FileSystemExt::calculate_checksum(&fs, "greeting.txt")
-            .expect("checksum should compute successfully");
+        let (checksum, _) =
+            FileSystemExt::calculate_checksum_and_size(&fs, "greeting.txt")
+                .expect("checksum should compute successfully");
         let expected: [u8; 32] = blake3::hash(b"Hello, World!").into();
         assert_eq!(checksum, expected);
     }
@@ -540,9 +541,12 @@ mod tests {
         fs.write_file("large.bin".to_string(), data.clone())
             .unwrap();
 
-        let checksum = FileSystemExt::calculate_checksum(&fs, "large.bin")
-            .expect("checksum should compute successfully");
+        let (checksum, size) =
+            FileSystemExt::calculate_checksum_and_size(&fs, "large.bin")
+                .expect("checksum should compute successfully");
         let expected: [u8; 32] = blake3::hash(&data).into();
         assert_eq!(checksum, expected);
+
+        assert_eq!(size, data.len() as u64);
     }
 }

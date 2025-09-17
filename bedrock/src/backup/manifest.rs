@@ -132,7 +132,8 @@ impl ManifestManager {
                         );
                         return Ok(ManifestMutation::NoChange);
                     }
-                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
+                    let (checksum_hex, _file_size_bytes) =
+                        Self::checksum_and_size_for_file(&normalized_path)?;
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
                         file_path: normalized_path,
@@ -176,7 +177,8 @@ impl ManifestManager {
                 root_secret,
                 backup_keypair_public_key,
                 |manifest| {
-                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
+                    let (checksum_hex, _file_size_bytes) =
+                        Self::checksum_and_size_for_file(&normalized_path)?;
                     manifest.files.retain(|e| e.designator != designator);
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
@@ -416,8 +418,8 @@ impl ManifestManager {
     ) -> Result<(String, u64), BackupError> {
         let fs = get_filesystem_raw()?;
         let normalized = Self::normalize_input_path(file_path);
-        fs.calculate_checksum(normalized)
-            .map(hex::encode)
+        fs.calculate_checksum_and_size(normalized)
+            .map(|(checksum, size)| (hex::encode(checksum), size))
             .map_err(|e| {
                 let msg = format!("Failed to load file: {e}");
                 log::error!("{msg}");

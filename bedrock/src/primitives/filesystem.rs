@@ -108,14 +108,20 @@ pub trait FileSystemExt {
     /// # Errors
     /// - `FileSystemError::FileDoesNotExist` if the path does not exist
     /// - `FileSystemError::IoFailure` for unexpected underlying IO/read errors
-    fn calculate_checksum(&self, file_path: &str) -> Result<[u8; 32], FileSystemError>;
+    fn calculate_checksum_and_size(
+        &self,
+        file_path: &str,
+    ) -> Result<([u8; 32], u64), FileSystemError>;
 }
 
 impl<T> FileSystemExt for T
 where
     T: FileSystem + ?Sized,
 {
-    fn calculate_checksum(&self, file_path: &str) -> Result<[u8; 32], FileSystemError> {
+    fn calculate_checksum_and_size(
+        &self,
+        file_path: &str,
+    ) -> Result<([u8; 32], u64), FileSystemError> {
         let mut hasher = blake3::Hasher::new();
         let mut offset: u64 = 0;
         let chunk_size: u64 = 65_536; // 64 KiB (64 * 1024)
@@ -133,7 +139,7 @@ where
             );
             offset = offset.saturating_add(chunk.len() as u64);
         }
-        Ok(hasher.finalize().into())
+        Ok((hasher.finalize().into(), offset))
     }
 }
 

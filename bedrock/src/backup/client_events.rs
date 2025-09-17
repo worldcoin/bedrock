@@ -249,7 +249,6 @@ impl ClientEventsReporter {
     ) -> Result<(), ClientEventsError> {
         let mut base = self.read_base_report().unwrap_or_default();
         base.user_pkid = input.user_pkid.or(base.user_pkid);
-        base.installation_id = input.installation_id.or(base.installation_id);
         base.orb_verified_after_sep25 = input
             .orb_verified_after_sep25
             .or(base.orb_verified_after_sep25);

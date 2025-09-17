@@ -329,8 +329,8 @@ impl BackupManager {
             // If a file already exists, verify checksum and log discrepancies before replacing.
             let path_ref = rel_path.get(..14).unwrap_or(rel_path); // don't log the full path to avoid leaking info
             match fs.file_exists(rel_path.to_string()) {
-                Ok(true) => match fs.calculate_checksum(rel_path) {
-                    Ok(local_checksum) => {
+                Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
+                    Ok((local_checksum, _)) => {
                         if local_checksum != file.checksum {
                             log::error!(
                                     "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
