@@ -36,7 +36,7 @@ impl SafeSmartAccount {
     ///
     /// ```rust,no_run
     /// use bedrock::smart_account::SafeSmartAccount;
-    /// use bedrock::transaction::TransactionError;
+    /// use bedrock::transactions::TransactionError;
     /// use bedrock::primitives::Network;
     ///
     /// # async fn example() -> Result<(), TransactionError> {

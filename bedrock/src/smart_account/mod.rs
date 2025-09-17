@@ -190,7 +190,7 @@ impl SafeSmartAccount {
     /// # Examples
     /// ```rust
     /// use bedrock::smart_account::{SafeSmartAccount};
-    /// use bedrock::transaction::foreign::UnparsedUserOperation;
+    /// use bedrock::transactions::foreign::UnparsedUserOperation;
     /// use bedrock::primitives::Network;
     ///
     /// let safe = SafeSmartAccount::new(
