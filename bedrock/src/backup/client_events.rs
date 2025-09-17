@@ -49,10 +49,6 @@ pub enum BackupReportEventKind {
     AddMainFactor,
     /// Remove main factor
     RemoveMainFactor,
-    /// Add sync factor
-    AddSyncFactor,
-    /// Remove sync factor
-    RemoveSyncFactor,
 }
 
 /// Minimal representation of an OIDC factor for reporting
