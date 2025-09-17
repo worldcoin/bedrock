@@ -2,6 +2,25 @@
 
 
 
+## [0.0.12] - 2025-09-11
+
+## What's Changed
+* fix: add x86 to android build matrix by @lukejmann in https://github.com/worldcoin/bedrock/pull/128
+* fix: add normalize_input_path by @lukejmann in https://github.com/worldcoin/bedrock/pull/127
+* build(deps): bump serde_json from 1.0.142 to 1.0.143 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/103
+* build(deps): bump proc-macro2 from 1.0.95 to 1.0.101 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/102
+* build(deps): bump alloy from 1.0.23 to 1.0.27 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/104
+* chore: bump dependencies and general housekeeping by @paolodamico in https://github.com/worldcoin/bedrock/pull/124
+* build(deps): bump thiserror from 2.0.12 to 2.0.16 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/129
+* build(deps): bump syn from 2.0.104 to 2.0.106 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/131
+* build(deps): bump ruint from 1.15.0 to 1.16.0 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/130
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.11...0.0.12
+
+
+
+
 ## [0.0.11] - 2025-09-09
 
 ## What's Changed

@@ -15,7 +15,7 @@ use crate::backup::{
     BackupFileDesignator, BackupManager, ClientEventsReporter, EventKind,
 };
 use crate::primitives::filesystem::{
-    create_middleware, FileSystemError, FileSystemMiddleware,
+    create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
 };
 use crate::root_key::RootKey;
 use crate::{
@@ -115,7 +115,7 @@ impl ManifestManager {
         root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
-        let normalized_path = file_path.trim_start_matches('/').to_string();
+        let normalized_path = Self::normalize_input_path(&file_path).to_string();
         let result = self
             .mutate_manifest_and_sync(
                 root_secret,
@@ -132,8 +132,7 @@ impl ManifestManager {
                         );
                         return Ok(ManifestMutation::NoChange);
                     }
-                    let (checksum_hex, _file_size_bytes) =
-                        Self::checksum_and_size_for_file(&normalized_path)?;
+                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
                         file_path: normalized_path,
@@ -171,14 +170,13 @@ impl ManifestManager {
         root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
-        let normalized_path = new_file_path.trim_start_matches('/').to_string();
+        let normalized_path = Self::normalize_input_path(&new_file_path).to_string();
         let result = self
             .mutate_manifest_and_sync(
                 root_secret,
                 backup_keypair_public_key,
                 |manifest| {
-                    let (checksum_hex, _file_size_bytes) =
-                        Self::checksum_and_size_for_file(&normalized_path)?;
+                    let checksum_hex = Self::checksum_hex_for_file(&normalized_path)?;
                     manifest.files.retain(|e| e.designator != designator);
                     manifest.files.push(V0BackupManifestEntry {
                         designator,
@@ -189,7 +187,6 @@ impl ManifestManager {
                 },
             )
             .await;
-
         if let Err(e) = ClientEventsReporter::new()
             .send_event(
                 EventKind::Sync,
@@ -217,7 +214,7 @@ impl ManifestManager {
         root_secret: &str,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
-        let normalized_path = file_path.trim_start_matches('/').to_string();
+        let normalized_path = Self::normalize_input_path(&file_path).to_string();
         let result = self
             .mutate_manifest_and_sync(
                 root_secret,
@@ -255,6 +252,23 @@ impl ManifestManager {
 
 /// Internal methods for the `ManifestManager` (not exposed to foreign code).
 impl ManifestManager {
+    /// Normalizes an input path by stripping any leading "./" or "/" segments.
+    /// This is tolerant to multiple occurrences (e.g., "././path" or "///path").
+    fn normalize_input_path(path: &str) -> &str {
+        let mut p = path;
+        loop {
+            if let Some(rest) = p.strip_prefix("./") {
+                p = rest;
+                continue;
+            }
+            if let Some(rest) = p.strip_prefix('/') {
+                p = rest;
+                continue;
+            }
+            break;
+        }
+        p
+    }
     /// Thepath to the global manifest file
     const GLOBAL_MANIFEST_FILE: &str = "manifest.json";
 
@@ -324,7 +338,7 @@ impl ManifestManager {
         // Use the global filesystem (no prefixing) to read file contents.
         let fs = get_filesystem_raw()?;
         for entry in &manifest.files {
-            let rel = entry.file_path.trim_start_matches('/');
+            let rel = Self::normalize_input_path(&entry.file_path);
             let data = fs.read_file(rel.to_string()).map_err(|e| {
                 let msg =
                     format!("Failed to load file from {:?}: {e}", entry.designator);
@@ -401,24 +415,14 @@ impl ManifestManager {
         file_path: &str,
     ) -> Result<(String, u64), BackupError> {
         let fs = get_filesystem_raw()?;
-        let mut hasher = blake3::Hasher::new();
-        let mut offset: u64 = 0;
-        let chunk_size: u64 = 65_536; // 64 KiB
-        loop {
-            let chunk = fs
-                .read_file_range(file_path.to_string(), offset, chunk_size)
-                .map_err(|e| {
-                    let msg = format!("Failed to load file: {e}");
-                    log::error!("{msg}");
-                    BackupError::InvalidFileForBackup(msg)
-                })?;
-            if chunk.is_empty() {
-                break;
-            }
-            hasher.update(&chunk);
-            offset = offset.saturating_add(chunk.len() as u64);
-        }
-        Ok((hex::encode(hasher.finalize().as_bytes()), offset))
+        let normalized = Self::normalize_input_path(file_path);
+        fs.calculate_checksum(normalized)
+            .map(hex::encode)
+            .map_err(|e| {
+                let msg = format!("Failed to load file: {e}");
+                log::error!("{msg}");
+                BackupError::InvalidFileForBackup(msg)
+            })
     }
 
     /// Applies a manifest mutation and, if changed, rebuilds, syncs, and commits the update.

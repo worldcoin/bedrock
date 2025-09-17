@@ -293,6 +293,51 @@ async fn test_store_file_happy_path_and_commit() {
 
 #[tokio::test]
 #[serial]
+async fn test_store_file_accepts_dot_slash_path() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Local empty manifest and matching remote
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        previous_manifest_hash: None,
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_dot_path");
+    api.set_remote_hash(compute_manifest_hash_from_disk(
+        "backup_test_store_dot_path",
+    ));
+
+    // Source file to store (in global FS)
+    write_global_file("pcp/source.bin", b"hello-bytes");
+
+    // Backup pubkey
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_dot_path");
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "./pcp/source.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // Manifest committed with previous hash == m0 and one entry with normalized path
+    let fs = get_filesystem_raw().unwrap().clone();
+    let committed = fs
+        .read_file("backup_test_store_dot_path/manifest.json".to_string())
+        .unwrap();
+    let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+    assert_eq!(committed["version"], "V0");
+    let files = committed["manifest"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["file_path"], "pcp/source.bin");
+}
+
+#[tokio::test]
+#[serial]
 async fn test_store_file_propagates_sync_failure() {
     let api = init_test_globals();
     api.reset();

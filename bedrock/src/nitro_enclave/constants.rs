@@ -1,4 +1,5 @@
 use super::types::PcrConfiguration;
+use aws_nitro_enclaves_nsm_api::api::Digest;
 use once_cell::sync::OnceCell;
 
 /// AWS Nitro Root Certificate for Production
@@ -11,9 +12,9 @@ pub const AWS_NITRO_ROOT_CERT_PROD: &[u8] = include_bytes!("aws_nitro_root_g1.de
 pub const AWS_NITRO_ROOT_CERT_STAGING: &[u8] = AWS_NITRO_ROOT_CERT_PROD;
 
 /// Compile-time constants for PCR expected values (48 bytes each for SHA-384)
-const PRODUCTION_PCR0_VALUE: &[u8] = &[0; 48];
-const PRODUCTION_PCR1_VALUE: &[u8] = &[0; 48];
-const PRODUCTION_PCR2_VALUE: &[u8] = &[0; 48];
+const PRODUCTION_PCR0_VALUE: [u8; 48] = [0; 48];
+const PRODUCTION_PCR1_VALUE: [u8; 48] = [0; 48];
+const PRODUCTION_PCR2_VALUE: [u8; 48] = [0; 48];
 
 /// Expected PCR configurations for production enclaves
 static PRODUCTION_PCR_CONFIGS: OnceCell<Vec<PcrConfiguration>> = OnceCell::new();
@@ -45,9 +46,9 @@ pub fn production_pcr_configs() -> Vec<PcrConfiguration> {
 }
 
 // Compile-time constants for staging PCR expected values (48 bytes each for SHA-384)
-const STAGING_PCR0_VALUE: &[u8] = &[0; 48];
-const STAGING_PCR1_VALUE: &[u8] = &[0; 48];
-const STAGING_PCR2_VALUE: &[u8] = &[0; 48];
+const STAGING_PCR0_VALUE: [u8; 48] = [0; 48];
+const STAGING_PCR1_VALUE: [u8; 48] = [0; 48];
+const STAGING_PCR2_VALUE: [u8; 48] = [0; 48];
 
 /// Expected PCR configurations for staging enclaves
 static STAGING_PCR_CONFIGS: OnceCell<Vec<PcrConfiguration>> = OnceCell::new();
@@ -81,6 +82,14 @@ pub fn staging_pcr_configs() -> Vec<PcrConfiguration> {
 /// Maximum age for attestation documents (in milliseconds)
 pub const MAX_ATTESTATION_AGE_MILLISECONDS: u64 = 3 * 60 * 60 * 1000; // 3 hours
 
-/// Minimum PCR value lengths
-/// <https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html>
-pub const VALID_PCR_LENGTHS: &[usize] = &[32, 48, 64];
+/// Get the expected PCR length depending on the hashing algorithm used
+/// As of right now, only SHA-384 is used
+/// More info: <https://docs.aws.amazon.com/enclaves/latest/user/set-up-attestation.html>
+#[must_use]
+pub const fn get_expected_pcr_length(digest: Digest) -> usize {
+    match digest {
+        Digest::SHA384 => 48,
+        Digest::SHA256 => 32,
+        Digest::SHA512 => 64,
+    }
+}
