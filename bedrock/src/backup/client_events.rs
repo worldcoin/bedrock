@@ -131,7 +131,7 @@ pub struct BaseReport {
     pub last_synced_at: Option<String>,
 }
 
-/// Inputs supplied by native for fields that cannot be derived internally
+/// Inputs supplied by foreign code (native app) for fields that cannot be derived internally
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct BackupReportInput {
     /// User PKID
