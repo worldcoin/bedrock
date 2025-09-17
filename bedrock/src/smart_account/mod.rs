@@ -12,7 +12,7 @@ pub use transaction_4337::Is4337Encodable;
 use crate::primitives::Network;
 use crate::{
     bedrock_export, debug, error, primitives::HexEncodedData,
-    transaction::foreign::UnparsedUserOperation,
+    transactions::foreign::UnparsedUserOperation,
 };
 
 /// Enables signing of messages and EIP-712 typed data for Safe Smart Accounts.

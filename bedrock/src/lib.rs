@@ -25,7 +25,7 @@ pub mod smart_account;
 /// We call this transactions for the sake of clarity, but all transactions are executed as ERC-4337 user operations.
 ///
 /// Examples include: ERC-20 token transfers, swaps, etc.
-pub mod transaction;
+pub mod transactions;
 
 /// Allows verifying attestations from remote Nitro Enclaves.  
 pub mod primitives;

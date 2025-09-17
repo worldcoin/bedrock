@@ -1,5 +1,5 @@
 use crate::primitives::{HttpError, PrimitiveError};
-use crate::transaction::rpc::SponsorUserOperationResponse;
+use crate::transactions::rpc::SponsorUserOperationResponse;
 use alloy::hex::FromHex;
 use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
 use alloy::sol;

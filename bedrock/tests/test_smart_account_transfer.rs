@@ -13,7 +13,7 @@ use bedrock::{
         set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
     },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::foreign::UnparsedUserOperation,
+    transactions::foreign::UnparsedUserOperation,
 };
 
 use serde::Serialize;
