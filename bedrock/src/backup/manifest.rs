@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::service_client::BackupServiceClient;
 use crate::backup::{
-    BackupFileDesignator, BackupManager, ClientEventsReporter, EventKind,
+    BackupFileDesignator, BackupManager, BackupReportEventKind, ClientEventsReporter,
 };
 use crate::primitives::filesystem::{
     create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
@@ -442,7 +442,7 @@ impl ManifestManager {
     async fn send_sync_event(result: &Result<(), BackupError>) {
         if let Err(e) = ClientEventsReporter::new()
             .send_event(
-                EventKind::Sync,
+                BackupReportEventKind::Sync,
                 result.is_ok(),
                 result.as_ref().err().map(std::string::ToString::to_string),
                 Utc::now().to_rfc3339(),

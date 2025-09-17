@@ -38,7 +38,7 @@ pub enum ClientEventsError {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum EventKind {
+pub enum BackupReportEventKind {
     /// Backup sync or any backup file changes (store/remove)
     Sync,
     /// Backup enabled
@@ -57,7 +57,7 @@ pub enum EventKind {
 
 /// Minimal representation of an OIDC factor for reporting
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
-pub struct MainFactor {
+pub struct BackupReportMainFactor {
     /// Factor kind, e.g. OIDC
     pub kind: String,
     /// Account type, e.g. GOOGLE
@@ -70,7 +70,7 @@ pub struct MainFactor {
 /// Kinds of encryption keys present in backup metadata
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum)]
 #[serde(rename_all = "snake_case")]
-pub enum EncryptionKeyKind {
+pub enum BackupReportEncryptionKeyKind {
     /// Passkey PRF-derived key
     Prf,
     /// Turnkey-stored random key
@@ -91,9 +91,11 @@ pub struct BaseReport {
     /// Whether backup is enabled
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_backup_enabled: Option<bool>,
-    /// Whether orb verification happened after Sep 2025 Paolo
+    /// Whether orb verification happened after Oct 2025
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub orb_verified_after_sep25: Option<bool>,
+    pub orb_verified_after_oct_25: Option<bool>,
+    /// Whether the user is Orb verified
+    pub is_user_orb_verified: Option<bool>,
     /// Whether user is document verified
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_user_document_verified: Option<bool>,
@@ -105,10 +107,10 @@ pub struct BaseReport {
     pub sync_factor_count: Option<u32>,
     /// Encryption keys present (e.g., prf, turnkey)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub encryption_keys: Option<Vec<EncryptionKeyKind>>,
+    pub encryption_keys: Option<Vec<BackupReportEncryptionKeyKind>>,
     /// Main factors present
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub main_factors: Option<Vec<MainFactor>>,
+    pub main_factors: Option<Vec<BackupReportMainFactor>>,
     /// Backup file designators present
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_file_designators: Option<Vec<BackupFileDesignator>>,
@@ -131,11 +133,13 @@ pub struct BaseReport {
 
 /// Inputs supplied by native for fields that cannot be derived internally
 #[derive(Debug, Clone, uniffi::Record)]
-pub struct RecalculateInput {
+pub struct BackupReportInput {
     /// User PKID
     pub user_pkid: Option<String>,
-    /// Whether orb verification happened after Sep 2025
-    pub orb_verified_after_sep25: Option<bool>,
+    /// Whether orb verification happened after Oct 2025
+    pub orb_verified_after_oct_25: Option<bool>,
+    /// Whether the user is Orb verified
+    pub is_user_orb_verified: Option<bool>,
     /// Whether user is document verified
     pub is_user_document_verified: Option<bool>,
     /// Whether user has Turnkey account
@@ -143,9 +147,9 @@ pub struct RecalculateInput {
     /// Number of sync factors
     pub sync_factor_count: Option<u32>,
     /// Encryption keys present (e.g., prf, turnkey)
-    pub encryption_keys: Option<Vec<EncryptionKeyKind>>,
+    pub encryption_keys: Option<Vec<BackupReportEncryptionKeyKind>>,
     /// Main factors present
-    pub main_factors: Option<Vec<MainFactor>>,
+    pub main_factors: Option<Vec<BackupReportMainFactor>>,
     /// Device-local sync counter
     pub device_sync_count: Option<u32>,
     /// App version
@@ -158,59 +162,36 @@ pub struct RecalculateInput {
 
 /// Payload for a single event
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct EventPayload {
     /// Event ID (e.g., `UUIDv4`)
-    #[serde(rename = "id")]
     id: String,
     /// Timestamp (`ISO 8601`)
-    #[serde(rename = "timestamp")]
     timestamp: String,
     /// Event kind string
-    #[serde(rename = "event")]
     event: String,
     /// Whether the event was successful
-    #[serde(rename = "success")]
     success: bool,
     /// Generic error message if any
-    #[serde(rename = "latestError", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     latest_error: Option<String>,
 
     // merged base report fields
-    #[serde(rename = "userPkId", skip_serializing_if = "Option::is_none")]
     user_pkid: Option<String>,
-    #[serde(rename = "installationId", skip_serializing_if = "Option::is_none")]
     installation_id: Option<String>,
-    #[serde(rename = "isBackupEnabled", skip_serializing_if = "Option::is_none")]
     is_backup_enabled: Option<bool>,
-    #[serde(
-        rename = "orbVerifiedAfterJul25",
-        skip_serializing_if = "Option::is_none"
-    )]
-    orb_verified_after_jul25: Option<bool>,
-    #[serde(
-        rename = "isUserDocumentVerified",
-        skip_serializing_if = "Option::is_none"
-    )]
+    orb_verified_after_oct_25: Option<bool>,
+    is_user_orb_verified: Option<bool>,
     is_user_document_verified: Option<bool>,
-    #[serde(rename = "hasTurnkeyAccount", skip_serializing_if = "Option::is_none")]
     has_turnkey_account: Option<bool>,
-    #[serde(rename = "syncFactorCount", skip_serializing_if = "Option::is_none")]
     sync_factor_count: Option<u32>,
-    #[serde(rename = "encryptionKeys", skip_serializing_if = "Option::is_none")]
-    encryption_keys: Option<Vec<EncryptionKeyKind>>,
-    #[serde(rename = "mainFactors", skip_serializing_if = "Option::is_none")]
-    main_factors: Option<Vec<MainFactor>>, // same shape
-    #[serde(rename = "backupFilesModules", skip_serializing_if = "Option::is_none")]
+    encryption_keys: Option<Vec<BackupReportEncryptionKeyKind>>,
+    main_factors: Option<Vec<BackupReportMainFactor>>,
     backup_files_modules: Option<Vec<BackupFileDesignator>>,
-    #[serde(rename = "backupFileSizeKb", skip_serializing_if = "Option::is_none")]
     backup_file_size_kb: Option<u64>,
-    #[serde(rename = "deviceSyncCount", skip_serializing_if = "Option::is_none")]
     device_sync_count: Option<u32>,
-    #[serde(rename = "appVersion", skip_serializing_if = "Option::is_none")]
     app_version: Option<String>,
-    #[serde(rename = "platform", skip_serializing_if = "Option::is_none")]
     platform: Option<String>,
-    #[serde(rename = "lastSyncedAt", skip_serializing_if = "Option::is_none")]
     last_synced_at: Option<String>,
 }
 
@@ -246,13 +227,15 @@ impl ClientEventsReporter {
     /// Returns an error if serialization or filesystem write fails.
     pub fn set_backup_report_attributes(
         &self,
-        input: RecalculateInput,
+        input: BackupReportInput,
     ) -> Result<(), ClientEventsError> {
         let mut base = self.read_base_report().unwrap_or_default();
         base.user_pkid = input.user_pkid.or(base.user_pkid);
-        base.orb_verified_after_sep25 = input
-            .orb_verified_after_sep25
-            .or(base.orb_verified_after_sep25);
+        base.orb_verified_after_oct_25 = input
+            .orb_verified_after_oct_25
+            .or(base.orb_verified_after_oct_25);
+        base.is_user_orb_verified =
+            input.is_user_orb_verified.or(base.is_user_orb_verified);
         base.is_user_document_verified = input
             .is_user_document_verified
             .or(base.is_user_document_verified);
@@ -282,7 +265,7 @@ impl ClientEventsReporter {
     /// Returns an error if HTTP client is not initialized or network/serialization fails.
     pub async fn send_event(
         &self,
-        kind: EventKind,
+        kind: BackupReportEventKind,
         success: bool,
         error_message: Option<String>,
         timestamp_iso8601: String,
@@ -304,7 +287,8 @@ impl ClientEventsReporter {
             user_pkid: base.user_pkid,
             installation_id: Some(ensured_installation_id),
             is_backup_enabled: base.is_backup_enabled,
-            orb_verified_after_jul25: base.orb_verified_after_sep25,
+            orb_verified_after_oct_25: base.orb_verified_after_oct_25,
+            is_user_orb_verified: base.is_user_orb_verified,
             is_user_document_verified: base.is_user_document_verified,
             has_turnkey_account: base.has_turnkey_account,
             sync_factor_count: base.sync_factor_count,
