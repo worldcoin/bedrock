@@ -144,17 +144,7 @@ impl ManifestManager {
             )
             .await;
 
-        if let Err(e) = ClientEventsReporter::new()
-            .send_event(
-                EventKind::Sync,
-                result.is_ok(),
-                result.as_ref().err().map(std::string::ToString::to_string),
-                Utc::now().to_rfc3339(),
-            )
-            .await
-        {
-            log::warn!("[ClientEvents] failed to send Sync event (store): {e:?}");
-        }
+        Self::send_sync_event(&result).await;
 
         result
     }
@@ -189,17 +179,8 @@ impl ManifestManager {
                 },
             )
             .await;
-        if let Err(e) = ClientEventsReporter::new()
-            .send_event(
-                EventKind::Sync,
-                result.is_ok(),
-                result.as_ref().err().map(std::string::ToString::to_string),
-                Utc::now().to_rfc3339(),
-            )
-            .await
-        {
-            log::warn!("[ClientEvents] failed to send Sync event (replace): {e:?}");
-        }
+
+        Self::send_sync_event(&result).await;
 
         result
     }
@@ -236,17 +217,7 @@ impl ManifestManager {
             )
             .await;
 
-        if let Err(e) = ClientEventsReporter::new()
-            .send_event(
-                EventKind::Sync,
-                result.is_ok(),
-                result.as_ref().err().map(std::string::ToString::to_string),
-                Utc::now().to_rfc3339(),
-            )
-            .await
-        {
-            log::warn!("[ClientEvents] failed to send Sync event (remove): {e:?}");
-        }
+        Self::send_sync_event(&result).await;
 
         result
     }
@@ -297,21 +268,6 @@ impl ManifestManager {
         }
         let BackupManifest::V0(manifest) = manifest;
         Ok((manifest, local_hash))
-    }
-
-    /// Reads the manifest from disk without checking against the remote hash.
-    ///
-    /// This is intended for local computations (e.g., size telemetry) that must not fail
-    /// due to remote staleness and that don't mutate state.
-    ///
-    /// # Errors
-    /// Returns an error if the manifest file is missing or cannot be parsed.
-    pub(crate) fn load_manifest_unchecked(
-        &self,
-    ) -> Result<V0BackupManifest, BackupError> {
-        let (manifest, _checksum) = self.read_manifest()?;
-        let BackupManifest::V0(manifest) = manifest;
-        Ok(manifest)
     }
 
     /// Writes the updated manifest to disk.
@@ -393,7 +349,9 @@ impl ManifestManager {
     ///
     /// # Errors
     /// Returns an error if the manifest file is missing or cannot be parsed.
-    fn read_manifest(&self) -> Result<(BackupManifest, [u8; 32]), BackupError> {
+    pub(crate) fn read_manifest(
+        &self,
+    ) -> Result<(BackupManifest, [u8; 32]), BackupError> {
         let result = self.file_system.read_file(Self::GLOBAL_MANIFEST_FILE);
         match result {
             Ok(bytes) => {
@@ -479,6 +437,20 @@ impl ManifestManager {
         }
 
         Ok(())
+    }
+
+    async fn send_sync_event(result: &Result<(), BackupError>) {
+        if let Err(e) = ClientEventsReporter::new()
+            .send_event(
+                EventKind::Sync,
+                result.is_ok(),
+                result.as_ref().err().map(std::string::ToString::to_string),
+                Utc::now().to_rfc3339(),
+            )
+            .await
+        {
+            log::warn!("[ClientEvents] failed to send Sync event (remove): {e:?}");
+        }
     }
 }
 

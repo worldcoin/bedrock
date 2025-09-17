@@ -5,10 +5,11 @@ use std::str::FromStr;
 use strum::Display;
 
 use super::manifest::ManifestManager;
+use crate::backup::manifest::BackupManifest;
 use crate::backup::BackupFileDesignator;
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
-    create_middleware, get_filesystem_raw, FileSystemMiddleware,
+    create_middleware, get_filesystem_raw, FileSystemExt, FileSystemMiddleware,
 };
 use crate::primitives::http_client::{get_http_client, HttpHeader};
 use crate::HttpMethod;
@@ -396,15 +397,16 @@ impl ClientEventsReporter {
         let fs = get_filesystem_raw()?;
         let mut base = self.read_base_report().unwrap_or_default();
 
-        // Load manifest via manager (unchecked, no remote gate)
+        // Load manifest via manager (unchecked, no remote gate as it's not mutating the state)
         let mgr = ManifestManager::new();
-        let Ok(manifest) = mgr.load_manifest_unchecked() else {
+        let Ok((manifest, _checksum)) = mgr.read_manifest() else {
             base.is_backup_enabled = Some(false);
             base.backup_file_designators = Some(Vec::new());
             base.backup_size_kb = Some(0);
             self.write_base_report(&base)?;
             return Ok(());
         };
+        let BackupManifest::V0(manifest) = manifest;
 
         let mut designators: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
@@ -412,21 +414,9 @@ impl ClientEventsReporter {
 
         for entry in manifest.files {
             designators.insert(entry.designator.to_string());
-
-            // Stream file to count its size
-            let mut offset: u64 = 0;
-            let chunk_size: u64 = 65_536;
-            loop {
-                let chunk = fs
-                    .read_file_range(entry.file_path.clone(), offset, chunk_size)
-                    .map_err(|e| ClientEventsError::from(anyhow::Error::from(e)))?;
-                if chunk.is_empty() {
-                    break;
-                }
-                total_size_bytes = total_size_bytes
-                    .saturating_add(u64::try_from(chunk.len()).unwrap_or(0));
-                offset = offset.saturating_add(u64::try_from(chunk.len()).unwrap_or(0));
-            }
+            let (_checksum, size_bytes) =
+                fs.calculate_checksum_and_size(&entry.file_path)?;
+            total_size_bytes = total_size_bytes.saturating_add(size_bytes);
         }
 
         base.is_backup_enabled = Some(true);
