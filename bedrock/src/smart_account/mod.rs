@@ -32,6 +32,12 @@ mod transaction;
 /// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
 mod permit2;
 
+/// Simple helper to compute the expected new wallet address for a Safe Smart Account.
+///
+/// This is explicitly exposed as a separate module instead of part of `SafeSmartAccount` because this
+/// is used before there is a smart account. Furthermore, it can only be used for new wallets.
+mod wallet_address;
+
 pub use crate::primitives::contracts::{
     EncodedSafeOpStruct, ISafe4337Module, UserOperation, ENTRYPOINT_4337,
     GNOSIS_SAFE_4337_MODULE,
