@@ -2,7 +2,7 @@ import XCTest
 
 @testable import Bedrock
 
-final class BedrockCoreTests: XCTestCase {
+final class BedrockSmartAccountTests: XCTestCase {
 
     // Well-known Anvil test private key and address
     let testPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
@@ -185,5 +185,13 @@ final class BedrockCoreTests: XCTestCase {
         XCTAssertFalse(signature.isEmpty, "Signature for unicode message should not be empty")
         XCTAssertEqual(
             signature.count, 132, "Signature for unicode message should be 132 characters")
+    }
+
+    func testComputeWalletAddressForFreshAccount() throws {
+        let walletAddress = try computeWalletAddressForFreshAccount(
+            eoaAddress: "0x521abb206fb9969aa9382b68aa578769420e95fc"
+        )
+
+        XCTAssertEqual(walletAddress, "0xea51b7e5c07bb29237194aa14618057333435f3e")
     }
 } 
