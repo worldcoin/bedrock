@@ -2,6 +2,22 @@
 
 
 
+## [0.0.13] - 2025-09-18
+
+## What's Changed
+* build(deps): bump chrono from 0.4.41 to 0.4.42 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/132
+* refactor: Improve PCR validation code by @Takaros999 in https://github.com/worldcoin/bedrock/pull/135
+* docs: document android architecture support by @paolodamico in https://github.com/worldcoin/bedrock/pull/134
+* feat: compute wallet address by @paolodamico in https://github.com/worldcoin/bedrock/pull/137
+
+## New Contributors
+* @Takaros999 made their first contribution in https://github.com/worldcoin/bedrock/pull/135
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.12...0.0.13
+
+
+
+
 ## [0.0.12] - 2025-09-11
 
 ## What's Changed
