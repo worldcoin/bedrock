@@ -94,6 +94,9 @@ impl BackupServiceApi for FakeBackupServiceApi {
                 .remote_manifest_hash_hex
                 .clone()
                 .unwrap_or_else(|| hex::encode(blake3::hash(b"").as_bytes())),
+            encryption_keys: None,
+            sync_factor_count: None,
+            main_factors: None,
         })
     }
 }

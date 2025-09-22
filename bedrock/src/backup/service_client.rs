@@ -1,3 +1,7 @@
+use super::client_events::BackupReportInput;
+use crate::backup::{
+    BackupReportEncryptionKeyKind, BackupReportMainFactor, ClientEventsReporter,
+};
 use crate::{backup::BackupError, HttpError};
 use std::sync::{Arc, OnceLock};
 
@@ -35,6 +39,12 @@ pub trait BackupServiceApi: Send + Sync {
 pub struct RetrieveMetadataResponsePayload {
     /// The hex-encoded manifest hash.
     pub manifest_hash: String,
+    /// Encryption keys present
+    pub encryption_keys: Option<Vec<BackupReportEncryptionKeyKind>>,
+    /// Number of sync factors
+    pub sync_factor_count: Option<u32>,
+    /// Main factors present
+    pub main_factors: Option<Vec<BackupReportMainFactor>>,
 }
 
 /// Request body for `/v1/sync` (i.e. backup upload)
@@ -97,6 +107,32 @@ impl BackupServiceClient {
         let api = get_api()?;
         let response = api.retrieve_metadata().await?;
 
+        // Opportunistically merge exported metadata into the client events base report.
+        if response.encryption_keys.is_some()
+            || response.sync_factor_count.is_some()
+            || response.main_factors.is_some()
+        {
+            if let Err(e) = ClientEventsReporter::new().set_backup_report_attributes(
+                BackupReportInput {
+                    user_pkid: None,
+                    orb_verified_after_oct_25: None,
+                    is_user_orb_verified: None,
+                    is_user_document_verified: None,
+                    has_turnkey_account: None,
+                    sync_factor_count: response.sync_factor_count,
+                    encryption_keys: response.encryption_keys.clone(),
+                    main_factors: response.main_factors.clone(),
+                    device_sync_count: None,
+                    app_version: None,
+                    platform: None,
+                    last_synced_at: None,
+                },
+            ) {
+                log::warn!(
+                    "[ClientEvents] failed to merge retrieve_metadata into base report: {e:?}"
+                );
+            }
+        }
         let hash: [u8; 32] = hex::decode(response.manifest_hash)
             .map_err(|_| BackupError::Generic {
                 message: "[BackupServiceApi] invalid response from retrieve_metadata"
