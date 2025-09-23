@@ -4,7 +4,7 @@ use bedrock_macros::bedrock_export;
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Encodable, SafeSmartAccount},
-    transaction::contracts::erc20::{Erc20, TransferAssociation},
+    transactions::contracts::erc20::{Erc20, TransferAssociation},
 };
 
 mod contracts;
@@ -36,7 +36,7 @@ impl SafeSmartAccount {
     ///
     /// ```rust,no_run
     /// use bedrock::smart_account::SafeSmartAccount;
-    /// use bedrock::transaction::TransactionError;
+    /// use bedrock::transactions::TransactionError;
     /// use bedrock::primitives::Network;
     ///
     /// # async fn example() -> Result<(), TransactionError> {
@@ -73,7 +73,7 @@ impl SafeSmartAccount {
 
         let transaction = Erc20::new(token_address, to_address, amount);
 
-        let metadata = crate::transaction::contracts::erc20::MetadataArg {
+        let metadata = crate::transactions::contracts::erc20::MetadataArg {
             association: transfer_association,
         };
 
