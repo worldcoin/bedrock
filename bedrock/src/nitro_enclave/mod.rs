@@ -4,7 +4,7 @@ use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use coset::{AsCborValue, CborSerializable, CoseSign1};
-use crypto_box::PublicKey;
+use crypto_box::{aead::OsRng, PublicKey};
 use p384::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
 use webpki::{EndEntityCert, TrustAnchor};
 use x509_cert::{der::Decode, Certificate};
@@ -155,7 +155,7 @@ impl EnclaveAttestationVerifier {
         };
 
         let ciphertext = public_key
-            .seal(&mut rand::thread_rng(), plaintext)
+            .seal(&mut OsRng, plaintext)
             .map_err(|_| EnclaveAttestationError::EncryptionError)?;
 
         Ok(VerifiedAttestationWithCiphertext {
