@@ -140,7 +140,8 @@ impl EnclaveAttestationVerifier {
             self.verify_attestation_document_base64(attestation_doc_base64)?;
 
         let public_key = {
-            let pk_bytes = hex::decode(verified_attestation.enclave_public_key.clone())
+            let pk_bytes = STANDARD
+                .decode(verified_attestation.enclave_public_key.clone())
                 .map_err(|e| {
                     EnclaveAttestationError::InvalidEnclavePublicKey(format!(
                         "Failed to decode enclave public key: {e}"
