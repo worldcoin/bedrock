@@ -4,6 +4,7 @@ use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use coset::{AsCborValue, CborSerializable, CoseSign1};
+use crypto_box::PublicKey;
 use p384::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
 use webpki::{EndEntityCert, TrustAnchor};
 use x509_cert::{der::Decode, Certificate};
@@ -22,7 +23,7 @@ mod tests;
 
 pub use types::{
     EnclaveAttestationError, EnclaveAttestationResult, PcrConfiguration,
-    VerifiedAttestation,
+    VerifiedAttestation, VerifiedAttestationWithCiphertext,
 };
 
 use constants::{
@@ -112,6 +113,53 @@ impl EnclaveAttestationVerifier {
             })?;
 
         self.verify_attestation_document(&attestation_doc_bytes)
+    }
+
+    /// Verifies a base64-encoded attestation document and encrypts the given plaintext
+    ///
+    /// This is a convenience method that handles base64 decoding, verifying the attestation document,
+    /// and encrypting the given plaintext using the enclave's public key.
+    ///
+    /// # Arguments
+    /// * `attestation_doc_base64` - The base64-encoded attestation document
+    /// * `plaintext` - The plaintext to encrypt
+    ///
+    /// # Returns
+    /// A verified attestation containing the enclave's public key and the encrypted plaintext
+    ///
+    /// # Errors
+    /// Returns an error if the base64 decoding fails or the attestation document verification fails
+    pub fn verify_attestation_document_and_encrypt(
+        &self,
+        attestation_doc_base64: &str,
+        plaintext: &[u8],
+    ) -> EnclaveAttestationResult<VerifiedAttestationWithCiphertext> {
+        let verified_attestation =
+            self.verify_attestation_document_base64(attestation_doc_base64)?;
+
+        let public_key = {
+            let mut pk_bytes = [0u8; crypto_box::KEY_SIZE];
+            STANDARD
+                .decode_slice(
+                    verified_attestation.enclave_public_key.clone(),
+                    &mut pk_bytes,
+                )
+                .map_err(|e| {
+                    EnclaveAttestationError::InvalidEnclavePublicKey(format!(
+                        "Failed to decode enclave public key: {e}"
+                    ))
+                })?;
+            PublicKey::from_bytes(pk_bytes)
+        };
+
+        let ciphertext = public_key
+            .seal(&mut rand::thread_rng(), plaintext)
+            .map_err(|_| EnclaveAttestationError::EncryptionError)?;
+
+        Ok(VerifiedAttestationWithCiphertext {
+            verified_attestation,
+            ciphertext_base64: STANDARD.encode(ciphertext),
+        })
     }
 }
 
