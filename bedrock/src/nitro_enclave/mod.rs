@@ -140,18 +140,17 @@ impl EnclaveAttestationVerifier {
             self.verify_attestation_document_base64(attestation_doc_base64)?;
 
         let public_key = {
-            let mut pk_bytes = [0u8; crypto_box::KEY_SIZE];
-            STANDARD
-                .decode_slice(
-                    verified_attestation.enclave_public_key.clone(),
-                    &mut pk_bytes,
-                )
+            let pk_bytes = hex::decode(verified_attestation.enclave_public_key.clone())
                 .map_err(|e| {
                     EnclaveAttestationError::InvalidEnclavePublicKey(format!(
                         "Failed to decode enclave public key: {e}"
                     ))
                 })?;
-            PublicKey::from_bytes(pk_bytes)
+            PublicKey::from_slice(&pk_bytes).map_err(|e| {
+                EnclaveAttestationError::InvalidEnclavePublicKey(format!(
+                    "Failed to parse enclave public key: {e}"
+                ))
+            })?
         };
 
         let ciphertext = public_key
