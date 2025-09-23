@@ -2,6 +2,18 @@
 
 
 
+## [0.0.14] - 2025-09-23
+
+## What's Changed
+* feat: add post_delete_backup callback by @paolodamico in https://github.com/worldcoin/bedrock/pull/140
+* feat: rename transactions module by @paolodamico in https://github.com/worldcoin/bedrock/pull/136
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.13...0.0.14
+
+
+
+
 ## [0.0.13] - 2025-09-18
 
 ## What's Changed
