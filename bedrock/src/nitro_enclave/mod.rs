@@ -118,14 +118,16 @@ impl EnclaveAttestationVerifier {
     /// Verifies a base64-encoded attestation document and encrypts the given plaintext
     ///
     /// This is a convenience method that handles base64 decoding, verifying the attestation document,
-    /// and encrypting the given plaintext using the enclave's public key.
+    /// and encrypting the given plaintext using the enclave's public key using crypto_box sealed box.
+    ///
+    /// Learn about seal box [here](https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes)
     ///
     /// # Arguments
     /// * `attestation_doc_base64` - The base64-encoded attestation document
     /// * `plaintext` - The plaintext to encrypt
     ///
     /// # Returns
-    /// A verified attestation containing the enclave's public key and the encrypted plaintext
+    /// A verified attestation containing the enclave's public key and the encrypted plaintext in base64 format.
     ///
     /// # Errors
     /// Returns an error if the base64 decoding fails or the attestation document verification fails
