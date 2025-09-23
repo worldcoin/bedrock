@@ -302,6 +302,21 @@ impl BackupManager {
 
         Ok(result)
     }
+
+    /// Should be called after the backup is disabled/deleted.
+    ///
+    /// It processes local state after the backup is disabled/deleted.
+    ///
+    /// Currently it:
+    /// 1. Deletes the local manifest file.
+    ///
+    /// # Errors
+    /// - Returns an error if the post-processing fails.
+    pub fn post_delete_backup(&self) -> Result<(), BackupError> {
+        let manifest = ManifestManager::new();
+        manifest.danger_delete_manifest()?;
+        Ok(())
+    }
 }
 
 // Internal helpers (not exported)
