@@ -2,6 +2,18 @@
 
 
 
+## [0.0.15] - 2025-09-24
+
+## What's Changed
+* feat: Add encrypt method to attestation verifier by @Takaros999 in https://github.com/worldcoin/bedrock/pull/139
+* feat: bedrock address primitive by @paolodamico in https://github.com/worldcoin/bedrock/pull/142
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.14...0.0.15
+
+
+
+
 ## [0.0.14] - 2025-09-23
 
 ## What's Changed
