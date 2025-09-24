@@ -45,6 +45,10 @@ pub enum EnclaveAttestationError {
     /// Invalid enclave public key
     #[error("Invalid enclave public key: {0}")]
     InvalidEnclavePublicKey(String),
+
+    /// Failed to encrypt data
+    #[error("Failed to encrypt data")]
+    EncryptionError,
 }
 
 /// Result type for enclave attestation operations
@@ -65,7 +69,7 @@ pub struct PcrConfiguration {
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
 /// Verified attestation data from the enclave.
 pub struct VerifiedAttestation {
-    /// The hex encoded public key of the enclave
+    /// The base64 encoded public key of the enclave
     pub enclave_public_key: String,
 
     /// The timestamp of the attestation
@@ -93,4 +97,13 @@ impl VerifiedAttestation {
             module_id,
         }
     }
+}
+
+/// Verified attestation with ciphertext
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct VerifiedAttestationWithCiphertext {
+    /// The verified attestation
+    pub verified_attestation: VerifiedAttestation,
+    /// The base64 encoded ciphertext
+    pub ciphertext_base64: String,
 }
