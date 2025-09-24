@@ -42,6 +42,9 @@ pub fn is_zero_u256(value: &U256) -> bool {
     value.is_zero()
 }
 
+/// Provides an interface for interacting with Ethereum addresses for foreign code.
+pub mod address;
+
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
 
