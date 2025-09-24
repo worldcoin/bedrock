@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{ops::Deref, str::FromStr};
 
 use alloy::{primitives::Address, sol_types::SolValue};
 use bedrock_macros::bedrock_export;
@@ -45,6 +45,26 @@ impl BedrockAddress {
     #[must_use]
     pub fn as_checksummed_str(&self, chain_id: Option<u64>) -> String {
         self.0.to_checksum(chain_id)
+    }
+}
+
+impl From<BedrockAddress> for Address {
+    fn from(address: BedrockAddress) -> Self {
+        address.0
+    }
+}
+
+impl From<Address> for BedrockAddress {
+    fn from(address: Address) -> Self {
+        Self(address)
+    }
+}
+
+impl Deref for BedrockAddress {
+    type Target = Address;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
