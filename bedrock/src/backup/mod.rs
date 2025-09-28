@@ -1,6 +1,7 @@
 mod backup_format;
 mod manifest;
 mod service_client;
+mod turnkey;
 
 #[cfg(test)]
 mod test;
