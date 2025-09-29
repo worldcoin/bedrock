@@ -524,5 +524,15 @@ mod tests {
         // Bitflip api_private_key and check that decryption fails
         let mut api_private_key_bytes = hex::decode(api_private_key).unwrap();
         api_private_key_bytes[10] ^= 1;
+
+        let result = client.decrypt_factor_secret(
+            &hex::encode(api_private_key_bytes),
+            organization_id,
+            export_bundle,
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Failed to decrypt the factor secret"
+        );
     }
 }
