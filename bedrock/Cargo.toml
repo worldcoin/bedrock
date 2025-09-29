@@ -40,7 +40,11 @@ coset = "0.3.8"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 flate2 = "1.0.28"
 hex = "0.4.3"
-hpke = { version = "0.10", features = ["alloc", "p256", "serde_impls"], default-features = false }
+hpke = { version = "0.10", features = [
+  "alloc",
+  "p256",
+  "serde_impls",
+], default-features = false }
 log = "0.4.22"
 once_cell = "1.19"
 p256 = { version = "0.13.2", features = ["ecdsa", "pem", "pkcs8"] }
