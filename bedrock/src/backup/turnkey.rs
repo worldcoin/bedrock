@@ -8,13 +8,12 @@ use hpke::{Deserializable, Kem as KemTrait};
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::Signature;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::{PublicKey, SecretKey};
 use serde_json::json;
-use std::sync::Arc;
 use thiserror::Error;
 use turnkey_enclave_encrypt::client::EnclaveEncryptClient;
 use turnkey_enclave_encrypt::QuorumPublicKey;
 
+/// Allows interactions with Turnkey API.
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct Turnkey {}
 
@@ -22,12 +21,11 @@ pub struct Turnkey {}
 impl Turnkey {
     #[uniffi::constructor]
     #[must_use]
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// This function allows to derive a public key from the API private key. This is used as a helper
-    /// in mobile apps.
+    /// Derive a public key from the API private key for use with Turnkey's API.
     ///
     /// The public key is a hex-encoded SEC1 `EncodedPoint` representation with compression enabled
     /// of the P256 public key. This is the same implementation as Turnkey SDK.
@@ -55,8 +53,8 @@ impl Turnkey {
         ))
     }
 
-    /// This function allows to generate "a stamp" that should be passed in a header to Turnkey.
-    /// It signs the request body with the API private key.
+    /// Generate "a stamp" that should be passed in a header to Turnkey
+    /// which is used to sign the request body with the ephemeral API private key.
     ///
     /// <https://docs.turnkey.com/developer-reference/api-overview/stamps#stamps>
     ///
@@ -113,7 +111,7 @@ impl Turnkey {
         Ok(URL_SAFE_NO_PAD.encode(json_stamp.as_bytes()))
     }
 
-    /// Encrypts the factor secret using the Turnkey enclave public key and the import bundle.
+    /// Encrypts the factor secret using Turnkey's enclave public key.
     ///
     /// This function should be called after `INIT_IMPORT` Turnkey operation,
     /// which produces the target public key and the signature of it by Turnkey's enclave,
@@ -135,7 +133,7 @@ impl Turnkey {
     /// - `EncryptFactorSecretError`: Failed to encrypt the factor secret using the import bundle.
     /// - `SerializeEncryptedBundleError`: Failed to serialize the encrypted bundle to a JSON string.
     #[allow(clippy::unused_self)] // Uniffi doesn't support associated functions
-    pub fn import_factor_secret(
+    pub fn generate_import_bundle_for_factor_secret(
         &self,
         factor_secret: &str,
         import_bundle: &str,
@@ -182,64 +180,18 @@ impl Turnkey {
         Ok(encrypted_bundle)
     }
 
-    /// Decrypts credential bundle from Turnkey's enclave using the private key. Credential is
-    /// returned Turnkey's OAuth activity that verifies users OIDC token and returns the temporary
-    /// session encrypted to public key of `api_private_key` (which also mentioned in the nonce).
+    /// Decrypts the factor secret from an export bundle.
     ///
-    /// The decrypted bundle is hex-encoded 32 bytes of P256 private key, which represents
-    /// the temporary session, and can be used as a signer for followup requests using `stamp`.
-    ///
-    /// # Arguments
-    /// - `api_private_key`: The API private key used to decrypt the credential bundle. Must be a hex-encoded 32-byte string.
-    ///   Corresponding P256 SEC1 non-compressed public key should've been passed in the nonce of the OIDC token to Turnkey.
-    /// - `credential_bundle`: The credential bundle received from the Turnkey enclave. A base58-encoded string.
-    ///
-    /// # Errors
-    /// - `DecodeEnclaveAuthKeyError`: Failed to decode the Turnkey enclave public key.
-    /// - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
-    /// - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
-    /// - `ConvertP256KeypairToHpkeKeypairError`: Failed to convert the P256 keypair to HPKE keypair.
-    /// - `DecryptCredentialBundleError`: Failed to decrypt the credential bundle using the Turnkey enclave.
-    ///
-    #[allow(clippy::unused_self)] // Uniffi doesn't support associated functions
-    pub fn decrypt_credential_bundle(
-        &self,
-        api_private_key: &str,
-        credential_bundle: &str,
-    ) -> Result<String, TurnkeyError> {
-        let (private_key, public_key) = parse_api_private_key(api_private_key)?;
-        let (hpke_private_key, hpke_public_key) =
-            p256_keypair_to_hpke_keypair(&private_key, &public_key)?;
-
-        let mut client = EnclaveEncryptClient::from_enclave_auth_key_and_target_key(
-            QuorumPublicKey::production_signer()
-                .verifying_key()
-                .map_err(|_| {
-                    TurnkeyError::ConvertEnclavePublicKeyToVerifyingKeyError
-                })?,
-            hpke_public_key,
-            hpke_private_key,
-        );
-        let session_private_key = client
-            .auth_decrypt(credential_bundle)
-            .map_err(|_| TurnkeyError::DecryptCredentialBundleError)?;
-
-        Ok(hex::encode(session_private_key))
-    }
-
-    /// Decrypts the factor secret using the Turnkey enclave public key and the export bundle.
     /// The export bundle is a JSON, which contains the factor secret encrypted with the target
-    /// public key (corresponding to `api_private_key`). The resulting factor secret is
+    /// ephemeral session key (corresponding to `session_secret_key`). The resulting factor secret is
     /// a hex-encoded 32-byte string.
     ///
-    /// Mobile app can get the export bundle from Turnkey enclave by using the "export private key"
-    /// operation. Most likely, the operation like that would be authorized with a temporary
-    /// recovery session decrypted using `decrypt_credential_bundle`.
+    /// The export bundle is obtained from a `ACTIVITY_TYPE_EXPORT_PRIVATE_KEY` activity.
     ///
     /// Reference: <https://docs.turnkey.com/wallets/export-wallets>
     ///
     /// # Arguments
-    /// - `api_private_key`: The API private key used to decrypt the factor secret. Corresponding
+    /// - `session_secret_key`: The API private key to which the factor secret is encrypted. Corresponding
     ///   P256 SEC1 non-compressed public key should've been passed in the `targetPublicKey`
     ///   parameter of the "export private key" operation.
     /// - `turnkey_organization_id`: The organization ID of the Turnkey account. During recovery,
@@ -256,13 +208,11 @@ impl Turnkey {
     #[allow(clippy::unused_self)] // Uniffi doesn't support associated functions
     pub fn decrypt_factor_secret(
         &self,
-        api_private_key: &str,
+        session_secret_key: &str,
         turnkey_organization_id: &str,
         export_bundle: &str,
     ) -> Result<String, TurnkeyError> {
-        let (private_key, public_key) = parse_api_private_key(api_private_key)?;
-        let (hpke_private_key, hpke_public_key) =
-            p256_keypair_to_hpke_keypair(&private_key, &public_key)?;
+        let session_key_pair = SessionKeyPair::from_hex(session_secret_key)?;
         let _value: serde_json::Value = serde_json::from_str(export_bundle)
             .map_err(|_| TurnkeyError::DeserializeExportBundleError)?;
 
@@ -272,8 +222,8 @@ impl Turnkey {
                 .map_err(|_| {
                     TurnkeyError::ConvertEnclavePublicKeyToVerifyingKeyError
                 })?,
-            hpke_public_key,
-            hpke_private_key,
+            session_key_pair.public_key,
+            session_key_pair.secret_key,
         );
         let factor_secret = client
             .decrypt(export_bundle.as_bytes(), turnkey_organization_id)
@@ -283,45 +233,39 @@ impl Turnkey {
     }
 }
 
-/// Parses & verifies the API private key (32 random bytes, not stored permanently)
-/// from mobile app and returns `p256` primitives, including the derived public key.
-fn parse_api_private_key(
-    api_private_key: &str,
-) -> Result<(SecretKey, PublicKey), TurnkeyError> {
-    let private_key = hex::decode(api_private_key)
-        .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
-    if private_key.len() != 32 {
-        return Err(TurnkeyError::InvalidApiPrivateKeyLength);
-    }
-    let secret_key = p256::SecretKey::from_slice(&private_key)
-        .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
-    let public_key = secret_key.public_key();
-    Ok((secret_key, public_key))
+struct SessionKeyPair {
+    secret_key: <DhP256HkdfSha256 as KemTrait>::PrivateKey,
+    public_key: <DhP256HkdfSha256 as KemTrait>::PublicKey,
 }
 
-/// Converts primitives between `p256` (for signing) and `hpke` (for encryption & decryption)
-/// libraries. Both support P256 curve, so this transition should be safe. We're using the same
-/// keypair, because signing is used for backup-service auth and encryption is used for
-/// Turnkey auth (by decrypting credential bundle).
-fn p256_keypair_to_hpke_keypair(
-    secret_key: &SecretKey,
-    public_key: &PublicKey,
-) -> Result<
-    (
-        <DhP256HkdfSha256 as KemTrait>::PrivateKey,
-        <DhP256HkdfSha256 as KemTrait>::PublicKey,
-    ),
-    TurnkeyError,
-> {
-    let hpke_private_key = <DhP256HkdfSha256 as KemTrait>::PrivateKey::from_bytes(
-        secret_key.to_bytes().as_slice(),
-    )
-    .map_err(|_| TurnkeyError::ConvertP256KeypairToHpkeKeypairError)?;
-    let hpke_public_key = <DhP256HkdfSha256 as KemTrait>::PublicKey::from_bytes(
-        public_key.to_encoded_point(false).as_bytes(),
-    )
-    .map_err(|_| TurnkeyError::ConvertP256KeypairToHpkeKeypairError)?;
-    Ok((hpke_private_key, hpke_public_key))
+impl SessionKeyPair {
+    fn from_hex(secret_key: &str) -> Result<Self, TurnkeyError> {
+        let private_key = hex::decode(secret_key)
+            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
+
+        if private_key.len() != 32 {
+            return Err(TurnkeyError::InvalidApiPrivateKeyLength);
+        }
+
+        let secret_key = p256::SecretKey::from_slice(&private_key)
+            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
+        let public_key = secret_key.public_key();
+
+        let secret_key = <DhP256HkdfSha256 as KemTrait>::PrivateKey::from_bytes(
+            private_key.as_slice(),
+        )
+        .map_err(|_| TurnkeyError::ConvertP256KeypairToHpkeKeypairError)?;
+
+        let public_key = <DhP256HkdfSha256 as KemTrait>::PublicKey::from_bytes(
+            public_key.to_encoded_point(false).as_bytes(),
+        )
+        .map_err(|_| TurnkeyError::ConvertP256KeypairToHpkeKeypairError)?;
+
+        Ok(Self {
+            secret_key,
+            public_key,
+        })
+    }
 }
 
 #[derive(Debug, Error, uniffi::Error)]
@@ -345,8 +289,6 @@ pub enum TurnkeyError {
     EncryptFactorSecretError,
     #[error("Failed to serialize encrypted bundle to json string")]
     SerializeEncryptedBundleError,
-    #[error("Failed to decrypt the credential bundle")]
-    DecryptCredentialBundleError,
     #[error("Failed to decrypt the factor secret")]
     DecryptFactorSecretError,
     #[error("Failed to convert P256 keypair to HPKE keypair")]
@@ -362,7 +304,6 @@ mod tests {
     use base64::Engine;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::VerifyingKey;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use p256::PublicKey;
     use serde_json::json;
 
@@ -498,7 +439,7 @@ mod tests {
         let organization_id = "e9e7e466-f687-48a2-9e95-b9097a475f36";
         let user_id = "4de601ed-832e-4c9f-875d-fd79cd21f5a3";
         let encrypted_bundle = client
-            .import_factor_secret(
+            .generate_import_bundle_for_factor_secret(
                 factor_secret,
                 import_bundle,
                 organization_id,
@@ -525,7 +466,7 @@ mod tests {
         let import_bundle = "invalid_json";
         let organization_id = "e9e7e466-f687-48a2-9e95-b9097a475f36";
         let user_id = "4de601ed-832e-4c9f-875d-fd79cd21f5a3";
-        let result = client.import_factor_secret(
+        let result = client.generate_import_bundle_for_factor_secret(
             factor_secret,
             import_bundle,
             organization_id,
@@ -546,7 +487,7 @@ mod tests {
         // swapped organization_id and user_id
         let organization_id = "4de601ed-832e-4c9f-875d-fd79cd21f5a3";
         let user_id = "e9e7e466-f687-48a2-9e95-b9097a475f36";
-        let result = client.import_factor_secret(
+        let result = client.generate_import_bundle_for_factor_secret(
             factor_secret,
             import_bundle,
             organization_id,
@@ -555,36 +496,6 @@ mod tests {
         assert_eq!(
             result.unwrap_err().to_string(),
             "Failed to encrypt the factor secret to the import bundle"
-        );
-    }
-
-    #[test]
-    fn test_decrypt_credential_bundle() {
-        let client = Turnkey::new();
-
-        // Test OAuth session from Turnkey API using TS SDK with this private key and bundle
-        let api_private_key =
-            "4f320e66d1cbab981816273c3192174313d0f535763104b2c8caf38bcb24b0be";
-        let encrypted_bundle = "oXryzhCg11hPQo6RtC593FuVdUB4SeLP4PwN4W7UsAsj5PgufDjkTH5oadn42mJhx26Z4SQKVP3YGRGzwYgowBGpSEZDf1sqj4eZAKuyu2FfLaPB8it";
-
-        // Decrypt the bundle using the API private key and construct a P256 keypair
-        let decrypted_keypair = client
-            .decrypt_credential_bundle(api_private_key, encrypted_bundle)
-            .unwrap();
-        let decrypted_keypair =
-            p256::SecretKey::from_slice(&hex::decode(decrypted_keypair).unwrap())
-                .unwrap();
-
-        // Expected public pub has been cross-checked with Turnkey SDK
-        let decrypted_keypair_public_key = decrypted_keypair.public_key();
-        let decrypted_keypair_public_key = hex::encode(
-            decrypted_keypair_public_key
-                .to_encoded_point(true)
-                .as_bytes(),
-        );
-        assert_eq!(
-            decrypted_keypair_public_key,
-            "038c841a8e5c3e654e501ef272a3f4bdd3fbe37b1069f81626cc09d5257df7d041"
         );
     }
 
