@@ -2,6 +2,17 @@
 
 
 
+## [0.0.16] - 2025-09-29
+
+## What's Changed
+* feat: add turnkey API client by @paolodamico in https://github.com/worldcoin/bedrock/pull/144
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.15...0.0.16
+
+
+
+
 ## [0.0.15] - 2025-09-24
 
 ## What's Changed
