@@ -27,12 +27,13 @@ pub mod smart_account;
 /// Examples include: ERC-20 token transfers, swaps, etc.
 pub mod transactions;
 
-/// Allows verifying attestations from remote Nitro Enclaves.  
+/// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data and metadata.
 /// See `backup::BackupManager` for the high-level API.
 pub mod backup;
+
 /// Introduces low level operations for interacting with a Nitro Enclave.
 pub mod nitro_enclave;
 
