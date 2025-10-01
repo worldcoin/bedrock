@@ -160,7 +160,7 @@ impl EnclaveAttestationVerifier {
 
         Ok(VerifiedAttestationWithCiphertext {
             verified_attestation,
-            ciphertext_base64: STANDARD.encode(ciphertext),
+            ciphertext,
         })
     }
 }

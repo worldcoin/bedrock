@@ -155,12 +155,8 @@ fn test_verify_attestation_document_and_encrypt() {
         public_key_base64
     );
 
-    let result_ciphertext = STANDARD
-        .decode(result.ciphertext_base64)
-        .expect("failed to decode ciphertext");
-
     let decrypted_ciphertext = secret_key
-        .unseal(&result_ciphertext)
+        .unseal(&result.ciphertext)
         .expect("decrypt error");
     assert_eq!(decrypted_ciphertext, plaintext);
 }

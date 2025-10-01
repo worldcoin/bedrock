@@ -104,6 +104,6 @@ impl VerifiedAttestation {
 pub struct VerifiedAttestationWithCiphertext {
     /// The verified attestation
     pub verified_attestation: VerifiedAttestation,
-    /// The base64 encoded ciphertext
-    pub ciphertext_base64: String,
+    /// The ciphertext bytes
+    pub ciphertext: Vec<u8>,
 }
