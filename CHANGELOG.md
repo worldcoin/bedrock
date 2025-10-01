@@ -2,6 +2,20 @@
 
 
 
+## [0.0.17] - 2025-10-01
+
+## What's Changed
+* fix: add missing header for RPC requests & improvements by @paolodamico in https://github.com/worldcoin/bedrock/pull/150
+* build(deps): bump strum from 0.26.3 to 0.27.1 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/148
+* build(deps): bump anyhow from 1.0.98 to 1.0.100 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/146
+* build(deps): bump thiserror from 2.0.16 to 2.0.17 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/149
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.16...0.0.17
+
+
+
+
 ## [0.0.16] - 2025-09-29
 
 ## What's Changed
