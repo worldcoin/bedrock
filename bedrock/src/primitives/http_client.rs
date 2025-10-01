@@ -162,13 +162,12 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for HttpError {
 /// let success = setHttpClient(httpClient: httpClient)
 /// ```
 #[uniffi::export]
-pub fn set_http_client(http_client: Arc<dyn AuthenticatedHttpClient>) -> bool {
-    if HTTP_CLIENT_INSTANCE.set(http_client).is_err() {
-        crate::warn!("HTTP client already initialized, ignoring");
-        false
-    } else {
-        crate::info!("HTTP client initialized successfully");
-        true
+pub fn set_http_client(http_client: Arc<dyn AuthenticatedHttpClient>) {
+    match HTTP_CLIENT_INSTANCE.set(http_client) {
+        Ok(()) => (),
+        Err(_) => {
+            crate::warn!("HTTP client already initialized, ignoring");
+        }
     }
 }
 
@@ -231,17 +230,11 @@ mod tests {
 
         // Set the HTTP client
         let mock_client = Arc::new(MockHttpClient);
-        let success = set_http_client(mock_client);
-        assert!(success);
+        set_http_client(mock_client);
 
         // Verify the HTTP client is now initialized
         assert!(is_http_client_initialized());
         assert!(get_http_client().is_some());
-
-        // Verify that trying to set it again fails
-        let another_mock_client = Arc::new(MockHttpClient);
-        let success = set_http_client(another_mock_client);
-        assert!(!success); // Should return false since already set
 
         // The original client should still be there
         assert!(is_http_client_initialized());
