@@ -207,22 +207,23 @@ impl RpcClient {
         P: Serialize,
         R: for<'de> Deserialize<'de>,
     {
-        // Generate a unique request ID
+        // unique request ID
         let id = Id::String(format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())));
 
-        // Create the JSON-RPC request using Alloy's Request type
         let request = JsonRpcRequest::new(method, id, params);
+        let request = serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
-        // Serialize the request
-        let request_body =
-            serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
-
-        // Send the HTTP request
         let provider_name = provider.as_str();
-        let headers = vec![HttpHeader {
-            name: "provider-name".to_string(),
-            value: provider_name.to_string(),
-        }];
+        let headers = vec![
+            HttpHeader {
+                name: "provider-name".to_string(),
+                value: provider_name.to_string(),
+            },
+            HttpHeader {
+                name: "Content-Type".to_string(),
+                value: "application/json".to_string(),
+            },
+        ];
 
         let response_bytes = self
             .http_client
@@ -231,11 +232,10 @@ impl RpcClient {
                 Self::rpc_endpoint(network),
                 HttpMethod::Post,
                 headers,
-                Some(request_body),
+                Some(request),
             )
             .await?;
 
-        // Parse the response as a generic JSON value first to handle both success and error cases
         let json_response: Value =
             serde_json::from_slice(&response_bytes).map_err(|_| RpcError::JsonError)?;
 
@@ -250,7 +250,6 @@ impl RpcClient {
             });
         }
 
-        // Try to parse as a successful response
         json_response.get("result").map_or_else(
             || {
                 Err(RpcError::InvalidResponse {
