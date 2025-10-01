@@ -2,6 +2,17 @@
 
 
 
+## [0.0.18] - 2025-10-01
+
+## What's Changed
+* refactor!: Return ciphertext in bytes by @Takaros999 in https://github.com/worldcoin/bedrock/pull/152
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.17...0.0.18
+
+
+
+
 ## [0.0.17] - 2025-10-01
 
 ## What's Changed
