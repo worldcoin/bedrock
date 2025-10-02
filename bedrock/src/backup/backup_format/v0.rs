@@ -396,7 +396,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "CBOR decoding error invalid_file.txt: Semantic error at None: invalidtype:br"
+            "CBOR decoding error: Semantic error at None: invalidtype:br"
         );
     }
 
@@ -441,7 +441,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "CBOR decoding error invalid_module_file.txt: Semantic error at None: missingfieldch"
+            "CBOR decoding error: Semantic error at None: missingfieldch"
         );
     }
 
