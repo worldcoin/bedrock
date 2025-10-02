@@ -99,13 +99,15 @@ impl BackupServiceClient {
 
         let hash: [u8; 32] = hex::decode(response.manifest_hash)
             .map_err(|_| BackupError::Generic {
-                message: "[BackupServiceApi] invalid response from retrieve_metadata"
-                    .to_string(),
+                error_message:
+                    "[BackupServiceApi] invalid response from retrieve_metadata"
+                        .to_string(),
             })?
             .try_into()
             .map_err(|_| BackupError::Generic {
-                message: "[BackupServiceApi] invalid response from retrieve_metadata"
-                    .to_string(),
+                error_message:
+                    "[BackupServiceApi] invalid response from retrieve_metadata"
+                        .to_string(),
             })?;
         Ok(hash)
     }

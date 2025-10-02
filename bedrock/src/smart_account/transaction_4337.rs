@@ -447,9 +447,9 @@ mod tests {
         let result = user_op.extract_validity_timestamps();
         assert!(result.is_err());
 
-        if let Err(PrimitiveError::InvalidInput { attribute, message }) = result {
+        if let Err(PrimitiveError::InvalidInput { attribute, error_message }) = result {
             assert_eq!(attribute, "signature");
-            assert!(message.contains("signature does not have the correct length"));
+            assert!(error_message.contains("signature does not have the correct length"));
         } else {
             panic!("Expected InvalidInput error");
         }

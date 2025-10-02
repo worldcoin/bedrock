@@ -41,7 +41,7 @@ pub fn compute_wallet_address_for_fresh_account(
     let eoa_address = Address::from_str(eoa_address).map_err(|_| {
         SafeSmartAccountError::InvalidInput {
             attribute: "eoa_address".to_string(),
-            message: "invalid EOA address".to_string(),
+            error_message: "invalid EOA address".to_string(),
         }
     })?;
 

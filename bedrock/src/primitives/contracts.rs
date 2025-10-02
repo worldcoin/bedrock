@@ -181,7 +181,7 @@ impl UserOperation {
         if self.signature.len() != 77 {
             return Err(PrimitiveError::InvalidInput {
                 attribute: "signature".to_string(),
-                message: "signature does not have the correct length (77 bytes)"
+                error_message: "signature does not have the correct length (77 bytes)"
                     .to_string(),
             });
         }

@@ -111,10 +111,10 @@ pub enum HttpError {
     #[error("Request was cancelled")]
     Cancelled,
     /// Generic error for unexpected errors
-    #[error("Generic error: {message}")]
+    #[error("Generic error: {error_message}")]
     Generic {
         /// The error message
-        message: String,
+        error_message: String,
     },
 }
 
@@ -130,7 +130,7 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for HttpError {
     fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
         error.to_string().parse::<u64>().map_or_else(
             |_| Self::Generic {
-                message: error.to_string(),
+                error_message: error.to_string(),
             },
             |code| Self::BadStatusCode {
                 code,

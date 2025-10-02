@@ -51,7 +51,7 @@ class BedrockToolingTests {
             assertFailsWith<DemoException.AuthenticationFailed> {
                 demo.demoAuthenticate("admin", "wrongpassword")
             }
-        assertTrue(wrongCredentialsException.message?.contains("Authentication failed") == true)
+        assertEquals(401u, wrongCredentialsException.code)
         assertTrue(wrongCredentialsException.message?.contains("401") == true)
 
         // Slow user - NetworkTimeout
@@ -59,7 +59,7 @@ class BedrockToolingTests {
             assertFailsWith<DemoException.NetworkTimeout> {
                 demo.demoAuthenticate("slowuser", "password")
             }
-        assertTrue(timeoutException.message?.contains("Network timeout") == true)
+        assertEquals(30u, timeoutException.seconds)
         assertTrue(timeoutException.message?.contains("30") == true)
     }
 

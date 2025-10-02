@@ -22,7 +22,7 @@ impl BedrockAddress {
         Ok(Self(Address::from_str(address).map_err(|_| {
             PrimitiveError::InvalidInput {
                 attribute: "address".to_string(),
-                message: "invalid address".to_string(),
+                error_message: "invalid address".to_string(),
             }
         })?))
     }

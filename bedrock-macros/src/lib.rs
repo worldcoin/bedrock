@@ -92,10 +92,10 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
             if !has_generic {
                 let generic_variant: Variant = syn::parse_quote! {
                     /// A generic error that can wrap any anyhow error.
-                    #[error("Generic error: {message}")]
+                    #[error("Generic error: {error_message}")]
                     Generic {
                         /// The error message from the wrapped error.
-                        message: String
+                        error_message: String
                     }
                 };
                 variants.push(generic_variant);
@@ -125,19 +125,19 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
                 impl #generics From<anyhow::Error> for #enum_name #generics {
                     fn from(err: anyhow::Error) -> Self {
                         Self::Generic {
-                            message: {
-                                // Include the full error chain in the message
-                                let mut message = err.to_string();
+                            error_message: {
+                                // Include the full error chain in the error_message
+                                let mut error_message = err.to_string();
 
                                 // Add context from the error chain
                                 let chain: Vec<String> = err.chain().skip(1).map(|e| e.to_string()).collect();
                                 if !chain.is_empty() {
-                                    message.push_str(" (caused by: ");
-                                    message.push_str(&chain.join(" -> "));
-                                    message.push(')');
+                                    error_message.push_str(" (caused by: ");
+                                    error_message.push_str(&chain.join(" -> "));
+                                    error_message.push(')');
                                 }
 
-                                message
+                                error_message
                             }
                         }
                     }
@@ -155,19 +155,19 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
                         prefix: &str
                     ) -> Result<T, Self> {
                         result.map_err(|err| Self::Generic {
-                            message: {
+                            error_message: {
                                 // Format the error message directly without double prefixing
-                                let mut message = err.to_string();
+                                let mut error_message = err.to_string();
 
                                 // Add context from the error chain
                                 let chain: Vec<String> = err.chain().skip(1).map(|e| e.to_string()).collect();
                                 if !chain.is_empty() {
-                                    message.push_str(" (caused by: ");
-                                    message.push_str(&chain.join(" -> "));
-                                    message.push(')');
+                                    error_message.push_str(" (caused by: ");
+                                    error_message.push_str(&chain.join(" -> "));
+                                    error_message.push(')');
                                 }
 
-                                format!("{}: {}", prefix, message)
+                                format!("{}: {}", prefix, error_message)
                             }
                         })
                     }
@@ -808,7 +808,7 @@ fn generate_try_from_impl(
                     field.name, field.name, field.name
                 ),
                 _ => format!(
-                    "            {}: value.{}.parse().map_err(|e| crate::primitives::PrimitiveError::InvalidInput {{ attribute: \"{}\", message: format!(\"failed to parse: {{}}\", e) }})?",
+                    "            {}: value.{}.parse().map_err(|e| crate::primitives::PrimitiveError::InvalidInput {{ attribute: \"{}\", error_message: format!(\"failed to parse: {{}}\", e) }})?",
                     field.name, field.name, field.name
                 ),
             }
