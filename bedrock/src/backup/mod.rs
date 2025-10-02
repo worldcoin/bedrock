@@ -512,12 +512,18 @@ pub enum BackupError {
     /// Remote manifest head is ahead of local; fetch and apply latest backup before retrying.
     RemoteAheadStaleError,
     #[error(transparent)]
-    /// HTTP error.
+    /// HTTP error
     HttpError(#[from] crate::primitives::http_client::HttpError),
     #[error("Backup API not initialized")]
     /// Backup API not initialized.
     BackupApiNotInitialized,
 }
+
+// impl From<crate::primitives::http_client::HttpError> for BackupError {
+//     fn from(e: crate::primitives::http_client::HttpError) -> Self {
+//         Self::HttpError(e.to_string())
+//     }
+// }
 
 impl From<ciborium::ser::Error<std::io::Error>> for BackupError {
     fn from(e: ciborium::ser::Error<std::io::Error>) -> Self {

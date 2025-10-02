@@ -109,26 +109,26 @@ struct ErrorPayload {
 pub enum RpcError {
     /// HTTP request failed
     #[error("HTTP request failed: {0}")]
-    HttpError(#[from] HttpError),
+    HttpError(String),
 
     /// JSON parsing error
     #[error("JSON parsing error")]
     JsonError,
 
     /// RPC returned an error response
-    #[error("RPC error {code}: {message}")]
+    #[error("RPC error {code}: {error_message}")]
     RpcResponseError {
         /// The error code from the RPC response
         code: i64,
         /// The error message from the RPC response
-        message: String,
+        error_message: String,
     },
 
     /// Invalid response format
-    #[error("Invalid response format: {message}")]
+    #[error("Invalid response format: {error_message}")]
     InvalidResponse {
         /// The error message describing the format issue
-        message: String,
+        error_message: String,
     },
 
     /// HTTP client has not been initialized
@@ -137,11 +137,29 @@ pub enum RpcError {
 
     /// Primitive operation error
     #[error("Primitive operation failed: {0}")]
-    PrimitiveError(#[from] PrimitiveError),
+    PrimitiveError(String),
 
     /// Safe Smart Account operation error
     #[error("Safe Smart Account operation failed: {0}")]
-    SafeSmartAccountError(#[from] SafeSmartAccountError),
+    SafeSmartAccountError(String),
+}
+
+impl From<HttpError> for RpcError {
+    fn from(e: HttpError) -> Self {
+        Self::HttpError(e.to_string())
+    }
+}
+
+impl From<PrimitiveError> for RpcError {
+    fn from(e: PrimitiveError) -> Self {
+        Self::PrimitiveError(e.to_string())
+    }
+}
+
+impl From<SafeSmartAccountError> for RpcError {
+    fn from(e: SafeSmartAccountError) -> Self {
+        Self::SafeSmartAccountError(e.to_string())
+    }
 }
 
 /// Response from `wa_sponsorUserOperation`
@@ -246,14 +264,14 @@ impl RpcClient {
 
             return Err(RpcError::RpcResponseError {
                 code: error_payload.code,
-                message: error_payload.message,
+                error_message: error_payload.message,
             });
         }
 
         json_response.get("result").map_or_else(
             || {
                 Err(RpcError::InvalidResponse {
-                    message: "Response missing both 'result' and 'error' fields"
+                    error_message: "Response missing both 'result' and 'error' fields"
                         .to_string(),
                 })
             },
@@ -322,7 +340,7 @@ impl RpcClient {
             .await?;
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
-            message: format!("Invalid userOpHash format: {e}"),
+            error_message: format!("Invalid userOpHash format: {e}"),
         })
     }
 }
