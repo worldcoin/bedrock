@@ -70,7 +70,7 @@ pub fn is_backup_service_api_initialized() -> bool {
 fn get_api() -> Result<&'static Arc<dyn BackupServiceApi>, BackupError> {
     BACKUP_SERVICE_API_INSTANCE
         .get()
-        .ok_or_else(|| BackupError::BackupApiNotInitialized)
+        .ok_or(BackupError::BackupApiNotInitialized)
 }
 
 pub struct BackupServiceClient;

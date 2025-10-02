@@ -138,10 +138,7 @@ impl V0Backup {
                 let file: V0BackupFile = ciborium::from_reader(Cursor::new(&data))
                     .map_err(|e| {
                         log::error!("Failed to deserialize backup file {path}: {e}");
-                        BackupError::DecodeBackupFileError {
-                            error: Box::new(e),
-                            path,
-                        }
+                        e
                     })?;
 
                 file.validate_checksum()?;

@@ -21,7 +21,7 @@ impl BedrockAddress {
     pub fn new(address: &str) -> Result<Self, PrimitiveError> {
         Ok(Self(Address::from_str(address).map_err(|_| {
             PrimitiveError::InvalidInput {
-                attribute: "address",
+                attribute: "address".to_string(),
                 message: "invalid address".to_string(),
             }
         })?))

@@ -416,13 +416,14 @@ impl EnclaveAttestationVerifier {
         let expected_pcr_length = get_expected_pcr_length(attestation.digest);
 
         for pcr_config in &self.allowed_pcr_configs {
+            let index = pcr_config.index as usize;
             // Get the PCR value from the attestation
-            let attestation_pcr_value = attestation
-                .pcrs
-                .get(&pcr_config.index)
-                .ok_or_else(|| EnclaveAttestationError::CodeUntrusted {
-                    pcr_index: pcr_config.index,
-                    actual: "missing".to_string(),
+            let attestation_pcr_value =
+                attestation.pcrs.get(&index).ok_or_else(|| {
+                    EnclaveAttestationError::CodeUntrusted {
+                        pcr_index: pcr_config.index,
+                        actual: "missing".to_string(),
+                    }
                 })?;
 
             // Validate the PCR value length

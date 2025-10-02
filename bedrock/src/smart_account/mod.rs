@@ -62,8 +62,8 @@ pub enum SafeSmartAccountError {
     #[error("failed to decode hex-encoded secret into k256 signer: {0}")]
     KeyDecoding(String),
     /// Error occurred during the signing process.
-    #[error(transparent)]
-    Signing(#[from] alloy::signers::Error),
+    #[error("signing error: {0}")]
+    Signing(String),
     /// Failed to parse an Ethereum address string.
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
@@ -77,7 +77,7 @@ pub enum SafeSmartAccountError {
     #[error("invalid input on {attribute}: {message}")]
     InvalidInput {
         /// The name of the attribute that was invalid.
-        attribute: &'static str,
+        attribute: String,
         /// Explicit failure message for the attribute validation.
         message: String,
     },
@@ -271,7 +271,7 @@ impl SafeSmartAccount {
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let typed_data: TypedData = serde_json::from_str(stringified_typed_data)
             .map_err(|_| SafeSmartAccountError::InvalidInput {
-                attribute: "stringified_typed_data",
+                attribute: "stringified_typed_data".to_string(),
                 message:
                     "invalid JSON string or not a valid EIP-712 typed data message"
                         .to_string(),

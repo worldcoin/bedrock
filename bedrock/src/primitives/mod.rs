@@ -206,7 +206,7 @@ pub enum PrimitiveError {
     #[error("invalid input on {attribute}: {message}")]
     InvalidInput {
         /// The name of the attribute that was invalid.
-        attribute: &'static str,
+        attribute: String,
         /// Explicit failure message for the attribute validation.
         message: String,
     },
@@ -233,7 +233,7 @@ pub(crate) trait ParseFromForeignBinding {
 impl ParseFromForeignBinding for Address {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
-            attribute: attr,
+            attribute: attr.to_string(),
             message: e.to_string(),
         })
     }
@@ -242,7 +242,7 @@ impl ParseFromForeignBinding for Address {
 impl ParseFromForeignBinding for U256 {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
-            attribute: attr,
+            attribute: attr.to_string(),
             message: e.to_string(),
         })
     }
@@ -251,7 +251,7 @@ impl ParseFromForeignBinding for U256 {
 impl ParseFromForeignBinding for u128 {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         let number = U128::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
-            attribute: attr,
+            attribute: attr.to_string(),
             message: e.to_string(),
         })?;
 
@@ -266,7 +266,7 @@ impl ParseFromForeignBinding for Bytes {
         hex::decode(raw)
             .map(Self::from)
             .map_err(|e| PrimitiveError::InvalidInput {
-                attribute: attr,
+                attribute: attr.to_string(),
                 message: e.to_string(),
             })
     }
