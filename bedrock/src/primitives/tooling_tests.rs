@@ -8,7 +8,7 @@ pub struct ToolingDemo;
 /// Error type for demonstrating bedrock error handling patterns.
 ///
 /// The `#[bedrock_error]` macro automatically:
-/// - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
+/// - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]`
 /// - Adds a `Generic { message: String }` variant
 /// - Implements `From<anyhow::Error>` for automatic conversion
 /// - Provides helper methods for error handling

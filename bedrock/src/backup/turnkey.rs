@@ -2,14 +2,13 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use bedrock_macros::bedrock_export;
+use bedrock_macros::{bedrock_error, bedrock_export};
 use hpke::kem::DhP256HkdfSha256;
 use hpke::{Deserializable, Kem as KemTrait};
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::Signature;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use serde_json::json;
-use thiserror::Error;
 use turnkey_enclave_encrypt::client::EnclaveEncryptClient;
 use turnkey_enclave_encrypt::QuorumPublicKey;
 
@@ -268,8 +267,7 @@ impl SessionKeyPair {
     }
 }
 
-#[derive(Debug, Error, uniffi::Error)]
-#[uniffi(flat_error)]
+#[bedrock_error]
 pub enum TurnkeyError {
     #[error("Failed to decode API private key as hex")]
     DecodeApiPrivateKeyError,

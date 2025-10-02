@@ -11,7 +11,7 @@ use syn::{
 /// Procedural macro that enhances error enums with generic error handling
 ///
 /// This macro automatically:
-/// 1. Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
+/// 1. Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]`
 /// 2. Adds a `Generic { message: String }` variant if not already present
 /// 3. Adds a `FileSystem(FileSystemError)` variant if not already present
 /// 4. Implements `From<anyhow::Error>` for the error type
@@ -31,7 +31,7 @@ use syn::{
 /// ```
 ///
 /// This will automatically add:
-/// - `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
+/// - `#[derive(Debug, thiserror::Error, uniffi::Error)]`
 /// - `Generic { message: String }` variant
 /// - `FileSystem(FileSystemError)` variant
 /// - `impl From<anyhow::Error> for MyError`
@@ -117,7 +117,6 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
                 use anyhow::Context;
 
                 #[derive(Debug, thiserror::Error, uniffi::Error)]
-                #[uniffi(flat_error)]
                 #(#attrs)*
                 #visibility enum #enum_name #generics {
                     #variants
