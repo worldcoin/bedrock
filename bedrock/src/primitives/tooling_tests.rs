@@ -1,5 +1,7 @@
 use crate::primitives::filesystem::FileSystemError;
-use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader, HttpMethod};
+use crate::primitives::http_client::{
+    get_http_client, HttpError, HttpHeader, HttpMethod,
+};
 use crate::{bedrock_export, debug, info, warn};
 
 /// A simple demo struct to test tooling functionality like log prefixing and error handling.
