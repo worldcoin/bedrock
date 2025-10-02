@@ -46,9 +46,9 @@ final class BedrockToolingTests: XCTestCase {
         XCTAssertThrowsError(try demo.demoAuthenticate(username: "admin", password: "wrongpassword")) {
             error in
             if let demoError = error as? DemoError,
-                case .AuthenticationFailed(let message) = demoError
+                case let .AuthenticationFailed(code) = demoError
             {
-                XCTAssertTrue(message.contains("Authentication failed") && message.contains("401"))
+                XCTAssertEqual(code, 401)
             } else {
                 XCTFail("Expected AuthenticationFailed error")
             }
@@ -58,9 +58,9 @@ final class BedrockToolingTests: XCTestCase {
         XCTAssertThrowsError(try demo.demoAuthenticate(username: "slowuser", password: "password")) {
             error in
             if let demoError = error as? DemoError,
-                case .NetworkTimeout(let message) = demoError
+                case let .NetworkTimeout(seconds) = demoError
             {
-                XCTAssertTrue(message.contains("Network timeout") && message.contains("30"))
+                XCTAssertEqual(seconds, 30)
             } else {
                 XCTFail("Expected NetworkTimeout error")
             }

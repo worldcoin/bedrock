@@ -1,4 +1,5 @@
 use crate::primitives::filesystem::FileSystemError;
+use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader, HttpMethod};
 use crate::{bedrock_export, debug, info, warn};
 
 /// A simple demo struct to test tooling functionality like log prefixing and error handling.
@@ -325,6 +326,50 @@ impl FileSystemTester {
     /// - `FileSystemError` if filesystem operations fail
     pub fn test_delete_file(&self, filename: &str) -> Result<(), FileSystemError> {
         _bedrock_fs.delete_file(filename)
+    }
+}
+
+/// Test struct to verify HTTP client integration from foreign bindings.
+#[derive(Default, uniffi::Object)]
+pub struct HttpClientTester;
+
+#[bedrock_export]
+impl HttpClientTester {
+    /// Creates a new `HttpClientTester` instance.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Performs an HTTP request using the injected client and returns the status code when the
+    /// request fails with `HttpError::BadStatusCode`.
+    ///
+    /// This helper is used by foreign-language tests to verify that structured error data
+    /// survives the round-trip through UniFFI.
+    pub async fn fetch_bad_status_code(
+        &self,
+        url: String,
+        method: HttpMethod,
+        headers: Vec<HttpHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Result<u64, HttpError> {
+        let http_client = get_http_client().ok_or(HttpError::Generic {
+            message: "HTTP client not initialized".to_string(),
+        })?;
+
+        match http_client
+            .as_ref()
+            .fetch_from_app_backend(url, method, headers, body)
+            .await
+        {
+            Ok(_) => Err(HttpError::Generic {
+                message: "Expected HttpError::BadStatusCode, but request succeeded"
+                    .to_string(),
+            }),
+            Err(HttpError::BadStatusCode { code, .. }) => Ok(code),
+            Err(err) => Err(err),
+        }
     }
 }
 
