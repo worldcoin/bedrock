@@ -447,6 +447,7 @@ impl<'de> Deserialize<'de> for BackupFileDesignator {
 
 /// Errors that can occur when working with backups and manifests.
 #[crate::bedrock_error]
+#[uniffi(flat_error)]
 pub enum BackupError {
     #[error("Failed to decode factor secret as hex")]
     /// Failed to decode factor secret as hex.
