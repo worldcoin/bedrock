@@ -41,7 +41,7 @@ final class BedrockHttpClientTests: XCTestCase {
             bodyHistory.append(body)
 
             guard let response = responses[url] else {
-                throw HttpError.Generic(message: "No response configured for URL: \(url)")
+                throw HttpError.Generic(errorMessage: "No response configured for URL: \(url)")
             }
 
             switch response {
