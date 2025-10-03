@@ -2,6 +2,17 @@
 
 
 
+## [0.0.19] - 2025-10-03
+
+## What's Changed
+* fix: stop flattening errors by @paolodamico in https://github.com/worldcoin/bedrock/pull/155
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.18...0.0.19
+
+
+
+
 ## [0.0.18] - 2025-10-01
 
 ## What's Changed
