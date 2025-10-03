@@ -17,8 +17,14 @@ pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse
 #[crate::bedrock_error]
 pub enum TransactionError {
     /// An error occurred with a primitive type. See `PrimitiveError` for more details.
-    #[error(transparent)]
-    PrimitiveError(#[from] crate::primitives::PrimitiveError),
+    #[error("Primitive error: {0}")]
+    PrimitiveError(String),
+}
+
+impl From<crate::primitives::PrimitiveError> for TransactionError {
+    fn from(e: crate::primitives::PrimitiveError) -> Self {
+        Self::PrimitiveError(e.to_string())
+    }
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -84,7 +90,7 @@ impl SafeSmartAccount {
             .sign_and_execute(self, Network::WorldChain, None, Some(metadata), provider)
             .await
             .map_err(|e| TransactionError::Generic {
-                message: format!("Failed to execute transaction: {e}"),
+                error_message: format!("Failed to execute transaction: {e}"),
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)

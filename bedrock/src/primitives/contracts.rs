@@ -180,8 +180,8 @@ impl UserOperation {
         // timestamp validity (12 bytes) + regular ECDSA signature (65 bytes)
         if self.signature.len() != 77 {
             return Err(PrimitiveError::InvalidInput {
-                attribute: "signature",
-                message: "signature does not have the correct length (77 bytes)"
+                attribute: "signature".to_string(),
+                error_message: "signature does not have the correct length (77 bytes)"
                     .to_string(),
             });
         }

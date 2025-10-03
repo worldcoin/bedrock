@@ -1,4 +1,7 @@
 use crate::primitives::filesystem::FileSystemError;
+use crate::primitives::http_client::{
+    get_http_client, HttpError, HttpHeader, HttpMethod,
+};
 use crate::{bedrock_export, debug, info, warn};
 
 /// A simple demo struct to test tooling functionality like log prefixing and error handling.
@@ -8,7 +11,7 @@ pub struct ToolingDemo;
 /// Error type for demonstrating bedrock error handling patterns.
 ///
 /// The `#[bedrock_error]` macro automatically:
-/// - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]` and `#[uniffi(flat_error)]`
+/// - Adds `#[derive(Debug, thiserror::Error, uniffi::Error)]`
 /// - Adds a `Generic { message: String }` variant
 /// - Implements `From<anyhow::Error>` for automatic conversion
 /// - Provides helper methods for error handling
@@ -28,10 +31,10 @@ pub enum DemoError {
         seconds: u32,
     },
     /// Invalid input was provided with a descriptive message
-    #[error("Invalid input: {message}")]
+    #[error("Invalid input: {error_message}")]
     InvalidInput {
         /// A descriptive message explaining what was invalid about the input
-        message: String,
+        error_message: String,
     },
     // Note: Generic variant is automatically added by #[bedrock_error]
 }
@@ -42,10 +45,10 @@ pub mod filesystem_tests {
     #[crate::bedrock_error]
     pub enum FileSystemTestError {
         /// Custom test error
-        #[error("test error: {message}")]
+        #[error("test error: {error_message}")]
         TestError {
             /// The error message
-            message: String,
+            error_message: String,
         },
     }
 }
@@ -107,7 +110,7 @@ impl ToolingDemo {
         if username.is_empty() {
             warn!("Authentication failed: empty username");
             return Err(DemoError::InvalidInput {
-                message: "Username cannot be empty".to_string(),
+                error_message: "Username cannot be empty".to_string(),
             });
         }
 
@@ -195,7 +198,7 @@ impl ToolingDemo {
         if operation.is_empty() {
             warn!("Mixed operation failed: empty operation name");
             return Err(DemoError::InvalidInput {
-                message: "Operation cannot be empty".to_string(),
+                error_message: "Operation cannot be empty".to_string(),
             });
         }
 
@@ -225,7 +228,7 @@ impl ToolingDemo {
         } else {
             warn!("Mixed operation failed: unknown operation: {}", operation);
             Err(DemoError::InvalidInput {
-                message: format!("Unknown operation: {operation}"),
+                error_message: format!("Unknown operation: {operation}"),
             })
         }
     }
@@ -251,7 +254,7 @@ impl ToolingDemo {
         if delay_ms > 5000 {
             warn!("Async operation failed: timeout exceeded");
             return Err(DemoError::Generic {
-                message: "Operation timeout exceeded 5 seconds".to_string(),
+                error_message: "Operation timeout exceeded 5 seconds".to_string(),
             });
         }
 
@@ -299,7 +302,7 @@ impl FileSystemTester {
         // `FileSystemError` from _bedrock_fs automatically converts to FileSystemTestError::FileSystem
         let data = _bedrock_fs.read_file(filename)?;
         String::from_utf8(data).map_err(|_| FileSystemTestError::TestError {
-            message: "Invalid UTF-8 data".to_string(),
+            error_message: "Invalid UTF-8 data".to_string(),
         })
     }
 
@@ -325,6 +328,56 @@ impl FileSystemTester {
     /// - `FileSystemError` if filesystem operations fail
     pub fn test_delete_file(&self, filename: &str) -> Result<(), FileSystemError> {
         _bedrock_fs.delete_file(filename)
+    }
+}
+
+/// Test struct to verify HTTP client integration from foreign bindings.
+#[derive(Default, uniffi::Object)]
+pub struct HttpClientTester;
+
+#[bedrock_export]
+impl HttpClientTester {
+    /// Creates a new `HttpClientTester` instance.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Performs an HTTP request using the injected client and returns the status code when the
+    /// request fails with `HttpError::BadStatusCode`.
+    ///
+    /// This helper is used by foreign-language tests to verify that structured error data
+    /// survives the round-trip through UniFFI.
+    ///
+    /// # Errors
+    /// - `HttpError::Generic` if the HTTP client is not initialized
+    /// - `HttpError::BadStatusCode` if the request fails with a bad status code
+    /// - `HttpError` if the request fails with any other error
+    pub async fn fetch_bad_status_code(
+        &self,
+        url: String,
+        method: HttpMethod,
+        headers: Vec<HttpHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Result<u64, HttpError> {
+        let http_client = get_http_client().ok_or_else(|| HttpError::Generic {
+            error_message: "HTTP client not initialized".to_string(),
+        })?;
+
+        match http_client
+            .as_ref()
+            .fetch_from_app_backend(url, method, headers, body)
+            .await
+        {
+            Ok(_) => Err(HttpError::Generic {
+                error_message:
+                    "Expected HttpError::BadStatusCode, but request succeeded"
+                        .to_string(),
+            }),
+            Err(HttpError::BadStatusCode { code, .. }) => Ok(code),
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -355,8 +408,8 @@ mod tests {
         // Test strongly typed error - empty operation
         let result = demo.demo_mixed_operation("", "data");
         assert!(result.is_err());
-        if let Err(DemoError::InvalidInput { message }) = result {
-            assert!(message.contains("Operation cannot be empty"));
+        if let Err(DemoError::InvalidInput { error_message }) = result {
+            assert!(error_message.contains("Operation cannot be empty"));
         } else {
             panic!("Expected InvalidInput error");
         }
@@ -364,8 +417,8 @@ mod tests {
         // Test strongly typed error - unknown operation
         let result = demo.demo_mixed_operation("unknown", "data");
         assert!(result.is_err());
-        if let Err(DemoError::InvalidInput { message }) = result {
-            assert!(message.contains("Unknown operation"));
+        if let Err(DemoError::InvalidInput { error_message }) = result {
+            assert!(error_message.contains("Unknown operation"));
         } else {
             panic!("Expected InvalidInput error");
         }
@@ -373,9 +426,9 @@ mod tests {
         // Test generic error - anyhow style
         let result = demo.demo_mixed_operation("process", "trigger_error");
         assert!(result.is_err());
-        if let Err(DemoError::Generic { message }) = result {
-            assert!(message.contains("Operation failed"));
-            assert!(message.contains("Simulated processing failure"));
+        if let Err(DemoError::Generic { error_message }) = result {
+            assert!(error_message.contains("Operation failed"));
+            assert!(error_message.contains("Simulated processing failure"));
         } else {
             panic!("Expected Generic error");
         }
@@ -388,8 +441,8 @@ mod tests {
         // Test empty username
         let result = demo.demo_authenticate("", "password");
         assert!(result.is_err());
-        if let Err(DemoError::InvalidInput { message }) = result {
-            assert!(message.contains("Username cannot be empty"));
+        if let Err(DemoError::InvalidInput { error_message }) = result {
+            assert!(error_message.contains("Username cannot be empty"));
         } else {
             panic!("Expected InvalidInput error");
         }
@@ -425,8 +478,8 @@ mod tests {
         // Test timeout error
         let result = demo.demo_async_operation(6000).await;
         assert!(result.is_err());
-        if let Err(DemoError::Generic { message }) = result {
-            assert!(message.contains("timeout exceeded"));
+        if let Err(DemoError::Generic { error_message }) = result {
+            assert!(error_message.contains("timeout exceeded"));
         } else {
             panic!("Expected Generic error for timeout");
         }

@@ -70,7 +70,7 @@ pub fn is_backup_service_api_initialized() -> bool {
 fn get_api() -> Result<&'static Arc<dyn BackupServiceApi>, BackupError> {
     BACKUP_SERVICE_API_INSTANCE
         .get()
-        .ok_or_else(|| BackupError::BackupApiNotInitialized)
+        .ok_or(BackupError::BackupApiNotInitialized)
 }
 
 pub struct BackupServiceClient;
@@ -99,13 +99,15 @@ impl BackupServiceClient {
 
         let hash: [u8; 32] = hex::decode(response.manifest_hash)
             .map_err(|_| BackupError::Generic {
-                message: "[BackupServiceApi] invalid response from retrieve_metadata"
-                    .to_string(),
+                error_message:
+                    "[BackupServiceApi] invalid response from retrieve_metadata"
+                        .to_string(),
             })?
             .try_into()
             .map_err(|_| BackupError::Generic {
-                message: "[BackupServiceApi] invalid response from retrieve_metadata"
-                    .to_string(),
+                error_message:
+                    "[BackupServiceApi] invalid response from retrieve_metadata"
+                        .to_string(),
             })?;
         Ok(hash)
     }

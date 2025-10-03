@@ -447,6 +447,7 @@ impl<'de> Deserialize<'de> for BackupFileDesignator {
 
 /// Errors that can occur when working with backups and manifests.
 #[crate::bedrock_error]
+#[uniffi(flat_error)]
 pub enum BackupError {
     #[error("Failed to decode factor secret as hex")]
     /// Failed to decode factor secret as hex.
@@ -471,7 +472,7 @@ pub enum BackupError {
     EncryptBackupError,
     #[error("IO error: {0}")]
     /// IO error while reading/writing backup data.
-    IoError(#[from] std::io::Error),
+    IoError(String),
     #[error("Invalid root secret in the backup")]
     /// Root secret inside backup is invalid.
     InvalidRootSecretError,
@@ -490,14 +491,12 @@ pub enum BackupError {
     InvalidFileForBackup(String),
     #[error("CBOR encoding error: {0}")]
     /// CBOR encoding error while writing a backup file.
-    EncodeBackupFileError(#[from] ciborium::ser::Error<std::io::Error>),
-    #[error("CBOR decoding error {path}: {}", error.as_sanitized_string())]
+    EncodeBackupFileError(String),
+    #[error("CBOR decoding error: {sanitized_error}")]
     /// CBOR decoding error while reading a backup file.
     DecodeBackupFileError {
         /// The underlying decoding error, sanitized for logging.
-        error: Box<dyn SanitizeError>,
-        /// The path of the file that failed to decode.
-        path: String, // the path of the file that failed to decode
+        sanitized_error: String,
     },
     #[error("Manifest not found")]
     /// Manifest file not found.
@@ -513,33 +512,52 @@ pub enum BackupError {
     #[error("Remote manifest is ahead of local; fetch and apply latest backup before updating")]
     /// Remote manifest head is ahead of local; fetch and apply latest backup before retrying.
     RemoteAheadStaleError,
-    #[error(transparent)]
-    /// HTTP error.
-    HttpError(#[from] crate::primitives::http_client::HttpError),
+    #[error("HTTP error: {0}")]
+    /// HTTP error
+    HttpError(String),
     #[error("Backup API not initialized")]
     /// Backup API not initialized.
     BackupApiNotInitialized,
 }
 
-/// Trait for errors that can be sanitized for safe logging.
-pub trait SanitizeError: std::fmt::Debug + Send + Sync {
-    /// Converts the error to a sanitized string safe for logging.
-    fn as_sanitized_string(&self) -> String;
+impl From<crate::primitives::http_client::HttpError> for BackupError {
+    fn from(e: crate::primitives::http_client::HttpError) -> Self {
+        Self::HttpError(e.to_string())
+    }
 }
 
-impl SanitizeError for ciborium::de::Error<std::io::Error> {
-    fn as_sanitized_string(&self) -> String {
-        match self {
-            Self::Io(_) | Self::Syntax(_) => self.to_string(), // error is regular IO and only contains the pos offset
-            Self::Semantic(pos, msg) => {
-                // generally semantic errors don't contain any payload, but out of an abundance of caution, we only log the first bytes.
-                format!(
+impl From<ciborium::ser::Error<std::io::Error>> for BackupError {
+    fn from(e: ciborium::ser::Error<std::io::Error>) -> Self {
+        Self::EncodeBackupFileError(e.to_string())
+    }
+}
+
+impl From<ciborium::de::Error<std::io::Error>> for BackupError {
+    fn from(e: ciborium::de::Error<std::io::Error>) -> Self {
+        match e {
+            ciborium::de::Error::Io(_) | ciborium::de::Error::Syntax(_) => {
+                Self::DecodeBackupFileError {
+                    sanitized_error: e.to_string(),
+                }
+            } // error is regular IO and only contains the pos offset
+            ciborium::de::Error::Semantic(pos, msg) => Self::DecodeBackupFileError {
+                sanitized_error: format!(
                     "Semantic error at {pos:?}: {}",
-                    msg.replace([' ', '`'], "").get(..14).unwrap_or(msg)
-                )
+                    msg.replace([' ', '`'], "").get(..14).unwrap_or(&msg)
+                ),
+            },
+            ciborium::de::Error::RecursionLimitExceeded => {
+                Self::DecodeBackupFileError {
+                    sanitized_error: "recursion limit exceeded".to_string(),
+                }
             }
-            Self::RecursionLimitExceeded => "recursion limit exceeded".to_string(),
         }
+    }
+}
+
+impl From<std::io::Error> for BackupError {
+    fn from(e: std::io::Error) -> Self {
+        Self::IoError(e.to_string())
     }
 }
 

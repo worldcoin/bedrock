@@ -62,15 +62,15 @@ impl TryFrom<SafeTransaction> for SafeTxHash {
             &unparsed_tx.data[2..]
         } else {
             return Err(SafeSmartAccountError::InvalidInput {
-                attribute: "data",
-                message: "must be hex encoded and start with 0x".to_string(),
+                attribute: "data".to_string(),
+                error_message: "must be hex encoded and start with 0x".to_string(),
             });
         };
 
         let data = keccak256(&hex::decode(data).map_err(|e| {
             SafeSmartAccountError::InvalidInput {
-                attribute: "data",
-                message: e.to_string(),
+                attribute: "data".to_string(),
+                error_message: e.to_string(),
             }
         })?);
 

@@ -76,7 +76,9 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
         chain_id: u32,
     ) -> Result<Signature, SafeSmartAccountError> {
         let message_hash = self.get_message_hash_for_safe(message, chain_id, None);
-        Ok(self.signer.sign_hash_sync(&message_hash)?)
+        self.signer
+            .sign_hash_sync(&message_hash)
+            .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
     }
 
     fn sign_digest(
@@ -87,7 +89,9 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
     ) -> Result<Signature, SafeSmartAccountError> {
         let message_hash =
             self.eip_712_hash(digest, chain_id, domain_separator_address);
-        Ok(self.signer.sign_hash_sync(&message_hash)?)
+        self.signer
+            .sign_hash_sync(&message_hash)
+            .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
     }
 }
 

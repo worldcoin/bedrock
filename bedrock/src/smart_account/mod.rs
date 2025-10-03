@@ -62,8 +62,8 @@ pub enum SafeSmartAccountError {
     #[error("failed to decode hex-encoded secret into k256 signer: {0}")]
     KeyDecoding(String),
     /// Error occurred during the signing process.
-    #[error(transparent)]
-    Signing(#[from] alloy::signers::Error),
+    #[error("signing error: {0}")]
+    Signing(String),
     /// Failed to parse an Ethereum address string.
     #[error("failed to parse address: {0}")]
     AddressParsing(String),
@@ -74,16 +74,22 @@ pub enum SafeSmartAccountError {
     #[error("the contract {0} is restricted from TypedData signing.")]
     RestrictedContract(String),
     /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
-    #[error("invalid input on {attribute}: {message}")]
+    #[error("invalid input on {attribute}: {error_message}")]
     InvalidInput {
         /// The name of the attribute that was invalid.
-        attribute: &'static str,
+        attribute: String,
         /// Explicit failure message for the attribute validation.
-        message: String,
+        error_message: String,
     },
     /// An error occurred with a primitive type. See `PrimitiveError` for more details.
-    #[error(transparent)]
-    PrimitiveError(#[from] crate::primitives::PrimitiveError),
+    #[error("Primitive error: {0}")]
+    PrimitiveError(String),
+}
+
+impl From<crate::primitives::PrimitiveError> for SafeSmartAccountError {
+    fn from(e: crate::primitives::PrimitiveError) -> Self {
+        Self::PrimitiveError(e.to_string())
+    }
 }
 
 /// A Safe Smart Account (previously Gnosis Safe) is the representation of a Safe smart contract.
@@ -271,8 +277,8 @@ impl SafeSmartAccount {
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let typed_data: TypedData = serde_json::from_str(stringified_typed_data)
             .map_err(|_| SafeSmartAccountError::InvalidInput {
-                attribute: "stringified_typed_data",
-                message:
+                attribute: "stringified_typed_data".to_string(),
+                error_message:
                     "invalid JSON string or not a valid EIP-712 typed data message"
                         .to_string(),
             })?;
@@ -287,7 +293,7 @@ impl SafeSmartAccount {
 
         let typed_data_eip712_hash = typed_data.eip712_signing_hash().map_err(|e| {
             SafeSmartAccountError::Generic {
-                message: format!("failed to calculate EIP-712 signing hash: {e}"),
+                error_message: format!("failed to calculate EIP-712 signing hash: {e}"),
             }
         })?;
 
@@ -318,7 +324,7 @@ impl SafeSmartAccount {
             .as_typed_data(chain_id)
             .eip712_signing_hash()
             .map_err(|e| SafeSmartAccountError::Generic {
-                message: format!("failed to calculate EIP-712 signing hash: {e}"),
+                error_message: format!("failed to calculate EIP-712 signing hash: {e}"),
             })?;
 
         let signature = self.sign_message(signing_hash, chain_id)?;
@@ -619,7 +625,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!("invalid input on token: odd number of digits")
+            format!("Primitive error: invalid input on token: odd number of digits")
         );
     }
 
