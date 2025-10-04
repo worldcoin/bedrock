@@ -10,7 +10,7 @@ use bedrock::{
         EncodedSafeOpStruct, SafeSmartAccount, SafeSmartAccountSigner, UserOperation,
         ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
     },
-    transaction::foreign::UnparsedUserOperation,
+    transactions::foreign::UnparsedUserOperation,
 };
 
 mod common;

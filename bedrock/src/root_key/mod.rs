@@ -144,7 +144,7 @@ impl RootKey {
     pub fn danger_to_json(&self) -> Result<String, RootKeyError> {
         serde_json::to_string(self.inner.expose_secret()).map_err(|_| {
             RootKeyError::Generic {
-                message: "Failed to serialize key".to_string(),
+                error_message: "Failed to serialize key".to_string(),
             }
         })
     }

@@ -1,5 +1,5 @@
 use crate::primitives::{HttpError, PrimitiveError};
-use crate::transaction::rpc::SponsorUserOperationResponse;
+use crate::transactions::rpc::SponsorUserOperationResponse;
 use alloy::hex::FromHex;
 use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
 use alloy::sol;
@@ -180,8 +180,8 @@ impl UserOperation {
         // timestamp validity (12 bytes) + regular ECDSA signature (65 bytes)
         if self.signature.len() != 77 {
             return Err(PrimitiveError::InvalidInput {
-                attribute: "signature",
-                message: "signature does not have the correct length (77 bytes)"
+                attribute: "signature".to_string(),
+                error_message: "signature does not have the correct length (77 bytes)"
                     .to_string(),
             });
         }

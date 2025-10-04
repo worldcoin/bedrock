@@ -2,6 +2,77 @@
 
 
 
+## [0.0.19] - 2025-10-03
+
+## What's Changed
+* fix: stop flattening errors by @paolodamico in https://github.com/worldcoin/bedrock/pull/155
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.18...0.0.19
+
+
+
+
+## [0.0.18] - 2025-10-01
+
+## What's Changed
+* refactor!: Return ciphertext in bytes by @Takaros999 in https://github.com/worldcoin/bedrock/pull/152
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.17...0.0.18
+
+
+
+
+## [0.0.17] - 2025-10-01
+
+## What's Changed
+* fix: add missing header for RPC requests & improvements by @paolodamico in https://github.com/worldcoin/bedrock/pull/150
+* build(deps): bump strum from 0.26.3 to 0.27.1 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/148
+* build(deps): bump anyhow from 1.0.98 to 1.0.100 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/146
+* build(deps): bump thiserror from 2.0.16 to 2.0.17 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/149
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.16...0.0.17
+
+
+
+
+## [0.0.16] - 2025-09-29
+
+## What's Changed
+* feat: add turnkey API client by @paolodamico in https://github.com/worldcoin/bedrock/pull/144
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.15...0.0.16
+
+
+
+
+## [0.0.15] - 2025-09-24
+
+## What's Changed
+* feat: Add encrypt method to attestation verifier by @Takaros999 in https://github.com/worldcoin/bedrock/pull/139
+* feat: bedrock address primitive by @paolodamico in https://github.com/worldcoin/bedrock/pull/142
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.14...0.0.15
+
+
+
+
+## [0.0.14] - 2025-09-23
+
+## What's Changed
+* feat: add post_delete_backup callback by @paolodamico in https://github.com/worldcoin/bedrock/pull/140
+* feat: rename transactions module by @paolodamico in https://github.com/worldcoin/bedrock/pull/136
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.13...0.0.14
+
+
+
+
 ## [0.0.13] - 2025-09-18
 
 ## What's Changed

@@ -92,8 +92,7 @@ impl ForgeCreate {
             return Ok(addr);
         }
         Err(anyhow::anyhow!(
-            "forge output missing deployed address; stdout: {}",
-            stdout
+            "forge output missing deployed address; stdout: {stdout}",
         ))
     }
 }

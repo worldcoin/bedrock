@@ -13,7 +13,7 @@ use bedrock::{
         set_http_client, AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
     },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transaction::foreign::UnparsedUserOperation,
+    transactions::foreign::UnparsedUserOperation,
 };
 
 use serde::Serialize;
@@ -59,24 +59,24 @@ where
     ) -> Result<Vec<u8>, HttpError> {
         if method != HttpMethod::Post {
             return Err(HttpError::Generic {
-                message: "unsupported method".into(),
+                error_message: "unsupported method".into(),
             });
         }
 
         let body = body.ok_or(HttpError::Generic {
-            message: "missing body".into(),
+            error_message: "missing body".into(),
         })?;
 
         let root: serde_json::Value =
             serde_json::from_slice(&body).map_err(|_| HttpError::Generic {
-                message: "invalid json".into(),
+                error_message: "invalid json".into(),
             })?;
 
         let method =
             root.get("method")
                 .and_then(|m| m.as_str())
                 .ok_or(HttpError::Generic {
-                    message: "invalid json".into(),
+                    error_message: "invalid json".into(),
                 })?;
         let id = root.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let params = root
@@ -108,19 +108,19 @@ where
             // Execute the inner call directly through the Safe 4337 Module (no sponsorship path)
             "eth_sendUserOperation" => {
                 let params = params.as_array().ok_or(HttpError::Generic {
-                    message: "invalid params".into(),
+                    error_message: "invalid params".into(),
                 })?;
                 let user_op_val = params.first().ok_or(HttpError::Generic {
-                    message: "missing userOp param".into(),
+                    error_message: "missing userOp param".into(),
                 })?;
                 let entry_point_str = params.get(1).and_then(|v| v.as_str()).ok_or(
                     HttpError::Generic {
-                        message: "missing entryPoint param".into(),
+                        error_message: "missing entryPoint param".into(),
                     },
                 )?;
                 // Build UnparsedUserOperation from JSON (which uses hex strings), then convert
                 let obj = user_op_val.as_object().ok_or(HttpError::Generic {
-                    message: "userOp param must be an object".into(),
+                    error_message: "userOp param must be an object".into(),
                 })?;
 
                 let get_opt = |k: &str| -> Option<String> {
@@ -131,7 +131,7 @@ where
                 };
                 let get_required = |k: &str| -> Result<String, HttpError> {
                     get_opt(k).ok_or(HttpError::Generic {
-                        message: format!("missing or invalid {k}"),
+                        error_message: format!("missing or invalid {k}"),
                     })
                 };
 
@@ -157,13 +157,13 @@ where
 
                 let user_op: bedrock::smart_account::UserOperation =
                     unparsed.try_into().map_err(|e| HttpError::Generic {
-                        message: format!("invalid userOp: {e}"),
+                        error_message: format!("invalid userOp: {e}"),
                     })?;
 
                 // Convert to the packed format expected by EntryPoint
                 let packed = PackedUserOperation::try_from(&user_op).map_err(|e| {
                     HttpError::Generic {
-                        message: format!("pack userOp failed: {e}"),
+                        error_message: format!("pack userOp failed: {e}"),
                     }
                 })?;
 
@@ -171,12 +171,12 @@ where
                 let packed_for_hash =
                     PackedUserOperation::try_from(&user_op).map_err(|e| {
                         HttpError::Generic {
-                            message: format!("pack userOp for hash failed: {e}"),
+                            error_message: format!("pack userOp for hash failed: {e}"),
                         }
                     })?;
                 let chain_id_u64 = self.provider.get_chain_id().await.map_err(|e| {
                     HttpError::Generic {
-                        message: format!("getChainId failed: {e}"),
+                        error_message: format!("getChainId failed: {e}"),
                     }
                 })?;
                 let inner_encoded = (
@@ -196,7 +196,7 @@ where
                 let entry_point_addr =
                     Address::from_str(entry_point_str).map_err(|_| {
                         HttpError::Generic {
-                            message: "invalid entryPoint".into(),
+                            error_message: "invalid entryPoint".into(),
                         }
                     })?;
                 let entry_point = IEntryPoint::new(entry_point_addr, &self.provider);
@@ -205,11 +205,11 @@ where
                     .send()
                     .await
                     .map_err(|e| HttpError::Generic {
-                        message: format!("handleOps failed: {e}"),
+                        error_message: format!("handleOps failed: {e}"),
                     })?;
                 let _receipt =
                     tx.get_receipt().await.map_err(|e| HttpError::Generic {
-                        message: format!("handleOps receipt failed: {e}"),
+                        error_message: format!("handleOps receipt failed: {e}"),
                     })?;
 
                 // Return the chain userOpHash (EntryPoint-wrapped)
@@ -225,7 +225,7 @@ where
                 Ok(serde_json::to_vec(&resp).unwrap())
             }
             other => Err(HttpError::Generic {
-                message: format!("unsupported method {other}"),
+                error_message: format!("unsupported method {other}"),
             }),
         }
     }
@@ -287,7 +287,8 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     let client = AnvilBackedHttpClient {
         provider: provider.clone(),
     };
-    let _ = set_http_client(Arc::new(client));
+
+    set_http_client(Arc::new(client));
 
     // 8) Execute high-level transfer via transaction_transfer
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;

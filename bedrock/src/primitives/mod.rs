@@ -42,6 +42,9 @@ pub fn is_zero_u256(value: &U256) -> bool {
     value.is_zero()
 }
 
+/// Provides an interface for interacting with Ethereum addresses for foreign code.
+pub mod address;
+
 /// Introduces logging functionality that can be integrated with foreign language bindings.
 pub mod logger;
 
@@ -145,7 +148,7 @@ impl HexEncodedData {
     pub fn to_vec(&self) -> Result<Vec<u8>, PrimitiveError> {
         hex::decode(self.0.trim_start_matches("0x")).map_err(|_| {
             PrimitiveError::Generic {
-                message: "unexpected error in HexEncodedData::to_vec".to_string(),
+                error_message: "unexpected error in HexEncodedData::to_vec".to_string(),
             }
         })
     }
@@ -200,12 +203,12 @@ pub enum PrimitiveError {
     #[error("invalid hex string: {0}")]
     InvalidHexString(String),
     /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
-    #[error("invalid input on {attribute}: {message}")]
+    #[error("invalid input on {attribute}: {error_message}")]
     InvalidInput {
         /// The name of the attribute that was invalid.
-        attribute: &'static str,
+        attribute: String,
         /// Explicit failure message for the attribute validation.
-        message: String,
+        error_message: String,
     },
 }
 
@@ -230,8 +233,8 @@ pub(crate) trait ParseFromForeignBinding {
 impl ParseFromForeignBinding for Address {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
-            attribute: attr,
-            message: e.to_string(),
+            attribute: attr.to_string(),
+            error_message: e.to_string(),
         })
     }
 }
@@ -239,8 +242,8 @@ impl ParseFromForeignBinding for Address {
 impl ParseFromForeignBinding for U256 {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
-            attribute: attr,
-            message: e.to_string(),
+            attribute: attr.to_string(),
+            error_message: e.to_string(),
         })
     }
 }
@@ -248,8 +251,8 @@ impl ParseFromForeignBinding for U256 {
 impl ParseFromForeignBinding for u128 {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         let number = U128::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
-            attribute: attr,
-            message: e.to_string(),
+            attribute: attr.to_string(),
+            error_message: e.to_string(),
         })?;
 
         // This is safe because we know the number is within the range of u128
@@ -263,8 +266,8 @@ impl ParseFromForeignBinding for Bytes {
         hex::decode(raw)
             .map(Self::from)
             .map_err(|e| PrimitiveError::InvalidInput {
-                attribute: attr,
-                message: e.to_string(),
+                attribute: attr.to_string(),
+                error_message: e.to_string(),
             })
     }
 }

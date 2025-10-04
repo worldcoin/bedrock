@@ -345,6 +345,15 @@ impl ManifestManager {
         Ok(files)
     }
 
+    /// Deletes the global manifest file. This is useful when the backup is deleted.
+    ///
+    /// # Errors
+    /// Returns an error if the manifest file cannot be deleted.
+    pub fn danger_delete_manifest(&self) -> Result<(), BackupError> {
+        self.file_system.delete_file(Self::GLOBAL_MANIFEST_FILE)?;
+        Ok(())
+    }
+
     /// Reads the global manifest from disk.
     ///
     /// # Errors

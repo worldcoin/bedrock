@@ -34,9 +34,9 @@ final class BedrockToolingTests: XCTestCase {
         // Empty username - InvalidInput
         XCTAssertThrowsError(try demo.demoAuthenticate(username: "", password: "password")) { error in
             if let demoError = error as? DemoError,
-                case .InvalidInput(let message) = demoError
+                case .InvalidInput(let errorMessage) = demoError
             {
-                XCTAssertTrue(message.contains("Username cannot be empty"))
+                XCTAssertTrue(errorMessage.contains("Username cannot be empty"))
             } else {
                 XCTFail("Expected InvalidInput error")
             }
@@ -46,9 +46,9 @@ final class BedrockToolingTests: XCTestCase {
         XCTAssertThrowsError(try demo.demoAuthenticate(username: "admin", password: "wrongpassword")) {
             error in
             if let demoError = error as? DemoError,
-                case .AuthenticationFailed(let message) = demoError
+                case let .AuthenticationFailed(code) = demoError
             {
-                XCTAssertTrue(message.contains("Authentication failed") && message.contains("401"))
+                XCTAssertEqual(code, 401)
             } else {
                 XCTFail("Expected AuthenticationFailed error")
             }
@@ -58,9 +58,9 @@ final class BedrockToolingTests: XCTestCase {
         XCTAssertThrowsError(try demo.demoAuthenticate(username: "slowuser", password: "password")) {
             error in
             if let demoError = error as? DemoError,
-                case .NetworkTimeout(let message) = demoError
+                case let .NetworkTimeout(seconds) = demoError
             {
-                XCTAssertTrue(message.contains("Network timeout") && message.contains("30"))
+                XCTAssertEqual(seconds, 30)
             } else {
                 XCTFail("Expected NetworkTimeout error")
             }
@@ -78,9 +78,9 @@ final class BedrockToolingTests: XCTestCase {
         // Empty input - Generic error
         XCTAssertThrowsError(try demo.demoGenericOperation(input: "")) { error in
             if let demoError = error as? DemoError,
-                case .Generic(let message) = demoError
+                case .Generic(let errorMessage) = demoError
             {
-                XCTAssertTrue(message.contains("Input cannot be empty"))
+                XCTAssertTrue(errorMessage.contains("Input cannot be empty"))
             } else {
                 XCTFail("Expected Generic error")
             }
@@ -89,9 +89,9 @@ final class BedrockToolingTests: XCTestCase {
         // Network error - Generic error with anyhow context
         XCTAssertThrowsError(try demo.demoGenericOperation(input: "network_error")) { error in
             if let demoError = error as? DemoError,
-                case .Generic(let message) = demoError
+                case .Generic(let errorMessage) = demoError
             {
-                XCTAssertTrue(message.contains("Connection timed out"))
+                XCTAssertTrue(errorMessage.contains("Connection timed out"))
             } else {
                 XCTFail("Expected Generic error")
             }
@@ -100,9 +100,9 @@ final class BedrockToolingTests: XCTestCase {
         // Parse error - Generic error with anyhow context
         XCTAssertThrowsError(try demo.demoGenericOperation(input: "parse_error")) { error in
             if let demoError = error as? DemoError,
-                case .Generic(let message) = demoError
+                case .Generic(let errorMessage) = demoError
             {
-                XCTAssertTrue(message.contains("Failed to parse input as JSON"))
+                XCTAssertTrue(errorMessage.contains("Failed to parse input as JSON"))
             } else {
                 XCTFail("Expected Generic error")
             }
@@ -120,9 +120,9 @@ final class BedrockToolingTests: XCTestCase {
         // Empty operation - InvalidInput (strongly typed validation)
         XCTAssertThrowsError(try demo.demoMixedOperation(operation: "", data: "data")) { error in
             if let demoError = error as? DemoError,
-                case .InvalidInput(let message) = demoError
+                case .InvalidInput(let errorMessage) = demoError
             {
-                XCTAssertTrue(message.contains("Operation cannot be empty"))
+                XCTAssertTrue(errorMessage.contains("Operation cannot be empty"))
             } else {
                 XCTFail("Expected InvalidInput error")
             }
@@ -131,9 +131,9 @@ final class BedrockToolingTests: XCTestCase {
         // Unknown operation - InvalidInput (strongly typed validation)
         XCTAssertThrowsError(try demo.demoMixedOperation(operation: "unknown", data: "data")) { error in
             if let demoError = error as? DemoError,
-                case .InvalidInput(let message) = demoError
+                case .InvalidInput(let errorMessage) = demoError
             {
-                XCTAssertTrue(message.contains("Unknown operation"))
+                XCTAssertTrue(errorMessage.contains("Unknown operation"))
             } else {
                 XCTFail("Expected InvalidInput error")
             }
@@ -143,11 +143,11 @@ final class BedrockToolingTests: XCTestCase {
         XCTAssertThrowsError(try demo.demoMixedOperation(operation: "process", data: "trigger_error")) {
             error in
             if let demoError = error as? DemoError,
-                case .Generic(let message) = demoError
+                case .Generic(let errorMessage) = demoError
             {
                 XCTAssertTrue(
-                    message.contains("Operation failed")
-                        && message.contains("Simulated processing failure"))
+                    errorMessage.contains("Operation failed")
+                        && errorMessage.contains("Simulated processing failure"))
             } else {
                 XCTFail("Expected Generic error with anyhow-style message")
             }
@@ -250,9 +250,9 @@ final class BedrockToolingTests: XCTestCase {
             _ = try await demo.demoAsyncOperation(delayMs: 6000)
             XCTFail("Expected timeout error")
         } catch let error as DemoError {
-            if case .Generic(let message) = error {
-                XCTAssertTrue(message.contains("timeout exceeded"))
-                XCTAssertTrue(message.contains("5 seconds"))
+            if case .Generic(let errorMessage) = error {
+                XCTAssertTrue(errorMessage.contains("timeout exceeded"))
+                XCTAssertTrue(errorMessage.contains("5 seconds"))
             } else {
                 XCTFail("Expected Generic error for timeout")
             }
