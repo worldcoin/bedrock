@@ -30,8 +30,14 @@ pub enum ClientEventsError {
     Rng,
 
     /// HTTP error when sending events
-    #[error(transparent)]
-    HttpError(#[from] crate::primitives::http_client::HttpError),
+    #[error("HTTP error: {0}")]
+    HttpError(String),
+}
+
+impl From<crate::primitives::http_client::HttpError> for ClientEventsError {
+    fn from(e: crate::primitives::http_client::HttpError) -> Self {
+        Self::HttpError(e.to_string())
+    }
 }
 
 /// High-level event kinds we care to report
