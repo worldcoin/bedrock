@@ -393,7 +393,7 @@ impl BackupManager {
         // this must be set as `None`, otherwise the remote will appear ahead when it's not.
         // See: `test_decrypt_and_unpack_default_manifest_hash`
         let previous_manifest_hash =
-            if current_manifest_hash_hex == BackupManifest::DEFAULT_HASH {
+            if current_manifest_hash_hex == BackupManifest::default_hash_hex() {
                 crate::info!("Manifest hash is the default hash, setting to None");
                 None
             } else {

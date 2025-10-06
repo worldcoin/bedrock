@@ -93,7 +93,7 @@ impl BackupServiceApi for FakeBackupServiceApi {
             manifest_hash: s
                 .remote_manifest_hash_hex
                 .clone()
-                .unwrap_or_else(|| hex::encode(blake3::hash(b"").as_bytes())),
+                .unwrap_or_else(BackupManifest::default_hash_hex),
             encryption_keys: None,
             sync_factor_count: None,
             main_factors: None,
@@ -153,7 +153,7 @@ fn test_backup_manifest_default_hash() {
         files: vec![],
     });
     let hash = hex::encode(manifest.calculate_hash().unwrap());
-    assert_eq!(hash, BackupManifest::DEFAULT_HASH);
+    assert_eq!(hash, BackupManifest::default_hash_hex());
 }
 
 #[tokio::test]
@@ -235,7 +235,7 @@ async fn test_list_files_corrupted_manifest() {
     mw.write_file("manifest.json", b"not-json".to_vec())
         .unwrap();
 
-    api.set_remote_hash(hex::encode(blake3::hash(b"").as_bytes()));
+    api.set_remote_hash(BackupManifest::default_hash_hex());
 
     let mgr = ManifestManager::new_with_prefix("backup_test_list_corrupted");
     let err = mgr
@@ -866,7 +866,7 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             prf_result.clone(),
             FactorType::Prf,
-            hex::encode(blake3::hash(b"").as_bytes()),
+            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 
@@ -893,7 +893,7 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             incorrect_factor_secret,
             FactorType::Prf,
-            hex::encode(blake3::hash(b"").as_bytes()),
+            BackupManifest::default_hash_hex(),
         )
         .expect_err("Expected decryption to fail with incorrect factor secret");
     assert_eq!(
@@ -914,7 +914,7 @@ fn test_decrypt_sealed_backup_with_prf() {
             incorrect_encrypted_backup_keypair,
             prf_result,
             FactorType::Prf,
-            hex::encode(blake3::hash(b"").as_bytes()),
+            BackupManifest::default_hash_hex(),
         )
         .expect_err(
             "Expected decryption to fail with incorrect encrypted backup keypair",
@@ -1019,7 +1019,7 @@ fn test_unpack_writes_files_and_manifest() {
             hex::encode(encrypted_backup_keypair),
             hex::encode(factor_sk.to_bytes()),
             FactorType::Prf,
-            hex::encode(blake3::hash(b"").as_bytes()),
+            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 

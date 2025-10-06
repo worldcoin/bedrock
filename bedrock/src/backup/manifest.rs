@@ -36,19 +36,93 @@ pub enum BackupManifest {
 }
 
 impl BackupManifest {
-    /// The hash of the `Default` manifest (i.e. genesis, no files).
-    ///
-    /// See `test_backup_manifest_default_hash` for computation and updates.
-    pub const DEFAULT_HASH: &str =
-        "471f87ee6c873ccd523bcd669aa253361e711d8613b9a1f4a6a92f28bc8c64a6";
+    /// Returns the canonical bytes used for manifest hashing, independent of JSON formatting.
+    fn hash_material(&self) -> Result<Vec<u8>, BackupError> {
+        let mut out = Vec::with_capacity(64);
+        out.extend_from_slice(b"BEDROCK_MANIFEST");
+        match self {
+            Self::V0(m) => {
+                // Version tag for V0
+                out.push(0x00);
 
-    /// Computes the BLAKE3 hash of the serialized manifest bytes.
-    ///
-    /// Computes the BLAKE3 hash of the serialized manifest bytes.
+                // Previous manifest hash: 0x00 for None, 0x01 + 32 bytes for Some
+                match &m.previous_manifest_hash {
+                    None => out.push(0x00),
+                    Some(prev_hex) => {
+                        out.push(0x01);
+                        let prev_bytes = hex::decode(prev_hex).map_err(|_| {
+                            BackupError::InvalidFileForBackup(
+                                "Invalid previous manifest hash encoding".to_string(),
+                            )
+                        })?;
+                        let prev_arr: [u8; 32] =
+                            prev_bytes.try_into().map_err(|_| {
+                                BackupError::InvalidFileForBackup(
+                                    "Invalid previous manifest hash length".to_string(),
+                                )
+                            })?;
+                        out.extend_from_slice(&prev_arr);
+                    }
+                }
+
+                // Files length (u32 LE)
+                #[allow(clippy::cast_possible_truncation)]
+                let count = m.files.len() as u32;
+                out.extend_from_slice(&count.to_le_bytes());
+
+                // Files in-order
+                for entry in &m.files {
+                    // Designator (snake_case) + 0x00 separator
+                    out.extend_from_slice(entry.designator.to_string().as_bytes());
+                    out.push(0x00);
+
+                    // File path (UTF-8) + 0x00 separator
+                    out.extend_from_slice(entry.file_path.as_bytes());
+                    out.push(0x00);
+
+                    // Checksum: 32 raw bytes from hex
+                    let ck_bytes = hex::decode(&entry.checksum_hex).map_err(|_| {
+                        log::error!(
+                            "[Critical] Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
+                            entry.designator
+                        );
+                        BackupError::InvalidFileForBackup(format!(
+                            "Invalid checksum encoding for designator: {}",
+                            entry.designator
+                        ))
+                    })?;
+                    let ck_arr: [u8; 32] = ck_bytes.try_into().map_err(|_| {
+                        log::error!(
+                            "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
+                            entry.designator
+                        );
+                        BackupError::InvalidFileForBackup(format!(
+                            "Invalid checksum length for designator: {}",
+                            entry.designator
+                        ))
+                    })?;
+                    out.extend_from_slice(&ck_arr);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Computes the BLAKE3 hash of the canonical manifest bytes.
     pub fn calculate_hash(&self) -> Result<[u8; 32], BackupError> {
-        let serialized =
-            serde_json::to_vec(self).context("serialize hashable BackupManifest")?;
-        Ok(blake3::hash(&serialized).into())
+        let material = self.hash_material()?;
+        Ok(blake3::hash(&material).into())
+    }
+
+    /// Returns the hex-encoded hash of the default (empty) manifest.
+    #[must_use]
+    pub fn default_hash_hex() -> String {
+        // This cannot fail: no previous hash, no files to decode.
+        hex::encode(
+            Self::default()
+                .calculate_hash()
+                .expect("default manifest hash is infallible"),
+        )
     }
 }
 
