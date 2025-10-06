@@ -152,14 +152,10 @@ pub struct BackupReportInput {
     pub encryption_keys: Option<Vec<BackupReportEncryptionKeyKind>>,
     /// Main factors present
     pub main_factors: Option<Vec<BackupReportMainFactor>>,
-    /// Device-local sync counter
-    pub device_sync_count: Option<u32>,
     /// App version
     pub app_version: Option<String>,
     /// Platform
     pub platform: Option<Os>,
-    /// Last synced at (ISO8601)
-    pub last_synced_at: Option<String>,
 }
 
 /// Payload for a single event

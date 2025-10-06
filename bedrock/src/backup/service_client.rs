@@ -122,10 +122,8 @@ impl BackupServiceClient {
                     sync_factor_count: response.sync_factor_count,
                     encryption_keys: response.encryption_keys.clone(),
                     main_factors: response.main_factors.clone(),
-                    device_sync_count: None,
                     app_version: None,
                     platform: None,
-                    last_synced_at: None,
                 },
             ) {
                 log::warn!(
