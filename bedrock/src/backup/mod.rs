@@ -77,7 +77,9 @@ impl BackupManager {
         factor_secret: String,
         factor_type: FactorType,
     ) -> Result<CreatedBackup, BackupError> {
-        log::info!("[BackupManager] creating sealed backup for new user with factor: {factor_type:?}");
+        crate::info!(
+            "Creating sealed backup for new user with factor: {factor_type:?}"
+        );
 
         // 1: Decode the root secret from multiple formats
         let root_secret = RootKey::from_json(root_secret)
@@ -178,9 +180,7 @@ impl BackupManager {
         factor_type: FactorType,
         current_manifest_hash: String,
     ) -> Result<DecryptedBackup, BackupError> {
-        log::info!(
-            "[BackupManager] decrypting sealed backup with factor: {factor_type:?}"
-        );
+        crate::info!("Decrypting sealed backup with factor: {factor_type:?}");
 
         if sealed_backup_data.is_empty() {
             return Err(BackupError::InvalidSealedBackupError);
@@ -210,6 +210,8 @@ impl BackupManager {
             .map_err(|_| BackupError::DecryptBackupError)?;
 
         let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
+
+        crate::info!("Backup successfully decrypted, initiating unpacking.");
 
         Self::unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
 
@@ -256,7 +258,7 @@ impl BackupManager {
         existing_factor_type: FactorType,
         new_factor_type: FactorType,
     ) -> Result<AddNewFactorResult, BackupError> {
-        log::info!("[BackupManager] creating new encrypted backup key: existing - {existing_factor_type:?}, new - {new_factor_type:?}");
+        crate::info!("Creating new encrypted backup key: existing - {existing_factor_type:?}, new - {new_factor_type:?}");
 
         // 1: Decode the backup keypair that was encrypted with the existing factor secret
         let encrypted_backup_keypair_bytes =
@@ -319,6 +321,7 @@ impl BackupManager {
     /// # Errors
     /// - Returns an error if the post-processing fails.
     pub fn post_delete_backup(&self) -> Result<(), BackupError> {
+        crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
         let manifest = ManifestManager::new();
         manifest.danger_delete_manifest()?;
         Ok(())
@@ -338,6 +341,8 @@ impl BackupManager {
         let fs = get_filesystem_raw()?;
         let mut manifest_entries: Vec<V0BackupManifestEntry> =
             Vec::with_capacity(backup.files.len());
+
+        crate::info!("Processing {} files for unpacking.", backup.files.len());
 
         for file in &backup.files {
             let rel_path = file.path.trim_start_matches('/');
@@ -389,10 +394,16 @@ impl BackupManager {
         // See: `test_decrypt_and_unpack_default_manifest_hash`
         let previous_manifest_hash =
             if current_manifest_hash_hex == BackupManifest::DEFAULT_HASH {
+                crate::info!("Manifest hash is the default hash, setting to None");
                 None
             } else {
                 Some(current_manifest_hash_hex)
             };
+
+        crate::info!(
+            "Saving manifest file with hash: {previous_manifest_hash:?} and {} files",
+            manifest_entries.len()
+        );
 
         let manifest = BackupManifest::V0(V0BackupManifest {
             previous_manifest_hash,

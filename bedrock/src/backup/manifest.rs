@@ -277,6 +277,18 @@ impl ManifestManager {
     pub fn write_manifest(&self, manifest: &BackupManifest) -> Result<(), BackupError> {
         let serialized =
             serde_json::to_vec(manifest).context("serialize BackupManifest")?;
+        let BackupManifest::V0(manifest) = manifest;
+
+        crate::info!(
+            "Writing manifest file with files: {}",
+            manifest
+                .files
+                .iter()
+                .map(|f| f.designator.to_string())
+                .collect::<Vec<String>>()
+                .join(", "),
+        );
+
         self.file_system
             .write_file(Self::GLOBAL_MANIFEST_FILE, serialized)
             .context("write manifest.json")?;
