@@ -246,10 +246,8 @@ impl ClientEventsReporter {
         base.sync_factor_count = input.sync_factor_count.or(base.sync_factor_count);
         base.encryption_keys = input.encryption_keys.or(base.encryption_keys);
         base.main_factors = input.main_factors.or(base.main_factors);
-        base.device_sync_count = input.device_sync_count.or(base.device_sync_count);
         base.app_version = input.app_version.or(base.app_version);
         base.platform = input.platform.or(base.platform);
-        base.last_synced_at = input.last_synced_at.or(base.last_synced_at);
 
         // If no installation ID provided and none persisted yet, generate and persist now.
         if base.installation_id.is_none() {
@@ -278,7 +276,15 @@ impl ClientEventsReporter {
         let http =
             get_http_client().ok_or(ClientEventsError::HttpClientNotInitialized)?;
 
-        let base = self.read_base_report().unwrap_or_default();
+        let mut base = self.read_base_report().unwrap_or_default();
+
+        if matches!(kind, BackupReportEventKind::Sync) && success {
+            let current_count = base.device_sync_count.unwrap_or(0);
+            base.device_sync_count = Some(current_count.saturating_add(1));
+            base.last_synced_at = Some(timestamp_iso8601.clone());
+            // Persist updated base report before emitting the event so payload reflects new values.
+            self.write_base_report(&base)?;
+        }
 
         let event = EventPayload {
             id: uuid::Uuid::new_v4().to_string(),
