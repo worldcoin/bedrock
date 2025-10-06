@@ -2,6 +2,17 @@
 
 
 
+## [0.0.20] - 2025-10-06
+
+## What's Changed
+* feat: add detailed logging to backup restore by @paolodamico in https://github.com/worldcoin/bedrock/pull/157
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.19...0.0.20
+
+
+
+
 ## [0.0.19] - 2025-10-03
 
 ## What's Changed
