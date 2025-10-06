@@ -206,9 +206,7 @@ impl ClientEventsReporter {
     #[must_use]
     /// Constructs a new `ClientEventsReporter` with a scoped filesystem middleware.
     pub fn new() -> Self {
-        Self {
-            fs: create_middleware("backup_client_events"),
-        }
+        Self::default()
     }
 
     /// Returns the installation ID, generating and persisting it if missing.
@@ -327,12 +325,13 @@ impl ClientEventsReporter {
 impl Default for ClientEventsReporter {
     fn default() -> Self {
         Self {
-            fs: create_middleware("client_events"),
+            fs: create_middleware(Self::FS_PREFIX),
         }
     }
 }
 
 impl ClientEventsReporter {
+    const FS_PREFIX: &'static str = "backup_client_events";
     const BASE_FILE: &'static str = "base_report.json";
     const EVENTS_ENDPOINT: &'static str = "/v1/backup/status";
 
