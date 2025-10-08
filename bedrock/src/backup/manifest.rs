@@ -44,6 +44,20 @@ impl BackupManifest {
                 // Version tag for V0
                 out.push(0x00);
 
+                // Reject duplicate file paths (case-insensitive) to prevent ambiguous manifests
+                {
+                    let mut seen_paths_lower =
+                        std::collections::HashSet::with_capacity(m.files.len());
+                    for entry in &m.files {
+                        let key = entry.file_path.to_lowercase();
+                        if !seen_paths_lower.insert(key) {
+                            return Err(BackupError::InvalidFileForBackup(
+                                "Duplicate file path in manifest".to_string(),
+                            ));
+                        }
+                    }
+                }
+
                 // Files length (u32 BE)
                 #[allow(clippy::cast_possible_truncation)]
                 let count = m.files.len() as u32;
@@ -506,4 +520,132 @@ impl Default for ManifestManager {
 enum ManifestMutation {
     NoChange,
     Changed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_entry(
+        designator: crate::backup::BackupFileDesignator,
+        path: &str,
+        data: &[u8],
+    ) -> V0BackupManifestEntry {
+        V0BackupManifestEntry {
+            designator,
+            file_path: path.to_string(),
+            checksum_hex: hex::encode(blake3::hash(data).as_bytes()),
+        }
+    }
+
+    #[test]
+    fn test_digest_default_and_known_hash() {
+        let manifest = BackupManifest::default();
+        let digest = manifest.to_digest().unwrap();
+        assert_eq!(digest, b"BEDROCK_MANIFEST\x00\x00\x00\x00\x00");
+        let hash = manifest.to_hash().unwrap();
+        assert_eq!(
+            hex::encode(hash),
+            "85c9d3437fbd13e892674f14603650fff5cb32db314d375722f39f84f501036f"
+        );
+        assert_eq!(
+            BackupManifest::default_hash_hex(),
+            "85c9d3437fbd13e892674f14603650fff5cb32db314d375722f39f84f501036f"
+        );
+    }
+
+    #[test]
+    fn test_order_independent_hashing() {
+        use crate::backup::BackupFileDesignator as D;
+        let e1 = mk_entry(D::OrbPkg, "a/file1.bin", b"DATA1");
+        let e2 = mk_entry(D::DocumentPkg, "b/file2.bin", b"DATA2");
+        let m1 = BackupManifest::V0(V0BackupManifest {
+            files: vec![
+                V0BackupManifestEntry {
+                    designator: e1.designator.clone(),
+                    file_path: e1.file_path.clone(),
+                    checksum_hex: e1.checksum_hex.clone(),
+                },
+                V0BackupManifestEntry {
+                    designator: e2.designator.clone(),
+                    file_path: e2.file_path.clone(),
+                    checksum_hex: e2.checksum_hex.clone(),
+                },
+            ],
+        });
+        let m2 = BackupManifest::V0(V0BackupManifest {
+            files: vec![e2, e1],
+        });
+        assert_eq!(m1.to_hash().unwrap(), m2.to_hash().unwrap());
+    }
+
+    #[test]
+    fn test_duplicate_paths_rejected_case_insensitive() {
+        use crate::backup::BackupFileDesignator as D;
+        let e1 = mk_entry(D::OrbPkg, "PCP/FILE.bin", b"DATA");
+        let e2 = mk_entry(D::DocumentPkg, "pcp/file.BIN", b"DATA");
+        let m = BackupManifest::V0(V0BackupManifest {
+            files: vec![e1, e2],
+        });
+        let err = m.to_hash().expect_err("expected duplicate path error");
+        assert!(err.to_string().to_lowercase().contains("duplicate"));
+    }
+
+    #[test]
+    fn test_checksum_hex_must_be_valid_and_32_bytes() {
+        use crate::backup::BackupFileDesignator as D;
+        // invalid hex
+        let e1 = V0BackupManifestEntry {
+            designator: D::OrbPkg,
+            file_path: "p.bin".into(),
+            checksum_hex: "zz".into(),
+        };
+        let m = BackupManifest::V0(V0BackupManifest { files: vec![e1] });
+        let err = m.to_hash().expect_err("expected invalid hex");
+        assert!(err
+            .to_string()
+            .to_lowercase()
+            .contains("invalid checksum encoding"));
+
+        // wrong length (not 32 bytes)
+        let e2 = V0BackupManifestEntry {
+            designator: D::OrbPkg,
+            file_path: "p.bin".into(),
+            checksum_hex: hex::encode([0u8; 31]),
+        };
+        let m = BackupManifest::V0(V0BackupManifest { files: vec![e2] });
+        let err = m.to_hash().expect_err("expected invalid length");
+        assert!(err
+            .to_string()
+            .to_lowercase()
+            .contains("invalid checksum length"));
+    }
+
+    #[test]
+    fn test_hash_changes_when_entry_changes() {
+        use crate::backup::BackupFileDesignator as D;
+        let e1 = mk_entry(D::OrbPkg, "same.bin", b"A");
+        let e2 = mk_entry(D::OrbPkg, "same.bin", b"B");
+        // Different checksums but can't have dup paths; instead compare single-entry manifests
+        let m1 = BackupManifest::V0(V0BackupManifest { files: vec![e1] });
+        let m2 = BackupManifest::V0(V0BackupManifest { files: vec![e2] });
+        assert_ne!(m1.to_hash().unwrap(), m2.to_hash().unwrap());
+    }
+
+    #[test]
+    fn test_hash_stable_across_serialization_variations() {
+        use crate::backup::BackupFileDesignator as D;
+        // Manifest with two files; serialize and deserialize shouldn't affect hash
+        let orig = BackupManifest::V0(V0BackupManifest {
+            files: vec![
+                mk_entry(D::OrbPkg, "x.bin", b"X"),
+                mk_entry(D::DocumentPkg, "y.bin", b"Y"),
+            ],
+        });
+        let h0 = orig.to_hash().unwrap();
+        let json = serde_json::to_string_pretty(&orig).unwrap();
+        let round: BackupManifest = serde_json::from_str(&json).unwrap();
+        let h1 = round.to_hash().unwrap();
+        assert_eq!(h0, h1);
+    }
 }
