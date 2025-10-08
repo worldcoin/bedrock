@@ -16,7 +16,7 @@ use crate::backup::backup_format::BackupFormat;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
 use crate::root_key::RootKey;
-use anyhow::Context as _;
+// anyhow::Context not needed here
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -125,9 +125,7 @@ impl BackupManager {
 
         // 5.1: Initialize and persist the initial manifest (empty files set) and compute its hash
         let manifest = BackupManifest::default();
-        let manifest_bytes =
-            serde_json::to_vec(&manifest).context("serialize BackupManifest")?;
-        let manifest_hash_hex = hex::encode(blake3::hash(&manifest_bytes).as_bytes());
+        let manifest_hash_hex = hex::encode(manifest.to_hash()?);
 
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
@@ -179,7 +177,7 @@ impl BackupManager {
         encrypted_backup_keypair: String,
         factor_secret: String,
         factor_type: FactorType,
-        current_manifest_hash: String,
+        current_manifest_hash: &str,
     ) -> Result<DecryptedBackup, BackupError> {
         crate::info!("Decrypting sealed backup with factor: {factor_type:?}");
 
@@ -333,7 +331,7 @@ impl BackupManager {
 impl BackupManager {
     fn unpack_backup_to_filesystem(
         unsealed_backup: &BackupFormat,
-        current_manifest_hash_hex: String,
+        _current_manifest_hash_hex: &str,
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
 
@@ -390,26 +388,15 @@ impl BackupManager {
             });
         }
 
-        // If the current manifest hash is the default hash, then there is no previous manifest hash
-        // this must be set as `None`, otherwise the remote will appear ahead when it's not.
-        // See: `test_decrypt_and_unpack_default_manifest_hash`
-        let previous_manifest_hash =
-            if current_manifest_hash_hex == BackupManifest::DEFAULT_HASH {
-                crate::info!("Manifest hash is the default hash, setting to None");
-                None
-            } else {
-                Some(current_manifest_hash_hex)
-            };
-
-        crate::info!(
-            "Saving manifest file with hash: {previous_manifest_hash:?} and {} files",
-            manifest_entries.len()
-        );
-
         let manifest = BackupManifest::V0(V0BackupManifest {
-            previous_manifest_hash,
             files: manifest_entries,
         });
+
+        crate::info!(
+            "Saving manifest file with {} files and hash: {}",
+            manifest.entries_length(),
+            hex::encode(manifest.to_hash()?)
+        );
 
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;

@@ -15,10 +15,6 @@ const ROOT_SECRET_FILE: &str = "root_secret.json";
 /// NOTE: Important not to incorporate types with undefined iteration order into this struct (e.g. `HashMap`)
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V0BackupManifest {
-    /// Hash of the immediately previous manifest state (hex, 32-byte blake3), if any.
-    ///
-    /// Used to provide a lightweight chain of states for conflict detection and auditing.
-    pub previous_manifest_hash: Option<String>,
     /// Entries describing each file to be backed up.
     pub files: Vec<V0BackupManifestEntry>,
 }
