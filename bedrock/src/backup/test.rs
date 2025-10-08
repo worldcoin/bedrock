@@ -331,6 +331,75 @@ async fn test_store_file_accepts_dot_slash_path() {
 
 #[tokio::test]
 #[serial]
+async fn test_store_file_with_unicode_paths() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Local empty manifest and matching remote
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_unicode");
+    api.set_remote_hash(compute_manifest_hash_from_disk("backup_test_store_unicode"));
+
+    // Source files to store (in global FS) with Unicode names
+    write_global_file("pcp/résumé.bin", b"FR");
+    write_global_file("docs/İstanbul-ŞĞÜ.bin", b"TR");
+    write_global_file("ไทย/บีน.bin", b"TH");
+
+    // Backup pubkey
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_unicode");
+    // Store French path under OrbPkg
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "pcp/résumé.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex.clone(),
+    )
+    .await
+    .unwrap();
+    // Store Turkish path under DocumentPkg
+    mgr.store_file(
+        BackupFileDesignator::DocumentPkg,
+        "docs/İstanbul-ŞĞÜ.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex.clone(),
+    )
+    .await
+    .unwrap();
+    // Store Thai path under DocumentPkg
+    mgr.store_file(
+        BackupFileDesignator::DocumentPkg,
+        "ไทย/บีน.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // Read manifest and verify paths are present
+    let fs = get_filesystem_raw().unwrap().clone();
+    let committed = fs
+        .read_file("backup_test_store_unicode/manifest.json".to_string())
+        .unwrap();
+    let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
+    assert_eq!(committed["version"], "V0");
+    let files = committed["manifest"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 3);
+    let paths: std::collections::HashSet<String> = files
+        .iter()
+        .map(|v| v["file_path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(paths.contains("pcp/résumé.bin"));
+    assert!(paths.contains("docs/İstanbul-ŞĞÜ.bin"));
+    assert!(paths.contains("ไทย/บีน.bin"));
+}
+
+#[tokio::test]
+#[serial]
 async fn test_store_file_propagates_sync_failure() {
     let api = init_test_globals();
     api.reset();
@@ -1024,6 +1093,92 @@ fn test_unpack_writes_files_and_manifest() {
     let checksum1 = &files_array[1]["checksum_hex"];
     assert!(checksum0.is_string());
     assert!(checksum1.is_string());
+}
+
+#[test]
+#[serial]
+fn test_unpack_writes_files_and_manifest_unicode() {
+    ensure_fs_initialized();
+    let manager = BackupManager::new();
+
+    // Create a backup with Unicode file paths
+    let root_secret = RootKey::new_random();
+    let files = vec![
+        V0BackupFile {
+            data: b"bonjour".to_vec(),
+            checksum: blake3::hash(b"bonjour").as_bytes().to_owned(),
+            path: "orb_pkg/personal_custody/résumé-αβγ.bin".to_string(),
+            designator: BackupFileDesignator::OrbPkg,
+        },
+        V0BackupFile {
+            data: b"merhaba".to_vec(),
+            checksum: blake3::hash(b"merhaba").as_bytes().to_owned(),
+            path: "document_pkg/İstanbul/ŞĞÜ-çö.bin".to_string(),
+            designator: BackupFileDesignator::DocumentPkg,
+        },
+        V0BackupFile {
+            data: b"sawasdee".to_vec(),
+            checksum: blake3::hash(b"sawasdee").as_bytes().to_owned(),
+            path: "document_pkg/ไทย/บีน.bin".to_string(),
+            designator: BackupFileDesignator::DocumentPkg,
+        },
+    ];
+    let unsealed = BackupFormat::V0(V0Backup { root_secret, files });
+    let unsealed_bytes = unsealed.to_bytes().unwrap();
+
+    // Encrypt sealed backup using a one-off keypair and then decrypt via manager path
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let sealed = backup_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &unsealed_bytes)
+        .unwrap();
+
+    // Factor secret wraps the backup keypair
+    let factor_sk = SecretKey::generate(&mut rand::thread_rng());
+    let encrypted_backup_keypair = factor_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &backup_sk.to_bytes())
+        .unwrap();
+
+    // Act: decrypt and unpack
+    let _ = manager
+        .decrypt_and_unpack_sealed_backup(
+            &sealed,
+            hex::encode(encrypted_backup_keypair),
+            hex::encode(factor_sk.to_bytes()),
+            FactorType::Prf,
+            BackupManifest::default_hash_hex(),
+        )
+        .unwrap();
+
+    // Assert: files exist at expected paths (global filesystem, no prefix)
+    let global_fs = crate::primitives::filesystem::get_filesystem_raw()
+        .unwrap()
+        .clone();
+    assert!(global_fs
+        .file_exists("orb_pkg/personal_custody/résumé-αβγ.bin".to_string())
+        .unwrap());
+    assert!(global_fs
+        .file_exists("document_pkg/İstanbul/ŞĞÜ-çö.bin".to_string())
+        .unwrap());
+    assert!(global_fs
+        .file_exists("document_pkg/ไทย/บีน.bin".to_string())
+        .unwrap());
+
+    // Manifest is written under backup_manager/manifest.json and includes the paths
+    let manifest_bytes = global_fs
+        .read_file("backup_manager/manifest.json".to_string())
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    assert_eq!(manifest["version"], "V0");
+    let files_array = manifest["manifest"]["files"].as_array().unwrap();
+    let paths: std::collections::HashSet<String> = files_array
+        .iter()
+        .map(|v| v["file_path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(paths.contains("orb_pkg/personal_custody/résumé-αβγ.bin"));
+    assert!(paths.contains("document_pkg/İstanbul/ŞĞÜ-çö.bin"));
+    assert!(paths.contains("document_pkg/ไทย/บีน.bin"));
 }
 
 #[test]
