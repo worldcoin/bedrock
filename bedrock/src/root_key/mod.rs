@@ -1,9 +1,11 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
+use dryoc::kdf::Kdf;
 use rand::{rngs::OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const KEY_LENGTH: usize = 32;
 type KeyType = [u8; KEY_LENGTH];
@@ -14,6 +16,9 @@ pub enum RootKeyError {
     /// The provided input is likely not an actual `RootKey`. It is malformed or not the right format.
     #[error("failed to parse key")]
     KeyParseError,
+    /// Key derivation unexpectedly fail
+    #[error("key derivation failure: {0}")]
+    KeyDerivation(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,7 +79,7 @@ where
 /// The `RootKey` is a 32-byte secret key from which other keys are derived for use throughout World App.
 ///
 /// Debug trait is safe because the key is stored in a `SecretBox`.
-#[derive(uniffi::Object, Debug)]
+#[derive(uniffi::Object, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct RootKey {
     inner: SecretBox<VersionedKey>,
 }
@@ -108,10 +113,12 @@ impl RootKey {
         })
     }
 
+    /// Returns `true` if the `RootKey` is a version 0 key.
     pub fn is_v0(&self) -> bool {
         matches!(self.inner.expose_secret(), VersionedKey::V0(_))
     }
 
+    /// Returns `true` if the provided `RootKey`s are equal by comparing internally the underlying secrets.
     pub fn is_equal_to(&self, other: &Self) -> bool {
         let self_secret = self.inner.expose_secret();
         let other_secret = other.inner.expose_secret();
@@ -136,6 +143,8 @@ impl PartialEq for RootKey {
 
 /// Internal implementation for `RootKey` (methods not exposed to foreign bindings)
 impl RootKey {
+    const CONTEXT: [u8; 8] = *b"OXIDEKEY";
+
     /// Serializes a `RootKey` to a JSON string.
     ///
     /// # Warning
@@ -147,6 +156,71 @@ impl RootKey {
                 error_message: "Failed to serialize key".to_string(),
             }
         })
+    }
+
+    /// Derives a subkey from the `RootKey` given `subkey_id` using blake2b-based KDF.
+    fn derive_subkey(
+        &self,
+        subkey_id: u64,
+    ) -> Result<SecretBox<KeyType>, RootKeyError> {
+        let mut base_key_material = match self.inner.expose_secret() {
+            VersionedKey::V0(key) => Self::internal_parse_key_v0(key),
+            VersionedKey::V1(key) => key.to_owned(),
+        };
+
+        let key = Kdf::from_parts(base_key_material, Self::CONTEXT);
+        base_key_material.zeroize();
+
+        let mut subkey = key
+            .derive_subkey_to_vec(subkey_id)
+            .map_err(|e| RootKeyError::KeyDerivation(e.to_string()))?;
+        let mut result_key = [0u8; KEY_LENGTH];
+        result_key.copy_from_slice(&subkey);
+
+        let secret_box = SecretBox::new(Box::new(result_key));
+        result_key.zeroize();
+        subkey.zeroize();
+        Ok(secret_box)
+    }
+
+    /// Handling for legacy V0 keys to be able to use them with KDF.
+    fn internal_parse_key_v0(encoded_key: &str) -> KeyType {
+        let mut hasher = Sha256::new();
+        hasher.update(encoded_key);
+        let key_bytes = hasher.finalize().to_vec();
+
+        let mut key = [0u8; KEY_LENGTH];
+        key.copy_from_slice(&key_bytes);
+
+        key
+    }
+}
+
+/// Subkey ID. Namespace used for the Backup ID.
+const BACKUP_SUBKEY_ID: u64 = 0x100;
+
+/// Key derivation implementations.
+///
+/// Derivations identified with "Public" contain identifiers that are not considered secret and
+/// may be exposed. Note these values are not returned in a `SecretBox`.
+impl RootKey {
+    /// Key derivation. "Public" value.
+    ///
+    /// Derives the deterministic public backup account ID to uniquely identify a backup for an account.
+    ///
+    /// This is used to ensure that only a single backup can exist per account, otherwise this could lead
+    /// to race conditions and undefined behavior with the backup (including user confusion).
+    ///
+    /// # Errors
+    /// No errors are generally expected, but key derivation may unexpectedly fail.
+    pub(crate) fn derive_public_backup_account_id(
+        &self,
+    ) -> Result<String, RootKeyError> {
+        let mut subkey: SecretBox<[u8; 32]> =
+            Self::derive_subkey(self, BACKUP_SUBKEY_ID)?;
+        let backup_id = blake3::keyed_hash(subkey.expose_secret(), b"public");
+        subkey.zeroize();
+        Ok(format!("backup_account_{}", backup_id.to_hex()))
     }
 }
 

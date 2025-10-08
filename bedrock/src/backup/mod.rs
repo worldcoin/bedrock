@@ -78,8 +78,13 @@ impl BackupManager {
         );
 
         // 1: Decode the root secret from multiple formats
-        let root_secret = RootKey::from_json(root_secret)
+        let root_key = RootKey::from_json(root_secret)
             .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let backup_account_id =
+            root_key.derive_public_backup_account_id().map_err(|e| {
+                crate::error!("Error deriving public backup account id: {e:?}");
+                BackupError::InvalidRootSecretError
+            })?;
 
         // 2.1: Decode factor secret from hex
         let factor_secret_bytes = hex::decode(factor_secret)
@@ -96,7 +101,7 @@ impl BackupManager {
             .map_err(|_| BackupError::DecodeFactorSecretError)?;
 
         // 3: Build the unsealed backup
-        let unsealed_backup = BackupFormat::new_v0(V0Backup::new(root_secret, vec![]));
+        let unsealed_backup = BackupFormat::new_v0(V0Backup::new(root_key, vec![]));
         let unsealed_backup = unsealed_backup.to_bytes()?;
 
         // 4.1: Create a backup encryption keypair
@@ -135,6 +140,7 @@ impl BackupManager {
                 backup_secret_key.public_key().as_bytes(),
             ),
             manifest_hash: manifest_hash_hex,
+            backup_account_id,
         };
 
         Ok(result)
@@ -584,6 +590,9 @@ pub struct CreatedBackup {
     backup_keypair_public_key: String,
     /// The manifest hash representing the current backup state. Hex-encoded, 32-byte Blake3 hash.
     manifest_hash: String,
+    /// The unique identifier for the backup account. Used to ensure that a user can only have a single backup.
+    /// The remote backup service will only accept one backup per account.
+    backup_account_id: String,
 }
 
 /// Result of decrypting a sealed backup.
