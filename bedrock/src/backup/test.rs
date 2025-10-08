@@ -93,7 +93,7 @@ impl BackupServiceApi for FakeBackupServiceApi {
             manifest_hash: s
                 .remote_manifest_hash_hex
                 .clone()
-                .unwrap_or_else(BackupManifest::default_hash_hex),
+                .unwrap_or_else(|| BackupManifest::default_hash_hex().to_string()),
             encryption_keys: None,
             sync_factor_count: None,
             main_factors: None,
@@ -131,14 +131,14 @@ fn get_manifest_from_disk(prefix: &str) -> BackupManifest {
 }
 
 fn compute_manifest_hash(manifest: &BackupManifest) -> String {
-    hex::encode(manifest.calculate_hash().unwrap())
+    hex::encode(manifest.to_hash().unwrap())
 }
 
 fn compute_manifest_hash_from_disk(prefix: &str) -> String {
     let fs: Arc<dyn FileSystem> = get_filesystem_raw().unwrap().clone();
     let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
     let manifest: BackupManifest = serde_json::from_slice(&bytes).unwrap();
-    hex::encode(manifest.calculate_hash().unwrap())
+    hex::encode(manifest.to_hash().unwrap())
 }
 
 fn write_global_file(path: &str, contents: &[u8]) {
@@ -148,11 +148,8 @@ fn write_global_file(path: &str, contents: &[u8]) {
 
 #[test]
 fn test_backup_manifest_default_hash() {
-    let manifest = BackupManifest::V0(V0BackupManifest {
-        previous_manifest_hash: None,
-        files: vec![],
-    });
-    let hash = hex::encode(manifest.calculate_hash().unwrap());
+    let manifest = BackupManifest::V0(V0BackupManifest { files: vec![] });
+    let hash = hex::encode(manifest.to_hash().unwrap());
     assert_eq!(hash, BackupManifest::default_hash_hex());
 }
 
@@ -164,7 +161,6 @@ async fn test_list_files_happy_path() {
 
     // Prepare manifest with two files
     let m = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
         files: vec![
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::OrbPkg,
@@ -193,10 +189,7 @@ async fn test_list_files_stale_remote() {
     api.reset();
 
     // Local manifest
-    let m = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
-        files: vec![],
-    });
+    let m = BackupManifest::V0(V0BackupManifest { files: vec![] });
     write_manifest_with_prefix(&m, "backup_test_list_2");
     // Remote is different
     api.set_remote_hash(hex::encode(blake3::hash(b"different").as_bytes()));
@@ -235,7 +228,7 @@ async fn test_list_files_corrupted_manifest() {
     mw.write_file("manifest.json", b"not-json".to_vec())
         .unwrap();
 
-    api.set_remote_hash(BackupManifest::default_hash_hex());
+    api.set_remote_hash(BackupManifest::default_hash_hex().to_string());
 
     let mgr = ManifestManager::new_with_prefix("backup_test_list_corrupted");
     let err = mgr
@@ -256,10 +249,7 @@ async fn test_store_file_happy_path_and_commit() {
     api.reset();
 
     // Local empty manifest and matching remote
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
-        files: vec![],
-    });
+    let m0 = BackupManifest::V0(V0BackupManifest { files: vec![] });
     write_manifest_with_prefix(&m0, "backup_test_store_1");
     api.set_remote_hash(compute_manifest_hash_from_disk("backup_test_store_1"));
 
@@ -280,7 +270,7 @@ async fn test_store_file_happy_path_and_commit() {
     .await
     .unwrap();
 
-    // Manifest committed with previous hash == m0 and one entry
+    // Manifest committed with one entry
     let fs = get_filesystem_raw().unwrap().clone();
     let committed = fs
         .read_file("backup_test_store_1/manifest.json".to_string())
@@ -288,10 +278,6 @@ async fn test_store_file_happy_path_and_commit() {
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     assert_eq!(committed["manifest"]["files"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        committed["manifest"]["previous_manifest_hash"],
-        serde_json::Value::String(compute_manifest_hash(&m0))
-    );
 }
 
 #[tokio::test]
@@ -302,7 +288,6 @@ async fn test_store_file_accepts_dot_slash_path() {
 
     // Local empty manifest and matching remote
     let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
         files: vec![],
     });
     write_manifest_with_prefix(&m0, "backup_test_store_dot_path");
@@ -346,10 +331,7 @@ async fn test_store_file_propagates_sync_failure() {
     api.reset();
 
     // Local empty manifest and matching remote
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
-        files: vec![],
-    });
+    let m0 = BackupManifest::V0(V0BackupManifest { files: vec![] });
     write_manifest_with_prefix(&m0, "backup_test_store_sync_failure");
     api.set_remote_hash(compute_manifest_hash_from_disk(
         "backup_test_store_sync_failure",
@@ -387,10 +369,7 @@ async fn test_store_file_fails_when_remote_ahead() {
     let api = init_test_globals();
     api.reset();
 
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
-        files: vec![],
-    });
+    let m0 = BackupManifest::V0(V0BackupManifest { files: vec![] });
     write_manifest_with_prefix(&m0, "backup_test_store_2");
     api.set_remote_hash(hex::encode(blake3::hash(b"different").as_bytes()));
 
@@ -416,10 +395,7 @@ async fn test_store_file_invalid_source_path() {
     let api = init_test_globals();
     api.reset();
 
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
-        files: vec![],
-    });
+    let m0 = BackupManifest::V0(V0BackupManifest { files: vec![] });
     write_manifest_with_prefix(&m0, "backup_test_store_3");
     api.set_remote_hash(compute_manifest_hash_from_disk("backup_test_store_3"));
 
@@ -448,8 +424,7 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
     // Prepare manifest with one entry that has wrong checksum vs actual file
     write_global_file("orb_pkg/existing.bin", b"ACTUAL");
     let wrong_checksum = hex::encode(blake3::hash(b"DIFFERENT").as_bytes());
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
+    let m0 = BackupManifest::V0(V0BackupManifest {
         files: vec![V0BackupManifestEntry {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "orb_pkg/existing.bin".to_string(),
@@ -487,8 +462,7 @@ async fn test_store_file_checksum_mismatch_when_file_modified() {
     // Prepare manifest with one entry that matches the original file contents
     write_global_file("pcp/changed.bin", b"ORIGINAL");
     let correct_checksum = hex::encode(blake3::hash(b"ORIGINAL").as_bytes());
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
+    let m0 = BackupManifest::V0(V0BackupManifest {
         files: vec![V0BackupManifestEntry {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "pcp/changed.bin".to_string(),
@@ -532,8 +506,7 @@ async fn test_store_file_fails_when_manifest_references_missing_file() {
 
     // Prepare manifest with an entry pointing to a non-existent file
     let bogus_checksum = hex::encode(blake3::hash(b"ANY").as_bytes());
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
+    let m0 = BackupManifest::V0(V0BackupManifest {
         files: vec![V0BackupManifestEntry {
             designator: BackupFileDesignator::OrbPkg,
             file_path: "pcp/missing.bin".to_string(),
@@ -577,8 +550,7 @@ async fn test_replace_all_files_for_designator_happy_path() {
     write_global_file("docs/keep.bin", b"KEEP");
 
     // Initial manifest with two Orb entries and one Document entry
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
+    let m0 = BackupManifest::V0(V0BackupManifest {
         files: vec![
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::OrbPkg,
@@ -625,11 +597,6 @@ async fn test_replace_all_files_for_designator_happy_path() {
         .unwrap();
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
-    let prev_hash = committed["manifest"]["previous_manifest_hash"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(prev_hash, compute_manifest_hash(&m0));
     let files = committed["manifest"]["files"].as_array().unwrap();
     // 1 (new orb) + 1 (existing document)
     assert_eq!(files.len(), 2);
@@ -660,8 +627,7 @@ async fn test_remove_file_happy_and_not_found() {
     write_global_file("docs/keep.bin", b"KEEP");
 
     // Initial manifest with two entries (one to be removed)
-    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
-        previous_manifest_hash: None,
+    let m0 = BackupManifest::V0(V0BackupManifest {
         files: vec![
             V0BackupManifestEntry {
                 designator: BackupFileDesignator::OrbPkg,
@@ -866,7 +832,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             prf_result.clone(),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 
@@ -893,7 +858,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             incorrect_factor_secret,
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .expect_err("Expected decryption to fail with incorrect factor secret");
     assert_eq!(
@@ -914,7 +878,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             incorrect_encrypted_backup_keypair,
             prf_result,
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .expect_err(
             "Expected decryption to fail with incorrect encrypted backup keypair",
@@ -954,7 +917,6 @@ async fn test_decrypt_and_unpack_default_manifest_hash() {
             create_result.encrypted_backup_keypair.clone(),
             prf_result,
             FactorType::Prf,
-            create_result.manifest_hash.clone(),
         )
         .unwrap();
 
@@ -965,9 +927,6 @@ async fn test_decrypt_and_unpack_default_manifest_hash() {
 
     let manifest = get_manifest_from_disk("backup_manager");
     let unpacked_manifest_hash = compute_manifest_hash(&manifest);
-    let BackupManifest::V0(manifest) = manifest;
-
-    assert_eq!(manifest.previous_manifest_hash, None);
     assert_eq!(unpacked_manifest_hash, create_result.manifest_hash);
 }
 
@@ -1019,7 +978,6 @@ fn test_unpack_writes_files_and_manifest() {
             hex::encode(encrypted_backup_keypair),
             hex::encode(factor_sk.to_bytes()),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 

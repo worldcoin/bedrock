@@ -123,11 +123,8 @@ impl BackupManager {
             .map_err(|_| BackupError::EncryptBackupError)?;
 
         // 5.1: Initialize and persist the initial manifest (empty files set) and compute its hash
-        let manifest = BackupManifest::V0(V0BackupManifest {
-            previous_manifest_hash: None,
-            files: vec![],
-        });
-        let manifest_hash_hex = hex::encode(manifest.calculate_hash()?);
+        let manifest = BackupManifest::V0(V0BackupManifest { files: vec![] });
+        let manifest_hash_hex = hex::encode(manifest.to_hash()?);
 
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
@@ -155,7 +152,6 @@ impl BackupManager {
     /// * `factor_secret` - is the factor secret that was used to encrypt the backup keypair. Hex encoded.
     /// * `factor_type` - is the type of factor that was used to encrypt the backup keypair.
     ///   It should mark what kind of key `factor_secret` is.
-    /// * `current_manifest_hash` - hex-encoded 32-byte blake3 hash of the manifest head at the time
     ///   the fetched backup was created (returned by the remote and provided by the native layer).
     ///
     /// # Errors
@@ -178,7 +174,6 @@ impl BackupManager {
         encrypted_backup_keypair: String,
         factor_secret: String,
         factor_type: FactorType,
-        current_manifest_hash: String,
     ) -> Result<DecryptedBackup, BackupError> {
         crate::info!("Decrypting sealed backup with factor: {factor_type:?}");
 
@@ -213,7 +208,7 @@ impl BackupManager {
 
         crate::info!("Backup successfully decrypted, initiating unpacking.");
 
-        Self::unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
+        Self::unpack_backup_to_filesystem(&unsealed_backup)?;
 
         match unsealed_backup {
             BackupFormat::V0(backup) => Ok(DecryptedBackup {
@@ -332,7 +327,6 @@ impl BackupManager {
 impl BackupManager {
     fn unpack_backup_to_filesystem(
         unsealed_backup: &BackupFormat,
-        current_manifest_hash_hex: String,
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
 
@@ -389,26 +383,15 @@ impl BackupManager {
             });
         }
 
-        // If the current manifest hash is the default hash, then there is no previous manifest hash
-        // this must be set as `None`, otherwise the remote will appear ahead when it's not.
-        // See: `test_decrypt_and_unpack_default_manifest_hash`
-        let previous_manifest_hash =
-            if current_manifest_hash_hex == BackupManifest::default_hash_hex() {
-                crate::info!("Manifest hash is the default hash, setting to None");
-                None
-            } else {
-                Some(current_manifest_hash_hex)
-            };
-
-        crate::info!(
-            "Saving manifest file with hash: {previous_manifest_hash:?} and {} files",
-            manifest_entries.len()
-        );
-
         let manifest = BackupManifest::V0(V0BackupManifest {
-            previous_manifest_hash,
             files: manifest_entries,
         });
+
+        crate::info!(
+            "Saving manifest file with {} files and hash: {}",
+            manifest.entries_length(),
+            hex::encode(manifest.to_hash()?)
+        );
 
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;

@@ -7,6 +7,7 @@ use anyhow::Context;
 use bedrock_macros::bedrock_export;
 use chrono::Utc;
 use crypto_box::PublicKey;
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
@@ -26,6 +27,8 @@ use crate::{
     primitives::filesystem::get_filesystem_raw,
 };
 
+static DEFAULT_DIGEST_HEX: OnceCell<String> = OnceCell::new();
+
 /// A single, global manifest that describes the backup content.
 ///
 /// All operations on the backup use this as a source.
@@ -37,7 +40,7 @@ pub enum BackupManifest {
 
 impl BackupManifest {
     /// Returns the canonical bytes used for manifest hashing, independent of JSON formatting.
-    fn hash_material(&self) -> Result<Vec<u8>, BackupError> {
+    fn to_digest(&self) -> Result<Vec<u8>, BackupError> {
         let mut out = Vec::with_capacity(64);
         out.extend_from_slice(b"BEDROCK_MANIFEST");
         match self {
@@ -45,33 +48,19 @@ impl BackupManifest {
                 // Version tag for V0
                 out.push(0x00);
 
-                // Previous manifest hash: 0x00 for None, 0x01 + 32 bytes for Some
-                match &m.previous_manifest_hash {
-                    None => out.push(0x00),
-                    Some(prev_hex) => {
-                        out.push(0x01);
-                        let prev_bytes = hex::decode(prev_hex).map_err(|_| {
-                            BackupError::InvalidFileForBackup(
-                                "Invalid previous manifest hash encoding".to_string(),
-                            )
-                        })?;
-                        let prev_arr: [u8; 32] =
-                            prev_bytes.try_into().map_err(|_| {
-                                BackupError::InvalidFileForBackup(
-                                    "Invalid previous manifest hash length".to_string(),
-                                )
-                            })?;
-                        out.extend_from_slice(&prev_arr);
-                    }
-                }
-
                 // Files length (u32 LE)
                 #[allow(clippy::cast_possible_truncation)]
                 let count = m.files.len() as u32;
-                out.extend_from_slice(&count.to_le_bytes());
+                out.extend_from_slice(&count.to_be_bytes());
+
+                let mut sorted_files: Vec<&V0BackupManifestEntry> =
+                    m.files.iter().collect();
+                sorted_files.sort_by(|a, b| {
+                    a.file_path.to_lowercase().cmp(&b.file_path.to_lowercase())
+                });
 
                 // Files in-order
-                for entry in &m.files {
+                for entry in sorted_files {
                     // Designator (snake_case) + 0x00 separator
                     out.extend_from_slice(entry.designator.to_string().as_bytes());
                     out.push(0x00);
@@ -109,29 +98,35 @@ impl BackupManifest {
     }
 
     /// Computes the BLAKE3 hash of the canonical manifest bytes.
-    pub fn calculate_hash(&self) -> Result<[u8; 32], BackupError> {
-        let material = self.hash_material()?;
-        Ok(blake3::hash(&material).into())
+    pub fn to_hash(&self) -> Result<[u8; 32], BackupError> {
+        let pre_image = self.to_digest()?;
+        Ok(blake3::hash(&pre_image).into())
     }
 
     /// Returns the hex-encoded hash of the default (empty) manifest.
     #[must_use]
-    pub fn default_hash_hex() -> String {
-        // This cannot fail: no previous hash, no files to decode.
-        hex::encode(
-            Self::default()
-                .calculate_hash()
-                .expect("default manifest hash is infallible"),
-        )
+    pub fn default_hash_hex() -> &'static str {
+        DEFAULT_DIGEST_HEX.get_or_init(|| {
+            // This cannot fail: no previous hash, no files to decode.
+            hex::encode(
+                Self::default()
+                    .to_hash()
+                    .expect("default manifest hash is infallible"),
+            )
+        })
+    }
+
+    /// The number of file entries in the manifest.
+    pub const fn entries_length(&self) -> usize {
+        match self {
+            Self::V0(m) => m.files.len(),
+        }
     }
 }
 
 impl Default for BackupManifest {
     fn default() -> Self {
-        Self::V0(V0BackupManifest {
-            previous_manifest_hash: None,
-            files: vec![],
-        })
+        Self::V0(V0BackupManifest { files: vec![] })
     }
 }
 
@@ -452,7 +447,7 @@ impl ManifestManager {
             Ok(bytes) => {
                 let manifest: BackupManifest =
                     serde_json::from_slice(&bytes).context("parse BackupManifest")?;
-                let checksum = manifest.calculate_hash()?;
+                let checksum = manifest.to_hash()?;
                 Ok((manifest, checksum))
             }
             Err(FileSystemError::FileDoesNotExist) => {
@@ -504,15 +499,13 @@ impl ManifestManager {
             ManifestMutation::Changed => (),
         }
 
-        manifest.previous_manifest_hash = Some(hex::encode(local_hash));
-
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
         let unsealed_backup = V0Backup::new(root, files).to_bytes()?;
         let sealed_backup =
             BackupManager::seal_backup_with_public_key(&unsealed_backup, &pk)?;
 
         let updated_manifest = BackupManifest::V0(manifest);
-        let new_manifest_hash = updated_manifest.calculate_hash()?;
+        let new_manifest_hash = updated_manifest.to_hash()?;
 
         BackupServiceClient::sync(
             hex::encode(local_hash),
@@ -559,4 +552,22 @@ impl Default for ManifestManager {
 enum ManifestMutation {
     NoChange,
     Changed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_hash() {
+        let manifest = BackupManifest::V0(V0BackupManifest { files: vec![] });
+        let digest = manifest.to_digest().unwrap();
+        // 0u8 = version tag; 4x 0u8 = u32 length of files
+        assert_eq!(digest, b"BEDROCK_MANIFEST\x00\x00\x00\x00\x00");
+        let hash = manifest.to_hash().unwrap();
+        assert_eq!(
+            hex::encode(hash),
+            "85c9d3437fbd13e892674f14603650fff5cb32db314d375722f39f84f501036f"
+        );
+    }
 }
