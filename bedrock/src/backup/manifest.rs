@@ -6,6 +6,7 @@
 use anyhow::Context;
 use bedrock_macros::bedrock_export;
 use crypto_box::PublicKey;
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
@@ -23,6 +24,8 @@ use crate::{
     primitives::filesystem::get_filesystem_raw,
 };
 
+static DEFAULT_DIGEST_HEX: OnceCell<String> = OnceCell::new();
+
 /// A single, global manifest that describes the backup content.
 ///
 /// All operations on the backup use this as a source.
@@ -33,28 +36,93 @@ pub enum BackupManifest {
 }
 
 impl BackupManifest {
-    /// The hash of the `Default` manifest (i.e. genesis, no files).
-    ///
-    /// See `test_backup_manifest_default_hash` for computation and updates.
-    pub const DEFAULT_HASH: &str =
-        "471f87ee6c873ccd523bcd669aa253361e711d8613b9a1f4a6a92f28bc8c64a6";
+    fn to_digest(&self) -> Result<Vec<u8>, BackupError> {
+        let mut out = Vec::with_capacity(64);
+        out.extend_from_slice(b"BEDROCK_MANIFEST");
+        match self {
+            Self::V0(m) => {
+                // Version tag for V0
+                out.push(0x00);
 
-    /// Computes the BLAKE3 hash of the serialized manifest bytes.
-    ///
-    /// This mirrors how the manifest is persisted via `write_manifest` to keep hashes consistent.
-    pub fn calculate_hash(&self) -> Result<[u8; 32], BackupError> {
-        let serialized =
-            serde_json::to_vec(self).context("serialize BackupManifest")?;
-        Ok(blake3::hash(&serialized).into())
+                // Files length (u32 BE)
+                #[allow(clippy::cast_possible_truncation)]
+                let count = m.files.len() as u32;
+                out.extend_from_slice(&count.to_be_bytes());
+
+                let mut sorted_files: Vec<&V0BackupManifestEntry> =
+                    m.files.iter().collect();
+                sorted_files.sort_by(|a, b| {
+                    a.file_path.to_lowercase().cmp(&b.file_path.to_lowercase())
+                });
+
+                // Files in-order
+                for entry in sorted_files {
+                    // Designator (snake_case) + 0x00 separator
+                    out.extend_from_slice(entry.designator.to_string().as_bytes());
+                    out.push(0x00);
+
+                    // File path (UTF-8) + 0x00 separator
+                    out.extend_from_slice(entry.file_path.as_bytes());
+                    out.push(0x00);
+
+                    // Checksum: 32 raw bytes from hex
+                    let ck_bytes = hex::decode(&entry.checksum_hex).map_err(|_| {
+                        log::error!(
+                            "[Critical] Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
+                            entry.designator
+                        );
+                        BackupError::InvalidFileForBackup(format!(
+                            "Invalid checksum encoding for designator: {}",
+                            entry.designator
+                        ))
+                    })?;
+                    let ck_arr: [u8; 32] = ck_bytes.try_into().map_err(|_| {
+                        log::error!(
+                            "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
+                            entry.designator
+                        );
+                        BackupError::InvalidFileForBackup(format!(
+                            "Invalid checksum length for designator: {}",
+                            entry.designator
+                        ))
+                    })?;
+                    out.extend_from_slice(&ck_arr);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Computes the BLAKE3 hash of the canonical manifest bytes.
+    pub fn to_hash(&self) -> Result<[u8; 32], BackupError> {
+        let pre_image = self.to_digest()?;
+        Ok(blake3::hash(&pre_image).into())
+    }
+
+    /// Returns the hex-encoded hash of the default (empty) manifest.
+    #[must_use]
+    pub fn default_hash_hex() -> &'static str {
+        DEFAULT_DIGEST_HEX.get_or_init(|| {
+            // This cannot fail: empty files to decode.
+            hex::encode(
+                Self::default()
+                    .to_hash()
+                    .expect("default manifest hash is infallible"),
+            )
+        })
+    }
+
+    /// The number of file entries in the manifest.
+    pub const fn entries_length(&self) -> usize {
+        match self {
+            Self::V0(m) => m.files.len(),
+        }
     }
 }
 
 impl Default for BackupManifest {
     fn default() -> Self {
-        Self::V0(V0BackupManifest {
-            previous_manifest_hash: None,
-            files: vec![],
-        })
+        Self::V0(V0BackupManifest { files: vec![] })
     }
 }
 
@@ -354,9 +422,9 @@ impl ManifestManager {
         let result = self.file_system.read_file(Self::GLOBAL_MANIFEST_FILE);
         match result {
             Ok(bytes) => {
-                let checksum = blake3::hash(&bytes).into();
                 let manifest: BackupManifest =
                     serde_json::from_slice(&bytes).context("parse BackupManifest")?;
+                let checksum = manifest.to_hash()?;
                 Ok((manifest, checksum))
             }
             Err(FileSystemError::FileDoesNotExist) => {
@@ -406,15 +474,13 @@ impl ManifestManager {
             ManifestMutation::Changed => {}
         }
 
-        manifest.previous_manifest_hash = Some(hex::encode(local_hash));
-
         let files = self.build_unsealed_backup_files_from_manifest(&manifest)?;
         let unsealed_backup = V0Backup::new(root, files).to_bytes()?;
         let sealed_backup =
             BackupManager::seal_backup_with_public_key(&unsealed_backup, &pk)?;
 
         let updated_manifest = BackupManifest::V0(manifest);
-        let new_manifest_hash = updated_manifest.calculate_hash()?;
+        let new_manifest_hash = updated_manifest.to_hash()?;
 
         BackupServiceClient::sync(
             hex::encode(local_hash),
