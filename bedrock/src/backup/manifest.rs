@@ -648,4 +648,50 @@ mod tests {
         let h1 = round.to_hash().unwrap();
         assert_eq!(h0, h1);
     }
+
+    #[test]
+    fn test_unicode_paths_order_independent_hashing() {
+        use crate::backup::BackupFileDesignator as D;
+        // French, Turkish, Thai
+        let entry_french = mk_entry(D::OrbPkg, "pcp/résumé.bin", b"FR");
+        let entry_turkish = mk_entry(D::DocumentPkg, "docs/İstanbul-şğü.bin", b"TR");
+        let entry_thai = mk_entry(D::DocumentPkg, "docs/ไทย/บีน.bin", b"TH");
+
+        let m1 = BackupManifest::V0(V0BackupManifest {
+            files: vec![
+                V0BackupManifestEntry {
+                    designator: entry_french.designator.clone(),
+                    file_path: entry_french.file_path.clone(),
+                    checksum_hex: entry_french.checksum_hex.clone(),
+                },
+                V0BackupManifestEntry {
+                    designator: entry_turkish.designator.clone(),
+                    file_path: entry_turkish.file_path.clone(),
+                    checksum_hex: entry_turkish.checksum_hex.clone(),
+                },
+                V0BackupManifestEntry {
+                    designator: entry_thai.designator.clone(),
+                    file_path: entry_thai.file_path.clone(),
+                    checksum_hex: entry_thai.checksum_hex.clone(),
+                },
+            ],
+        });
+        let m2 = BackupManifest::V0(V0BackupManifest {
+            files: vec![entry_thai, entry_turkish, entry_french],
+        });
+        assert_eq!(m1.to_hash().unwrap(), m2.to_hash().unwrap());
+    }
+
+    #[test]
+    fn test_unicode_duplicate_paths_rejected_case_insensitive() {
+        use crate::backup::BackupFileDesignator as D;
+        // The uppercase path lowercases to the same as the lowercase path (accents included)
+        let e1 = mk_entry(D::OrbPkg, "docs/résumé.bin", b"X");
+        let e2 = mk_entry(D::OrbPkg, "DOCS/RÉSUMÉ.BIN", b"X");
+        let m = BackupManifest::V0(V0BackupManifest {
+            files: vec![e1, e2],
+        });
+        let err = m.to_hash().expect_err("expected duplicate path error");
+        assert!(err.to_string().to_lowercase().contains("duplicate"));
+    }
 }
