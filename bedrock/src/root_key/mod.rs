@@ -164,11 +164,13 @@ impl RootKey {
         subkey_id: u64,
     ) -> Result<SecretBox<KeyType>, RootKeyError> {
         let mut base_key_material = match self.inner.expose_secret() {
-            VersionedKey::V0(key) => Self::internal_parse_key_v0(key),
+            VersionedKey::V0(key) => {
+                Self::internal_parse_key_v0(key).expose_secret().to_owned()
+            }
             VersionedKey::V1(key) => key.to_owned(),
         };
 
-        let key = Kdf::from_parts(base_key_material, Self::CONTEXT);
+        let mut key = Kdf::from_parts(base_key_material, Self::CONTEXT);
         base_key_material.zeroize();
 
         let mut subkey: [u8; 32] = key
@@ -177,19 +179,19 @@ impl RootKey {
 
         let secret_box = SecretBox::new(Box::new(subkey));
         subkey.zeroize();
+        key.zeroize();
         Ok(secret_box)
     }
 
     /// Handling for legacy V0 keys to be able to use them with KDF.
-    fn internal_parse_key_v0(encoded_key: &str) -> KeyType {
+    fn internal_parse_key_v0(encoded_key: &str) -> SecretBox<KeyType> {
         let mut hasher = Sha256::new();
         hasher.update(encoded_key);
-        let key_bytes = hasher.finalize().to_vec();
+        let mut key_bytes: [u8; KEY_LENGTH] = hasher.finalize().into();
 
-        let mut key = [0u8; KEY_LENGTH];
-        key.copy_from_slice(&key_bytes);
-
-        key
+        let secret_box = SecretBox::new(Box::new(key_bytes));
+        key_bytes.zeroize();
+        secret_box
     }
 }
 
