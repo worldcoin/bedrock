@@ -2,6 +2,19 @@
 
 
 
+## [0.0.21] - 2025-10-09
+
+## What's Changed
+* feat: canonical manifest hashing by @lukejmann in https://github.com/worldcoin/bedrock/pull/160
+* feat: add test_unicode_paths_order_independent_hashing, test_unicode_duplicate_paths_rejected_case_insensitive by @lukejmann in https://github.com/worldcoin/bedrock/pull/161
+* feat: generate deterministic backup account ID by @paolodamico in https://github.com/worldcoin/bedrock/pull/162
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.20...0.0.21
+
+
+
+
 ## [0.0.20] - 2025-10-06
 
 ## What's Changed
