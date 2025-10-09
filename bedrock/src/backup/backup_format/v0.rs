@@ -283,22 +283,6 @@ mod tests {
         assert!(V0Backup::peek_version(&bytes).unwrap());
     }
 
-    /// Ensuring a backup can only have a file path only once is critical because:
-    /// 1. Otherwise there can be undefined behavior of unpacking different files into the same location on restore.
-    /// 2. The ordering for canonical hashing is no longer guaranteed.
-    #[test]
-    fn test_v0_backup_manifest_cannot_have_duplicate_file_path_entries() {
-        // todo!("todo");
-        // let manifest = V0BackupManifest {
-        //     previous_manifest_hash: None,
-        //     files: vec![V0BackupManifestEntry {
-        //         designator: BackupFileDesignator::OrbPkg,
-        //         file_path: "personal_custody/file.txt".to_string(),
-        //         checksum_hex: "1234567890".to_string(),
-        //     }],
-        // };
-    }
-
     #[test]
     fn test_v0_backup_with_incorrect_root_secret() {
         let root_secret = "incorrect-secret".to_string();
