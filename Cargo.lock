@@ -1445,7 +1445,7 @@ dependencies = [
  "dryoc",
  "flate2",
  "hex",
- "hpke",
+ "hpke 0.11.0",
  "log",
  "once_cell",
  "p256 0.13.2",
@@ -2854,6 +2854,28 @@ dependencies = [
  "hkdf",
  "hmac",
  "p256 0.11.1",
+ "rand_core 0.6.4",
+ "serde",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "hpke"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e04a5933a381bb81f00b083fce6b4528e16d735dbeecbb2bdb45e0dbbf3f7e17"
+dependencies = [
+ "aead",
+ "aes-gcm",
+ "byteorder",
+ "chacha20poly1305",
+ "digest 0.10.7",
+ "generic-array",
+ "hkdf",
+ "hmac",
+ "p256 0.13.2",
  "rand_core 0.6.4",
  "serde",
  "sha2",
@@ -5358,7 +5380,7 @@ checksum = "af2017307b0b984cd965fa53a7ddf97f4ef9ed0339e5d54e51b6c1e84bc3dbb1"
 dependencies = [
  "bs58",
  "hex",
- "hpke",
+ "hpke 0.10.0",
  "p256 0.12.0",
  "rand_core 0.6.4",
  "serde",
