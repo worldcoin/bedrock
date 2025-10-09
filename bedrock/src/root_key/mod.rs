@@ -171,14 +171,11 @@ impl RootKey {
         let key = Kdf::from_parts(base_key_material, Self::CONTEXT);
         base_key_material.zeroize();
 
-        let mut subkey = key
-            .derive_subkey_to_vec(subkey_id)
+        let mut subkey: [u8; 32] = key
+            .derive_subkey(subkey_id)
             .map_err(|e| RootKeyError::KeyDerivation(e.to_string()))?;
-        let mut result_key = [0u8; KEY_LENGTH];
-        result_key.copy_from_slice(&subkey);
 
-        let secret_box = SecretBox::new(Box::new(result_key));
-        result_key.zeroize();
+        let secret_box = SecretBox::new(Box::new(subkey));
         subkey.zeroize();
         Ok(secret_box)
     }
