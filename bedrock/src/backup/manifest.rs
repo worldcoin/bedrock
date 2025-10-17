@@ -550,7 +550,7 @@ impl ManifestManager {
             )
             .await
         {
-            log::warn!("[ClientEvents] failed to send Sync event (remove): {e:?}");
+            log::warn!("[ClientEvents] failed to send Sync event: {e:?}");
         }
     }
 }
