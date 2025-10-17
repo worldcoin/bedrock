@@ -84,22 +84,19 @@ pub enum HttpError {
     #[error("No internet connectivity")]
     NoConnectivity,
     /// Request timed out
-    #[error("Request timed out after {seconds} seconds")]
-    Timeout {
-        /// Number of seconds before timeout occurred
-        seconds: u64,
-    },
+    #[error("Request timed out")]
+    Timeout,
     /// DNS resolution failed for the hostname
-    #[error("DNS resolution failed for {hostname}")]
+    #[error("DNS resolution failed: {error_message}")]
     DnsResolutionFailed {
-        /// The hostname that failed to resolve
-        hostname: String,
+        /// Any additional details about the DNS resolution failure
+        error_message: String,
     },
     /// Connection was refused by the server
-    #[error("Connection refused by {host}")]
+    #[error("Connection refused: {error_message}")]
     ConnectionRefused {
-        /// The host that refused the connection
-        host: String,
+        /// Any additional details about the connection refusal
+        error_message: String,
     },
     /// SSL/TLS certificate validation failed
     #[error("SSL certificate validation failed: {reason}")]
