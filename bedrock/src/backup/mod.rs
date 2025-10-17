@@ -1,4 +1,5 @@
 mod backup_format;
+mod client_events;
 mod manifest;
 mod service_client;
 mod turnkey;
@@ -7,16 +8,20 @@ mod turnkey;
 mod test;
 
 use bedrock_macros::bedrock_export;
+pub use client_events::{
+    BackupReportEncryptionKeyKind, BackupReportEventKind, BackupReportMainFactor,
+    BaseReport, ClientEventsError, ClientEventsReporter,
+};
 pub use manifest::ManifestManager;
 
 use crate::backup::backup_format::v0::{
     V0Backup, V0BackupManifest, V0BackupManifestEntry,
 };
 use crate::backup::backup_format::BackupFormat;
+use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
 use crate::root_key::RootKey;
-// anyhow::Context not needed here
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -325,6 +330,50 @@ impl BackupManager {
         manifest.danger_delete_manifest()?;
         Ok(())
     }
+
+    /// **Client Event Streams**. Set the base report attributes for event reports.
+    pub fn set_backup_report_attributes(&self, input: BackupReportInput) {
+        let client_events = ClientEventsReporter::new();
+        match client_events.set_backup_report_attributes(input) {
+            Ok(()) => {}
+            Err(e) => {
+                crate::error!("Failed to set backup report attributes: {e:?}");
+            }
+        }
+    }
+
+    /// Send a single event by merging with base report and posting to backend.
+    ///
+    /// Sends events to the REST API endpoint `/v1/backup/status`.
+    ///
+    /// # Errors
+    /// Returns an error if HTTP client is not initialized or network/serialization fails.
+    pub async fn send_event(
+        &self,
+        kind: BackupReportEventKind,
+        success: bool,
+        error_message: Option<String>,
+        timestamp_iso8601: String,
+    ) -> Result<(), BackupError> {
+        if kind == BackupReportEventKind::Sync {
+            return Err(BackupError::Generic {
+                error_message: "Sync event is automatically sent from Bedrock"
+                    .to_string(),
+            });
+        }
+        let client_events = ClientEventsReporter::new();
+        let result = client_events
+            .send_event(kind, success, error_message, timestamp_iso8601)
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                crate::error!("Failed to send event: {e:?}");
+                Ok(())
+            }
+        }
+    }
 }
 
 // Internal helpers (not exported)
@@ -349,8 +398,8 @@ impl BackupManager {
             // If a file already exists, verify checksum and log discrepancies before replacing.
             let path_ref = rel_path.get(..14).unwrap_or(rel_path); // don't log the full path to avoid leaking info
             match fs.file_exists(rel_path.to_string()) {
-                Ok(true) => match fs.calculate_checksum(rel_path) {
-                    Ok(local_checksum) => {
+                Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
+                    Ok((local_checksum, _)) => {
                         if local_checksum != file.checksum {
                             log::error!(
                                     "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",

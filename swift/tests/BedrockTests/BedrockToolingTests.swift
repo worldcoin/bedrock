@@ -197,7 +197,7 @@ final class BedrockToolingTests: XCTestCase {
     
     func testBedrockConfigInitialization() throws {
         // Initialize config with staging environment
-        setConfig(environment: .staging)
+        setConfig(environment: .staging, os: .ios)
         
         // Verify current environment is staging
         let config = getConfig()
@@ -215,7 +215,7 @@ final class BedrockToolingTests: XCTestCase {
         }
         
         // Try to initialize again - should be ignored (check logs for warning)
-        setConfig(environment: .production)
+        setConfig(environment: .production, os: .ios)
         
         // Environment should still be staging
         let configAfterSecondInit = getConfig()
@@ -224,10 +224,10 @@ final class BedrockToolingTests: XCTestCase {
     
     func testBedrockConfigEnvironmentTypes() throws {
         // Test creating config with different environments
-        let stagingConfig = BedrockConfig(environment: .staging)
+        let stagingConfig = BedrockConfig(environment: .staging, os: .ios)
         XCTAssertEqual(stagingConfig.environment(), .staging, "Staging config should have staging environment")
         
-        let productionConfig = BedrockConfig(environment: .production)
+        let productionConfig = BedrockConfig(environment: .production, os: .ios)
         XCTAssertEqual(productionConfig.environment(), .production, "Production config should have production environment")
     }
     

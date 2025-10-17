@@ -8,7 +8,9 @@ use crate::backup::service_client::{
 };
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
-use crate::primitives::filesystem::{create_middleware, get_filesystem_raw};
+use crate::primitives::filesystem::{
+    create_middleware, get_filesystem_raw, FileSystem,
+};
 use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
@@ -92,6 +94,9 @@ impl BackupServiceApi for FakeBackupServiceApi {
                 .remote_manifest_hash_hex
                 .clone()
                 .unwrap_or_else(|| BackupManifest::default_hash_hex().to_string()),
+            encryption_keys: None,
+            sync_factor_count: None,
+            main_factors: None,
         })
     }
 }
@@ -130,7 +135,7 @@ fn compute_manifest_hash(manifest: &BackupManifest) -> String {
 }
 
 fn compute_manifest_hash_from_disk(prefix: &str) -> String {
-    let fs = get_filesystem_raw().unwrap().clone();
+    let fs: Arc<dyn FileSystem> = get_filesystem_raw().unwrap().clone();
     let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
     let manifest: BackupManifest = serde_json::from_slice(&bytes).unwrap();
     hex::encode(manifest.to_hash().unwrap())
