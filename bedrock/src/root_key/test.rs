@@ -71,3 +71,24 @@ fn test_new_generates_seemingly_random_keys() {
         assert!(zero_count < 4); // following a binomial distribution X ~ Bin(32, 1/256), P(X <= 4) = 0.99999+
     }
 }
+
+#[test]
+fn test_derive_public_backup_account_id() {
+    // Test with a known V1 key to verify deterministic output
+    let key = r#"{"key":"1111111111111111111111111111111111111111111111111111111111111111","version":"V1"}"#;
+    let key = RootKey::from_json(key).unwrap();
+
+    let backup_id = key.derive_public_backup_account_id().unwrap();
+
+    // Assert format and expected well-known output
+    assert_eq!(backup_id, "backup_account_b4e9ec90064a44a2486e822bb9279635014ad8d1256c13b17645ea4056c5ec66");
+
+    // Verify determinism - same key should produce same ID
+    let backup_id2 = key.derive_public_backup_account_id().unwrap();
+    assert_eq!(backup_id, backup_id2);
+
+    // Different keys produce different IDs
+    let key2 = RootKey::new_random();
+    let backup_id3 = key2.derive_public_backup_account_id().unwrap();
+    assert_ne!(backup_id, backup_id3);
+}
