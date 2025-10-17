@@ -1,4 +1,3 @@
-use bedrock_macros::{bedrock_error, bedrock_export};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -9,13 +8,14 @@ use crate::backup::manifest::BackupManifest;
 use crate::backup::BackupFileDesignator;
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
-    create_middleware, get_filesystem_raw, FileSystemExt, FileSystemMiddleware,
+    create_middleware, get_filesystem_raw, FileSystemError, FileSystemExt,
+    FileSystemMiddleware,
 };
 use crate::primitives::http_client::{get_http_client, HttpHeader};
 use crate::HttpMethod;
 
 /// Errors that can occur when reporting client events.
-#[bedrock_error]
+#[derive(Debug, thiserror::Error)]
 pub enum ClientEventsError {
     /// HTTP client has not been initialized
     #[error("HTTP client not initialized. Call set_http_client() first.")]
@@ -30,14 +30,12 @@ pub enum ClientEventsError {
     Rng,
 
     /// HTTP error when sending events
-    #[error("HTTP error: {0}")]
-    HttpError(String),
-}
+    #[error(transparent)]
+    HttpError(#[from] crate::primitives::http_client::HttpError),
 
-impl From<crate::primitives::http_client::HttpError> for ClientEventsError {
-    fn from(e: crate::primitives::http_client::HttpError) -> Self {
-        Self::HttpError(e.to_string())
-    }
+    /// `FileSystem` error
+    #[error(transparent)]
+    FileSystemError(#[from] crate::primitives::filesystem::FileSystemError),
 }
 
 /// High-level event kinds we care to report
@@ -82,7 +80,7 @@ pub enum BackupReportEncryptionKeyKind {
 }
 
 /// Base report stored locally and merged into outgoing events.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, uniffi::Record)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BaseReport {
     /// User PKID
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,7 +117,7 @@ pub struct BaseReport {
     /// Approx backup size in KB
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_size_kb: Option<u64>,
-    /// Device-local sync counter
+    /// Number of times the user has synced their backup in this device (counter tracked locally)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_sync_count: Option<u32>,
     /// App version
@@ -128,7 +126,7 @@ pub struct BaseReport {
     /// Platform
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<Os>,
-    /// Last synced at (ISO8601) Paolo
+    /// Last synced at (ISO-8601)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_synced_at: Option<String>,
 }
@@ -138,7 +136,7 @@ pub struct BaseReport {
 pub struct BackupReportInput {
     /// User PKID
     pub user_pkid: Option<String>,
-    /// Whether orb verification happened after Oct 2025
+    /// Whether orb verification happened after 2025-10-01
     pub orb_verified_after_oct_25: Option<bool>,
     /// Whether the user is Orb verified
     pub is_user_orb_verified: Option<bool>,
@@ -154,7 +152,7 @@ pub struct BackupReportInput {
     pub main_factors: Option<Vec<BackupReportMainFactor>>,
     /// App version
     pub app_version: Option<String>,
-    /// Platform
+    /// Platform (OS where the app is running)
     pub platform: Option<Os>,
 }
 
@@ -194,15 +192,12 @@ struct EventPayload {
 }
 
 /// Reports client events with a base report persisted under a prefixed folder.
-#[derive(uniffi::Object)]
 pub struct ClientEventsReporter {
     /// Scoped filesystem middleware for this module (prefixes paths).
     fs: FileSystemMiddleware,
 }
 
-#[bedrock_export]
 impl ClientEventsReporter {
-    #[uniffi::constructor]
     #[must_use]
     /// Constructs a new `ClientEventsReporter` with a scoped filesystem middleware.
     pub fn new() -> Self {
@@ -217,7 +212,7 @@ impl ClientEventsReporter {
         self.ensure_installation_id()
     }
 
-    /// Set non-dynamic report attributes provided by native.
+    /// Set non-dynamic report attributes provided by the native layer.
     ///
     /// # Errors
     /// Returns an error if serialization or filesystem write fails.
@@ -358,10 +353,19 @@ impl ClientEventsReporter {
     }
 
     fn read_base_report(&self) -> Result<BaseReport, ClientEventsError> {
-        self.fs.read_file(Self::BASE_FILE).map_or_else(
-            |_| Ok(BaseReport::default()),
-            |bytes| serde_json::from_slice(&bytes).map_err(|_| ClientEventsError::Json),
-        )
+        let file_result = self.fs.read_file(Self::BASE_FILE);
+        match file_result {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|_| ClientEventsError::Json)
+            }
+            Err(e) => {
+                if matches!(e, FileSystemError::FileDoesNotExist) {
+                    Ok(BaseReport::default())
+                } else {
+                    Err(ClientEventsError::FileSystemError(e))
+                }
+            }
+        }
     }
 
     fn write_base_report(&self, base: &BaseReport) -> Result<(), ClientEventsError> {
@@ -369,7 +373,7 @@ impl ClientEventsReporter {
             serde_json::to_vec(base).map_err(|_| ClientEventsError::Json)?;
         self.fs
             .write_file(Self::BASE_FILE, serialized)
-            .map_err(|e| ClientEventsError::from(anyhow::Error::from(e)))
+            .map_err(ClientEventsError::FileSystemError)
     }
 
     /// Recalculate backup size from manifest and update base report.

@@ -18,6 +18,7 @@ use crate::backup::backup_format::v0::{
     V0Backup, V0BackupManifest, V0BackupManifestEntry,
 };
 use crate::backup::backup_format::BackupFormat;
+use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
 use crate::root_key::RootKey;
@@ -328,6 +329,50 @@ impl BackupManager {
         let manifest = ManifestManager::new();
         manifest.danger_delete_manifest()?;
         Ok(())
+    }
+
+    /// **Client Event Streams**. Set the base report attributes for event reports.
+    pub fn set_backup_report_attributes(&self, input: BackupReportInput) {
+        let client_events = ClientEventsReporter::new();
+        match client_events.set_backup_report_attributes(input) {
+            Ok(()) => {}
+            Err(e) => {
+                crate::error!("Failed to set backup report attributes: {e:?}");
+            }
+        }
+    }
+
+    /// Send a single event by merging with base report and posting to backend.
+    ///
+    /// Sends events to the REST API endpoint `/v1/backup/status`.
+    ///
+    /// # Errors
+    /// Returns an error if HTTP client is not initialized or network/serialization fails.
+    pub async fn send_event(
+        &self,
+        kind: BackupReportEventKind,
+        success: bool,
+        error_message: Option<String>,
+        timestamp_iso8601: String,
+    ) -> Result<(), BackupError> {
+        if kind == BackupReportEventKind::Sync {
+            return Err(BackupError::Generic {
+                error_message: "Sync event is automatically sent from Bedrock"
+                    .to_string(),
+            });
+        }
+        let client_events = ClientEventsReporter::new();
+        let result = client_events
+            .send_event(kind, success, error_message, timestamp_iso8601)
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                crate::error!("Failed to send event: {e:?}");
+                Ok(())
+            }
+        }
     }
 }
 
