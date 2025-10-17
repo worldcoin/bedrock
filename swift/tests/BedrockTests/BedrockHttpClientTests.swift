@@ -151,7 +151,7 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://nonexistent.example.com/test"
 
-        client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(errorMessage: "failed to reachnonexistent.example.com")))
+        client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(errorMessage: "failed to reach nonexistent.example.com")))
 
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)

@@ -129,7 +129,7 @@ class BedrockHttpClientTests {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
 
-        assertEquals("nonexistent.example.com", exception.`errorMessage`)
+        assertEquals("failed to reach nonexistent.example.com", exception.`errorMessage`)
     }
     
     @Test
