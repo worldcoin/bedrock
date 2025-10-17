@@ -111,13 +111,11 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://api.example.com/slow"
 
-        client.setResponse(testUrl, Result.failure(HttpException.Timeout(30u)))
+        client.setResponse(testUrl, Result.failure(HttpException.Timeout()))
 
         val exception = assertFailsWith<HttpException.Timeout> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
-
-        assertEquals(30u, exception.`seconds`)
     }
     
     @Test
@@ -125,13 +123,13 @@ class BedrockHttpClientTests {
         val client = TestAuthenticatedHttpClient()
         val testUrl = "https://nonexistent.example.com/test"
 
-        client.setResponse(testUrl, Result.failure(HttpException.DnsResolutionFailed("nonexistent.example.com")))
+        client.setResponse(testUrl, Result.failure(HttpException.DnsResolutionFailed("failed to reach nonexistent.example.com")))
 
         val exception = assertFailsWith<HttpException.DnsResolutionFailed> {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
 
-        assertEquals("nonexistent.example.com", exception.`hostname`)
+        assertEquals("nonexistent.example.com", exception.`errorMessage`)
     }
     
     @Test
@@ -171,7 +169,7 @@ class BedrockHttpClientTests {
             client.fetchFromAppBackend(testUrl, HttpMethod.GET, emptyList(), null)
         }
 
-        assertEquals("api.example.com", exception.`host`)
+        assertEquals("api.example.com", exception.`errorMessage`)
     }
     
     @Test

@@ -134,14 +134,13 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://api.example.com/slow"
 
-        client.setResponse(for: testUrl, result: .failure(.Timeout(seconds: 30)))
+        client.setResponse(for: testUrl, result: .failure(.Timeout))
 
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
-            if case let .Timeout(seconds: seconds) = httpError {
-                XCTAssertEqual(seconds, 30)
+            if case let .Timeout = httpError {
             } else {
                 XCTFail("Expected Timeout error, got \(httpError)")
             }
@@ -152,14 +151,14 @@ final class BedrockHttpClientTests: XCTestCase {
         let client = TestAuthenticatedHttpClient()
         let testUrl = "https://nonexistent.example.com/test"
 
-        client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(hostname: "nonexistent.example.com")))
+        client.setResponse(for: testUrl, result: .failure(.DnsResolutionFailed(errorMessage: "failed to reachnonexistent.example.com")))
 
         do {
             _ = try await client.fetchFromAppBackend(url: testUrl, method: .get, headers: [], body: nil)
             XCTFail("Should have thrown an error")
         } catch let httpError as HttpError {
-            if case let .DnsResolutionFailed(hostname: hostname) = httpError {
-                XCTAssertEqual(hostname, "nonexistent.example.com")
+            if case let .DnsResolutionFailed(errorMessage: errorMessage) = httpError {
+                XCTAssertEqual(errorMessage, "failed to reach nonexistent.example.com")
             } else {
                 XCTFail("Expected DnsResolutionFailed error, got \(httpError)")
             }

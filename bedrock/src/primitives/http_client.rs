@@ -93,9 +93,9 @@ pub enum HttpError {
         error_message: String,
     },
     /// Connection was refused by the server
-    #[error("Connection refused by {error_message}")]
+    #[error("Connection refused: {error_message}")]
     ConnectionRefused {
-        /// Any additional details about the DNS resolution failure
+        /// Any additional details about the connection refusal
         error_message: String,
     },
     /// SSL/TLS certificate validation failed
