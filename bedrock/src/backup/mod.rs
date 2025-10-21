@@ -374,6 +374,32 @@ impl BackupManager {
             }
         }
     }
+
+    /// Checks if the local backup is stale compared to the provided remote manifest hash.
+    ///
+    /// # Errors
+    /// Returns an error if the remote manifest hash is invalid.
+    ///
+    /// # Returns
+    /// Returns true if the local backup is stale, false otherwise.
+    pub fn is_local_backup_stale(
+        &self,
+        remote_manifest_hash: &str,
+    ) -> Result<bool, BackupError> {
+        let remote_manifest_hash = hex::decode(remote_manifest_hash)
+            .map_err(|_| BackupError::InvalidManifestHash)?;
+
+        if remote_manifest_hash.len() != 32 {
+            return Err(BackupError::InvalidManifestHash);
+        }
+
+        let manifest_manager = ManifestManager::new();
+        let (_manifest, local_manifest_hash) = manifest_manager.read_manifest()?;
+        if remote_manifest_hash == local_manifest_hash.to_vec() {
+            return Ok(false);
+        }
+        Ok(true)
+    }
 }
 
 // Internal helpers (not exported)
@@ -571,6 +597,9 @@ pub enum BackupError {
     #[error("Backup API not initialized")]
     /// Backup API not initialized.
     BackupApiNotInitialized,
+    #[error("Invalid manifest hash")]
+    /// Invalid manifest hash.
+    InvalidManifestHash,
 }
 
 impl From<crate::primitives::http_client::HttpError> for BackupError {
