@@ -2,6 +2,19 @@
 
 
 
+## [0.0.22] - 2025-10-21
+
+## What's Changed
+* fix!: improve HTTP errors & bump alloy for advisories by @paolodamico in https://github.com/worldcoin/bedrock/pull/164
+* feat: backup manifest event reporting by @lukejmann in https://github.com/worldcoin/bedrock/pull/123
+* feat: add is_local_backup_stale method by @paolodamico in https://github.com/worldcoin/bedrock/pull/165
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.21...0.0.22
+
+
+
+
 ## [0.0.21] - 2025-10-09
 
 ## What's Changed
