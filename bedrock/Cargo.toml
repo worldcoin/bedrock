@@ -41,7 +41,7 @@ crypto_box = { version = "0.9.1", features = ["seal"] }
 dryoc = "0.7.0"
 flate2 = "1.0.28"
 hex = "0.4.3"
-hpke = { version = "0.10", features = [
+hpke = { version = "0.11", features = [
   "alloc",
   "p256",
   "serde_impls",
