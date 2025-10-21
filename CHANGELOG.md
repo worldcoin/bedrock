@@ -2,6 +2,17 @@
 
 
 
+## [0.0.23] - 2025-10-21
+
+## What's Changed
+* feat: get local manifest debug by @paolodamico in https://github.com/worldcoin/bedrock/pull/167
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.22...0.0.23
+
+
+
+
 ## [0.0.22] - 2025-10-21
 
 ## What's Changed
