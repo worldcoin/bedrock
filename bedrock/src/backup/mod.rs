@@ -400,6 +400,20 @@ impl BackupManager {
         }
         Ok(true)
     }
+
+    /// **For debugging purposes only**.
+    ///
+    /// Returns the local manifest from disk as a JSON string.
+    ///
+    /// # Errors
+    /// Returns an error if the manifest is not found or cannot be serialized.
+    pub fn debug_get_local_manifest(&self) -> Result<String, BackupError> {
+        let manifest_manager = ManifestManager::new();
+        let (manifest, _) = manifest_manager.read_manifest()?;
+        serde_json::to_string(&manifest).map_err(|_| BackupError::Generic {
+            error_message: "error serializing manifest to JSON".to_string(),
+        })
+    }
 }
 
 // Internal helpers (not exported)
