@@ -102,3 +102,38 @@ pub enum EnclaveApplication {
     /// World Chat Notifications Enclave
     WorldChatNotifications,
 }
+
+/// Represents a PCR measurement with its index and value
+/// Used to define expected PCR values for attestation verification
+#[derive(Clone, Debug)]
+pub struct PcrMeasurement {
+    /// Index of the PCR measurement
+    pub index: u32,
+    /// Byte array representing the PCR value
+    pub value: Vec<u8>,
+}
+
+impl PcrMeasurement {
+    /// Creates a new `PcrMeasurement`
+    ///
+    /// # Arguments
+    /// * `pcr_index` - The index of the PCR
+    /// * `pcr_value` - The expected value of the PCR
+    #[must_use]
+    pub const fn new(index: u32, value: Vec<u8>) -> Self {
+        Self { index, value }
+    }
+
+    /// Creates a new `PcrMeasurement` from a hex string
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provided hex string is not valid hex.
+    #[must_use]
+    pub fn from_hex(index: u32, value_hex: &str) -> Self {
+        Self {
+            index,
+            value: hex::decode(value_hex).unwrap(),
+        }
+    }
+}

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::nitro_enclave::types::EnclaveApplication;
+use crate::nitro_enclave::types::{EnclaveApplication, PcrMeasurement};
 
 use aws_nitro_enclaves_nsm_api::api::Digest;
 use once_cell::sync::OnceCell;
@@ -21,24 +21,33 @@ const PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE: [u8; 48] = [0; 48];
 
 /// Expected PCR configurations for production enclaves
 static PRODUCTION_PCR_CONFIGS: OnceCell<
-    HashMap<EnclaveApplication, Vec<Vec<(u32, Vec<u8>)>>>,
+    HashMap<EnclaveApplication, Vec<Vec<PcrMeasurement>>>,
 > = OnceCell::new();
 
 /// Returns the lazily-initialized PCR configurations for production.
 #[must_use]
 pub fn production_pcr_configs(
     enclave_application: &EnclaveApplication,
-) -> Vec<Vec<(u32, Vec<u8>)>> {
+) -> Vec<Vec<PcrMeasurement>> {
     PRODUCTION_PCR_CONFIGS
         .get_or_init(|| {
-            let mut map: HashMap<EnclaveApplication, Vec<Vec<(u32, Vec<u8>)>>> =
+            let mut map: HashMap<EnclaveApplication, Vec<Vec<PcrMeasurement>>> =
                 HashMap::new();
             map.insert(
                 EnclaveApplication::WorldChatNotifications,
                 vec![vec![
-                    (0, PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE.to_vec()),
-                    (1, PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE.to_vec()),
-                    (2, PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE.to_vec()),
+                    PcrMeasurement::new(
+                        0,
+                        PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE.to_vec(),
+                    ),
+                    PcrMeasurement::new(
+                        1,
+                        PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE.to_vec(),
+                    ),
+                    PcrMeasurement::new(
+                        2,
+                        PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE.to_vec(),
+                    ),
                 ]],
             );
             map
@@ -55,24 +64,24 @@ const STAGING_PCR2_VALUE: [u8; 48] = [0; 48];
 
 /// Expected PCR configurations for staging enclaves
 static STAGING_PCR_CONFIGS: OnceCell<
-    HashMap<EnclaveApplication, Vec<Vec<(u32, Vec<u8>)>>>,
+    HashMap<EnclaveApplication, Vec<Vec<PcrMeasurement>>>,
 > = OnceCell::new();
 
 /// Returns the lazily-initialized PCR configurations for staging.
 #[must_use]
 pub fn staging_pcr_configs(
     enclave_application: &EnclaveApplication,
-) -> Vec<Vec<(u32, Vec<u8>)>> {
+) -> Vec<Vec<PcrMeasurement>> {
     STAGING_PCR_CONFIGS
         .get_or_init(|| {
-            let mut map: HashMap<EnclaveApplication, Vec<Vec<(u32, Vec<u8>)>>> =
+            let mut map: HashMap<EnclaveApplication, Vec<Vec<PcrMeasurement>>> =
                 HashMap::new();
             map.insert(
                 EnclaveApplication::WorldChatNotifications,
                 vec![vec![
-                    (0, STAGING_PCR0_VALUE.to_vec()),
-                    (1, STAGING_PCR1_VALUE.to_vec()),
-                    (2, STAGING_PCR2_VALUE.to_vec()),
+                    PcrMeasurement::new(0, STAGING_PCR0_VALUE.to_vec()),
+                    PcrMeasurement::new(1, STAGING_PCR1_VALUE.to_vec()),
+                    PcrMeasurement::new(2, STAGING_PCR2_VALUE.to_vec()),
                 ]],
             );
             map
