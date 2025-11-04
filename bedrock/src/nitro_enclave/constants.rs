@@ -25,6 +25,11 @@ static PRODUCTION_PCR_CONFIGS: OnceCell<
 > = OnceCell::new();
 
 /// Returns the lazily-initialized PCR configurations for production.
+///
+/// # Panics
+///
+/// This function will panic if the `enclave_application` is not found in the configurations.
+/// This should not happen and we have tests to ensure all applications are covered.
 #[must_use]
 pub fn production_pcr_configs(
     enclave_application: &EnclaveApplication,
@@ -68,6 +73,11 @@ static STAGING_PCR_CONFIGS: OnceCell<
 > = OnceCell::new();
 
 /// Returns the lazily-initialized PCR configurations for staging.
+///
+/// # Panics
+///
+/// Panics if the enclave application is not found in the staging configurations.
+/// This should not happen and we have tests to ensure all applications are covered.
 #[must_use]
 pub fn staging_pcr_configs(
     enclave_application: &EnclaveApplication,
