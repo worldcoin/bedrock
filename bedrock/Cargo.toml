@@ -63,7 +63,7 @@ thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = ["time"], optional = true }
 turnkey_enclave_encrypt = "0.3.0"
 uniffi = { workspace = true, features = ["build", "tokio"] }
-uuid = { version = "1.4.1", features = ["v4"], default-features = false }
+uuid = { version = "1.18.1", features = ["v4"], default-features = false }
 webpki = "0.22"
 x509-cert = { version = "0.2.5", features = ["pem"] }
 zeroize = "1.8"
