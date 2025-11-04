@@ -423,37 +423,45 @@ impl EnclaveAttestationVerifier {
         // As of right now, only SHA-384 is used
         let expected_pcr_length = get_expected_pcr_length(attestation.digest);
 
+        // Try to find at least one allowed PCR configuration that matches
+        // This allows supporting multiple enclave versions simultaneously
         for allowed_pcr_measurements in &self.allowed_pcr_configs {
+            let mut all_match = true;
+
             for pcr_measurement in allowed_pcr_measurements {
                 // Get the PCR value from the attestation
-                let attestation_pcr_value =
-                    Self::get_pcr_value(attestation, pcr_measurement.index)?;
+                let Ok(attestation_pcr_value) =
+                    Self::get_pcr_value(attestation, pcr_measurement.index)
+                else {
+                    all_match = false;
+                    break;
+                };
 
                 // Validate the PCR value length
                 if attestation_pcr_value.len() != expected_pcr_length {
-                    return Err(EnclaveAttestationError::CodeUntrusted {
-                        pcr_index: pcr_measurement.index,
-                        actual: format!(
-                            "Invalid PCR{} length: {}, expected: {}",
-                            pcr_measurement.index,
-                            attestation_pcr_value.len(),
-                            expected_pcr_length
-                        ),
-                    });
+                    all_match = false;
+                    break;
                 }
 
                 // Validate the PCR value matches the expected value
                 if attestation_pcr_value.as_slice() != pcr_measurement.value.as_slice()
                 {
-                    return Err(EnclaveAttestationError::CodeUntrusted {
-                        pcr_index: pcr_measurement.index,
-                        actual: hex::encode(attestation_pcr_value),
-                    });
+                    all_match = false;
+                    break;
                 }
+            }
+
+            // If all PCRs in this configuration match, return success
+            if all_match {
+                return Ok(());
             }
         }
 
-        Ok(())
+        // If we have no allowed configurations at all
+        Err(EnclaveAttestationError::CodeUntrusted {
+            pcr_index: 0,
+            actual: "No allowed PCR configurations".to_string(),
+        })
     }
 
     fn check_attestation_freshness(

@@ -120,20 +120,10 @@ impl PcrMeasurement {
     /// * `pcr_index` - The index of the PCR
     /// * `pcr_value` - The expected value of the PCR
     #[must_use]
-    pub const fn new(index: u32, value: Vec<u8>) -> Self {
-        Self { index, value }
-    }
-
-    /// Creates a new `PcrMeasurement` from a hex string
-    ///
-    /// # Panics
-    ///
-    /// Panics if the provided hex string is not valid hex.
-    #[must_use]
-    pub fn from_hex(index: u32, value_hex: &str) -> Self {
+    pub fn new(index: u32, value: impl Into<Vec<u8>>) -> Self {
         Self {
             index,
-            value: hex::decode(value_hex).unwrap(),
+            value: value.into(),
         }
     }
 }
