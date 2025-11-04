@@ -137,7 +137,7 @@ impl HexEncodedData {
     /// Returns the wrapped hex string as a String. Re-wraps `Display` trait for foreign code.
     #[must_use]
     pub fn to_hex_string(&self) -> String {
-        self.0.to_string()
+        self.0.clone()
     }
 
     /// Converts the wrapped hex string into a `Bytes` struct.
