@@ -22,7 +22,7 @@ pub mod types;
 mod tests;
 
 pub use types::{
-    EnclaveAttestationError, EnclaveAttestationResult, PcrConfiguration,
+    EnclaveApplication, EnclaveAttestationError, EnclaveAttestationResult,
     VerifiedAttestation, VerifiedAttestationWithCiphertext,
 };
 
@@ -42,7 +42,11 @@ use constants::{
 /// - Public key extraction
 #[derive(Debug, uniffi::Object)]
 pub struct EnclaveAttestationVerifier {
-    allowed_pcr_configs: Vec<PcrConfiguration>,
+    /// Allowed PCR configs for validation
+    /// This is a list of allowed PCR configurations, where each configuration is a list of (PCR index, expected value) tuples.
+    ///
+    /// This allows for supporting multiple enclave software versions.
+    allowed_pcr_configs: Vec<Vec<(u32, Vec<u8>)>>,
     root_certificate: Vec<u8>,
     max_age_millis: u64,
     #[cfg(test)]
@@ -71,8 +75,12 @@ impl EnclaveAttestationVerifier {
             .expect("Bedrock config not initialized")
             .environment();
         let allowed_pcr_configs = match env {
-            BedrockEnvironment::Production => production_pcr_configs(),
-            BedrockEnvironment::Staging => staging_pcr_configs(),
+            BedrockEnvironment::Production => {
+                production_pcr_configs(&EnclaveApplication::WorldChatNotifications)
+            }
+            BedrockEnvironment::Staging => {
+                staging_pcr_configs(&EnclaveApplication::WorldChatNotifications)
+            }
         };
 
         let root_certificate = match env {
@@ -415,37 +423,32 @@ impl EnclaveAttestationVerifier {
         // As of right now, only SHA-384 is used
         let expected_pcr_length = get_expected_pcr_length(attestation.digest);
 
-        for pcr_config in &self.allowed_pcr_configs {
-            let index = pcr_config.index as usize;
-            // Get the PCR value from the attestation
-            let attestation_pcr_value =
-                attestation.pcrs.get(&index).ok_or_else(|| {
-                    EnclaveAttestationError::CodeUntrusted {
-                        pcr_index: pcr_config.index,
-                        actual: "missing".to_string(),
-                    }
-                })?;
+        for allowed_pcr_measurements in &self.allowed_pcr_configs {
+            for (pcr_index, pcr_expected_value) in allowed_pcr_measurements {
+                // Get the PCR value from the attestation
+                let attestation_pcr_value =
+                    Self::get_pcr_value(attestation, *pcr_index)?;
 
-            // Validate the PCR value length
-            if attestation_pcr_value.len() != expected_pcr_length {
-                return Err(EnclaveAttestationError::CodeUntrusted {
-                    pcr_index: pcr_config.index,
-                    actual: format!(
-                        "Invalid PCR{} length: {}, expected: {}",
-                        pcr_config.index,
-                        attestation_pcr_value.len(),
-                        expected_pcr_length
-                    ),
-                });
-            }
+                // Validate the PCR value length
+                if attestation_pcr_value.len() != expected_pcr_length {
+                    return Err(EnclaveAttestationError::CodeUntrusted {
+                        pcr_index: *pcr_index,
+                        actual: format!(
+                            "Invalid PCR{} length: {}, expected: {}",
+                            pcr_index,
+                            attestation_pcr_value.len(),
+                            expected_pcr_length
+                        ),
+                    });
+                }
 
-            // Validate the PCR value matches the expected value
-            if attestation_pcr_value.as_slice() != pcr_config.expected_value.as_slice()
-            {
-                return Err(EnclaveAttestationError::CodeUntrusted {
-                    pcr_index: pcr_config.index,
-                    actual: hex::encode(attestation_pcr_value),
-                });
+                // Validate the PCR value matches the expected value
+                if attestation_pcr_value.as_slice() != pcr_expected_value.as_slice() {
+                    return Err(EnclaveAttestationError::CodeUntrusted {
+                        pcr_index: *pcr_index,
+                        actual: hex::encode(attestation_pcr_value),
+                    });
+                }
             }
         }
 
@@ -501,6 +504,21 @@ impl EnclaveAttestationVerifier {
             |key| Ok(key.into_vec()),
         )
     }
+
+    fn get_pcr_value(
+        attestation_doc: &AttestationDoc,
+        pcr_index: u32,
+    ) -> EnclaveAttestationResult<Vec<u8>> {
+        attestation_doc.pcrs.get(&(pcr_index as usize)).map_or_else(
+            || {
+                Err(EnclaveAttestationError::CodeUntrusted {
+                    pcr_index,
+                    actual: "missing".to_string(),
+                })
+            },
+            |value| Ok(value.to_vec()),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -508,7 +526,7 @@ impl EnclaveAttestationVerifier {
     /// Creates a new `EnclaveAttestationVerifier` with custom PCR configurations, used for testing.
     #[must_use]
     pub fn new_with_config_and_time_skip(
-        allowed_pcr_configs: Vec<PcrConfiguration>,
+        allowed_pcr_configs: Vec<Vec<(u32, Vec<u8>)>>,
         root_certificate: Vec<u8>,
         max_age_millis: u64,
         skip_certificate_time_check: bool,
@@ -522,7 +540,7 @@ impl EnclaveAttestationVerifier {
     }
 
     /// Adds a custom PCR configuration, used for testing.
-    pub fn add_allowed_pcr_config(&mut self, pcr_config: PcrConfiguration) {
+    pub fn add_allowed_pcr_config(&mut self, pcr_config: Vec<(u32, Vec<u8>)>) {
         self.allowed_pcr_configs.push(pcr_config);
     }
 }

@@ -54,18 +54,6 @@ pub enum EnclaveAttestationError {
 /// Result type for enclave attestation operations
 pub type EnclaveAttestationResult<T, E = EnclaveAttestationError> = Result<T, E>;
 
-/// PCR configuration
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PcrConfiguration {
-    /// The index of the PCR{index} value
-    /// eg. 0, 1, 2, 3, 4, 8
-    pub index: u32,
-    /// The expected value of the PCR
-    pub expected_value: Vec<u8>,
-    /// The description of the PCR
-    pub description: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
 /// Verified attestation data from the enclave.
 pub struct VerifiedAttestation {
@@ -106,4 +94,11 @@ pub struct VerifiedAttestationWithCiphertext {
     pub verified_attestation: VerifiedAttestation,
     /// The ciphertext bytes
     pub ciphertext: Vec<u8>,
+}
+
+/// Enum representing different enclave applications
+#[derive(PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum EnclaveApplication {
+    /// World Chat Notifications Enclave
+    WorldChatNotifications,
 }
