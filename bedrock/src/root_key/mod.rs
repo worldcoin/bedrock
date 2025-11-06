@@ -198,10 +198,11 @@ impl RootKey {
 /// Subkey ID. Namespace used for the Backup ID.
 const BACKUP_SUBKEY_ID: u64 = 0x100;
 
-/// Key derivation implementations.
+/// Public key derivation implementations. These are not considered secret and may be exposed. They are also exposed
+/// to foreign bindings.
 ///
-/// Derivations identified with "Public" contain identifiers that are not considered secret and
-/// may be exposed. Note these values are not returned in a `SecretBox`.
+/// Note these values are not returned in a `SecretBox`.
+#[bedrock_export]
 impl RootKey {
     /// Key derivation. "Public" value.
     ///
@@ -212,9 +213,7 @@ impl RootKey {
     ///
     /// # Errors
     /// No errors are generally expected, but key derivation may unexpectedly fail.
-    pub(crate) fn derive_public_backup_account_id(
-        &self,
-    ) -> Result<String, RootKeyError> {
+    pub fn derive_public_backup_account_id(&self) -> Result<String, RootKeyError> {
         let mut subkey: SecretBox<[u8; 32]> =
             Self::derive_subkey(self, BACKUP_SUBKEY_ID)?;
         let backup_id = blake3::keyed_hash(subkey.expose_secret(), b"public");
