@@ -2,6 +2,23 @@
 
 
 
+## [0.0.24] - 2025-11-07
+
+## What's Changed
+* fix: Fix clippy error introduced in `1.91.0` rust by @Takaros999 in https://github.com/worldcoin/bedrock/pull/174
+* build(deps): bump uuid from 1.17.0 to 1.18.1 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/169
+* build(deps): bump quote from 1.0.40 to 1.0.41 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/170
+* build(deps): bump uniffi from 0.29.2 to 0.30.0 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/172
+* feat: expose public backup id from key by @paolodamico in https://github.com/worldcoin/bedrock/pull/175
+* feat: convert the backup ID into a keypair by @paolodamico in https://github.com/worldcoin/bedrock/pull/177
+* build(deps): bump proc-macro2 from 1.0.101 to 1.0.103 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/171
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.23...0.0.24
+
+
+
+
 ## [0.0.23] - 2025-10-21
 
 ## What's Changed
