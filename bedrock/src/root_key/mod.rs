@@ -1,5 +1,6 @@
 use bedrock_macros::{bedrock_error, bedrock_export};
 use dryoc::kdf::Kdf;
+use k256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::{rngs::OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -196,7 +197,29 @@ impl RootKey {
 }
 
 /// Subkey ID. Namespace used for the Backup ID.
-const BACKUP_SUBKEY_ID: u64 = 0x100;
+const BACKUP_SUBKEY_ID: u64 = 0x101;
+
+/// Private key derivation implementations. These are sensitive and not exposed to foreign bindings.
+impl RootKey {
+    /// Key derivation. Private value.
+    ///
+    /// Derives the private key for the backup account ID.
+    ///
+    /// # Errors
+    /// No errors are generally expected, but key derivation may unexpectedly fail.
+    fn derive_backup_account_key(&self) -> Result<k256::SecretKey, RootKeyError> {
+        let mut subkey: SecretBox<[u8; 32]> =
+            Self::derive_subkey(self, BACKUP_SUBKEY_ID)?;
+        let backup_key =
+            k256::SecretKey::from_slice(subkey.expose_secret()).map_err(|e| {
+                RootKeyError::KeyDerivation(format!(
+                    "invalid k256 key for backup account ID: {e:?}"
+                ))
+            })?;
+        subkey.zeroize();
+        Ok(backup_key)
+    }
+}
 
 /// Public key derivation implementations. These are not considered secret and may be exposed. They are also exposed
 /// to foreign bindings.
@@ -211,14 +234,16 @@ impl RootKey {
     /// This is used to ensure that only a single backup can exist per account, otherwise this could lead
     /// to race conditions and undefined behavior with the backup (including user confusion).
     ///
+    /// The public backup account ID is the public key of a `secp256k1` key. Public key cryptography is introduced
+    /// so the user can prove ownership of the backup account ID for certain disaster recovery scenarios.
+    ///
     /// # Errors
     /// No errors are generally expected, but key derivation may unexpectedly fail.
     pub fn derive_public_backup_account_id(&self) -> Result<String, RootKeyError> {
-        let mut subkey: SecretBox<[u8; 32]> =
-            Self::derive_subkey(self, BACKUP_SUBKEY_ID)?;
-        let backup_id = blake3::keyed_hash(subkey.expose_secret(), b"public");
-        subkey.zeroize();
-        Ok(format!("backup_account_{}", backup_id.to_hex()))
+        let backup_key = self.derive_backup_account_key()?;
+        let backup_id =
+            hex::encode(backup_key.public_key().to_encoded_point(true).as_bytes());
+        Ok(format!("backup_account_{backup_id}"))
     }
 }
 

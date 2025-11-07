@@ -46,10 +46,15 @@ hpke = { version = "0.10", features = [
   "p256",
   "serde_impls",
 ], default-features = false }
+k256 = { version = "0.13.4", default-features = false, features = ["std"] }
 log = "0.4.22"
 once_cell = "1.19"
-p256 = { version = "0.13.2", features = ["ecdsa", "pem", "pkcs8"] }
-p384 = { version = "0.13", features = ["ecdsa", "sha384"] }
+p256 = { version = "0.13.2", default-features = false, features = [
+  "ecdsa",
+  "pem",
+  "pkcs8",
+] }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "sha384"] }
 rand = { version = "0.8.5", default-features = false, features = ["std"] }
 ruint = { version = "1.16.0", default-features = false, features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
@@ -79,6 +84,7 @@ alloy = { version = "1.0.30", default-features = false, features = [
   "reqwest-rustls-tls",
 ] }
 dotenvy = "0.15.7"
+k256 = { version = "0.13.4", default-features = false, features = ["std", "ecdsa"] }
 serial_test = "3.2.0"
 tokio = { version = "1.47.1", features = ["time"] }
 tokio-test = "0.4.4"
