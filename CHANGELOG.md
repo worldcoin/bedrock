@@ -2,6 +2,18 @@
 
 
 
+## [0.0.25] - 2025-11-11
+
+## What's Changed
+* feat: Support multiple enclave apps & versions by @Takaros999 in https://github.com/worldcoin/bedrock/pull/173
+* fix: downgrade uniffi by @paolodamico in https://github.com/worldcoin/bedrock/pull/179
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.24...0.0.25
+
+
+
+
 ## [0.0.24] - 2025-11-07
 
 ## What's Changed
