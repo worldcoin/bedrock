@@ -72,6 +72,7 @@ uuid = { version = "1.18.1", features = ["v4"], default-features = false }
 webpki = "0.22"
 x509-cert = { version = "0.2.5", features = ["pem"] }
 zeroize = "1.8"
+hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
 
 # TODO: once `rand` can be bumped to 0.9, add the explicit feature flag `os_rng`. this explicitly determines no `thread_rng`;
 # bumping this requires crypto_box to update rand: https://github.com/RustCrypto/nacl-compat/issues/176

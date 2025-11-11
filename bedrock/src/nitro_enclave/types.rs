@@ -54,18 +54,6 @@ pub enum EnclaveAttestationError {
 /// Result type for enclave attestation operations
 pub type EnclaveAttestationResult<T, E = EnclaveAttestationError> = Result<T, E>;
 
-/// PCR configuration
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PcrConfiguration {
-    /// The index of the PCR{index} value
-    /// eg. 0, 1, 2, 3, 4, 8
-    pub index: u32,
-    /// The expected value of the PCR
-    pub expected_value: Vec<u8>,
-    /// The description of the PCR
-    pub description: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
 /// Verified attestation data from the enclave.
 pub struct VerifiedAttestation {
@@ -106,4 +94,36 @@ pub struct VerifiedAttestationWithCiphertext {
     pub verified_attestation: VerifiedAttestation,
     /// The ciphertext bytes
     pub ciphertext: Vec<u8>,
+}
+
+/// Enum representing different enclave applications
+#[derive(PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum EnclaveApplication {
+    /// World Chat Notifications Enclave
+    WorldChatNotifications,
+}
+
+/// Represents a PCR measurement with its index and value
+/// Used to define expected PCR values for attestation verification
+#[derive(Clone, Debug)]
+pub struct PcrMeasurement {
+    /// Index of the PCR measurement
+    pub index: u32,
+    /// Byte array representing the PCR value
+    pub value: Vec<u8>,
+}
+
+impl PcrMeasurement {
+    /// Creates a new `PcrMeasurement`
+    ///
+    /// # Arguments
+    /// * `pcr_index` - The index of the PCR
+    /// * `pcr_value` - The expected value of the PCR
+    #[must_use]
+    pub fn new(index: u32, value: impl Into<Vec<u8>>) -> Self {
+        Self {
+            index,
+            value: value.into(),
+        }
+    }
 }
