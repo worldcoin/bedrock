@@ -2,6 +2,17 @@
 
 
 
+## [0.0.26] - 2025-11-14
+
+## What's Changed
+* feat: refactor client events by @paolodamico in https://github.com/worldcoin/bedrock/pull/181
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.25...0.0.26
+
+
+
+
 ## [0.0.25] - 2025-11-11
 
 ## What's Changed
