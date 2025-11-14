@@ -124,6 +124,7 @@ impl BackupServiceClient {
                     main_factors: response.main_factors.clone(),
                     app_version: None,
                     platform: None,
+                    is_backup_enabled: None,
                 },
             ) {
                 log::warn!(
