@@ -45,10 +45,6 @@ pub enum ClientEventsError {
 pub enum BackupReportEventKind {
     /// Backup sync or any backup file changes (store/remove)
     Sync,
-    /// Backup enabled
-    Enable,
-    /// Backup disabled
-    Disable,
     /// Add main factor
     AddMainFactor,
     /// Remove main factor
@@ -132,8 +128,10 @@ pub struct BaseReport {
 }
 
 /// Inputs supplied by foreign code (native app) for fields that cannot be derived internally
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, uniffi::Record, Default)]
 pub struct BackupReportInput {
+    /// Whether backup is enabled
+    pub is_backup_enabled: Option<bool>,
     /// User PKID
     pub user_pkid: Option<String>,
     /// Whether orb verification happened after 2025-10-01
