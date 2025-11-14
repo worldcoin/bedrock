@@ -515,8 +515,6 @@ pub enum BackupFileDesignator {
     OrbPkg,
     /// Document (NFC) Personal Custody Package (PCP) or "Document Credential"
     DocumentPkg,
-    /// Secure Document (NFC) Personal Custody Package (PCP) or "Secure Document Credential"
-    SecureDocumentPkg,
 }
 
 impl Serialize for BackupFileDesignator {
