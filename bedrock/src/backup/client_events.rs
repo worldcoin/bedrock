@@ -235,6 +235,7 @@ impl ClientEventsReporter {
         base.main_factors = input.main_factors.or(base.main_factors);
         base.app_version = input.app_version.or(base.app_version);
         base.platform = input.platform.or(base.platform);
+        base.is_backup_enabled = input.is_backup_enabled.or(base.is_backup_enabled);
 
         // If no installation ID provided and none persisted yet, generate and persist now.
         if base.installation_id.is_none() {
