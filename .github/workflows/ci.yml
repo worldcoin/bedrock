@@ -11,7 +11,7 @@ env:
 jobs:
   lint:
     name: Format, Clippy & Build
-    runs-on: ubuntu-latest
+    runs-on: arc-4xlarge-amd64-runner
     permissions:
       contents: read
 
@@ -70,7 +70,7 @@ jobs:
 
   test:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: arc-4xlarge-amd64-runner
     permissions:
       contents: read
 
@@ -97,7 +97,7 @@ jobs:
 
   deny:
     name: Cargo deny
-    runs-on: ubuntu-latest
+    runs-on: arc-2xlarge-amd64-runner
     permissions:
       contents: read
     strategy:
@@ -119,7 +119,7 @@ jobs:
 
   kotlin-build-and-test:
     name: Build and Test Kotlin Bindings
-    runs-on: ubuntu-latest
+    runs-on: arc-4xlarge-amd64-runner
     permissions:
       contents: read
 
