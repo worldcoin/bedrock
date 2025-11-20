@@ -88,7 +88,7 @@ pub trait Is4337Encodable {
             .await?;
 
         // 3. Merge paymaster data
-        user_operation = user_operation.with_paymaster_data(sponsor_response)?;
+        user_operation = user_operation.with_paymaster_data(&sponsor_response)?;
 
         // 4. Compute validity timestamps
         // validAfter = 0 (immediately valid)
@@ -127,7 +127,12 @@ pub trait Is4337Encodable {
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
-            .send_user_operation(network, &user_operation, *ENTRYPOINT_4337, provider)
+            .send_user_operation(
+                network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                sponsor_response.provider_name,
+            )
             .await?;
 
         Ok(user_op_hash)
@@ -249,8 +254,8 @@ mod tests {
         user_op.verification_gas_limit = 200;
 
         let sponsor_response = SponsorUserOperationResponse {
-            paymaster: address!("0x2222222222222222222222222222222222222222"),
-            paymaster_data: Bytes::from_str("0xabcd").unwrap(),
+            paymaster: Some(address!("0x2222222222222222222222222222222222222222")),
+            paymaster_data: Some(Bytes::from_str("0xabcd").unwrap()),
             pre_verification_gas: U256::from(300),
             verification_gas_limit: U128::from(400),
             call_gas_limit: U128::from(500),
@@ -258,9 +263,10 @@ mod tests {
             paymaster_post_op_gas_limit: U128::from(700),
             max_priority_fee_per_gas: U128::from(800),
             max_fee_per_gas: U128::from(900),
+            provider_name: RpcProviderName::Pimlico,
         };
 
-        let result = user_op.with_paymaster_data(sponsor_response);
+        let result = user_op.with_paymaster_data(&sponsor_response);
         assert!(result.is_ok());
 
         let updated_user_op = result.unwrap();

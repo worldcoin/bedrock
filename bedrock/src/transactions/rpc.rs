@@ -42,8 +42,11 @@ pub enum RpcMethod {
 }
 
 /// 4337 provider selection to be passed by native apps
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RpcProviderName {
+    /// Let TFH backend load balance between available providers
+    Any,
     /// Use Alchemy as 4337 provider
     Alchemy,
     /// Use Pimlico as 4337 provider
@@ -55,6 +58,7 @@ impl RpcProviderName {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
+            Self::Any => "any",
             Self::Alchemy => "alchemy",
             Self::Pimlico => "pimlico",
         }
@@ -167,9 +171,9 @@ impl From<SafeSmartAccountError> for RpcError {
 #[serde(rename_all = "camelCase")]
 pub struct SponsorUserOperationResponse {
     /// Paymaster address
-    pub paymaster: Address,
+    pub paymaster: Option<Address>,
     /// Paymaster data
-    pub paymaster_data: Bytes,
+    pub paymaster_data: Option<Bytes>,
     /// Pre-verification gas
     pub pre_verification_gas: U256,
     /// Verification gas limit
@@ -184,6 +188,8 @@ pub struct SponsorUserOperationResponse {
     pub max_priority_fee_per_gas: U128,
     /// Max fee per gas
     pub max_fee_per_gas: U128,
+    /// provider name
+    pub provider_name: RpcProviderName,
 }
 
 /// RPC client for handling 4337 `UserOperation` requests
@@ -426,6 +432,7 @@ mod tests {
             "paymasterPostOpGasLimit": "0x706e",
             "maxPriorityFeePerGas": "0x3B9ACA00",
             "maxFeePerGas": "0x7A5CF70D5",
+            "providerName":"pimlico",
         });
 
         let response: SponsorUserOperationResponse =
@@ -433,7 +440,7 @@ mod tests {
 
         assert_eq!(
             response.paymaster,
-            address!("0000000000000039cd5e8aE05257CE51C473ddd1")
+            Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
         );
         assert_eq!(response.call_gas_limit, U128::from(0x212df));
     }
