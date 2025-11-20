@@ -229,10 +229,11 @@ impl UserOperation {
     /// Returns an error if any U128 to u128 conversion fails
     pub fn with_paymaster_data(
         mut self,
-        sponsor_response: SponsorUserOperationResponse,
+        sponsor_response: &SponsorUserOperationResponse,
     ) -> Result<Self, HttpError> {
-        self.paymaster = sponsor_response.paymaster;
-        self.paymaster_data = sponsor_response.paymaster_data;
+        self.paymaster = sponsor_response.paymaster.unwrap_or(Address::ZERO);
+        self.paymaster_data =
+            sponsor_response.paymaster_data.clone().unwrap_or_default();
         self.paymaster_verification_gas_limit = sponsor_response
             .paymaster_verification_gas_limit
             .try_into()

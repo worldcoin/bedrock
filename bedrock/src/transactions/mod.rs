@@ -83,8 +83,7 @@ impl SafeSmartAccount {
             association: transfer_association,
         };
 
-        // NOTE: We use Alchemy as the default provider for now.
-        let provider = RpcProviderName::Alchemy;
+        let provider = RpcProviderName::Any;
 
         let user_op_hash = transaction
             .sign_and_execute(self, Network::WorldChain, None, Some(metadata), provider)

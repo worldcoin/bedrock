@@ -43,6 +43,7 @@ struct SponsorUserOperationResponseLite<'a> {
     paymaster_post_op_gas_limit: String,
     max_priority_fee_per_gas: String,
     max_fee_per_gas: String,
+    provider_name: String,
 }
 
 #[async_trait::async_trait]
@@ -97,6 +98,7 @@ where
                     paymaster_post_op_gas_limit: "0x0".into(),
                     max_priority_fee_per_gas: "0x3b9aca00".into(), // 1 gwei
                     max_fee_per_gas: "0x3b9aca00".into(),          // 1 gwei
+                    provider_name: "pimlico".into(),
                 };
                 let resp = json!({
                     "jsonrpc": "2.0",
