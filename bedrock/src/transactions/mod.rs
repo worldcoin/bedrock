@@ -6,7 +6,7 @@ use crate::{
     smart_account::{Is4337Encodable, SafeSmartAccount},
     transactions::contracts::{
         erc20::{Erc20, TransferAssociation},
-        world_gift_manager::{WorldGiftManagerGift, WorldGiftManagerRedeem},
+        world_gift_manager::{GiftAction, WorldGiftManager, WorldGiftManagerGift},
     },
 };
 
@@ -138,7 +138,32 @@ impl SafeSmartAccount {
     ) -> Result<HexEncodedData, TransactionError> {
         let gift_id = U256::parse_from_ffi(gift_id, "gift_id")?;
 
-        let transaction = WorldGiftManagerRedeem::new(gift_id);
+        let transaction = WorldGiftManager::new(gift_id, GiftAction::Redeem);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Cancel a gift using the `WorldGiftManager` contract.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_world_gift_manager_cancel(
+        &self,
+        gift_id: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let gift_id = U256::parse_from_ffi(gift_id, "gift_id")?;
+
+        let transaction = WorldGiftManager::new(gift_id, GiftAction::Cancel);
 
         let provider = RpcProviderName::Any;
 
