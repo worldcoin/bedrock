@@ -39,7 +39,7 @@ pub struct MultiSend {
 }
 
 impl MultiSend {
-    pub fn new(address: Address) -> Self {
+    pub const fn new(address: Address) -> Self {
         Self { address }
     }
 

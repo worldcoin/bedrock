@@ -144,19 +144,19 @@ pub enum GiftAction {
 }
 
 impl GiftAction {
-    fn tx_type_id(&self) -> TransactionTypeId {
+    const fn tx_type_id(&self) -> TransactionTypeId {
         match self {
-            GiftAction::Redeem => TransactionTypeId::WorldGiftManagerRedeem,
-            GiftAction::Cancel => TransactionTypeId::WorldGiftManagerCancel,
+            Self::Redeem => TransactionTypeId::WorldGiftManagerRedeem,
+            Self::Cancel => TransactionTypeId::WorldGiftManagerCancel,
         }
     }
 
     fn encode_call(&self, gift_id: U256) -> Bytes {
         match self {
-            GiftAction::Redeem => IWorldGiftManager::redeemCall { giftId: gift_id }
+            Self::Redeem => IWorldGiftManager::redeemCall { giftId: gift_id }
                 .abi_encode()
                 .into(),
-            GiftAction::Cancel => IWorldGiftManager::cancelCall { giftId: gift_id }
+            Self::Cancel => IWorldGiftManager::cancelCall { giftId: gift_id }
                 .abi_encode()
                 .into(),
         }
