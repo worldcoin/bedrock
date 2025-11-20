@@ -11,7 +11,7 @@ permissions:
 jobs:
   execute-relyance-sci:
     name: Relyance SCI Job
-    runs-on: arm64-ubuntu-22.04-16core
+    runs-on: ubuntu-22.04-16core
     permissions:
       contents: read
 

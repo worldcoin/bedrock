@@ -17,7 +17,7 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest-xlarge') || 'arm64-ubuntu-22.04-16core' }}
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest-xlarge') || 'ubuntu-22.04-16core' }}
     strategy:
       fail-fast: false
       matrix:

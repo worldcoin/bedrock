@@ -9,7 +9,7 @@ on:
 jobs:
   pre-release-checks:
     if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
-    runs-on: arm64-ubuntu-22.04-16core
+    runs-on: ubuntu-22.04-16core
     permissions:
       contents: read
 
@@ -172,7 +172,7 @@ jobs:
 
   publish-kotlin:
     name: Publish Kotlin
-    runs-on: arm64-ubuntu-22.04-16core
+    runs-on: ubuntu-22.04-16core
     needs: [pre-release-checks, prepare-kotlin]
     permissions:
       packages: write
@@ -228,7 +228,7 @@ jobs:
 
   create-github-release:
     needs: [pre-release-checks, publish-kotlin, publish-swift]
-    runs-on: arm64-ubuntu-22.04-16core
+    runs-on: ubuntu-22.04-16core
     permissions:
       contents: write
 
