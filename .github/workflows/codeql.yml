@@ -17,7 +17,7 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'arc-2xlarge-amd64-runner' }}
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-15-xlarge') || 'arc-2xlarge-amd64-runner' }}
     strategy:
       fail-fast: false
       matrix:
