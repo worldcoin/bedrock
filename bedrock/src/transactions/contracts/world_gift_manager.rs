@@ -35,6 +35,8 @@ sol! {
     #[derive(serde::Serialize)]
     interface IWorldGiftManager {
         function gift(address token, uint256 giftId, address recipient, uint256 amount) external;
+        function redeem(uint256 giftId) external;
+        function cancel(uint256 giftId) external;
     }
 }
 
@@ -136,6 +138,68 @@ impl Is4337Encodable for WorldGiftManagerGift {
     }
 }
 
+pub struct WorldGiftManagerRedeem {
+    /// The inner call data for the function.
+    call_data: Vec<u8>,
+    /// gift id, randomly generated
+    gift_id: U256,
+}
+
+impl WorldGiftManagerRedeem {
+    pub fn new(gift_id: U256) -> Self {
+        let redeem_data =
+            IWorldGiftManager::redeemCall { giftId: gift_id }.abi_encode();
+
+        Self {
+            call_data: redeem_data,
+            gift_id,
+        }
+    }
+}
+
+impl Is4337Encodable for WorldGiftManagerRedeem {
+    type MetadataArg = ();
+
+    fn as_execute_user_op_call_data(&self) -> Bytes {
+        ISafe4337Module::executeUserOpCall {
+            to: *WORLD_GIFT_MANAGER_ADDRESS,
+            value: U256::ZERO,
+            data: self.call_data.clone().into(),
+            operation: SafeOperation::Call as u8,
+        }
+        .abi_encode()
+        .into()
+    }
+
+    fn as_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+        _metadata: Option<Self::MetadataArg>,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let call_data = self.as_execute_user_op_call_data();
+        let gift_id_bytes: [u8; 32] = self.gift_id.to_be_bytes();
+        let mut metadata_bytes = [0u8; 10];
+        metadata_bytes.copy_from_slice(&gift_id_bytes[15..25]);
+
+        let mut random_tail = [0u8; 7];
+        random_tail.copy_from_slice(&gift_id_bytes[25..32]);
+
+        let key = NonceKeyV1::with_random_tail(
+            TransactionTypeId::WorldGiftManagerRedeem,
+            InstructionFlag::Default,
+            metadata_bytes,
+            random_tail,
+        );
+        let nonce = key.encode_with_sequence(0);
+
+        Ok(UserOperation::new_with_defaults(
+            wallet_address,
+            nonce,
+            call_data,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -145,7 +209,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_user_op() {
+    fn test_gift() {
         let token =
             Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
         let to =
@@ -161,13 +225,34 @@ mod tests {
 
         assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
         assert_eq!(be[5], TransactionTypeId::WorldGiftManagerGift as u8);
-        assert_eq!(be[6], 0u8); // instruction flags default
 
         // Metadata = gift_id[0..10] (bytes 7..16)
         assert_eq!(&be[7..=16], &gift.gift_id[0..10]);
 
         // Random tail = gift_id[10..17] (bytes 17..23)
         assert_eq!(&be[17..=23], &gift.gift_id[10..17]);
+
+        // Sequence number = 0 (bytes 24..31)
+        assert_eq!(&be[24..32], &[0u8; 8]);
+    }
+
+    #[test]
+    fn test_redeem() {
+        let gift_id = U256::from(123456789123456789123456852u128);
+        let gift_id_bytes: [u8; 32] = gift_id.to_be_bytes();
+        let gift = WorldGiftManagerRedeem::new(gift_id);
+
+        let wallet =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let user_op = gift.as_preflight_user_operation(wallet, None).unwrap();
+
+        // Check nonce layout
+        let be: [u8; 32] = user_op.nonce.to_be_bytes();
+
+        assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
+        assert_eq!(be[5], TransactionTypeId::WorldGiftManagerRedeem as u8);
+        assert_eq!(&be[7..=16], &gift_id_bytes[15..25]);
+        assert_eq!(&be[17..=23], &gift_id_bytes[25..32]);
 
         // Sequence number = 0 (bytes 24..31)
         assert_eq!(&be[24..32], &[0u8; 8]);
