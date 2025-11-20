@@ -242,30 +242,18 @@ impl UserOperation {
             .try_into()
             .unwrap_or(0);
 
-        // Update gas fields if they were estimated by the RPC
-        if self.pre_verification_gas.is_zero() {
-            self.pre_verification_gas = sponsor_response.pre_verification_gas;
-        }
-        if self.verification_gas_limit == 0 {
-            self.verification_gas_limit = sponsor_response
-                .verification_gas_limit
-                .try_into()
-                .unwrap_or(0);
-        }
-        if self.call_gas_limit == 0 {
-            self.call_gas_limit =
-                sponsor_response.call_gas_limit.try_into().unwrap_or(0);
-        }
-        if self.max_fee_per_gas == 0 {
-            self.max_fee_per_gas =
-                sponsor_response.max_fee_per_gas.try_into().unwrap_or(0);
-        }
-        if self.max_priority_fee_per_gas == 0 {
-            self.max_priority_fee_per_gas = sponsor_response
-                .max_priority_fee_per_gas
-                .try_into()
-                .unwrap_or(0);
-        }
+        // Update gas fields
+        self.pre_verification_gas = sponsor_response.pre_verification_gas;
+        self.verification_gas_limit = sponsor_response
+            .verification_gas_limit
+            .try_into()
+            .unwrap_or(0);
+        self.call_gas_limit = sponsor_response.call_gas_limit.try_into().unwrap_or(0);
+        self.max_fee_per_gas = sponsor_response.max_fee_per_gas.try_into().unwrap_or(0);
+        self.max_priority_fee_per_gas = sponsor_response
+            .max_priority_fee_per_gas
+            .try_into()
+            .unwrap_or(0);
 
         Ok(self)
     }
