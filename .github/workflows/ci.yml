@@ -58,6 +58,62 @@ jobs:
           toolchain: stable
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
+      # Cache Cargo registry and git dependencies to speed up builds
+      # This cache is shared across all Cargo builds and is keyed by the lockfile
+      # to ensure dependency updates trigger a cache miss
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      # Cache Rust build artifacts (target directory) for iOS targets
+      # The cache key includes Cargo.lock, Cargo.toml, and rust-toolchain.toml
+      # to invalidate when dependencies or toolchain changes
+      # This significantly reduces rebuild time by reusing compiled dependencies
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/aarch64-apple-ios/release/
+            target/aarch64-apple-ios-sim/release/
+            target/x86_64-apple-ios/release/
+          key: ${{ runner.os }}-rust-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-target-
+
+      # Cache Swift build outputs in the swift/ directory
+      # This includes the generated XCFramework and Swift bindings
+      # The cache is keyed by Cargo dependencies since Swift bindings are generated
+      # from Rust code. Source code changes are detected via git commit hash.
+      - name: Cache Swift build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            swift/Bedrock.xcframework
+            swift/Sources/
+          key: ${{ runner.os }}-swift-build-${{ hashFiles('**/Cargo.lock', 'bedrock/**/*.rs', 'swift/**/*.sh') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-swift-build-${{ hashFiles('**/Cargo.lock', 'bedrock/**/*.rs', 'swift/**/*.sh') }}-
+            ${{ runner.os }}-swift-build-
+
+      # Cache Swift Package Manager dependencies used by the test package
+      # This speeds up test execution by avoiding re-downloading dependencies
+      - name: Cache Swift PM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            swift/tests/.build
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('swift/tests/Package.swift', 'swift/tests/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
       - name: Build and test Swift bindings
         run: ./swift/test_swift.sh
 
