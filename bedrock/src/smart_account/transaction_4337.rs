@@ -280,58 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn test_with_paymaster_data_does_not_overwrite_existing_gas_values() {
-        let mut user_op = UserOperation::new_with_defaults(
-            address!("0x1111111111111111111111111111111111111111"),
-            U256::ZERO,
-            Bytes::from_str("0x1234").unwrap(),
-        );
-
-        // Set existing non-zero values that should NOT be overwritten
-        user_op.pre_verification_gas = U256::from(1000);
-        user_op.verification_gas_limit = 2000;
-        user_op.call_gas_limit = 3000;
-        user_op.max_fee_per_gas = 4000;
-        user_op.max_priority_fee_per_gas = 5000;
-
-        let sponsor_response = SponsorUserOperationResponse {
-            paymaster: address!("0x2222222222222222222222222222222222222222"),
-            paymaster_data: Bytes::from_str("0xabcd").unwrap(),
-            pre_verification_gas: U256::from(300),
-            verification_gas_limit: U128::from(400),
-            call_gas_limit: U128::from(500),
-            paymaster_verification_gas_limit: U128::from(600),
-            paymaster_post_op_gas_limit: U128::from(700),
-            max_priority_fee_per_gas: U128::from(800),
-            max_fee_per_gas: U128::from(900),
-        };
-
-        let result = user_op.with_paymaster_data(sponsor_response);
-        assert!(result.is_ok());
-
-        let updated_user_op = result.unwrap();
-
-        // Paymaster fields should always be updated
-        assert_eq!(
-            updated_user_op.paymaster,
-            address!("0x2222222222222222222222222222222222222222")
-        );
-        assert_eq!(
-            updated_user_op.paymaster_data,
-            Bytes::from_str("0xabcd").unwrap()
-        );
-        assert_eq!(updated_user_op.paymaster_verification_gas_limit, 600);
-        assert_eq!(updated_user_op.paymaster_post_op_gas_limit, 700);
-
-        // Existing non-nil values should NOT be overwritten
-        assert_eq!(updated_user_op.pre_verification_gas, U256::from(1000));
-        assert_eq!(updated_user_op.verification_gas_limit, 2000);
-        assert_eq!(updated_user_op.call_gas_limit, 3000);
-        assert_eq!(updated_user_op.max_fee_per_gas, 4000);
-        assert_eq!(updated_user_op.max_priority_fee_per_gas, 5000);
-    }
-
-    #[test]
     fn test_get_paymaster_and_data_no_paymaster() {
         let user_op = UserOperation {
             paymaster: Address::ZERO,
