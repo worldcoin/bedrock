@@ -531,7 +531,7 @@ impl ManifestManager {
         self.write_manifest(&updated_manifest)?;
 
         // Refresh backup report from manifest; ignore errors
-        if let Err(e) = ClientEventsReporter::new().recalculate_backup_size() {
+        if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
             log::warn!(
                 "[ClientEvents] failed to refresh backup report after manifest update: {e:?}"
             );

@@ -135,6 +135,14 @@ impl BackupManager {
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
 
+        // Keep the base report in sync with the freshly initialized (empty) manifest.
+        // This ensures we don't keep stale designators (e.g., `orb_pkg`) from a previous state.
+        if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
+            log::warn!(
+                "[ClientEvents] failed to refresh backup report after manifest init: {e:?}"
+            );
+        }
+
         // 6: Prepare the result
         let result = CreatedBackup {
             sealed_backup_data: sealed_backup,
@@ -328,6 +336,15 @@ impl BackupManager {
         crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
         let manifest = ManifestManager::new();
         manifest.danger_delete_manifest()?;
+
+        // After deleting the manifest, refresh the base report so it no longer reports
+        // any backup designators or size for a backup that has been disabled.
+        if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
+            log::warn!(
+                "[ClientEvents] failed to refresh backup report after manifest deletion: {e:?}"
+            );
+        }
+
         Ok(())
     }
 
@@ -502,6 +519,14 @@ impl BackupManager {
 
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
+
+        // Refresh the base report to reflect the unpacked manifest contents. This keeps
+        // `backup_file_designators` and `backup_size_kb` in sync after a restore.
+        if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
+            log::warn!(
+                "[ClientEvents] failed to refresh backup report after unpacking backup: {e:?}"
+            );
+        }
 
         Ok(())
     }
