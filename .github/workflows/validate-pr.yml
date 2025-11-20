@@ -12,7 +12,7 @@ on:
 jobs:
   main:
     name: Validate PR title
-    runs-on: arc-4xlarge-amd64-runner
+    runs-on: arm64-ubuntu-22.04-16core
     permissions:
       pull-requests: read
     steps:
