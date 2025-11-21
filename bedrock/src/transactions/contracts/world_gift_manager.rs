@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_redeem() {
-        let gift_id = U256::from(123456789123456789123456852u128);
+        let gift_id = U256::from(123_456_789_123_456_789_123_456_852_u128);
         let gift_id_bytes: [u8; 32] = gift_id.to_be_bytes();
         let gift = WorldGiftManager::new(gift_id, GiftAction::Redeem);
 
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_cancel() {
-        let gift_id = U256::from(123456789123456789123456852u128);
+        let gift_id = U256::from(123_456_789_123_456_789_123_456_852_u128);
         let gift_id_bytes: [u8; 32] = gift_id.to_be_bytes();
         let gift = WorldGiftManager::new(gift_id, GiftAction::Cancel);
 

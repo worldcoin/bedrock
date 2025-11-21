@@ -247,6 +247,7 @@ impl TryFrom<&UserOperation> for PackedUserOperation {
     }
 }
 
+#[allow(dead_code)] // used in integration-style tests
 /// Set an ERC-20 balance for a Safe by directly writing the storage slot
 ///
 /// The underlying token must store balances as `mapping(address => uint256)` at slot `0`.
@@ -274,6 +275,7 @@ where
 
 // ------------------ Shared Anvil-backed AuthenticatedHttpClient ------------------
 
+#[allow(dead_code)] // used in integration-style tests
 /// Mock HTTP client that actually executes the user operation on Anvil and parses receipt logs
 #[derive(Clone)]
 pub struct AnvilBackedHttpClient<P>
@@ -283,6 +285,7 @@ where
     pub provider: P,
 }
 
+#[allow(dead_code)] // used in integration-style tests
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorUserOperationResponseLite<'a> {
