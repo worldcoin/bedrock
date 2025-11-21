@@ -22,7 +22,6 @@ use crate::{
     },
     transactions::contracts::multisend::MultiSendTx,
 };
-use rand::RngCore;
 
 pub static WORLD_GIFT_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e")
@@ -233,9 +232,9 @@ fn split_nonce_parts(gift_id: U256) -> ([u8; 10], [u8; 7]) {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
+    use rand::RngCore;
+    use std::str::FromStr;
 
     use super::*;
 

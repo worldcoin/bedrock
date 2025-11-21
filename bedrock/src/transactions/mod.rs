@@ -150,9 +150,9 @@ impl SafeSmartAccount {
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_world_gift_manager_redeem(
         &self,
-        _gift_id: &str,
+        gift_id_str: &str,
     ) -> Result<WorldGiftManagerResult, TransactionError> {
-        let gift_id = U256::parse_from_ffi(_gift_id, "gift_id")?;
+        let gift_id = U256::parse_from_ffi(gift_id_str, "gift_id")?;
 
         let transaction = WorldGiftManager::new(gift_id, GiftAction::Redeem);
 
@@ -167,7 +167,7 @@ impl SafeSmartAccount {
 
         Ok(WorldGiftManagerResult {
             user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
-            gift_id: HexEncodedData::new(_gift_id)?,
+            gift_id: HexEncodedData::new(gift_id_str)?,
         })
     }
 
@@ -178,9 +178,9 @@ impl SafeSmartAccount {
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_world_gift_manager_cancel(
         &self,
-        _gift_id: &str,
+        gift_id_str: &str,
     ) -> Result<WorldGiftManagerResult, TransactionError> {
-        let gift_id = U256::parse_from_ffi(_gift_id, "gift_id")?;
+        let gift_id = U256::parse_from_ffi(gift_id_str, "gift_id")?;
 
         let transaction = WorldGiftManager::new(gift_id, GiftAction::Cancel);
 
@@ -195,7 +195,7 @@ impl SafeSmartAccount {
 
         Ok(WorldGiftManagerResult {
             user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
-            gift_id: HexEncodedData::new(_gift_id)?,
+            gift_id: HexEncodedData::new(gift_id_str)?,
         })
     }
 }
