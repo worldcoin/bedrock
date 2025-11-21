@@ -20,7 +20,10 @@ use serde::Serialize;
 use serde_json::json;
 
 mod common;
-use common::{deploy_safe, setup_anvil, IEntryPoint, PackedUserOperation, IERC20};
+use common::{
+    deploy_safe, set_erc20_balance_for_safe, setup_anvil, IEntryPoint,
+    PackedUserOperation, IERC20,
+};
 
 // ------------------ Mock HTTP client that actually executes the op on Anvil ------------------
 #[derive(Clone)]
@@ -273,28 +276,6 @@ where
             }),
         }
     }
-}
-
-async fn set_erc20_balance_for_safe<P>(
-    provider: &P,
-    token: Address,
-    safe: Address,
-    balance: U256,
-) -> anyhow::Result<()>
-where
-    P: Provider<Ethereum> + AnvilApi<Ethereum>,
-{
-    // Simulate balance by writing storage slot for mapping(address => uint) at slot 0
-    let mut padded = [0u8; 64];
-    padded[12..32].copy_from_slice(safe.as_slice());
-    let slot_hash = keccak256(padded);
-    let slot = U256::from_be_bytes(slot_hash.into());
-
-    provider
-        .anvil_set_storage_at(token, slot, balance.into())
-        .await?;
-
-    Ok(())
 }
 
 #[tokio::test]

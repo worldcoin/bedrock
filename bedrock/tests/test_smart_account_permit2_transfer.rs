@@ -1,5 +1,5 @@
 use alloy::{
-    primitives::{address, keccak256, Address, U256},
+    primitives::{address, Address, U256},
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
@@ -13,7 +13,7 @@ use bedrock::smart_account::{
 use chrono::Utc;
 
 mod common;
-use common::{deploy_safe, setup_anvil, ISafe, IERC20};
+use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, ISafe, IERC20};
 
 sol!(
     // NOTE: This is defined in the `permit2` module, but it cannot be easily re-used here.
@@ -80,17 +80,9 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
     // Step 3: Give the Safe some simulated WLD balance
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
     let wld_contract = IERC20::new(wld_token_address, &provider);
-
-    // the simulated balance is provided by updating the storage slot of the contract
-    let mut padded = [0u8; 64];
-    padded[12..32].copy_from_slice(safe_address.as_slice());
-    let slot_hash = keccak256(padded);
-    let slot = U256::from_be_bytes(slot_hash.into());
     let balance = U256::from(10e18); // 10 WLD
 
-    provider
-        .anvil_set_storage_at(wld_token_address, slot, balance.into())
-        .await?;
+    set_erc20_balance_for_safe(&provider, wld_token_address, safe_address, balance).await?;
 
     assert_eq!(wld_contract.balanceOf(safe_address).call().await?, balance,);
 

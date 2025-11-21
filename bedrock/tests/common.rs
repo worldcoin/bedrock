@@ -237,3 +237,28 @@ impl TryFrom<&UserOperation> for PackedUserOperation {
         })
     }
 }
+
+/// Set an ERC-20 balance for a Safe by directly writing the storage slot
+///
+/// The underlying token must store balances as `mapping(address => uint256)` at slot `0`.
+pub async fn set_erc20_balance_for_safe<P>(
+    provider: &P,
+    token: Address,
+    safe: Address,
+    balance: U256,
+) -> anyhow::Result<()>
+where
+    P: Provider<Ethereum> + AnvilApi<Ethereum>,
+{
+    // Simulate balance by writing storage slot for mapping(address => uint) at slot 0
+    let mut padded = [0u8; 64];
+    padded[12..32].copy_from_slice(safe.as_slice());
+    let slot_hash = alloy::primitives::keccak256(padded);
+    let slot = U256::from_be_bytes(slot_hash.into());
+
+    provider
+        .anvil_set_storage_at(token, slot, balance.into())
+        .await?;
+
+    Ok(())
+}

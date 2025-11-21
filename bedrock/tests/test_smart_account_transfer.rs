@@ -20,7 +20,10 @@ use serde::Serialize;
 use serde_json::json;
 
 mod common;
-use common::{deploy_safe, setup_anvil, IEntryPoint, PackedUserOperation, IERC20};
+use common::{
+    deploy_safe, set_erc20_balance_for_safe, setup_anvil, IEntryPoint,
+    PackedUserOperation, IERC20,
+};
 
 // ------------------ Mock HTTP client that actually executes the op on Anvil ------------------
 #[derive(Clone)]
@@ -270,15 +273,14 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
     let wld = IERC20::new(wld_token_address, &provider);
 
-    // Simulate balance by writing storage slot for mapping(address => uint) at slot 0
-    let mut padded = [0u8; 64];
-    padded[12..32].copy_from_slice(safe_address.as_slice());
-    let slot_hash = keccak256(padded);
-    let slot = U256::from_be_bytes(slot_hash.into());
     let starting_balance = U256::from(10u128.pow(18) * 10); // 10 WLD
-    provider
-        .anvil_set_storage_at(wld_token_address, slot, starting_balance.into())
-        .await?;
+    set_erc20_balance_for_safe(
+        &provider,
+        wld_token_address,
+        safe_address,
+        starting_balance,
+    )
+    .await?;
 
     // 6) Prepare recipient and assert initial balances
     let recipient = PrivateKeySigner::random().address();
