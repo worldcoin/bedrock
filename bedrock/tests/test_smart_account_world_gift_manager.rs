@@ -365,7 +365,7 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
     let gift_result = safe_account_giftor
         .transaction_world_gift_manager_gift(
             &wld_token_address.to_string(),
-            &giftee.to_string(),
+            &safe_address_giftee.to_string(),
             &amount.to_string(),
         )
         .await
