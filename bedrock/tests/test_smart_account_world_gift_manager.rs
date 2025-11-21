@@ -91,13 +91,13 @@ where
                 let result = SponsorUserOperationResponseLite {
                     paymaster: "0x0000000000000000000000000000000000000000",
                     paymaster_data: "0x",
-                    pre_verification_gas: "0x20000".into(),
-                    verification_gas_limit: "0x20000".into(),
-                    call_gas_limit: "0x20000".into(),
+                    pre_verification_gas: "0x200000".into(), // 2M
+                    verification_gas_limit: "0x200000".into(), // 2M
+                    call_gas_limit: "0x200000".into(),       // 2M
                     paymaster_verification_gas_limit: "0x0".into(),
                     paymaster_post_op_gas_limit: "0x0".into(),
-                    max_priority_fee_per_gas: "0x3b9aca00".into(), // 1 gwei
-                    max_fee_per_gas: "0x3b9aca00".into(),          // 1 gwei
+                    max_priority_fee_per_gas: "0x12A05F200".into(), // 5 gwei
+                    max_fee_per_gas: "0x12A05F200".into(),          // 5 gwei
                     provider_name: "pimlico".into(),
                 };
                 let resp = json!({
@@ -361,12 +361,12 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
     // 8) gift
     let safe_account_giftor =
         SafeSmartAccount::new(giftor_key_hex, &safe_address_giftor.to_string())?;
-    let amount = "1000000000000000000"; // 1 WLD
+    let amount = U256::from(1e18);
     let gift_result = safe_account_giftor
         .transaction_world_gift_manager_gift(
             &wld_token_address.to_string(),
             &giftee.to_string(),
-            amount,
+            &amount.to_string(),
         )
         .await
         .expect("transaction_world_gift_manager_gift failed");
@@ -374,7 +374,7 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
     // 9) Verify balances did not change
     let after_giftor = wld.balanceOf(safe_address_giftor).call().await?;
     let after_giftee = wld.balanceOf(safe_address_giftee).call().await?;
-    assert_eq!(after_giftor, before_giftor - U256::from(1e18));
+    assert_eq!(after_giftor, before_giftor - amount);
     assert_eq!(after_giftee, before_giftee);
 
     // 8) redeem
@@ -387,7 +387,7 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
         .expect("transaction_world_gift_manager_redeem failed");
 
     let after_redeem_giftee = wld.balanceOf(safe_address_giftee).call().await?;
-    assert_eq!(after_redeem_giftee, before_giftee + U256::from(1e18));
+    assert_eq!(after_redeem_giftee, before_giftee + amount);
 
     Ok(())
 }
