@@ -1,5 +1,10 @@
 name: CI
 
+# Unless we are on the main branch, the workflow should stop and yield to a new run if new code is pushed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }} # allow concurrency on main by setting the concurrency group to the commit hash
+  cancel-in-progress: ${{ !contains(github.ref, 'main')}} # Code pushed to PRs will cancel previous workflows, while all code pushed to the main branch will trigger a new workflow
+
 on:
   push:
     branches: [main]

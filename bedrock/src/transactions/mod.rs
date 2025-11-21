@@ -1,10 +1,15 @@
 use alloy::primitives::{Address, U256};
 use bedrock_macros::bedrock_export;
+use rand::RngCore;
+use std::sync::Arc;
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Encodable, SafeSmartAccount},
-    transactions::contracts::erc20::{Erc20, TransferAssociation},
+    transactions::contracts::{
+        erc20::{Erc20, TransferAssociation},
+        world_gift_manager::{GiftAction, WorldGiftManager, WorldGiftManagerGift},
+    },
 };
 
 mod contracts;
@@ -25,6 +30,14 @@ impl From<crate::primitives::PrimitiveError> for TransactionError {
     fn from(e: crate::primitives::PrimitiveError) -> Self {
         Self::PrimitiveError(e.to_string())
     }
+}
+
+/// Return value from the World Gift Manager methods
+#[allow(missing_docs)]
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct WorldGiftManagerResult {
+    pub user_op_hash: Arc<HexEncodedData>,
+    pub gift_id: Arc<HexEncodedData>,
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -93,5 +106,97 @@ impl SafeSmartAccount {
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Sends a gift using the `WorldGiftManager` contract.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_world_gift_manager_gift(
+        &self,
+        token_address: &str,
+        to_address: &str,
+        amount: &str,
+    ) -> Result<WorldGiftManagerResult, TransactionError> {
+        let token_address = Address::parse_from_ffi(token_address, "token_address")?;
+        let to_address = Address::parse_from_ffi(to_address, "address")?;
+        let amount = U256::parse_from_ffi(amount, "amount")?;
+
+        let mut gift_id = [0u8; 17];
+        rand::thread_rng().fill_bytes(&mut gift_id);
+
+        let transaction =
+            WorldGiftManagerGift::new(token_address, to_address, amount, gift_id);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(WorldGiftManagerResult {
+            user_op_hash: Arc::new(HexEncodedData::new(&user_op_hash.to_string())?),
+            gift_id: Arc::new(HexEncodedData::new(&hex::encode(gift_id))?),
+        })
+    }
+
+    /// Reddems a gift using the `WorldGiftManager` contract.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_world_gift_manager_redeem(
+        &self,
+        gift_id_str: &str,
+    ) -> Result<WorldGiftManagerResult, TransactionError> {
+        let gift_id = U256::parse_from_ffi(gift_id_str, "gift_id")?;
+
+        let transaction = WorldGiftManager::new(gift_id, GiftAction::Redeem);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(WorldGiftManagerResult {
+            user_op_hash: Arc::new(HexEncodedData::new(&user_op_hash.to_string())?),
+            gift_id: Arc::new(HexEncodedData::new(gift_id_str)?),
+        })
+    }
+
+    /// Cancel a gift using the `WorldGiftManager` contract.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_world_gift_manager_cancel(
+        &self,
+        gift_id_str: &str,
+    ) -> Result<WorldGiftManagerResult, TransactionError> {
+        let gift_id = U256::parse_from_ffi(gift_id_str, "gift_id")?;
+
+        let transaction = WorldGiftManager::new(gift_id, GiftAction::Cancel);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(WorldGiftManagerResult {
+            user_op_hash: Arc::new(HexEncodedData::new(&user_op_hash.to_string())?),
+            gift_id: Arc::new(HexEncodedData::new(gift_id_str)?),
+        })
     }
 }

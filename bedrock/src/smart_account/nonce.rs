@@ -18,6 +18,12 @@ use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
 pub enum TransactionTypeId {
     /// ERC-20 transfer
     Transfer = 1,
+    /// `WorldGiftManager` gift
+    WorldGiftManagerGift = 127,
+    /// `WorldGiftManager` redeem
+    WorldGiftManagerRedeem = 128,
+    /// `WorldGiftManager` cancel
+    WorldGiftManagerCancel = 129,
 }
 
 impl TransactionTypeId {

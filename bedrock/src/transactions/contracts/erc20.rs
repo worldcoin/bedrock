@@ -20,6 +20,7 @@ sol! {
     #[derive(serde::Serialize)]
     interface IErc20 {
         function transfer(address to, uint256 value) external returns (bool);
+          function approve(address spender, uint256 value) external returns (bool);
     }
 }
 
@@ -39,6 +40,9 @@ impl Erc20 {
             call_data,
             token_address,
         }
+    }
+    pub fn encode_approve(spender: Address, value: U256) -> Vec<u8> {
+        IErc20::approveCall { spender, value }.abi_encode()
     }
 }
 
