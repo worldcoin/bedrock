@@ -19,11 +19,11 @@ pub enum TransactionTypeId {
     /// ERC-20 transfer
     Transfer = 1,
     /// `WorldGiftManager` gift
-    WorldGiftManagerGift = 2,
+    WorldGiftManagerGift = 127,
     /// `WorldGiftManager` redeem
-    WorldGiftManagerRedeem = 3,
+    WorldGiftManagerRedeem = 128,
     /// `WorldGiftManager` cancel
-    WorldGiftManagerCancel = 4,
+    WorldGiftManagerCancel = 129,
 }
 
 impl TransactionTypeId {
