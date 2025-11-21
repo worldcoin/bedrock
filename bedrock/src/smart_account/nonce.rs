@@ -24,6 +24,10 @@ pub enum TransactionTypeId {
     WorldGiftManagerRedeem = 128,
     /// `WorldGiftManager` cancel
     WorldGiftManagerCancel = 129,
+    /// `WorldCampaignManager` sponsor
+    WorldCampaignManagerSponsor = 130,
+    /// `WorldCampaignManager` claim
+    WorldCampaignManagerClaim = 131,
 }
 
 impl TransactionTypeId {

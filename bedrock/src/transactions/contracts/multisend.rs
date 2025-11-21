@@ -50,6 +50,7 @@ pub struct MultiSend {
     pub address: Address,
 }
 
+// TODO sol macro
 impl MultiSend {
     pub const fn new(address: Address) -> Self {
         Self { address }

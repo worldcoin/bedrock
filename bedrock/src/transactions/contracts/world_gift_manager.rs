@@ -39,6 +39,7 @@ sol! {
     }
 }
 
+// TODO merge WorldGiftManager and WorldGiftManagerGift
 /// Enables operations with the `WorldGiftManager` contract.
 pub struct WorldGiftManagerGift {
     /// The inner call data for the function.
