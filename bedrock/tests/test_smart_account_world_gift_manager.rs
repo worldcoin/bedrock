@@ -18,6 +18,7 @@ use bedrock::{
 
 use serde::Serialize;
 use serde_json::json;
+use serial_test::serial;
 
 mod common;
 use common::{
@@ -279,6 +280,7 @@ where
 }
 
 #[tokio::test]
+#[serial]
 async fn test_transaction_world_gift_manager_gift_redeem_user_operations(
 ) -> anyhow::Result<()> {
     let anvil = setup_anvil();
@@ -380,6 +382,7 @@ async fn test_transaction_world_gift_manager_gift_redeem_user_operations(
 }
 
 #[tokio::test]
+#[serial]
 async fn test_transaction_world_gift_manager_gift_cancel_user_operations(
 ) -> anyhow::Result<()> {
     let anvil = setup_anvil();

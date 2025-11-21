@@ -18,6 +18,7 @@ use bedrock::{
 
 use serde::Serialize;
 use serde_json::json;
+use serial_test::serial;
 
 mod common;
 use common::{
@@ -239,6 +240,7 @@ where
 // ------------------ The test for the full transaction_transfer flow ------------------
 
 #[tokio::test]
+#[serial]
 async fn test_transaction_transfer_full_flow_executes_user_operation(
 ) -> anyhow::Result<()> {
     // 1) Spin up anvil fork
