@@ -1,5 +1,6 @@
 use alloy::primitives::{Address, U256};
 use bedrock_macros::bedrock_export;
+use rand::RngCore;
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
@@ -28,6 +29,14 @@ impl From<crate::primitives::PrimitiveError> for TransactionError {
     fn from(e: crate::primitives::PrimitiveError) -> Self {
         Self::PrimitiveError(e.to_string())
     }
+}
+
+/// Return value from the World Gift Manager methods
+#[allow(missing_docs)]
+#[derive(uniffi::Object, Clone, Debug)]
+pub struct WorldGiftManagerResult {
+    pub user_op_hash: HexEncodedData,
+    pub gift_id: HexEncodedData,
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -108,12 +117,16 @@ impl SafeSmartAccount {
         token_address: &str,
         to_address: &str,
         amount: &str,
-    ) -> Result<HexEncodedData, TransactionError> {
+    ) -> Result<WorldGiftManagerResult, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
 
-        let transaction = WorldGiftManagerGift::new(token_address, to_address, amount);
+        let mut gift_id = [0u8; 17];
+        rand::thread_rng().fill_bytes(&mut gift_id);
+
+        let transaction =
+            WorldGiftManagerGift::new(token_address, to_address, amount, gift_id);
 
         let provider = RpcProviderName::Any;
 
@@ -124,7 +137,10 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to execute transaction: {e}"),
             })?;
 
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        Ok(WorldGiftManagerResult {
+            user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
+            gift_id: HexEncodedData::new(&hex::encode(gift_id))?,
+        })
     }
 
     /// Reddems a gift using the `WorldGiftManager` contract.
@@ -134,9 +150,9 @@ impl SafeSmartAccount {
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_world_gift_manager_redeem(
         &self,
-        gift_id: &str,
-    ) -> Result<HexEncodedData, TransactionError> {
-        let gift_id = U256::parse_from_ffi(gift_id, "gift_id")?;
+        _gift_id: &str,
+    ) -> Result<WorldGiftManagerResult, TransactionError> {
+        let gift_id = U256::parse_from_ffi(_gift_id, "gift_id")?;
 
         let transaction = WorldGiftManager::new(gift_id, GiftAction::Redeem);
 
@@ -149,7 +165,10 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to execute transaction: {e}"),
             })?;
 
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        Ok(WorldGiftManagerResult {
+            user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
+            gift_id: HexEncodedData::new(_gift_id)?,
+        })
     }
 
     /// Cancel a gift using the `WorldGiftManager` contract.
@@ -159,9 +178,9 @@ impl SafeSmartAccount {
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_world_gift_manager_cancel(
         &self,
-        gift_id: &str,
-    ) -> Result<HexEncodedData, TransactionError> {
-        let gift_id = U256::parse_from_ffi(gift_id, "gift_id")?;
+        _gift_id: &str,
+    ) -> Result<WorldGiftManagerResult, TransactionError> {
+        let gift_id = U256::parse_from_ffi(_gift_id, "gift_id")?;
 
         let transaction = WorldGiftManager::new(gift_id, GiftAction::Cancel);
 
@@ -174,6 +193,9 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to execute transaction: {e}"),
             })?;
 
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        Ok(WorldGiftManagerResult {
+            user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
+            gift_id: HexEncodedData::new(_gift_id)?,
+        })
     }
 }

@@ -25,7 +25,7 @@ use crate::{
 use rand::RngCore;
 
 pub static WORLD_GIFT_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
-    Address::from_str("0x0000000000000000000000000000000000000000") // TODO aurel
+    Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e")
         .expect("failed to decode WORLD_GIFT_MANAGER_ADDRESS")
 });
 
@@ -52,11 +52,13 @@ pub struct WorldGiftManagerGift {
 }
 
 impl WorldGiftManagerGift {
-    pub fn new(token: Address, recipient: Address, amount: U256) -> Self {
+    pub fn new(
+        token: Address,
+        recipient: Address,
+        amount: U256,
+        gift_id: [u8; 17],
+    ) -> Self {
         let approve_data = Erc20::encode_approve(*WORLD_GIFT_MANAGER_ADDRESS, amount);
-
-        let mut gift_id = [0u8; 17];
-        rand::thread_rng().fill_bytes(&mut gift_id);
 
         let mut padded_gift_id = [0u8; 32];
         padded_gift_id[32 - 17..].copy_from_slice(&gift_id);
@@ -243,7 +245,9 @@ mod tests {
             Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
         let to =
             Address::from_str("0x44db85bca667056bdbf397f8e3f6db294587b288").unwrap();
-        let gift = WorldGiftManagerGift::new(token, to, U256::from(1));
+        let mut gift_id = [0u8; 17];
+        rand::thread_rng().fill_bytes(&mut gift_id);
+        let gift = WorldGiftManagerGift::new(token, to, U256::from(1), gift_id);
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
