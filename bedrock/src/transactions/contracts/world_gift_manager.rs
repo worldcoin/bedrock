@@ -24,7 +24,7 @@ use crate::{
 };
 
 pub static WORLD_GIFT_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
-    Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e") // TODO replace with prod contract
+    Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e") //TODO replace with post-audit contract
         .expect("failed to decode WORLD_GIFT_MANAGER_ADDRESS")
 });
 

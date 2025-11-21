@@ -15,7 +15,7 @@ use crate::smart_account::{
 };
 
 pub static WORLD_CAMPAIGN_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
-    Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003") // TODO aurel
+    Address::from_str("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
         .expect("failed to decode WORLD_CAMPAIGN_MANAGER_ADDRESS")
 });
 
