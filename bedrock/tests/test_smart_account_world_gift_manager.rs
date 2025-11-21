@@ -276,7 +276,8 @@ where
 }
 
 #[tokio::test]
-async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result<()> {
+async fn test_transaction_world_gift_manager_gift_redeem_user_operations(
+) -> anyhow::Result<()> {
     // 1) Spin up anvil fork
     let anvil = setup_anvil();
 
@@ -388,6 +389,122 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
 
     let after_redeem_giftee = wld.balanceOf(safe_address_giftee).call().await?;
     assert_eq!(after_redeem_giftee, before_giftee + amount);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_world_gift_manager_gift_cancel_user_operations(
+) -> anyhow::Result<()> {
+    // 1) Spin up anvil fork
+    let anvil = setup_anvil();
+
+    // 2) giftor signer and provider
+    let giftor_signer = PrivateKeySigner::random();
+    let giftor_key_hex = hex::encode(giftor_signer.to_bytes());
+    let giftor = giftor_signer.address();
+
+    let giftee_signer = PrivateKeySigner::random();
+    let giftee_key_hex = hex::encode(giftee_signer.to_bytes());
+    let giftee = giftee_signer.address();
+
+    let giftor_provider = ProviderBuilder::new()
+        .wallet(giftor_signer.clone())
+        .connect_http(anvil.endpoint_url());
+
+    let giftee_provider = ProviderBuilder::new()
+        .wallet(giftee_signer.clone())
+        .connect_http(anvil.endpoint_url());
+
+    giftor_provider
+        .anvil_set_balance(giftor, U256::from(1e18 as u64))
+        .await?;
+
+    giftee_provider
+        .anvil_set_balance(giftee, U256::from(1e18 as u64))
+        .await?;
+
+    // 3) Deploy Safe with 4337 module enabled
+    let safe_address_giftor = deploy_safe(&giftor_provider, giftor, U256::ZERO).await?;
+    let safe_address_giftee = deploy_safe(&giftee_provider, giftee, U256::ZERO).await?;
+
+    // 4) Fund EntryPoint deposit for Safe
+    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &giftor_provider);
+    let deposit_tx = entry_point
+        .depositTo(safe_address_giftor)
+        .value(U256::from(1e18 as u64))
+        .send()
+        .await?;
+    let _ = deposit_tx.get_receipt().await?;
+    let deposit_tx = entry_point
+        .depositTo(safe_address_giftee)
+        .value(U256::from(1e18 as u64))
+        .send()
+        .await?;
+    let _ = deposit_tx.get_receipt().await?;
+
+    // 5) Give Safe some ERC-20 balance (WLD on World Chain test contract used in other tests)
+    let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
+    let wld = IERC20::new(wld_token_address, &giftor_provider);
+
+    // Simulate balance by writing storage slot for mapping(address => uint) at slot 0
+    let mut padded = [0u8; 64];
+    padded[12..32].copy_from_slice(safe_address_giftor.as_slice());
+    let slot_hash = keccak256(padded);
+    let slot = U256::from_be_bytes(slot_hash.into());
+    let starting_balance = U256::from(10u128.pow(18) * 10); // 10 WLD
+    giftor_provider
+        .anvil_set_storage_at(wld_token_address, slot, starting_balance.into())
+        .await?;
+
+    let mut padded = [0u8; 64];
+    padded[12..32].copy_from_slice(safe_address_giftee.as_slice());
+    let slot_hash = keccak256(padded);
+    let slot = U256::from_be_bytes(slot_hash.into());
+    let starting_balance = U256::from(10u128.pow(18) * 10); // 10 WLD
+    giftee_provider
+        .anvil_set_storage_at(wld_token_address, slot, starting_balance.into())
+        .await?;
+
+    // 6) Prepare giftee and assert initial balances
+    let before_giftor = wld.balanceOf(safe_address_giftor).call().await?;
+    let before_giftee = wld.balanceOf(safe_address_giftee).call().await?;
+
+    // 7) Install mocked HTTP client that routes calls to Anvil
+    let client = AnvilBackedHttpClient {
+        provider: giftor_provider.clone(),
+    };
+
+    set_http_client(Arc::new(client));
+
+    // 8) gift
+    let safe_account_giftor =
+        SafeSmartAccount::new(giftor_key_hex, &safe_address_giftor.to_string())?;
+    let amount = U256::from(1e18);
+    let gift_result = safe_account_giftor
+        .transaction_world_gift_manager_gift(
+            &wld_token_address.to_string(),
+            &safe_address_giftee.to_string(),
+            &amount.to_string(),
+        )
+        .await
+        .expect("transaction_world_gift_manager_gift failed");
+
+    // 9) Verify balances did not change
+    let after_giftor = wld.balanceOf(safe_address_giftor).call().await?;
+    let after_giftee = wld.balanceOf(safe_address_giftee).call().await?;
+    assert_eq!(after_giftor, before_giftor - amount);
+    assert_eq!(after_giftee, before_giftee);
+
+    // 8) cancel
+
+    let _redeem_result = safe_account_giftor
+        .transaction_world_gift_manager_cancel(gift_result.gift_id.as_str())
+        .await
+        .expect("transaction_world_gift_manager_cancel failed");
+
+    let after_cancel_giftor = wld.balanceOf(safe_address_giftor).call().await?;
+    assert_eq!(after_cancel_giftor, before_giftor);
 
     Ok(())
 }
