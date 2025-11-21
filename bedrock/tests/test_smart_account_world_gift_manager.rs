@@ -285,33 +285,22 @@ async fn test_transaction_world_gift_manager_gift_redeem_user_operations(
 ) -> anyhow::Result<()> {
     let anvil = setup_anvil();
 
-    let giftor_signer = PrivateKeySigner::random();
-    let giftor_key_hex = hex::encode(giftor_signer.to_bytes());
-    let giftor = giftor_signer.address();
+    let owner_signer = PrivateKeySigner::random();
+    let owner_key_hex = hex::encode(owner_signer.to_bytes());
+    let owner = owner_signer.address();
 
-    let giftee_signer = PrivateKeySigner::random();
-    let giftee_key_hex = hex::encode(giftee_signer.to_bytes());
-    let giftee = giftee_signer.address();
-
-    let giftor_provider = ProviderBuilder::new()
-        .wallet(giftor_signer.clone())
+    let provider = ProviderBuilder::new()
+        .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());
 
-    let giftee_provider = ProviderBuilder::new()
-        .wallet(giftee_signer.clone())
-        .connect_http(anvil.endpoint_url());
+    provider
+        .anvil_set_balance(owner, U256::from(1e18 as u64))
+        .await?;
 
-    for (provider, address) in [(&giftor_provider, giftor), (&giftee_provider, giftee)]
-    {
-        provider
-            .anvil_set_balance(address, U256::from(1e18 as u64))
-            .await?;
-    }
+    let safe_address_giftor = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address_giftee = deploy_safe(&provider, owner, U256::from(1)).await?;
 
-    let safe_address_giftor = deploy_safe(&giftor_provider, giftor, U256::ZERO).await?;
-    let safe_address_giftee = deploy_safe(&giftee_provider, giftee, U256::ZERO).await?;
-
-    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &giftor_provider);
+    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
     for safe in [safe_address_giftor, safe_address_giftee] {
         let _ = entry_point
             .depositTo(safe)
@@ -323,18 +312,18 @@ async fn test_transaction_world_gift_manager_gift_redeem_user_operations(
     }
 
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
-    let wld = IERC20::new(wld_token_address, &giftor_provider);
+    let wld = IERC20::new(wld_token_address, &provider);
 
     let starting_balance = U256::from(10u128.pow(18) * 10); // 10 WLD
     set_erc20_balance_for_safe(
-        &giftor_provider,
+        &provider,
         wld_token_address,
         safe_address_giftor,
         starting_balance,
     )
     .await?;
     set_erc20_balance_for_safe(
-        &giftee_provider,
+        &provider,
         wld_token_address,
         safe_address_giftee,
         starting_balance,
@@ -345,15 +334,15 @@ async fn test_transaction_world_gift_manager_gift_redeem_user_operations(
     let before_giftee = wld.balanceOf(safe_address_giftee).call().await?;
 
     let client = AnvilBackedHttpClient {
-        provider: giftor_provider.clone(),
+        provider: provider.clone(),
     };
 
     set_http_client(Arc::new(client));
 
     let safe_account_giftor =
-        SafeSmartAccount::new(giftor_key_hex, &safe_address_giftor.to_string())?;
+        SafeSmartAccount::new(owner_key_hex.clone(), &safe_address_giftor.to_string())?;
     let safe_account_giftee =
-        SafeSmartAccount::new(giftee_key_hex, &safe_address_giftee.to_string())?;
+        SafeSmartAccount::new(owner_key_hex.clone(), &safe_address_giftee.to_string())?;
     let amount = U256::from(1e18);
 
     let gift_result = safe_account_giftor
@@ -387,33 +376,22 @@ async fn test_transaction_world_gift_manager_gift_cancel_user_operations(
 ) -> anyhow::Result<()> {
     let anvil = setup_anvil();
 
-    let giftor_signer = PrivateKeySigner::random();
-    let giftor_key_hex = hex::encode(giftor_signer.to_bytes());
-    let giftor = giftor_signer.address();
+    let owner_signer = PrivateKeySigner::random();
+    let owner_key_hex = hex::encode(owner_signer.to_bytes());
+    let owner = owner_signer.address();
 
-    let giftee_signer = PrivateKeySigner::random();
-    let _giftee_key_hex = hex::encode(giftee_signer.to_bytes());
-    let giftee = giftee_signer.address();
-
-    let giftor_provider = ProviderBuilder::new()
-        .wallet(giftor_signer.clone())
+    let provider = ProviderBuilder::new()
+        .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());
 
-    let giftee_provider = ProviderBuilder::new()
-        .wallet(giftee_signer.clone())
-        .connect_http(anvil.endpoint_url());
+    provider
+        .anvil_set_balance(owner, U256::from(1e18 as u64))
+        .await?;
 
-    for (provider, address) in [(&giftor_provider, giftor), (&giftee_provider, giftee)]
-    {
-        provider
-            .anvil_set_balance(address, U256::from(1e18 as u64))
-            .await?;
-    }
+    let safe_address_giftor = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address_giftee = deploy_safe(&provider, owner, U256::from(1)).await?;
 
-    let safe_address_giftor = deploy_safe(&giftor_provider, giftor, U256::ZERO).await?;
-    let safe_address_giftee = deploy_safe(&giftee_provider, giftee, U256::ZERO).await?;
-
-    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &giftor_provider);
+    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
     for safe in [safe_address_giftor, safe_address_giftee] {
         let _ = entry_point
             .depositTo(safe)
@@ -425,20 +403,13 @@ async fn test_transaction_world_gift_manager_gift_cancel_user_operations(
     }
 
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
-    let wld = IERC20::new(wld_token_address, &giftor_provider);
+    let wld = IERC20::new(wld_token_address, &provider);
 
     let starting_balance = U256::from(10u128.pow(18) * 10); // 10 WLD
     set_erc20_balance_for_safe(
-        &giftor_provider,
+        &provider,
         wld_token_address,
         safe_address_giftor,
-        starting_balance,
-    )
-    .await?;
-    set_erc20_balance_for_safe(
-        &giftee_provider,
-        wld_token_address,
-        safe_address_giftee,
         starting_balance,
     )
     .await?;
@@ -447,13 +418,13 @@ async fn test_transaction_world_gift_manager_gift_cancel_user_operations(
     let before_giftee = wld.balanceOf(safe_address_giftee).call().await?;
 
     let client = AnvilBackedHttpClient {
-        provider: giftor_provider.clone(),
+        provider: provider.clone(),
     };
 
     set_http_client(Arc::new(client));
 
     let safe_account_giftor =
-        SafeSmartAccount::new(giftor_key_hex, &safe_address_giftor.to_string())?;
+        SafeSmartAccount::new(owner_key_hex.clone(), &safe_address_giftor.to_string())?;
     let amount = U256::from(1e18);
 
     let gift_result = safe_account_giftor
