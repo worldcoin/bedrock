@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 mod common;
-use common::{
-    deploy_safe, set_erc20_balance_for_safe, setup_anvil, AnvilBackedHttpClient,
-    IEntryPoint, IERC20,
-};
 use alloy::{
     primitives::{address, U256},
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
+};
+use common::{
+    deploy_safe, set_erc20_balance_for_safe, setup_anvil, AnvilBackedHttpClient,
+    IEntryPoint, IERC20,
 };
 
 use bedrock::{

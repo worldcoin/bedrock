@@ -325,12 +325,12 @@ where
                 error_message: "invalid json".into(),
             })?;
 
-        let method = root
-            .get("method")
-            .and_then(|m| m.as_str())
-            .ok_or(HttpError::Generic {
-                error_message: "invalid json".into(),
-            })?;
+        let method =
+            root.get("method")
+                .and_then(|m| m.as_str())
+                .ok_or(HttpError::Generic {
+                    error_message: "invalid json".into(),
+                })?;
         let id = root.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let params = root
             .get("params")

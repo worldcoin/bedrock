@@ -82,7 +82,8 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
     let wld_contract = IERC20::new(wld_token_address, &provider);
     let balance = U256::from(10e18); // 10 WLD
 
-    set_erc20_balance_for_safe(&provider, wld_token_address, safe_address, balance).await?;
+    set_erc20_balance_for_safe(&provider, wld_token_address, safe_address, balance)
+        .await?;
 
     assert_eq!(wld_contract.balanceOf(safe_address).call().await?, balance,);
 
