@@ -2,10 +2,10 @@ use std::{str::FromStr, sync::Arc};
 
 use alloy::{
     network::Ethereum,
-    primitives::{address, keccak256, Address, U256},
+    primitives::{address, keccak256, Address, Log, U256},
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
-    sol_types::SolValue,
+    sol_types::{SolEvent, SolValue},
 };
 
 use bedrock::{
@@ -209,10 +209,52 @@ where
                     .map_err(|e| HttpError::Generic {
                         error_message: format!("handleOps failed: {e}"),
                     })?;
-                let _receipt =
+                let receipt =
                     tx.get_receipt().await.map_err(|e| HttpError::Generic {
                         error_message: format!("handleOps receipt failed: {e}"),
                     })?;
+
+                // Check for error events in the receipt
+                for log in receipt.inner.logs() {
+                    let raw_log = Log {
+                        address: log.address(),
+                        data: log.data().clone(),
+                    };
+
+                    // Check for UserOperationRevertReason event
+                    if let Ok(revert_event) =
+                        IEntryPoint::UserOperationRevertReason::decode_log(&raw_log)
+                    {
+                        let revert_reason = if revert_event.revertReason.is_empty() {
+                            "Unknown revert reason".to_string()
+                        } else {
+                            String::from_utf8(revert_event.revertReason.to_vec())
+                                .unwrap_or_else(|_| {
+                                    format!(
+                                        "0x{}",
+                                        hex::encode(&revert_event.revertReason)
+                                    )
+                                })
+                        };
+
+                        return Err(HttpError::Generic {
+                            error_message: format!(
+                                "UserOperation reverted - sender: {}, nonce: {}, reason: {}",
+                                revert_event.sender, revert_event.nonce, revert_reason
+                            ),
+                        });
+                    }
+
+                    // Log UserOperationEvent for debugging
+                    if let Ok(event) =
+                        IEntryPoint::UserOperationEvent::decode_log(&raw_log)
+                    {
+                        println!(
+                            "UserOperationEvent - sender: {}, success: {}, actualGasCost: {}, actualGasUsed: {}",
+                            event.sender, event.success, event.actualGasCost, event.actualGasUsed
+                        );
+                    }
+                }
 
                 // Return the chain userOpHash (EntryPoint-wrapped)
                 let enc = (inner_hash, entry_point_addr, U256::from(chain_id_u64))
@@ -306,8 +348,8 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
         .await?;
 
     // 6) Prepare giftee and assert initial balances
-    let before_giftor = wld.balanceOf(giftor).call().await?;
-    let before_giftee = wld.balanceOf(giftee).call().await?;
+    let before_giftor = wld.balanceOf(safe_address_giftor).call().await?;
+    let before_giftee = wld.balanceOf(safe_address_giftee).call().await?;
 
     // 7) Install mocked HTTP client that routes calls to Anvil
     let client = AnvilBackedHttpClient {
@@ -331,7 +373,7 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
 
     // 9) Verify balances did not change
     let after_giftor = wld.balanceOf(safe_address_giftor).call().await?;
-    let after_giftee = wld.balanceOf(giftee).call().await?;
+    let after_giftee = wld.balanceOf(safe_address_giftee).call().await?;
     assert_eq!(after_giftor, before_giftor - U256::from(1e18));
     assert_eq!(after_giftee, before_giftee);
 
@@ -342,9 +384,9 @@ async fn test_transaction_world_gift_manager_user_operations() -> anyhow::Result
     let _redeem_result = safe_account_giftee
         .transaction_world_gift_manager_redeem(gift_result.gift_id.as_str())
         .await
-        .expect("transaction_world_gift_manager_gift failed");
+        .expect("transaction_world_gift_manager_redeem failed");
 
-    let after_redeem_giftee = wld.balanceOf(safe_address_giftor).call().await?;
+    let after_redeem_giftee = wld.balanceOf(safe_address_giftee).call().await?;
     assert_eq!(after_redeem_giftee, before_giftee + U256::from(1e18));
 
     Ok(())

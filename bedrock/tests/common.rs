@@ -77,6 +77,23 @@ sol! {
 
     #[sol(rpc)]
     interface IEntryPoint {
+        event UserOperationRevertReason(
+            bytes32 indexed userOpHash,
+            address indexed sender,
+            uint256 nonce,
+            bytes revertReason
+        );
+
+        event UserOperationEvent(
+            bytes32 indexed userOpHash,
+            address indexed sender,
+            address indexed paymaster,
+            uint256 nonce,
+            bool success,
+            uint256 actualGasCost,
+            uint256 actualGasUsed
+        );
+
         function depositTo(address account) external payable;
         function handleOps(PackedUserOperation[] calldata ops, address payable beneficiary) external;
     }
