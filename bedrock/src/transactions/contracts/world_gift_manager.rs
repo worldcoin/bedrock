@@ -43,7 +43,7 @@ sol! {
 pub struct WorldGiftManagerGift {
     /// The inner call data for the function.
     call_data: Vec<u8>,
-    operation: u8,
+    operation: SafeOperation,
     to: Address,
     value: U256,
     /// gift id, randomly generated
@@ -72,13 +72,13 @@ impl WorldGiftManagerGift {
 
         let entries = vec![
             MultiSendTx {
-                operation: SafeOperation::Call as u8,
+                operation: SafeOperation::Call,
                 to: token,
                 value: U256::ZERO,
                 data: approve_data,
             },
             MultiSendTx {
-                operation: SafeOperation::Call as u8,
+                operation: SafeOperation::Call,
                 to: *WORLD_GIFT_MANAGER_ADDRESS,
                 value: U256::ZERO,
                 data: gift_data,
@@ -104,7 +104,7 @@ impl Is4337Encodable for WorldGiftManagerGift {
             to: self.to,
             value: self.value,
             data: self.call_data.clone().into(),
-            operation: self.operation,
+            operation: self.operation.clone() as u8,
         }
         .abi_encode()
         .into()

@@ -21,14 +21,14 @@ sol! {
 }
 
 pub struct MultiSendTx {
-    pub operation: u8,
+    pub operation: SafeOperation,
     pub to: Address,
     pub value: U256,
     pub data: Vec<u8>,
 }
 
 pub struct MultiSendBundle {
-    pub operation: u8,
+    pub operation: SafeOperation,
     pub to: Address,
     pub value: U256,
     pub data: Vec<u8>,
@@ -48,7 +48,7 @@ impl MultiSend {
         let mut out = Vec::new();
 
         // uint8 operation
-        out.push(tx.operation);
+        out.push(tx.operation.clone() as u8);
 
         // address 20 bytes
         out.extend_from_slice(tx.to.as_slice());
@@ -88,7 +88,7 @@ impl MultiSend {
             to: self.address,
             data: multisend_data,
             value: U256::ZERO,
-            operation: SafeOperation::DelegateCall as u8,
+            operation: SafeOperation::DelegateCall,
         }
     }
 }
