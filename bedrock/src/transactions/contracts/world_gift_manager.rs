@@ -87,7 +87,7 @@ impl WorldGiftManagerGift {
             },
         ];
 
-        let bundle = MultiSend::new(*MULTISEND_ADDRESS).build_operation(&entries);
+        let bundle = MultiSend::new(*MULTISEND_ADDRESS).build_bundle(&entries);
         Self {
             call_data: bundle.data,
             operation: bundle.operation,

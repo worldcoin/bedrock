@@ -20,7 +20,7 @@ sol! {
     }
 
     /// The structure of an encoded transaction
-    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
+    /// Reference: <https://github.com/safe-fndn/safe-smart-account/blob/cdb2eb578dbdba4c3f10a47f9a2dd9580773e63a/contracts/libraries/MultiSend.sol#L26>
     #[sol(rename_all = "camelcase")]
     #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -55,17 +55,11 @@ impl MultiSend {
         Self { address }
     }
 
-    pub fn encode_blob(txs: &[MultiSendTx]) -> Vec<u8> {
-        let mut out = Vec::new();
+    pub fn build_bundle(&self, txs: &[MultiSendTx]) -> MultiSendBundle {
+        let mut blob = Vec::new();
         for tx in txs {
-            out.extend_from_slice(&tx.abi_encode_packed());
+            blob.extend_from_slice(&tx.abi_encode_packed());
         }
-        out
-    }
-
-    pub fn build_operation(&self, txs: &[MultiSendTx]) -> MultiSendBundle {
-        let blob = Self::encode_blob(txs);
-
         let multisend_data = IMultiSend::multiSendCall {
             transactions: blob.into(),
         }
