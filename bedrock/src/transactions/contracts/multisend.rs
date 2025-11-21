@@ -1,30 +1,41 @@
 use alloy::{
     primitives::{Address, U256},
     sol,
-    sol_types::SolCall,
+    sol_types::{SolCall, SolValue},
 };
 use std::{str::FromStr, sync::LazyLock};
 
 use crate::smart_account::SafeOperation;
 
-/// Reference: <https://github.com/safe-fndn/safe-smart-account/blob/main/contracts/libraries/MultiSend.sol>
 pub static MULTISEND_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0x38869bf66a61cf6bdb996a6ae40d5853fd43b526")
         .expect("invalid MULTISEND address")
 });
 
 sol! {
+    /// Reference: <https://github.com/safe-fndn/safe-smart-account/blob/main/contracts/libraries/MultiSend.sol>
     #[derive(serde::Serialize)]
     interface IMultiSend {
         function multiSend(bytes transactions) external payable;
     }
-}
 
-pub struct MultiSendTx {
-    pub operation: SafeOperation,
-    pub to: Address,
-    pub value: U256,
-    pub data: Vec<u8>,
+    /// The structure of an encoded transaction
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
+    #[sol(rename_all = "camelcase")]
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MultiSendTx {
+        /// call = 0, delegatecall = 1
+        uint8 operation;
+        /// contract to call
+        address to;
+        /// eth to send with the call
+        uint256 value;
+        /// length of the data
+        uint256 data_length;
+        /// call data
+        bytes data;
+    }
 }
 
 pub struct MultiSendBundle {
@@ -44,34 +55,10 @@ impl MultiSend {
         Self { address }
     }
 
-    pub fn encode_entry(tx: &MultiSendTx) -> Vec<u8> {
-        let mut out = Vec::new();
-
-        // uint8 operation
-        out.push(tx.operation.clone() as u8);
-
-        // address 20 bytes
-        out.extend_from_slice(tx.to.as_slice());
-
-        // uint256 value (32 bytes)
-        let value_bytes: [u8; 32] = tx.value.to_be_bytes();
-        out.extend_from_slice(&value_bytes);
-
-        // uint256 length of data (32 bytes)
-        let len_u256 = U256::from(tx.data.len());
-        let len_bytes: [u8; 32] = len_u256.to_be_bytes();
-        out.extend_from_slice(&len_bytes);
-
-        // bytes data
-        out.extend_from_slice(&tx.data);
-
-        out
-    }
-
     pub fn encode_blob(txs: &[MultiSendTx]) -> Vec<u8> {
         let mut out = Vec::new();
         for tx in txs {
-            out.extend_from_slice(&Self::encode_entry(tx));
+            out.extend_from_slice(&tx.abi_encode_packed());
         }
         out
     }
