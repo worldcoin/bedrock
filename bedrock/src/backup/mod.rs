@@ -337,11 +337,12 @@ impl BackupManager {
         let manifest = ManifestManager::new();
         manifest.danger_delete_manifest()?;
 
-        // After deleting the manifest, refresh the base report so it no longer reports
-        // any backup designators or size for a backup that has been disabled.
-        if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
+        // After deleting the manifest, delete the base report so any backup-related
+        // state (designators, size, counters) is fully cleared. It will be recreated
+        // automatically if/when backup is enabled again.
+        if let Err(e) = ClientEventsReporter::new().delete_base_report() {
             log::warn!(
-                "[ClientEvents] failed to refresh backup report after manifest deletion: {e:?}"
+                "[ClientEvents] failed to delete base report after manifest deletion: {e:?}"
             );
         }
 

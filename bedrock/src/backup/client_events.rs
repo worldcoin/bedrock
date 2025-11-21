@@ -375,6 +375,29 @@ impl ClientEventsReporter {
             .map_err(ClientEventsError::FileSystemError)
     }
 
+    /// Delete the persisted base report file, if present.
+    ///
+    /// This is used when the backup is disabled/deleted so that any backup-related
+    /// state (e.g., designators, size, counters) is cleared. Missing file is treated
+    /// as a no-op.
+    ///
+    /// # Errors
+    /// Returns an error if deleting the base report fails for reasons other than the
+    /// file not existing.
+    pub fn delete_base_report(&self) -> Result<(), ClientEventsError> {
+        match self.fs.delete_file(Self::BASE_FILE) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if matches!(e, FileSystemError::FileDoesNotExist) {
+                    // Treat missing file as a successful delete.
+                    Ok(())
+                } else {
+                    Err(ClientEventsError::FileSystemError(e))
+                }
+            }
+        }
+    }
+
     /// Sync the base report with the current manifest contents.
     ///
     /// Iterates all files listed in the global manifest, streams each file to calculate
