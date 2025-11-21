@@ -1,6 +1,7 @@
 use alloy::primitives::{Address, U256};
 use bedrock_macros::bedrock_export;
 use rand::RngCore;
+use std::sync::Arc;
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
@@ -33,10 +34,10 @@ impl From<crate::primitives::PrimitiveError> for TransactionError {
 
 /// Return value from the World Gift Manager methods
 #[allow(missing_docs)]
-#[derive(uniffi::Object, Clone, Debug)]
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct WorldGiftManagerResult {
-    pub user_op_hash: HexEncodedData,
-    pub gift_id: HexEncodedData,
+    pub user_op_hash: Arc<HexEncodedData>,
+    pub gift_id: Arc<HexEncodedData>,
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -138,8 +139,8 @@ impl SafeSmartAccount {
             })?;
 
         Ok(WorldGiftManagerResult {
-            user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
-            gift_id: HexEncodedData::new(&hex::encode(gift_id))?,
+            user_op_hash: Arc::new(HexEncodedData::new(&user_op_hash.to_string())?),
+            gift_id: Arc::new(HexEncodedData::new(&hex::encode(gift_id))?),
         })
     }
 
@@ -166,8 +167,8 @@ impl SafeSmartAccount {
             })?;
 
         Ok(WorldGiftManagerResult {
-            user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
-            gift_id: HexEncodedData::new(gift_id_str)?,
+            user_op_hash: Arc::new(HexEncodedData::new(&user_op_hash.to_string())?),
+            gift_id: Arc::new(HexEncodedData::new(gift_id_str)?),
         })
     }
 
@@ -194,8 +195,8 @@ impl SafeSmartAccount {
             })?;
 
         Ok(WorldGiftManagerResult {
-            user_op_hash: HexEncodedData::new(&user_op_hash.to_string())?,
-            gift_id: HexEncodedData::new(gift_id_str)?,
+            user_op_hash: Arc::new(HexEncodedData::new(&user_op_hash.to_string())?),
+            gift_id: Arc::new(HexEncodedData::new(gift_id_str)?),
         })
     }
 }
