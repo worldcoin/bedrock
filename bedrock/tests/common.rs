@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::str::FromStr;
 
 use alloy::{
@@ -136,7 +137,6 @@ pub const SAFE_4337_MODULE_ADDRESS: Address =
 pub const SAFE_MODULE_SETUP_ADDRESS: Address =
     address!("2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47");
 
-#[allow(dead_code)] // this is extensively used in Integration Tests
 pub fn setup_anvil() -> AnvilInstance {
     dotenvy::dotenv().ok();
     let rpc_url = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
@@ -147,7 +147,6 @@ pub fn setup_anvil() -> AnvilInstance {
     alloy::node_bindings::Anvil::new().fork(rpc_url).spawn()
 }
 
-#[allow(dead_code)] // this is extensively used in Integration Tests
 pub async fn deploy_safe<P>(
     provider: &P,
     owner: Address,
@@ -247,7 +246,6 @@ impl TryFrom<&UserOperation> for PackedUserOperation {
     }
 }
 
-#[allow(dead_code)] // used in integration-style tests
 /// Set an ERC-20 balance for a Safe by directly writing the storage slot
 ///
 /// The underlying token must store balances as `mapping(address => uint256)` at slot `0`.
@@ -275,7 +273,6 @@ where
 
 // ------------------ Shared Anvil-backed AuthenticatedHttpClient ------------------
 
-#[allow(dead_code)] // used in integration-style tests
 /// Mock HTTP client that actually executes the user operation on Anvil and parses receipt logs
 #[derive(Clone)]
 pub struct AnvilBackedHttpClient<P>
@@ -285,7 +282,6 @@ where
     pub provider: P,
 }
 
-#[allow(dead_code)] // used in integration-style tests
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorUserOperationResponseLite<'a> {
