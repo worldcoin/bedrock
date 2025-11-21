@@ -282,6 +282,7 @@ where
     pub provider: P,
 }
 
+/// Represents a response from 'wa_sponsorUserOperation' rpc method
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorUserOperationResponseLite<'a> {
