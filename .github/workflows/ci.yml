@@ -16,7 +16,7 @@ env:
 jobs:
   lint:
     name: Format, Clippy & Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-16core
     permissions:
       contents: read
 
@@ -44,7 +44,7 @@ jobs:
 
   swift-build-and-test:
     name: Build and Test Swift Bindings
-    runs-on: macos-14
+    runs-on: macos-14-xlarge
     permissions:
       contents: read
 
@@ -75,7 +75,7 @@ jobs:
 
   test:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-16core
     permissions:
       contents: read
 
@@ -102,7 +102,7 @@ jobs:
 
   deny:
     name: Cargo deny
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-16core
     permissions:
       contents: read
     strategy:
@@ -124,7 +124,7 @@ jobs:
 
   kotlin-build-and-test:
     name: Build and Test Kotlin Bindings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-16core
     permissions:
       contents: read
 
