@@ -13,7 +13,7 @@ use crate::{
     primitives::PrimitiveError,
     transactions::contracts::{
         erc20::Erc20,
-        multisend::{MultiSend, MULTISEND_ADDRESS},
+        multisend::MultiSend,
     },
 };
 use crate::{
@@ -99,7 +99,7 @@ impl WorldGiftManagerGift {
             },
         ];
 
-        let bundle = MultiSend::new(*MULTISEND_ADDRESS).build_bundle(&entries);
+        let bundle = MultiSend::new().build_bundle(&entries);
         Self {
             call_data: bundle.data,
             operation: bundle.operation,

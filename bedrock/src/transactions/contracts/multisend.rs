@@ -46,13 +46,11 @@ pub struct MultiSendBundle {
 }
 
 /// Idiomatic struct wrapper
-pub struct MultiSend {
-    pub address: Address,
-}
+pub struct MultiSend;
 
 impl MultiSend {
-    pub const fn new(address: Address) -> Self {
-        Self { address }
+    pub fn new() -> Self {
+        Self
     }
 
     pub fn build_bundle(&self, txs: &[MultiSendTx]) -> MultiSendBundle {
@@ -66,7 +64,7 @@ impl MultiSend {
         .abi_encode();
 
         MultiSendBundle {
-            to: self.address,
+            to: *MULTISEND_ADDRESS,
             data: multisend_data,
             value: U256::ZERO,
             operation: SafeOperation::DelegateCall,
