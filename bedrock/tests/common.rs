@@ -272,21 +272,8 @@ where
     Ok(())
 }
 
-/// Mark an address as verified in the WorldIDAddressBook by overriding the `addressVerifiedUntil`
-/// mapping via storage writes.
-///
-/// Storage layout (from `WorldIDAddressBook` + OpenZeppelin `Ownable2Step`):
-/// - slot 0: `_owner`          (from `Ownable`)
-/// - slot 1: `_pendingOwner`   (from `Ownable2Step`)
-/// - slot 2: `worldIdRouter`
-/// - slot 3: `groupId`
-/// - (immutable) `externalNullifierHash` — not stored in a slot
-/// - slot 4: `verificationLength`
-/// - slot 5: `maxProofTime`
-/// - slot 6: `nullifierHashes` mapping
-/// - slot 7: `addressVerifiedUntil` mapping
-///
 /// Returns the World ID Address Book contract address for the current Bedrock environment.
+/// Reference <https://github.com/worldcoin/worldcoin-vault/blob/main/src/WorldIDAddressBook.sol>
 fn address_book_address() -> Address {
     match current_environment_or_default() {
         BedrockEnvironment::Staging => {
@@ -300,6 +287,19 @@ fn address_book_address() -> Address {
     }
 }
 
+/// Mark an address as verified in the WorldIDAddressBook by overriding the `addressVerifiedUntil`
+/// mapping via storage writes.
+///
+/// Storage layout (from `WorldIDAddressBook` + OpenZeppelin `Ownable2Step`):
+/// - slot 0: `_owner`          (from `Ownable`)
+/// - slot 1: `_pendingOwner`   (from `Ownable2Step`)
+/// - slot 2: `worldIdRouter`
+/// - slot 3: `groupId`
+/// - (immutable) `externalNullifierHash` — not stored in a slot
+/// - slot 4: `verificationLength`
+/// - slot 5: `maxProofTime`
+/// - slot 6: `nullifierHashes` mapping
+/// - slot 7: `addressVerifiedUntil` mapping
 pub async fn set_address_verified_until_for_account<P>(
     provider: &P,
     account: Address,
