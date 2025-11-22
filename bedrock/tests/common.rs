@@ -11,10 +11,11 @@ use alloy::{
 };
 
 use bedrock::{
-    primitives::http_client::{
-        AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
+    primitives::{
+        contracts::ADDRESS_BOOK,
+        http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
+        PrimitiveError,
     },
-    primitives::PrimitiveError,
     smart_account::UserOperation,
     transactions::foreign::UnparsedUserOperation,
 };
@@ -274,7 +275,7 @@ where
 /// Mark an address as verified in the WorldIDAddressBook by overriding the `addressVerifiedUntil`
 /// mapping via storage writes.
 ///
-/// Storage layout (approximate, from `WorldIDAddressBook` + OpenZeppelin `Ownable2Step`):
+/// Storage layout (from `WorldIDAddressBook` + OpenZeppelin `Ownable2Step`):
 /// - slot 0: `_owner`          (from `Ownable`)
 /// - slot 1: `_pendingOwner`   (from `Ownable2Step`)
 /// - slot 2: `worldIdRouter`
@@ -295,10 +296,6 @@ pub async fn set_address_verified_until_for_account<P>(
 where
     P: Provider<Ethereum> + AnvilApi<Ethereum>,
 {
-    // WorldCampaignManager address must match the one used by the transaction builder.
-    let address_book = Address::from_str("0x57b930D551e677CC36e2fA036Ae2fe8FdaE0330D")
-        .expect("failed to decode WORLD_CAMPAIGN_MANAGER_ADDRESS");
-
     // Compute the storage slot for addressVerifiedUntil[account] where the mapping is at slot 7.
     let mut padded = [0u8; 64];
     // First 32 bytes: left-padded address
@@ -309,7 +306,7 @@ where
     let slot = U256::from_be_bytes(slot_hash.into());
 
     provider
-        .anvil_set_storage_at(address_book, slot, verified_until.into())
+        .anvil_set_storage_at(*ADDRESS_BOOK, slot, verified_until.into())
         .await?;
 
     Ok(())

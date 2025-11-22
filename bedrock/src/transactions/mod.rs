@@ -228,7 +228,7 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Sponsors a campaign gift using the `WorldCampaignManager` contract.
+    /// Claims a campaign gift using the `WorldCampaignManager` contract.
     ///
     /// # Errors
     /// - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
