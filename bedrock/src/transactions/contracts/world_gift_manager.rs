@@ -26,11 +26,11 @@ use crate::{
 pub fn world_gift_manager_address() -> Address {
     match current_environment_or_default() {
         BedrockEnvironment::Staging => {
-            Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e")
+            Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e") // TODO replace with post-audit contract
                 .expect("failed to decode staging gift manager address")
         }
         BedrockEnvironment::Production => {
-            Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e")
+            Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e") // TODO replace with post-audit contract
                 .expect("failed to decode production gift manager address")
         }
     }
