@@ -45,15 +45,10 @@ pub struct MultiSendBundle {
     pub data: Vec<u8>,
 }
 
-/// Idiomatic struct wrapper
 pub struct MultiSend;
 
 impl MultiSend {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn build_bundle(&self, txs: &[MultiSendTx]) -> MultiSendBundle {
+    pub fn build_bundle(txs: &[MultiSendTx]) -> MultiSendBundle {
         let mut blob = Vec::new();
         for tx in txs {
             blob.extend_from_slice(&tx.abi_encode_packed());

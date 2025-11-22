@@ -11,10 +11,7 @@ use alloy::{
 use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::{
     primitives::PrimitiveError,
-    transactions::contracts::{
-        erc20::Erc20,
-        multisend::MultiSend,
-    },
+    transactions::contracts::{erc20::Erc20, multisend::MultiSend},
 };
 use crate::{
     smart_account::{
@@ -99,7 +96,7 @@ impl WorldGiftManagerGift {
             },
         ];
 
-        let bundle = MultiSend::new().build_bundle(&entries);
+        let bundle = MultiSend::build_bundle(&entries);
         Self {
             call_data: bundle.data,
             operation: bundle.operation,
