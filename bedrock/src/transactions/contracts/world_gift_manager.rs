@@ -72,20 +72,22 @@ impl WorldGiftManagerGift {
 
         let entries = vec![
             MultiSendTx {
-                operation: SafeOperation::Call,
+                operation: SafeOperation::Call as u8,
                 to: token,
                 value: U256::ZERO,
-                data: approve_data,
+                data_length: U256::from(approve_data.len()),
+                data: approve_data.into(),
             },
             MultiSendTx {
-                operation: SafeOperation::Call,
+                operation: SafeOperation::Call as u8,
                 to: *WORLD_GIFT_MANAGER_ADDRESS,
                 value: U256::ZERO,
-                data: gift_data,
+                data_length: U256::from(gift_data.len()),
+                data: gift_data.into(),
             },
         ];
 
-        let bundle = MultiSend::new(*MULTISEND_ADDRESS).build_operation(&entries);
+        let bundle = MultiSend::new(*MULTISEND_ADDRESS).build_bundle(&entries);
         Self {
             call_data: bundle.data,
             operation: bundle.operation,
