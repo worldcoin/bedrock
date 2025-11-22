@@ -271,6 +271,50 @@ where
     Ok(())
 }
 
+/// Mark an address as verified in the WorldIDAddressBook by overriding the `addressVerifiedUntil`
+/// mapping via storage writes.
+///
+/// Storage layout (approximate, from `WorldIDAddressBook` + OpenZeppelin `Ownable2Step`):
+/// - slot 0: `_owner`          (from `Ownable`)
+/// - slot 1: `_pendingOwner`   (from `Ownable2Step`)
+/// - slot 2: `worldIdRouter`
+/// - slot 3: `groupId`
+/// - (immutable) `externalNullifierHash` — not stored in a slot
+/// - slot 4: `verificationLength`
+/// - slot 5: `maxProofTime`
+/// - slot 6: `nullifierHashes` mapping
+/// - slot 7: `addressVerifiedUntil` mapping
+///
+/// For `mapping(address => uint256) addressVerifiedUntil` at slot `6`, the storage slot for
+/// `addressVerifiedUntil[account]` is `keccak256(abi.encode(account, uint256(6)))`.
+pub async fn set_address_verified_until_for_account<P>(
+    provider: &P,
+    account: Address,
+    verified_until: U256,
+) -> anyhow::Result<()>
+where
+    P: Provider<Ethereum> + AnvilApi<Ethereum>,
+{
+    // WorldCampaignManager address must match the one used by the transaction builder.
+    let address_book = Address::from_str("0x57b930D551e677CC36e2fA036Ae2fe8FdaE0330D")
+        .expect("failed to decode WORLD_CAMPAIGN_MANAGER_ADDRESS");
+
+    // Compute the storage slot for addressVerifiedUntil[account] where the mapping is at slot 7.
+    let mut padded = [0u8; 64];
+    // First 32 bytes: left-padded address
+    padded[12..32].copy_from_slice(account.as_slice());
+    // Second 32 bytes: mapping slot index (slot = 7 for `addressVerifiedUntil`).
+    padded[63] = 7u8;
+    let slot_hash = keccak256(padded);
+    let slot = U256::from_be_bytes(slot_hash.into());
+
+    provider
+        .anvil_set_storage_at(address_book, slot, verified_until.into())
+        .await?;
+
+    Ok(())
+}
+
 // ------------------ Shared Anvil-backed AuthenticatedHttpClient ------------------
 
 /// Mock HTTP client that actually executes the user operation on Anvil and parses receipt logs
