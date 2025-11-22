@@ -14,6 +14,7 @@ use crate::smart_account::{
     TransactionTypeId, UserOperation,
 };
 
+/// Address of the `WorldCampaignManager` contract on World Chain.
 pub static WORLD_CAMPAIGN_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
     Address::from_str("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
         .expect("failed to decode WORLD_CAMPAIGN_MANAGER_ADDRESS")
@@ -54,7 +55,11 @@ pub struct WorldCampaignManager {
 }
 
 impl WorldCampaignManager {
-    const fn new(call_data: Vec<u8>, campaign_id: U256, action: CampaignAction) -> Self {
+    const fn new(
+        call_data: Vec<u8>,
+        campaign_id: U256,
+        action: CampaignAction,
+    ) -> Self {
         Self {
             call_data,
             campaign_id,

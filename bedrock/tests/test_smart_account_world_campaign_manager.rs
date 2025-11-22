@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 mod common;
 use common::{
@@ -16,6 +16,7 @@ use alloy::{
 use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
+    transactions::WORLD_CAMPAIGN_MANAGER_ADDRESS,
 };
 
 #[tokio::test]
@@ -168,9 +169,7 @@ where
     P: Provider<Ethereum> + AnvilApi<Ethereum>,
 {
     // Address must match the one used by the transaction builder (`WORLD_CAMPAIGN_MANAGER_ADDRESS`).
-    let world_campaign_manager_address =
-        Address::from_str("0xD61F9411E768871ca9bc723afC5Ff3A4f731D0C1")
-            .expect("failed to decode WORLD_CAMPAIGN_MANAGER_ADDRESS");
+    let world_campaign_manager_address = *WORLD_CAMPAIGN_MANAGER_ADDRESS;
 
     // Compute the base slot for getCampaign[campaign_id] where getCampaign is at slot 1.
     //
