@@ -54,7 +54,7 @@ pub struct WorldCampaignManager {
 }
 
 impl WorldCampaignManager {
-    fn new(call_data: Vec<u8>, campaign_id: U256, action: CampaignAction) -> Self {
+    const fn new(call_data: Vec<u8>, campaign_id: U256, action: CampaignAction) -> Self {
         Self {
             call_data,
             campaign_id,
