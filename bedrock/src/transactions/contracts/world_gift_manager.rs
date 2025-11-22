@@ -8,6 +8,7 @@ use alloy::{
     sol_types::SolCall,
 };
 
+use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::{
     primitives::PrimitiveError,
     transactions::contracts::{
@@ -15,7 +16,6 @@ use crate::{
         multisend::{MultiSend, MULTISEND_ADDRESS},
     },
 };
-use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::{
     smart_account::{
         ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
@@ -69,8 +69,7 @@ impl WorldGiftManagerGift {
         amount: U256,
         gift_id: [u8; 17],
     ) -> Self {
-        let approve_data =
-            Erc20::encode_approve(world_gift_manager_address(), amount);
+        let approve_data = Erc20::encode_approve(world_gift_manager_address(), amount);
 
         let mut padded_gift_id = [0u8; 32];
         padded_gift_id[32 - 17..].copy_from_slice(&gift_id);
