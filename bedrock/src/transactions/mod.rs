@@ -14,7 +14,7 @@ use crate::{
 };
 
 mod contracts;
-pub use contracts::world_campaign_manager::WORLD_CAMPAIGN_MANAGER_ADDRESS;
+pub use contracts::world_campaign_manager::world_campaign_manager_address;
 pub mod foreign;
 pub mod rpc;
 

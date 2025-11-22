@@ -48,6 +48,15 @@ impl BedrockEnvironment {
     }
 }
 
+/// Returns the current `BedrockEnvironment`, defaulting to `Production` if
+/// the global configuration has not been initialized.
+#[must_use]
+pub fn current_environment_or_default() -> BedrockEnvironment {
+    get_config()
+        .map(|cfg| cfg.environment())
+        .unwrap_or(BedrockEnvironment::Production)
+}
+
 impl std::fmt::Display for BedrockEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())

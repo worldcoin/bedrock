@@ -1,6 +1,6 @@
 //! This module introduces the `WorldGiftManager` contract interface.
 
-use std::{str::FromStr, sync::LazyLock};
+use std::str::FromStr;
 
 use alloy::{
     primitives::{Address, Bytes, U256},
@@ -15,6 +15,7 @@ use crate::{
         multisend::{MultiSend, MULTISEND_ADDRESS},
     },
 };
+use crate::primitives::config::{get_config, BedrockEnvironment};
 use crate::{
     smart_account::{
         ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
@@ -23,10 +24,23 @@ use crate::{
     transactions::contracts::multisend::MultiSendTx,
 };
 
-pub static WORLD_GIFT_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
-    Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e") //TODO replace with post-audit contract
-        .expect("failed to decode WORLD_GIFT_MANAGER_ADDRESS")
-});
+/// Returns the `WorldGiftManager` contract address for the current Bedrock environment.
+#[must_use]
+pub fn world_gift_manager_address() -> Address {
+    match get_config()
+        .map(|cfg| cfg.environment())
+        .unwrap_or(BedrockEnvironment::Production)
+    {
+        BedrockEnvironment::Staging => {
+            Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e")
+                .expect("failed to decode staging gift manager address")
+        }
+        BedrockEnvironment::Production => {
+            Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e")
+                .expect("failed to decode production gift manager address")
+        }
+    }
+}
 
 sol! {
     /// The `WorldGiftManager` contract interface.
@@ -58,7 +72,8 @@ impl WorldGiftManagerGift {
         amount: U256,
         gift_id: [u8; 17],
     ) -> Self {
-        let approve_data = Erc20::encode_approve(*WORLD_GIFT_MANAGER_ADDRESS, amount);
+        let approve_data =
+            Erc20::encode_approve(world_gift_manager_address(), amount);
 
         let mut padded_gift_id = [0u8; 32];
         padded_gift_id[32 - 17..].copy_from_slice(&gift_id);
@@ -81,7 +96,7 @@ impl WorldGiftManagerGift {
             },
             MultiSendTx {
                 operation: SafeOperation::Call as u8,
-                to: *WORLD_GIFT_MANAGER_ADDRESS,
+                to: world_gift_manager_address(),
                 value: U256::ZERO,
                 data_length: U256::from(gift_data.len()),
                 data: gift_data.into(),
@@ -188,7 +203,7 @@ impl Is4337Encodable for WorldGiftManager {
 
     fn as_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
-            to: *WORLD_GIFT_MANAGER_ADDRESS,
+            to: world_gift_manager_address(),
             value: U256::ZERO,
             data: self.call_data.clone(),
             operation: SafeOperation::Call as u8,
