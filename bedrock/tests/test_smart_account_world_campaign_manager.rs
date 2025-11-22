@@ -53,22 +53,6 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
     let wld = IERC20::new(wld_token_address, &provider);
 
-    let starting_balance = U256::from(10u128.pow(18) * 10); // 10 WLD
-    set_erc20_balance_for_safe(
-        &provider,
-        wld_token_address,
-        safe_address_giftor,
-        starting_balance,
-    )
-    .await?;
-    set_erc20_balance_for_safe(
-        &provider,
-        wld_token_address,
-        safe_address_giftee,
-        starting_balance,
-    )
-    .await?;
-
     // Prepare a fake campaign on WorldCampaignManager with id 1 funded in WLD.
     let amount = U256::from(1e18);
     let total_funds = amount * U256::from(10u8);
