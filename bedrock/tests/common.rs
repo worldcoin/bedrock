@@ -11,10 +11,11 @@ use alloy::{
 };
 
 use bedrock::{
-    primitives::http_client::{
-        AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod,
+    primitives::{
+        contracts::ADDRESS_BOOK,
+        http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
+        PrimitiveError,
     },
-    primitives::PrimitiveError,
     smart_account::UserOperation,
     transactions::foreign::UnparsedUserOperation,
 };
@@ -266,6 +267,46 @@ where
 
     provider
         .anvil_set_storage_at(token, slot, balance.into())
+        .await?;
+
+    Ok(())
+}
+
+/// Mark an address as verified in the WorldIDAddressBook by overriding the `addressVerifiedUntil`
+/// mapping via storage writes.
+///
+/// Storage layout (from `WorldIDAddressBook` + OpenZeppelin `Ownable2Step`):
+/// - slot 0: `_owner`          (from `Ownable`)
+/// - slot 1: `_pendingOwner`   (from `Ownable2Step`)
+/// - slot 2: `worldIdRouter`
+/// - slot 3: `groupId`
+/// - (immutable) `externalNullifierHash` — not stored in a slot
+/// - slot 4: `verificationLength`
+/// - slot 5: `maxProofTime`
+/// - slot 6: `nullifierHashes` mapping
+/// - slot 7: `addressVerifiedUntil` mapping
+///
+/// For `mapping(address => uint256) addressVerifiedUntil` at slot `6`, the storage slot for
+/// `addressVerifiedUntil[account]` is `keccak256(abi.encode(account, uint256(6)))`.
+pub async fn set_address_verified_until_for_account<P>(
+    provider: &P,
+    account: Address,
+    verified_until: U256,
+) -> anyhow::Result<()>
+where
+    P: Provider<Ethereum> + AnvilApi<Ethereum>,
+{
+    // Compute the storage slot for addressVerifiedUntil[account] where the mapping is at slot 7.
+    let mut padded = [0u8; 64];
+    // First 32 bytes: left-padded address
+    padded[12..32].copy_from_slice(account.as_slice());
+    // Second 32 bytes: mapping slot index (slot = 7 for `addressVerifiedUntil`).
+    padded[63] = 7u8;
+    let slot_hash = keccak256(padded);
+    let slot = U256::from_be_bytes(slot_hash.into());
+
+    provider
+        .anvil_set_storage_at(*ADDRESS_BOOK, slot, verified_until.into())
         .await?;
 
     Ok(())

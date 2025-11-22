@@ -8,11 +8,13 @@ use crate::{
     smart_account::{Is4337Encodable, SafeSmartAccount},
     transactions::contracts::{
         erc20::{Erc20, TransferAssociation},
+        world_campaign_manager::WorldCampaignManager,
         world_gift_manager::{GiftAction, WorldGiftManager, WorldGiftManagerGift},
     },
 };
 
 mod contracts;
+pub use contracts::world_campaign_manager::WORLD_CAMPAIGN_MANAGER_ADDRESS;
 pub mod foreign;
 pub mod rpc;
 
@@ -198,5 +200,55 @@ impl SafeSmartAccount {
             user_op_hash: Arc::new(HexEncodedData::new(&user_op_hash.to_string())?),
             gift_id: Arc::new(HexEncodedData::new(gift_id_str)?),
         })
+    }
+
+    /// Sponsors a campaign gift using the `WorldCampaignManager` contract.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_world_campaign_manager_sponsor(
+        &self,
+        campaign_id_str: &str,
+        to_address: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let campaign_id = U256::parse_from_ffi(campaign_id_str, "campaign_id")?;
+        let to_address = Address::parse_from_ffi(to_address, "address")?;
+        let transaction = WorldCampaignManager::sponsor(campaign_id, to_address);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Claims a campaign gift using the `WorldCampaignManager` contract.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the provided attributes are invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_world_campaign_manager_claim(
+        &self,
+        campaign_id_str: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let campaign_id = U256::parse_from_ffi(campaign_id_str, "campaign_id")?;
+        let transaction = WorldCampaignManager::claim(campaign_id);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 }
