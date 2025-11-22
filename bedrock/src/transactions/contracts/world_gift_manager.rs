@@ -15,7 +15,7 @@ use crate::{
         multisend::{MultiSend, MULTISEND_ADDRESS},
     },
 };
-use crate::primitives::config::{get_config, BedrockEnvironment};
+use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::{
     smart_account::{
         ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
@@ -27,10 +27,7 @@ use crate::{
 /// Returns the `WorldGiftManager` contract address for the current Bedrock environment.
 #[must_use]
 pub fn world_gift_manager_address() -> Address {
-    match get_config()
-        .map(|cfg| cfg.environment())
-        .unwrap_or(BedrockEnvironment::Production)
-    {
+    match current_environment_or_default() {
         BedrockEnvironment::Staging => {
             Address::from_str("0x91479943841A4350f614Abb9745314F262F45b2e")
                 .expect("failed to decode staging gift manager address")

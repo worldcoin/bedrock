@@ -52,9 +52,7 @@ impl BedrockEnvironment {
 /// the global configuration has not been initialized.
 #[must_use]
 pub fn current_environment_or_default() -> BedrockEnvironment {
-    get_config()
-        .map(|cfg| cfg.environment())
-        .unwrap_or(BedrockEnvironment::Production)
+    get_config().map_or(BedrockEnvironment::Production, |cfg| cfg.environment())
 }
 
 impl std::fmt::Display for BedrockEnvironment {
