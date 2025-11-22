@@ -110,7 +110,7 @@ impl Is4337Encodable for WorldCampaignManager {
         let mut metadata_bytes = [0u8; 10];
 
         // copy last 10 bytes in the nonceKey.
-        // campaign_id is incremented by 1 for each new campaign, it will therefore exceed 10 bytes <https://github.com/worldcoin/worldcoin-gift-contracts/blob/58e21822650958c11d089ef6e9a797668271848e/src/WorldCampaignManager.sol#L266>
+        // campaign_id starts at 1 and is incremented by 1 for each new campaign, it will therefore never exceed 10 bytes <https://github.com/worldcoin/worldcoin-gift-contracts/blob/58e21822650958c11d089ef6e9a797668271848e/src/WorldCampaignManager.sol#L266>
         metadata_bytes.copy_from_slice(&bytes[32 - 10..]);
 
         let key = NonceKeyV1::new(
