@@ -171,21 +171,37 @@ struct EventPayload {
     latest_error: Option<String>,
 
     // merged base report fields
+    #[serde(skip_serializing_if = "Option::is_none")]
     user_pkid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     installation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     is_backup_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     orb_verified_after_oct_25: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     is_user_orb_verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     is_user_document_verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     has_turnkey_account: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     sync_factor_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     encryption_keys: Option<Vec<BackupReportEncryptionKeyKind>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     main_factors: Option<Vec<BackupReportMainFactor>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     backup_files_modules: Option<Vec<BackupFileDesignator>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     backup_file_size_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     device_sync_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     app_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     platform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     last_synced_at: Option<String>,
 }
 
