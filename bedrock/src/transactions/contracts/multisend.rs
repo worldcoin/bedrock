@@ -1,16 +1,14 @@
 use alloy::{
-    primitives::{Address, U256},
+    primitives::{address, Address, U256},
     sol,
     sol_types::{SolCall, SolValue},
 };
-use std::{str::FromStr, sync::LazyLock};
+use std::sync::LazyLock;
 
 use crate::smart_account::SafeOperation;
 
-pub static MULTISEND_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
-    Address::from_str("0x38869bf66a61cf6bdb996a6ae40d5853fd43b526")
-        .expect("invalid MULTISEND address")
-});
+pub static MULTISEND_ADDRESS: LazyLock<Address> =
+    LazyLock::new(|| address!("0x38869bf66a61cf6bdb996a6ae40d5853fd43b526"));
 
 sol! {
     /// Reference: <https://github.com/safe-fndn/safe-smart-account/blob/main/contracts/libraries/MultiSend.sol>
