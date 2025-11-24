@@ -42,8 +42,7 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response() -> anyhow::Re
 
     assert_eq!(receipt.user_op_hash, user_op_hash);
     let expected_tx_hash = Some(
-        "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0"
-            .to_string(),
+        "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0".to_string(),
     );
     assert_eq!(receipt.transaction_hash, expected_tx_hash);
     assert_eq!(receipt.sender, "0x1234567890abcdef1234567890abcdef12345678");
