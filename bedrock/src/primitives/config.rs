@@ -55,15 +55,15 @@ impl BedrockEnvironment {
 /// indicating that the default environment is being used.
 #[must_use]
 pub fn current_environment_or_default() -> BedrockEnvironment {
-    match get_config() {
-        Some(cfg) => cfg.environment(),
-        None => {
+    get_config().map_or_else(
+        || {
             crate::error!(
                 "Bedrock config not initialized, defaulting environment to Production"
             );
             BedrockEnvironment::Production
-        }
-    }
+        },
+        |cfg| cfg.environment(),
+    )
 }
 
 impl std::fmt::Display for BedrockEnvironment {
