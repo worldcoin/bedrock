@@ -370,8 +370,6 @@ impl BackupManager {
         &self,
         kind: BackupReportEventKind,
         success: bool,
-        updated_main_factors: Vec<BackupReportMainFactor>,
-        is_backup_enabled: bool,
         error_message: Option<String>,
         timestamp_iso8601: String,
     ) -> Result<(), BackupError> {
@@ -381,17 +379,8 @@ impl BackupManager {
                     .to_string(),
             });
         }
+
         let client_events = ClientEventsReporter::new();
-        let report_input = BackupReportInput {
-            main_factors: Some(updated_main_factors),
-            is_backup_enabled: Some(is_backup_enabled),
-            ..Default::default()
-        };
-        client_events
-            .set_backup_report_attributes(report_input)
-            .map_err(|e| BackupError::Generic {
-                error_message: e.to_string(),
-            })?;
 
         let result = client_events
             .send_event(kind, success, error_message, timestamp_iso8601)
@@ -400,7 +389,7 @@ impl BackupManager {
         match result {
             Ok(()) => Ok(()),
             Err(e) => {
-                crate::error!("Failed to send event: {e:?}");
+                crate::error!("Failed to send backup event: {e:?}");
                 Ok(())
             }
         }
