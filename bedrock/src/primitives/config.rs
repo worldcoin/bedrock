@@ -50,9 +50,20 @@ impl BedrockEnvironment {
 
 /// Returns the current `BedrockEnvironment`, defaulting to `Production` if
 /// the global configuration has not been initialized.
+///
+/// When the configuration has not been initialized, this will log an error
+/// indicating that the default environment is being used.
 #[must_use]
 pub fn current_environment_or_default() -> BedrockEnvironment {
-    get_config().map_or(BedrockEnvironment::Production, |cfg| cfg.environment())
+    get_config().map_or_else(
+        || {
+            crate::error!(
+                "Bedrock config not initialized, defaulting environment to Production"
+            );
+            BedrockEnvironment::Production
+        },
+        |cfg| cfg.environment(),
+    )
 }
 
 impl std::fmt::Display for BedrockEnvironment {

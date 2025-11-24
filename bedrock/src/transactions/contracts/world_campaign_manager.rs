@@ -1,9 +1,7 @@
 //! This module introduces the `WorldCampaignManager` contract interface.
 
-use std::str::FromStr;
-
 use alloy::{
-    primitives::{Address, Bytes, U256},
+    primitives::{address, Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -26,12 +24,10 @@ use crate::smart_account::{
 pub fn world_campaign_manager_address() -> Address {
     match current_environment_or_default() {
         BedrockEnvironment::Staging => {
-            Address::from_str("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
-                .expect("failed to decode staging campaign manager address")
+            address!("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
         }
         BedrockEnvironment::Production => {
-            Address::from_str("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
-                .expect("failed to decode production campaign manager address")
+            address!("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
         }
     }
 }
