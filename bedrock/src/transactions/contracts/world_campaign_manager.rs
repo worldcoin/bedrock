@@ -14,12 +14,6 @@ use crate::smart_account::{
 };
 
 /// Returns the `WorldCampaignManager` contract address for the current Bedrock environment.
-///
-/// # Panics
-///
-/// This function panics if the hard-coded address strings cannot be parsed into
-/// a valid `Address`. This should never happen unless the constants are edited
-/// to an invalid value.
 #[must_use]
 pub fn world_campaign_manager_address() -> Address {
     match current_environment_or_default() {
@@ -60,7 +54,7 @@ impl CampaignAction {
 pub struct WorldCampaignManager {
     /// The inner call data for the function.
     call_data: Vec<u8>,
-    /// campaingId
+    /// campaignId
     campaign_id: U256,
     /// action
     action: CampaignAction,

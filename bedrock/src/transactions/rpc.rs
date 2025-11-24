@@ -36,6 +36,9 @@ pub enum RpcMethod {
     /// Request sponsorship for a `UserOperation`
     #[serde(rename = "wa_sponsorUserOperation")]
     SponsorUserOperation,
+    /// Queries the status of a `UserOperation`
+    #[serde(rename = "wa_getUserOperationReceipt")]
+    WaGetUserOperationReceipt,
     /// Submit a signed `UserOperation`
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
@@ -71,6 +74,7 @@ impl RpcMethod {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::SponsorUserOperation => "wa_sponsorUserOperation",
+            Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
             Self::SendUserOperation => "eth_sendUserOperation",
         }
     }
@@ -190,6 +194,30 @@ pub struct SponsorUserOperationResponse {
     pub max_fee_per_gas: U128,
     /// provider name
     pub provider_name: RpcProviderName,
+}
+
+/// Response from `wa_getUserOperationReceipt`
+#[derive(Debug, Deserialize, uniffi::Record, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WaGetUserOperationReceiptResponse {
+    /// User operation hash
+    pub user_op_hash: String,
+    /// Transaction hash, if the user operation has been included in a block
+    pub transaction_hash: Option<String>,
+    /// Sender address
+    pub sender: String,
+    /// Success status ("pending", "error", "true", or "false")
+    pub success: String,
+    /// Source (flexible field representing the transaction type or origin)
+    pub source: String,
+    /// Source ID, if available
+    pub source_id: Option<String>,
+    /// Self-sponsor token, if applicable
+    pub self_sponsor_token: Option<String>,
+    /// Self-sponsor amount, if applicable
+    pub self_sponsor_amount: Option<String>,
+    /// Block timestamp, if the user operation has been included in a block
+    pub block_timestamp: Option<String>,
 }
 
 /// RPC client for handling 4337 `UserOperation` requests
@@ -348,6 +376,33 @@ impl RpcClient {
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
             error_message: format!("Invalid userOpHash format: {e}"),
         })
+    }
+
+    /// Gets a custom user operation receipt for a given userOp hash
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The HTTP request fails
+    /// - The request serialization fails
+    /// - The response parsing fails
+    /// - The RPC returns an error response
+    /// - The returned user operation hash is invalid
+    pub async fn wa_get_user_operation_receipt(
+        &self,
+        network: Network,
+        user_operation_hash: &str,
+    ) -> Result<WaGetUserOperationReceiptResponse, RpcError> {
+        let params = vec![serde_json::to_value(user_operation_hash)
+            .map_err(|_| RpcError::JsonError)?];
+
+        self.rpc_call(
+            network,
+            RpcMethod::WaGetUserOperationReceipt,
+            params,
+            RpcProviderName::Any,
+        )
+        .await
     }
 }
 

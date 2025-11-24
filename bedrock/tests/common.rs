@@ -358,7 +358,7 @@ where
 {
     async fn fetch_from_app_backend(
         &self,
-        _url: String,
+        url: String,
         method: HttpMethod,
         _headers: Vec<HttpHeader>,
         body: Option<Vec<u8>>,
@@ -570,6 +570,41 @@ where
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": format!("0x{}", hex::encode(user_op_hash)),
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
+            // Return a mocked wa_getUserOperationReceipt response with static values
+            "wa_getUserOperationReceipt" => {
+                let params = params.as_array().ok_or(HttpError::Generic {
+                    error_message: "invalid params".into(),
+                })?;
+                let user_op_hash = params.get(0).and_then(|v| v.as_str()).ok_or(
+                    HttpError::Generic {
+                        error_message: "missing userOpHash param".into(),
+                    },
+                )?;
+
+                // Extract the network from the URL path (e.g. "/v1/rpc/worldchain" -> "worldchain")
+                let network_name = url.rsplit('/').next().unwrap_or_default();
+
+                let result = serde_json::json!({
+                    "network": network_name,
+                    "userOpHash": user_op_hash,
+                    "transactionHash":
+                        "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0",
+                    "sender": "0x1234567890abcdef1234567890abcdef12345678",
+                    "success": "true",
+                    "source": "campaign_gift_sponsor",
+                    "sourceId": "0x1",
+                    "selfSponsorToken": serde_json::Value::Null,
+                    "selfSponsorAmount": serde_json::Value::Null,
+                    "blockTimestamp": "2025-11-24T20:15:32.000Z",
+                });
+
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": result,
                 });
                 Ok(serde_json::to_vec(&resp).unwrap())
             }
