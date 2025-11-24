@@ -28,13 +28,6 @@ pub static GNOSIS_SAFE_4337_MODULE: LazyLock<Address> = LazyLock::new(|| {
         .expect("failed to decode GNOSIS_SAFE_4337_MODULE")
 });
 
-/// Address of the World Id Address Book Contract
-/// Reference: <https://docs.world.org/mini-apps/reference/address-book>
-pub static ADDRESS_BOOK: LazyLock<Address> = LazyLock::new(|| {
-    Address::from_str("0x57b930D551e677CC36e2fA036Ae2fe8FdaE0330D")
-        .expect("failed to decode ADDRESS_BOOK")
-});
-
 /// The length of a 4337 `UserOperation` signature.
 ///
 /// This is the length of a regular ECDSA signature with r,s,v (32 + 32 + 1 = 65 bytes) + 12 bytes for the validity timestamps.

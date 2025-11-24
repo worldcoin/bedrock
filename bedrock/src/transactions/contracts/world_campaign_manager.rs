@@ -1,6 +1,6 @@
 //! This module introduces the `WorldCampaignManager` contract interface.
 
-use std::{str::FromStr, sync::LazyLock};
+use std::str::FromStr;
 
 use alloy::{
     primitives::{Address, Bytes, U256},
@@ -8,17 +8,33 @@ use alloy::{
     sol_types::SolCall,
 };
 
+use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::primitives::PrimitiveError;
 use crate::smart_account::{
     ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
     TransactionTypeId, UserOperation,
 };
 
-/// Address of the `WorldCampaignManager` contract on World Chain.
-pub static WORLD_CAMPAIGN_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
-    Address::from_str("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
-        .expect("failed to decode WORLD_CAMPAIGN_MANAGER_ADDRESS")
-});
+/// Returns the `WorldCampaignManager` contract address for the current Bedrock environment.
+///
+/// # Panics
+///
+/// This function panics if the hard-coded address strings cannot be parsed into
+/// a valid `Address`. This should never happen unless the constants are edited
+/// to an invalid value.
+#[must_use]
+pub fn world_campaign_manager_address() -> Address {
+    match current_environment_or_default() {
+        BedrockEnvironment::Staging => {
+            Address::from_str("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
+                .expect("failed to decode staging campaign manager address")
+        }
+        BedrockEnvironment::Production => {
+            Address::from_str("0xD61F9411E768871ca9bc723afC5fF3A4f731D0C1") // TODO replace with post-audit contract
+                .expect("failed to decode production campaign manager address")
+        }
+    }
+}
 
 sol! {
     /// The `WorldCampaignManager` contract interface.
@@ -90,7 +106,7 @@ impl Is4337Encodable for WorldCampaignManager {
 
     fn as_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
-            to: *WORLD_CAMPAIGN_MANAGER_ADDRESS,
+            to: world_campaign_manager_address(),
             value: U256::ZERO,
             data: self.call_data.clone().into(),
             operation: SafeOperation::Call as u8,

@@ -16,7 +16,7 @@ use alloy::{
 use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    transactions::WORLD_CAMPAIGN_MANAGER_ADDRESS,
+    transactions::world_campaign_manager_address,
 };
 
 #[tokio::test]
@@ -152,8 +152,8 @@ pub async fn setup_fake_world_campaign<P>(
 where
     P: Provider<Ethereum> + AnvilApi<Ethereum>,
 {
-    // Address must match the one used by the transaction builder (`WORLD_CAMPAIGN_MANAGER_ADDRESS`).
-    let world_campaign_manager_address = *WORLD_CAMPAIGN_MANAGER_ADDRESS;
+    // Address must match the one used by the transaction builder.
+    let world_campaign_manager_address = world_campaign_manager_address();
 
     // Compute the base slot for getCampaign[campaign_id] where getCampaign is at slot 1.
     //

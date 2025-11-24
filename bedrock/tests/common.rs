@@ -12,7 +12,7 @@ use alloy::{
 
 use bedrock::{
     primitives::{
-        contracts::ADDRESS_BOOK,
+        config::{current_environment_or_default, BedrockEnvironment},
         http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
         PrimitiveError,
     },
@@ -272,6 +272,21 @@ where
     Ok(())
 }
 
+/// Returns the World ID Address Book contract address for the current Bedrock environment.
+/// Reference <https://github.com/worldcoin/worldcoin-vault/blob/main/src/WorldIDAddressBook.sol>
+fn address_book_address() -> Address {
+    match current_environment_or_default() {
+        BedrockEnvironment::Staging => {
+            Address::from_str("0xfd5b7aefdd478f34ae61d8399a206a4879f0af0a")
+                .expect("failed to decode staging address book address")
+        }
+        BedrockEnvironment::Production => {
+            Address::from_str("0x57b930D551e677CC36e2fA036Ae2fe8FdaE0330D")
+                .expect("failed to decode production address book address")
+        }
+    }
+}
+
 /// Mark an address as verified in the WorldIDAddressBook by overriding the `addressVerifiedUntil`
 /// mapping via storage writes.
 ///
@@ -285,9 +300,6 @@ where
 /// - slot 5: `maxProofTime`
 /// - slot 6: `nullifierHashes` mapping
 /// - slot 7: `addressVerifiedUntil` mapping
-///
-/// For `mapping(address => uint256) addressVerifiedUntil` at slot `6`, the storage slot for
-/// `addressVerifiedUntil[account]` is `keccak256(abi.encode(account, uint256(6)))`.
 pub async fn set_address_verified_until_for_account<P>(
     provider: &P,
     account: Address,
@@ -306,7 +318,7 @@ where
     let slot = U256::from_be_bytes(slot_hash.into());
 
     provider
-        .anvil_set_storage_at(*ADDRESS_BOOK, slot, verified_until.into())
+        .anvil_set_storage_at(address_book_address(), slot, verified_until.into())
         .await?;
 
     Ok(())
