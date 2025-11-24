@@ -578,12 +578,11 @@ where
                 let params = params.as_array().ok_or(HttpError::Generic {
                     error_message: "invalid params".into(),
                 })?;
-                let user_op_hash = params
-                    .get(0)
-                    .and_then(|v| v.as_str())
-                    .ok_or(HttpError::Generic {
+                let user_op_hash = params.get(0).and_then(|v| v.as_str()).ok_or(
+                    HttpError::Generic {
                         error_message: "missing userOpHash param".into(),
-                    })?;
+                    },
+                )?;
 
                 // Extract the network from the URL path (e.g. "/v1/rpc/worldchain" -> "worldchain")
                 let network_name = url.rsplit('/').next().unwrap_or_default();

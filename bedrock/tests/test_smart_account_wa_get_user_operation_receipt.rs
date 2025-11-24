@@ -10,8 +10,8 @@ use bedrock::{
 };
 
 #[tokio::test]
-async fn test_wa_get_user_operation_receipt_uses_mocked_response(
-) -> anyhow::Result<()> {
+async fn test_wa_get_user_operation_receipt_uses_mocked_response() -> anyhow::Result<()>
+{
     // Spin up a minimal Anvil-backed provider required by AnvilBackedHttpClient
     let anvil = setup_anvil();
 
@@ -30,10 +30,8 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response(
     set_http_client(Arc::new(client));
 
     // Construct a SafeSmartAccount; the on-chain state is irrelevant for this test
-    let safe_account = SafeSmartAccount::new(
-        owner_key_hex,
-        &owner_address.to_string(),
-    )?;
+    let safe_account =
+        SafeSmartAccount::new(owner_key_hex, &owner_address.to_string())?;
 
     let user_op_hash =
         "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0";
@@ -47,10 +45,7 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response(
         receipt.transaction_hash,
         "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0"
     );
-    assert_eq!(
-        receipt.sender,
-        "0x1234567890abcdef1234567890abcdef12345678"
-    );
+    assert_eq!(receipt.sender, "0x1234567890abcdef1234567890abcdef12345678");
     assert_eq!(receipt.success, "true");
     assert_eq!(receipt.source, "campaign_gift_sponsor");
     assert_eq!(receipt.source_id.as_deref(), Some("0x1"));
@@ -60,5 +55,3 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response(
 
     Ok(())
 }
-
-
