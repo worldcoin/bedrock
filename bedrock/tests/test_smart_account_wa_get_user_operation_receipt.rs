@@ -37,7 +37,7 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response() -> anyhow::Re
         "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0";
 
     let receipt = safe_account
-        .wa_get_user_operation_receipt(Network::WorldChain, user_op_hash)
+        .wa_get_user_operation_receipt(user_op_hash)
         .await?;
 
     assert_eq!(receipt.user_op_hash, user_op_hash);
