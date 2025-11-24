@@ -270,12 +270,11 @@ impl SafeSmartAccount {
     /// - The RPC returns an error response.
     pub async fn wa_get_user_operation_receipt(
         &self,
-        network: Network,
         user_op_hash: &str,
     ) -> Result<WaGetUserOperationReceiptResponse, RpcError> {
         let client = get_rpc_client()?;
         client
-            .wa_get_user_operation_receipt(network, user_op_hash)
+            .wa_get_user_operation_receipt(Network::WorldChain, user_op_hash)
             .await
     }
 }
