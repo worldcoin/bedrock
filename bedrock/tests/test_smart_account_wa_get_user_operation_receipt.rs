@@ -41,17 +41,19 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response() -> anyhow::Re
         .await?;
 
     assert_eq!(receipt.user_op_hash, user_op_hash);
-    assert_eq!(
-        receipt.transaction_hash,
+    let expected_tx_hash = Some(
         "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0"
+            .to_string(),
     );
+    assert_eq!(receipt.transaction_hash, expected_tx_hash);
     assert_eq!(receipt.sender, "0x1234567890abcdef1234567890abcdef12345678");
     assert_eq!(receipt.success, "true");
     assert_eq!(receipt.source, "campaign_gift_sponsor");
     assert_eq!(receipt.source_id.as_deref(), Some("0x1"));
     assert!(receipt.self_sponsor_token.is_none());
     assert!(receipt.self_sponsor_amount.is_none());
-    assert_eq!(receipt.block_timestamp, "2025-11-24T20:15:32.000Z");
+    let expected_block_ts = Some("2025-11-24T20:15:32.000Z".to_string());
+    assert_eq!(receipt.block_timestamp, expected_block_ts);
 
     Ok(())
 }

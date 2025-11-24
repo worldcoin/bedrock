@@ -202,13 +202,13 @@ pub struct SponsorUserOperationResponse {
 pub struct WaGetUserOperationReceiptResponse {
     /// User operation hash
     pub user_op_hash: String,
-    /// Transaction hash
-    pub transaction_hash: String,
+    /// Transaction hash, if the user operation has been included in a block
+    pub transaction_hash: Option<String>,
     /// Sender address
     pub sender: String,
     /// Success status ("pending", "error", "true", or "false")
     pub success: String,
-    /// Source (e.g., backend or provider name)
+    /// Source (flexible field representing the transaction type or origin)
     pub source: String,
     /// Source ID, if available
     pub source_id: Option<String>,
@@ -216,8 +216,8 @@ pub struct WaGetUserOperationReceiptResponse {
     pub self_sponsor_token: Option<String>,
     /// Self-sponsor amount, if applicable
     pub self_sponsor_amount: Option<String>,
-    /// Block timestamp
-    pub block_timestamp: String,
+    /// Block timestamp, if the user operation has been included in a block
+    pub block_timestamp: Option<String>,
 }
 
 /// RPC client for handling 4337 `UserOperation` requests
