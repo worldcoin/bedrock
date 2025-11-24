@@ -197,7 +197,7 @@ pub struct SponsorUserOperationResponse {
 }
 
 /// Response from `wa_getUserOperationReceipt`
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, uniffi::Record, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WaGetUserOperationReceiptResponse {
     /// User operation hash
@@ -391,11 +391,10 @@ impl RpcClient {
     pub async fn wa_get_user_operation_receipt(
         &self,
         network: Network,
-        user_operation_hash: FixedBytes<32>,
+        user_operation_hash: &str,
     ) -> Result<WaGetUserOperationReceiptResponse, RpcError> {
-        let hash_hex = format!("0x{}", hex::encode(user_operation_hash));
-        let params =
-            vec![serde_json::to_value(hash_hex).map_err(|_| RpcError::JsonError)?];
+        let params = vec![serde_json::to_value(user_operation_hash)
+            .map_err(|_| RpcError::JsonError)?];
 
         self.rpc_call(
             network,

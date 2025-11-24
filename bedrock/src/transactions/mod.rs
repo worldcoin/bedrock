@@ -6,10 +6,13 @@ use std::sync::Arc;
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{Is4337Encodable, SafeSmartAccount},
-    transactions::contracts::{
-        erc20::{Erc20, TransferAssociation},
-        world_campaign_manager::WorldCampaignManager,
-        world_gift_manager::{GiftAction, WorldGiftManager, WorldGiftManagerGift},
+    transactions::{
+        contracts::{
+            erc20::{Erc20, TransferAssociation},
+            world_campaign_manager::WorldCampaignManager,
+            world_gift_manager::{GiftAction, WorldGiftManager, WorldGiftManagerGift},
+        },
+        rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
     },
 };
 
@@ -250,5 +253,29 @@ impl SafeSmartAccount {
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Gets a custom user operation receipt for a given user operation hash via the global RPC client.
+    ///
+    /// This is a convenience wrapper around [`RpcClient::wa_get_user_operation_receipt`]
+    /// that uses the globally configured HTTP client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The global HTTP client has not been initialized.
+    /// - The HTTP request fails.
+    /// - The request serialization fails.
+    /// - The response parsing fails.
+    /// - The RPC returns an error response.
+    pub async fn wa_get_user_operation_receipt(
+        &self,
+        network: Network,
+        user_op_hash: &str,
+    ) -> Result<WaGetUserOperationReceiptResponse, RpcError> {
+        let client = get_rpc_client()?;
+        client
+            .wa_get_user_operation_receipt(network, user_op_hash)
+            .await
     }
 }
