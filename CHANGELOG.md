@@ -2,6 +2,27 @@
 
 
 
+## [0.0.27] - 2025-11-24
+
+## What's Changed
+* fix: do not allow overriding userOp by @aurel-fr in https://github.com/worldcoin/bedrock/pull/185
+* chore: support new SponsorUserOperationResponse types by @aurel-fr in https://github.com/worldcoin/bedrock/pull/184
+* fix: call sync_base_report_with_manifest on create_sealed_backup_for_new_user by @lukejmann in https://github.com/worldcoin/bedrock/pull/189
+* feat: WorldGiftManagerGift by @aurel-fr in https://github.com/worldcoin/bedrock/pull/183
+* feat: improve encoding of multisend transactions by @aurel-fr in https://github.com/worldcoin/bedrock/pull/190
+* feat: holiday campaign support by @aurel-fr in https://github.com/worldcoin/bedrock/pull/191
+* chore: contract envs by @aurel-fr in https://github.com/worldcoin/bedrock/pull/192
+* chore: address feedback from PR #192 by @aurel-fr in https://github.com/worldcoin/bedrock/pull/193
+* fix: add staging contract with relaxed requirements by @andy-t-wang in https://github.com/worldcoin/bedrock/pull/194
+* feat: remove secure document from backup designator by @paolodamico in https://github.com/worldcoin/bedrock/pull/176
+* feat!: drop the additional attributes for send-event by @paolodamico in https://github.com/worldcoin/bedrock/pull/188
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.26...0.0.27
+
+
+
+
 ## [0.0.26] - 2025-11-14
 
 ## What's Changed
