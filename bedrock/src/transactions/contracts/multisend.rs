@@ -3,12 +3,11 @@ use alloy::{
     sol,
     sol_types::{SolCall, SolValue},
 };
-use std::sync::LazyLock;
 
 use crate::smart_account::SafeOperation;
 
-pub static MULTISEND_ADDRESS: LazyLock<Address> =
-    LazyLock::new(|| address!("0x38869bf66a61cf6bdb996a6ae40d5853fd43b526"));
+pub const MULTISEND_ADDRESS: Address =
+    address!("0x38869bf66a61cf6bdb996a6ae40d5853fd43b526");
 
 sol! {
     /// Reference: <https://github.com/safe-fndn/safe-smart-account/blob/main/contracts/libraries/MultiSend.sol>
@@ -57,7 +56,7 @@ impl MultiSend {
         .abi_encode();
 
         MultiSendBundle {
-            to: *MULTISEND_ADDRESS,
+            to: MULTISEND_ADDRESS,
             data: multisend_data,
             value: U256::ZERO,
             operation: SafeOperation::DelegateCall,
