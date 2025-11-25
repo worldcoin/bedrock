@@ -593,7 +593,7 @@ where
                     "transactionHash":
                         "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0",
                     "sender": "0x1234567890abcdef1234567890abcdef12345678",
-                    "success": "true",
+                    "status": "mined_success",
                     "source": "campaign_gift_sponsor",
                     "sourceId": "0x1",
                     "selfSponsorToken": serde_json::Value::Null,

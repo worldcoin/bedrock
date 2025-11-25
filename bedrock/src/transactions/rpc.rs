@@ -206,8 +206,8 @@ pub struct WaGetUserOperationReceiptResponse {
     pub transaction_hash: Option<String>,
     /// Sender address
     pub sender: String,
-    /// Success status ("pending", "error", "true", or "false")
-    pub success: String,
+    /// Status (`pending`, `error`, `mined_success`, or `mined_revert`)
+    pub status: String,
     /// Source (flexible field representing the transaction type or origin)
     pub source: String,
     /// Source ID, if available

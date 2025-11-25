@@ -46,7 +46,7 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response() -> anyhow::Re
     );
     assert_eq!(receipt.transaction_hash, expected_tx_hash);
     assert_eq!(receipt.sender, "0x1234567890abcdef1234567890abcdef12345678");
-    assert_eq!(receipt.success, "true");
+    assert_eq!(receipt.status, "mined_success");
     assert_eq!(receipt.source, "campaign_gift_sponsor");
     assert_eq!(receipt.source_id.as_deref(), Some("0x1"));
     assert!(receipt.self_sponsor_token.is_none());
