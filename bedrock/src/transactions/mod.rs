@@ -278,7 +278,6 @@ impl SafeSmartAccount {
         let delay_ms = 2000u64; // duration of 1 OP block
 
         for attempt in 0..5 {
-            // retry for up to 10 secs
             let response = client
                 .wa_get_user_operation_receipt(Network::WorldChain, user_op_hash)
                 .await?;
