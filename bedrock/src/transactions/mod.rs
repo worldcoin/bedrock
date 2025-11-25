@@ -282,7 +282,7 @@ impl SafeSmartAccount {
                 .wa_get_user_operation_receipt(Network::WorldChain, user_op_hash)
                 .await?;
 
-            if response.success != "pending" || attempt == 4 {
+            if response.status != "pending" || attempt == 4 {
                 return Ok(response);
             }
 
