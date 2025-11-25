@@ -270,12 +270,27 @@ impl SafeSmartAccount {
     /// - The RPC returns an error response.
     pub async fn wa_get_user_operation_receipt(
         &self,
-        network: Network,
         user_op_hash: &str,
     ) -> Result<WaGetUserOperationReceiptResponse, RpcError> {
         let client = get_rpc_client()?;
-        client
-            .wa_get_user_operation_receipt(network, user_op_hash)
-            .await
+
+        // Retry while the receipt status is still "pending".
+        let delay_ms = 2000u64; // duration of 1 OP block
+
+        for attempt in 0..5 {
+            let response = client
+                .wa_get_user_operation_receipt(Network::WorldChain, user_op_hash)
+                .await?;
+
+            if response.success != "pending" || attempt == 4 {
+                return Ok(response);
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+        }
+
+        // This line is technically unreachable due to the for-loop logic,
+        // but is required to satisfy the type checker.
+        unreachable!("wa_get_user_operation_receipt retry loop exited unexpectedly")
     }
 }

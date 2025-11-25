@@ -54,9 +54,9 @@ impl CampaignAction {
 pub struct WorldCampaignManager {
     /// The inner call data for the function.
     call_data: Vec<u8>,
-    /// campaignId
+    /// The campaign id the action is performed on
     campaign_id: U256,
-    /// action
+    /// The campaign action to perform
     action: CampaignAction,
 }
 
