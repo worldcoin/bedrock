@@ -2,6 +2,13 @@
 
 
 
+## [0.0.29] - 2025-11-25
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.28...0.0.29
+
+
+
+
 ## [0.0.28] - 2025-11-25
 
 ## What's Changed
