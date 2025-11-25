@@ -54,10 +54,10 @@ impl CampaignAction {
 pub struct WorldCampaignManager {
     /// The inner call data for the function.
     call_data: Vec<u8>,
-    /// The campaign action to perform
-    action: CampaignAction,
     /// The campaign id the action is performed on
     campaign_id: U256,
+    /// The campaign action to perform
+    action: CampaignAction,
 }
 
 impl WorldCampaignManager {
