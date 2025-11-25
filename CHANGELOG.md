@@ -2,6 +2,18 @@
 
 
 
+## [0.0.28] - 2025-11-25
+
+## What's Changed
+* feat: custom user op status endpoint by @aurel-fr in https://github.com/worldcoin/bedrock/pull/196
+* chore: retry if user op status is pending by @aurel-fr in https://github.com/worldcoin/bedrock/pull/199
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.27...0.0.28
+
+
+
+
 ## [0.0.27] - 2025-11-24
 
 ## What's Changed
