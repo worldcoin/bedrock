@@ -4,7 +4,7 @@ use std::str::FromStr;
 use alloy::{
     network::Ethereum,
     node_bindings::AnvilInstance,
-    primitives::{address, keccak256, Address, FixedBytes, Log, U256},
+    primitives::{address, keccak256, Address, FixedBytes, Log, U128, U256},
     providers::{ext::AnvilApi, Provider},
     sol,
     sol_types::{SolCall, SolEvent, SolValue},
@@ -216,10 +216,10 @@ where
 }
 
 /// Pack two U128 in 32 bytes
-pub fn pack_pair(a: &u128, b: &u128) -> FixedBytes<32> {
+pub fn pack_pair(a: &U128, b: &U128) -> FixedBytes<32> {
     let mut out = [0u8; 32];
-    out[..16].copy_from_slice(a.to_be_bytes().as_slice());
-    out[16..].copy_from_slice(b.to_be_bytes().as_slice());
+    out[..16].copy_from_slice(&a.to_be_bytes::<16>());
+    out[16..].copy_from_slice(&b.to_be_bytes::<16>());
     out.into()
 }
 

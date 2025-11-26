@@ -1,10 +1,11 @@
-use crate::primitives::{HttpError, PrimitiveError};
+use crate::primitives::PrimitiveError;
 use crate::transactions::rpc::SponsorUserOperationResponse;
 use alloy::hex::FromHex;
-use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes};
+use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes, U128};
 use alloy::sol;
 use alloy::sol_types::SolValue;
 use ruint::aliases::U256;
+use serde::{Deserialize, Serialize};
 use std::{str::FromStr, sync::LazyLock};
 
 /// <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L53>
@@ -35,90 +36,96 @@ const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
 
 // --- JSON serialization helpers for ERC-4337 ---
 
-fn serialize_u128_as_hex<S: serde::Serializer>(
-    value: &u128,
+/// Serializes Option<Address> as hex string or null.
+fn serialize_option_address<S: serde::Serializer>(
+    value: &Option<Address>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    // Always hex with 0x prefix per spec
-    let s = format!("0x{value:x}");
-    serializer.serialize_str(&s)
+    match value {
+        Some(addr) => serializer.serialize_str(&format!("{addr}")),
+        None => serializer.serialize_none(),
+    }
 }
 
-fn serialize_u256_as_hex<S: serde::Serializer>(
-    value: &U256,
+/// Serializes Option<Bytes> as hex string or null.
+fn serialize_option_bytes<S: serde::Serializer>(
+    value: &Option<Bytes>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let s = format!("0x{value:x}");
-    serializer.serialize_str(&s)
+    match value {
+        Some(bytes) => serializer.serialize_str(&format!("{bytes}")),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Serializes Option<U128> using U128's default hex serialization, or null.
+fn serialize_option_u128<S: serde::Serializer>(
+    value: &Option<U128>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(v) => v.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// The structure of a generic 4337 `UserOperation`.
+///
+/// This is an **off-chain** JSON-RPC construct used to communicate with bundlers.
+///
+/// For the flow of World App:
+/// - A `UserOperation` is created by the user and passed to the World App RPC to request sponsorship through the `wa_sponsorUserOperation` method.
+/// - The final signed `UserOperation` is then passed to the World App RPC to be executed through the standard `eth_sendUserOperation` method.
+///
+/// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserOperation {
+    /// The Account making the `UserOperation`
+    pub sender: Address,
+    /// Anti-replay protection
+    pub nonce: U256,
+    /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise None
+    #[serde(serialize_with = "serialize_option_address")]
+    pub factory: Option<Address>,
+    /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data
+    #[serde(serialize_with = "serialize_option_bytes")]
+    pub factory_data: Option<Bytes>,
+    /// The data to pass to the sender during the main execution call
+    pub call_data: Bytes,
+    /// Gas limit for the main execution call
+    pub call_gas_limit: U128,
+    /// Gas limit for the verification call
+    pub verification_gas_limit: U128,
+    /// Extra gas to pay the bundler
+    pub pre_verification_gas: U256,
+    /// Maximum fee per gas (similar to EIP-1559 `max_fee_per_gas`)
+    pub max_fee_per_gas: U128,
+    /// Maximum priority fee per gas (similar to EIP-1559 `max_priority_fee_per_gas`)
+    pub max_priority_fee_per_gas: U128,
+    /// Address of paymaster contract (None if the transaction bundler pays for gas)
+    #[serde(serialize_with = "serialize_option_address")]
+    pub paymaster: Option<Address>,
+    /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
+    #[serde(serialize_with = "serialize_option_u128")]
+    pub paymaster_verification_gas_limit: Option<U128>,
+    /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
+    #[serde(serialize_with = "serialize_option_u128")]
+    pub paymaster_post_op_gas_limit: Option<U128>,
+    /// Data for paymaster (only if paymaster exists)
+    #[serde(serialize_with = "serialize_option_bytes")]
+    pub paymaster_data: Option<Bytes>,
+    /// Data passed into the sender to verify authorization
+    pub signature: Bytes,
 }
 
 sol! {
-
     /// Interface for the `Safe4337Module` contract.
     ///
     /// Reference: <https://github.com/safe-global/safe-modules/blob/4337/v0.3.0/modules/4337/contracts/Safe4337Module.sol#L172>
     #[sol(all_derives)]
     interface ISafe4337Module {
         function executeUserOp(address to, uint256 value, bytes calldata data, uint8 operation) external;
-    }
-
-    /// The structure of a generic 4337 `UserOperation`.
-    ///
-    /// `UserOperation`s are not used on-chain, they are used by RPCs to bundle transactions as `PackedUserOperation`s.
-    ///
-    /// For the flow of World App:
-    /// - A `UserOperation` is created by the user and passed to the World App RPC to request sponsorship through the `wa_sponsorUserOperation` method.
-    /// - The final signed `UserOperation` is then passed to the World App RPC to be executed through the standard `eth_sendUserOperation` method.
-    ///
-    /// Reference: <https://eips.ethereum.org/EIPS/eip-4337#useroperation>
-    #[sol(rename_all = "camelcase")]
-    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct UserOperation {
-        /// The Account making the `UserOperation`
-        address sender;
-        /// Anti-replay protection
-        #[serde(serialize_with = "serialize_u256_as_hex")]
-        uint256 nonce;
-        /// Account Factory for new Accounts OR `0x7702` flag for EIP-7702 Accounts, otherwise address(0)
-        address factory;
-        /// Data for the Account Factory if factory is provided OR EIP-7702 initialization data, or empty array
-        bytes factory_data;
-        /// The data to pass to the sender during the main execution call
-        bytes call_data;
-        /// Gas limit for the main execution call.
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(serialize_with = "serialize_u128_as_hex")]
-        uint128 call_gas_limit;
-        /// Gas limit for the verification call
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(serialize_with = "serialize_u128_as_hex")]
-        uint128 verification_gas_limit;
-        /// Extra gas to pay the bundler
-        #[serde(serialize_with = "serialize_u256_as_hex")]
-        uint256 pre_verification_gas;
-        /// Maximum fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_fee_per_gas`)
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(serialize_with = "serialize_u128_as_hex")]
-        uint128 max_fee_per_gas;
-        /// Maximum priority fee per gas (similar to [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) `max_priority_fee_per_gas`)
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is `uint128`. We enforce `uint128` to avoid overflows.
-        #[serde(serialize_with = "serialize_u128_as_hex")]
-        uint128 max_priority_fee_per_gas;
-        /// Address of paymaster contract, (or empty, if the sender pays for gas by itself)
-        address paymaster;
-        /// The amount of gas to allocate for the paymaster validation code (only if paymaster exists)
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
-        #[serde(serialize_with = "serialize_u128_as_hex")]
-        uint128 paymaster_verification_gas_limit;
-        /// The amount of gas to allocate for the paymaster post-operation code (only if paymaster exists)
-        /// Even though the type is `uint256`, in the `Safe4337Module` (see `EncodedSafeOpStruct`), it is expected as `uint128` for `paymasterAndData` validation.
-        #[serde(serialize_with = "serialize_u128_as_hex")]
-        uint128 paymaster_post_op_gas_limit;
-        /// Data for paymaster (only if paymaster exists)
-        bytes paymaster_data;
-        /// Data passed into the sender to verify authorization
-        bytes signature;
     }
 
     /// The EIP-712 type-hash for a `SafeOp`, representing the structure of a User Operation for the Safe.
