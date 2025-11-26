@@ -56,7 +56,7 @@ pub enum GiftAction {
 impl GiftAction {
     const fn tx_type_id(&self) -> TransactionTypeId {
         match self {
-            Self::Gift { .. } => TransactionTypeId::WorldGiftManagerGift,
+            Self::Gift => TransactionTypeId::WorldGiftManagerGift,
             Self::Redeem => TransactionTypeId::WorldGiftManagerRedeem,
             Self::Cancel => TransactionTypeId::WorldGiftManagerCancel,
         }
