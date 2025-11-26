@@ -10,7 +10,7 @@ use crate::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
             world_campaign_manager::WorldCampaignManager,
-            world_gift_manager::{GiftAction, WorldGiftManager, WorldGiftManagerGift},
+            world_gift_manager::WorldGiftManager,
         },
         rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
     },
@@ -132,7 +132,7 @@ impl SafeSmartAccount {
         rand::thread_rng().fill_bytes(&mut gift_id);
 
         let transaction =
-            WorldGiftManagerGift::new(token_address, to_address, amount, gift_id);
+            WorldGiftManager::gift(token_address, to_address, amount, gift_id);
 
         let provider = RpcProviderName::Any;
 
@@ -160,7 +160,7 @@ impl SafeSmartAccount {
     ) -> Result<WorldGiftManagerResult, TransactionError> {
         let gift_id = U256::parse_from_ffi(gift_id_str, "gift_id")?;
 
-        let transaction = WorldGiftManager::new(gift_id, GiftAction::Redeem);
+        let transaction = WorldGiftManager::redeem(gift_id);
 
         let provider = RpcProviderName::Any;
 
@@ -188,7 +188,7 @@ impl SafeSmartAccount {
     ) -> Result<WorldGiftManagerResult, TransactionError> {
         let gift_id = U256::parse_from_ffi(gift_id_str, "gift_id")?;
 
-        let transaction = WorldGiftManager::new(gift_id, GiftAction::Cancel);
+        let transaction = WorldGiftManager::cancel(gift_id);
 
         let provider = RpcProviderName::Any;
 

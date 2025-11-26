@@ -43,20 +43,41 @@ sol! {
     }
 }
 
-// TODO merge WorldGiftManager and WorldGiftManagerGift
+/// The action to perform on the `WorldGiftManager` contract.
+pub enum GiftAction {
+    /// Send a gift to a recipient.
+    Gift,
+    /// Redeem a gift.
+    Redeem,
+    /// Cancel a gift.
+    Cancel,
+}
+
+impl GiftAction {
+    const fn tx_type_id(&self) -> TransactionTypeId {
+        match self {
+            Self::Gift { .. } => TransactionTypeId::WorldGiftManagerGift,
+            Self::Redeem => TransactionTypeId::WorldGiftManagerRedeem,
+            Self::Cancel => TransactionTypeId::WorldGiftManagerCancel,
+        }
+    }
+}
+
 /// Enables operations with the `WorldGiftManager` contract.
-pub struct WorldGiftManagerGift {
+pub struct WorldGiftManager {
+    /// The 17-byte gift ID (stored as bytes for nonce encoding).
+    gift_id: [u8; 17],
+    action: GiftAction,
     /// The inner call data for the function.
     call_data: Vec<u8>,
     operation: SafeOperation,
     to: Address,
     value: U256,
-    /// gift id, randomly generated
-    gift_id: [u8; 17],
 }
 
-impl WorldGiftManagerGift {
-    pub fn new(
+impl WorldGiftManager {
+    /// Creates a new gift operation (approve + gift multi-send).
+    pub fn gift(
         token: Address,
         recipient: Address,
         amount: U256,
@@ -64,12 +85,10 @@ impl WorldGiftManagerGift {
     ) -> Self {
         let approve_data = Erc20::encode_approve(world_gift_manager_address(), amount);
 
-        let mut padded_gift_id = [0u8; 32];
-        padded_gift_id[32 - 17..].copy_from_slice(&gift_id);
-
+        let gift_id_u256 = gift_id_to_u256(&gift_id);
         let gift_data = IWorldGiftManager::giftCall {
             token,
-            giftId: U256::from_be_bytes(padded_gift_id),
+            giftId: gift_id_u256,
             recipient,
             amount,
         }
@@ -94,16 +113,43 @@ impl WorldGiftManagerGift {
 
         let bundle = MultiSend::build_bundle(&entries);
         Self {
+            gift_id,
+            action: GiftAction::Gift,
             call_data: bundle.data,
             operation: bundle.operation,
             to: bundle.to,
             value: bundle.value,
-            gift_id,
+        }
+    }
+
+    /// Creates a redeem operation.
+    pub fn redeem(gift_id: U256) -> Self {
+        let call_data = IWorldGiftManager::redeemCall { giftId: gift_id }.abi_encode();
+        Self {
+            gift_id: u256_to_gift_id(gift_id),
+            action: GiftAction::Redeem,
+            call_data,
+            operation: SafeOperation::Call,
+            to: world_gift_manager_address(),
+            value: U256::ZERO,
+        }
+    }
+
+    /// Creates a cancel operation.
+    pub fn cancel(gift_id: U256) -> Self {
+        let call_data = IWorldGiftManager::cancelCall { giftId: gift_id }.abi_encode();
+        Self {
+            gift_id: u256_to_gift_id(gift_id),
+            action: GiftAction::Cancel,
+            call_data,
+            operation: SafeOperation::Call,
+            to: world_gift_manager_address(),
+            value: U256::ZERO,
         }
     }
 }
 
-impl Is4337Encodable for WorldGiftManagerGift {
+impl Is4337Encodable for WorldGiftManager {
     type MetadataArg = ();
 
     fn as_execute_user_op_call_data(&self) -> Bytes {
@@ -131,87 +177,6 @@ impl Is4337Encodable for WorldGiftManagerGift {
         random_tail.copy_from_slice(&self.gift_id[10..17]);
 
         let key = NonceKeyV1::with_random_tail(
-            TransactionTypeId::WorldGiftManagerGift,
-            InstructionFlag::Default,
-            metadata_bytes,
-            random_tail,
-        );
-        let nonce = key.encode_with_sequence(0);
-
-        Ok(UserOperation::new_with_defaults(
-            wallet_address,
-            nonce,
-            call_data,
-        ))
-    }
-}
-
-pub enum GiftAction {
-    Redeem,
-    Cancel,
-}
-
-impl GiftAction {
-    const fn tx_type_id(&self) -> TransactionTypeId {
-        match self {
-            Self::Redeem => TransactionTypeId::WorldGiftManagerRedeem,
-            Self::Cancel => TransactionTypeId::WorldGiftManagerCancel,
-        }
-    }
-
-    fn encode_call(&self, gift_id: U256) -> Bytes {
-        match self {
-            Self::Redeem => IWorldGiftManager::redeemCall { giftId: gift_id }
-                .abi_encode()
-                .into(),
-            Self::Cancel => IWorldGiftManager::cancelCall { giftId: gift_id }
-                .abi_encode()
-                .into(),
-        }
-    }
-}
-
-pub struct WorldGiftManager {
-    gift_id: U256,
-    action: GiftAction,
-    call_data: Bytes,
-}
-
-impl WorldGiftManager {
-    pub fn new(gift_id: U256, action: GiftAction) -> Self {
-        let call_data = action.encode_call(gift_id);
-        Self {
-            gift_id,
-            action,
-            call_data,
-        }
-    }
-}
-impl Is4337Encodable for WorldGiftManager {
-    type MetadataArg = ();
-
-    fn as_execute_user_op_call_data(&self) -> Bytes {
-        ISafe4337Module::executeUserOpCall {
-            to: world_gift_manager_address(),
-            value: U256::ZERO,
-            data: self.call_data.clone(),
-            operation: SafeOperation::Call as u8,
-        }
-        .abi_encode()
-        .into()
-    }
-
-    fn as_preflight_user_operation(
-        &self,
-        wallet_address: Address,
-        _metadata: Option<Self::MetadataArg>,
-    ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.as_execute_user_op_call_data();
-
-        // Extract 10 + 7 bytes from the tail of the 32-byte big-endian number.
-        let (metadata_bytes, random_tail) = split_nonce_parts(self.gift_id);
-
-        let key = NonceKeyV1::with_random_tail(
             self.action.tx_type_id(),
             InstructionFlag::Default,
             metadata_bytes,
@@ -227,14 +192,21 @@ impl Is4337Encodable for WorldGiftManager {
     }
 }
 
+/// Converts a 17-byte gift ID to a U256 (zero-padded on the left).
 #[inline]
-fn split_nonce_parts(gift_id: U256) -> ([u8; 10], [u8; 7]) {
+fn gift_id_to_u256(gift_id: &[u8; 17]) -> U256 {
+    let mut padded = [0u8; 32];
+    padded[32 - 17..].copy_from_slice(gift_id);
+    U256::from_be_bytes(padded)
+}
+
+/// Extracts the 17-byte gift ID from a U256.
+#[inline]
+fn u256_to_gift_id(gift_id: U256) -> [u8; 17] {
     let bytes: [u8; 32] = gift_id.to_be_bytes();
-    let mut meta = [0u8; 10];
-    let mut tail = [0u8; 7];
-    meta.copy_from_slice(&bytes[15..25]); // 10 bytes
-    tail.copy_from_slice(&bytes[25..32]); // 7 bytes
-    (meta, tail)
+    let mut result = [0u8; 17];
+    result.copy_from_slice(&bytes[32 - 17..]);
+    result
 }
 
 #[cfg(test)]
@@ -253,7 +225,7 @@ mod tests {
             Address::from_str("0x44db85bca667056bdbf397f8e3f6db294587b288").unwrap();
         let mut gift_id = [0u8; 17];
         rand::thread_rng().fill_bytes(&mut gift_id);
-        let gift = WorldGiftManagerGift::new(token, to, U256::from(1), gift_id);
+        let gift = WorldGiftManager::gift(token, to, U256::from(1), gift_id);
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
@@ -279,7 +251,7 @@ mod tests {
     fn test_redeem() {
         let gift_id = U256::from(123_456_789_123_456_789_123_456_852_u128);
         let gift_id_bytes: [u8; 32] = gift_id.to_be_bytes();
-        let gift = WorldGiftManager::new(gift_id, GiftAction::Redeem);
+        let gift = WorldGiftManager::redeem(gift_id);
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
@@ -301,7 +273,7 @@ mod tests {
     fn test_cancel() {
         let gift_id = U256::from(123_456_789_123_456_789_123_456_852_u128);
         let gift_id_bytes: [u8; 32] = gift_id.to_be_bytes();
-        let gift = WorldGiftManager::new(gift_id, GiftAction::Cancel);
+        let gift = WorldGiftManager::cancel(gift_id);
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();

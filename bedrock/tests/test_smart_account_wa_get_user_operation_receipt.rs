@@ -5,8 +5,7 @@ use alloy::{providers::ProviderBuilder, signers::local::PrivateKeySigner};
 use common::{setup_anvil, AnvilBackedHttpClient};
 
 use bedrock::{
-    primitives::{http_client::set_http_client, Network},
-    smart_account::SafeSmartAccount,
+    primitives::http_client::set_http_client, smart_account::SafeSmartAccount,
 };
 
 #[tokio::test]
