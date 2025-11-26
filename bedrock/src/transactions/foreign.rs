@@ -36,9 +36,9 @@ pub struct UnparsedUserOperation {
     /// Paymaster contact address (Solidity type: `address`)
     pub paymaster: Option<String>,
     /// Paymaster verification gas limit (Solidity type: `uint128`)
-    pub paymaster_verification_gas_limit: String,
+    pub paymaster_verification_gas_limit: Option<String>,
     /// Paymaster post-operation gas limit (Solidity type: `uint128`)
-    pub paymaster_post_op_gas_limit: String,
+    pub paymaster_post_op_gas_limit: Option<String>,
     /// Paymaster additional data for verification (Solidity type: `bytes`)
     pub paymaster_data: Option<String>,
     /// Used to validate a `UserOperation` along with the nonce during verification (Solidity type: `bytes`)
@@ -85,17 +85,15 @@ impl TryFrom<UnparsedUserOperation> for UserOperation {
             .map(|p| Address::parse_from_ffi(&p, "paymaster"))
             .transpose()?;
 
-        let paymaster_verification_gas_limit = U128::parse_from_ffi(
-            &user_op.paymaster_verification_gas_limit,
-            "paymaster_verification_gas_limit",
-        )
-        .ok();
+        let paymaster_verification_gas_limit = user_op
+            .paymaster_verification_gas_limit
+            .map(|p| U128::parse_from_ffi(&p, "paymaster_verification_gas_limit"))
+            .transpose()?;
 
-        let paymaster_post_op_gas_limit = U128::parse_from_ffi(
-            &user_op.paymaster_post_op_gas_limit,
-            "paymaster_post_op_gas_limit",
-        )
-        .ok();
+        let paymaster_post_op_gas_limit = user_op
+            .paymaster_post_op_gas_limit
+            .map(|p| U128::parse_from_ffi(&p, "paymaster_post_op_gas_limit"))
+            .transpose()?;
 
         let paymaster_data = user_op
             .paymaster_data

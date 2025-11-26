@@ -78,8 +78,8 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         max_fee_per_gas: "0x3b9aca00".to_string(), // 1 gwei
         max_priority_fee_per_gas: "0x3b9aca00".to_string(), // 1 gwei
         paymaster: None,
-        paymaster_verification_gas_limit: "0x0".to_string(),
-        paymaster_post_op_gas_limit: "0x0".to_string(),
+        paymaster_verification_gas_limit: Some("0x0".to_string()),
+        paymaster_post_op_gas_limit: Some("0x0".to_string()),
         paymaster_data: None,
         signature: {
             let mut buf = Vec::with_capacity(77);

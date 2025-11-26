@@ -452,10 +452,10 @@ where
                     max_fee_per_gas: get_or_zero("maxFeePerGas"),
                     max_priority_fee_per_gas: get_or_zero("maxPriorityFeePerGas"),
                     paymaster: get_opt("paymaster"),
-                    paymaster_verification_gas_limit: get_or_zero(
+                    paymaster_verification_gas_limit: get_opt(
                         "paymasterVerificationGasLimit",
                     ),
-                    paymaster_post_op_gas_limit: get_or_zero("paymasterPostOpGasLimit"),
+                    paymaster_post_op_gas_limit: get_opt("paymasterPostOpGasLimit"),
                     paymaster_data: get_opt("paymasterData"),
                     signature: get_required("signature")?,
                     factory: get_opt("factory"),
