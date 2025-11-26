@@ -37,6 +37,7 @@ const USER_OPERATION_SIGNATURE_LENGTH: usize = 77;
 // --- JSON serialization helpers for ERC-4337 ---
 
 /// Serializes Option<Address> as hex string or null.
+#[allow(clippy::ref_option)]
 fn serialize_option_address<S: serde::Serializer>(
     value: &Option<Address>,
     serializer: S,
@@ -48,6 +49,7 @@ fn serialize_option_address<S: serde::Serializer>(
 }
 
 /// Serializes Option<Bytes> as hex string or null.
+#[allow(clippy::ref_option)]
 fn serialize_option_bytes<S: serde::Serializer>(
     value: &Option<Bytes>,
     serializer: S,
@@ -59,6 +61,7 @@ fn serialize_option_bytes<S: serde::Serializer>(
 }
 
 /// Serializes Option<U128> using U128's default hex serialization, or null.
+#[allow(clippy::ref_option)]
 fn serialize_option_u128<S: serde::Serializer>(
     value: &Option<U128>,
     serializer: S,
@@ -235,12 +238,14 @@ impl UserOperation {
     }
 
     /// Merges paymaster data from sponsorship response into the `UserOperation`
+    #[must_use]
     pub fn with_paymaster_data(
         mut self,
         sponsor_response: &SponsorUserOperationResponse,
     ) -> Self {
         self.paymaster = sponsor_response.paymaster;
-        self.paymaster_data = sponsor_response.paymaster_data.clone();
+        self.paymaster_data
+            .clone_from(&sponsor_response.paymaster_data);
         self.paymaster_verification_gas_limit =
             Some(sponsor_response.paymaster_verification_gas_limit);
         self.paymaster_post_op_gas_limit =
