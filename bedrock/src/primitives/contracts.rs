@@ -166,14 +166,15 @@ impl UserOperation {
 
     /// Gathers the factory+factoryData as `initCode`.
     pub fn get_init_code(&self) -> Bytes {
-        // Check if `factory` is present
-        if self.factory.is_zero() {
+        let Some(factory) = self.factory else {
             return Bytes::new();
-        }
+        };
+
+        let factory_data = self.factory_data.clone().unwrap_or_default();
 
         let mut out = Vec::new();
-        out.extend_from_slice(self.factory.as_slice());
-        out.extend_from_slice(&self.factory_data);
+        out.extend_from_slice(factory.as_slice());
+        out.extend_from_slice(&factory_data);
         out.into()
     }
 
@@ -208,62 +209,51 @@ impl UserOperation {
 
     /// Merges all paymaster related data into a single `paymasterAndData` attribute.
     pub fn get_paymaster_and_data(&self) -> Bytes {
-        if self.paymaster.is_zero() {
+        let Some(paymaster) = self.paymaster else {
             return Bytes::new();
-        }
+        };
+
+        let paymaster_data = self.paymaster_data.clone().unwrap_or_default();
 
         let mut out = Vec::new();
         // Append paymaster address (20 bytes)
-        out.extend_from_slice(self.paymaster.as_slice());
+        out.extend_from_slice(paymaster.as_slice());
 
         // Append paymasterVerificationGasLimit (16 bytes)
-        out.extend_from_slice(&self.paymaster_verification_gas_limit.to_be_bytes());
+        let verification_gas_limit =
+            self.paymaster_verification_gas_limit.unwrap_or(U128::ZERO);
+        out.extend_from_slice(&verification_gas_limit.to_be_bytes::<16>());
 
         // Append paymasterPostOpGasLimit (16 bytes)
-        out.extend_from_slice(&self.paymaster_post_op_gas_limit.to_be_bytes());
+        let post_op_gas_limit = self.paymaster_post_op_gas_limit.unwrap_or(U128::ZERO);
+        out.extend_from_slice(&post_op_gas_limit.to_be_bytes::<16>());
 
-        // Append paymasterData if it exists
-        if !self.paymaster_data.is_empty() {
-            out.extend_from_slice(&self.paymaster_data);
-        }
+        // Append paymasterData
+        out.extend_from_slice(&paymaster_data);
 
         out.into()
     }
 
     /// Merges paymaster data from sponsorship response into the `UserOperation`
-    ///
-    /// # Errors
-    /// Returns an error if any U128 to u128 conversion fails
     pub fn with_paymaster_data(
         mut self,
         sponsor_response: &SponsorUserOperationResponse,
-    ) -> Result<Self, HttpError> {
-        self.paymaster = sponsor_response.paymaster.unwrap_or(Address::ZERO);
-        self.paymaster_data =
-            sponsor_response.paymaster_data.clone().unwrap_or_default();
-        self.paymaster_verification_gas_limit = sponsor_response
-            .paymaster_verification_gas_limit
-            .try_into()
-            .unwrap_or(0);
-        self.paymaster_post_op_gas_limit = sponsor_response
-            .paymaster_post_op_gas_limit
-            .try_into()
-            .unwrap_or(0);
+    ) -> Self {
+        self.paymaster = sponsor_response.paymaster;
+        self.paymaster_data = sponsor_response.paymaster_data.clone();
+        self.paymaster_verification_gas_limit =
+            Some(sponsor_response.paymaster_verification_gas_limit);
+        self.paymaster_post_op_gas_limit =
+            Some(sponsor_response.paymaster_post_op_gas_limit);
 
         // Update gas fields
         self.pre_verification_gas = sponsor_response.pre_verification_gas;
-        self.verification_gas_limit = sponsor_response
-            .verification_gas_limit
-            .try_into()
-            .unwrap_or(0);
-        self.call_gas_limit = sponsor_response.call_gas_limit.try_into().unwrap_or(0);
-        self.max_fee_per_gas = sponsor_response.max_fee_per_gas.try_into().unwrap_or(0);
-        self.max_priority_fee_per_gas = sponsor_response
-            .max_priority_fee_per_gas
-            .try_into()
-            .unwrap_or(0);
+        self.verification_gas_limit = sponsor_response.verification_gas_limit;
+        self.call_gas_limit = sponsor_response.call_gas_limit;
+        self.max_fee_per_gas = sponsor_response.max_fee_per_gas;
+        self.max_priority_fee_per_gas = sponsor_response.max_priority_fee_per_gas;
 
-        Ok(self)
+        self
     }
 }
 
@@ -279,17 +269,25 @@ impl EncodedSafeOpStruct {
         valid_after: U48,
         valid_until: U48,
     ) -> Result<Self, PrimitiveError> {
+        // Convert U128 to u128 for sol! struct compatibility
+        let verification_gas_limit: u128 =
+            user_op.verification_gas_limit.try_into().unwrap_or(0);
+        let call_gas_limit: u128 = user_op.call_gas_limit.try_into().unwrap_or(0);
+        let max_priority_fee_per_gas: u128 =
+            user_op.max_priority_fee_per_gas.try_into().unwrap_or(0);
+        let max_fee_per_gas: u128 = user_op.max_fee_per_gas.try_into().unwrap_or(0);
+
         Ok(Self {
             type_hash: *SAFE_OP_TYPEHASH,
             safe: user_op.sender,
             nonce: user_op.nonce,
             init_code_hash: keccak256(user_op.get_init_code()),
             call_data_hash: keccak256(&user_op.call_data),
-            verification_gas_limit: user_op.verification_gas_limit,
-            call_gas_limit: user_op.call_gas_limit,
+            verification_gas_limit,
+            call_gas_limit,
             pre_verification_gas: user_op.pre_verification_gas,
-            max_priority_fee_per_gas: user_op.max_priority_fee_per_gas,
-            max_fee_per_gas: user_op.max_fee_per_gas,
+            max_priority_fee_per_gas,
+            max_fee_per_gas,
             paymaster_and_data_hash: keccak256(user_op.get_paymaster_and_data()),
             valid_after,
             valid_until,
