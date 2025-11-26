@@ -185,9 +185,9 @@ pub struct SponsorUserOperationResponse {
     /// Call gas limit
     pub call_gas_limit: U128,
     /// Paymaster verification gas limit
-    pub paymaster_verification_gas_limit: U128,
+    pub paymaster_verification_gas_limit: Option<U128>,
     /// Paymaster post-op gas limit
-    pub paymaster_post_op_gas_limit: U128,
+    pub paymaster_post_op_gas_limit: Option<U128>,
     /// Max priority fee per gas
     pub max_priority_fee_per_gas: U128,
     /// Max fee per gas

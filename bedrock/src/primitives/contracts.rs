@@ -247,9 +247,8 @@ impl UserOperation {
         self.paymaster_data
             .clone_from(&sponsor_response.paymaster_data);
         self.paymaster_verification_gas_limit =
-            Some(sponsor_response.paymaster_verification_gas_limit);
-        self.paymaster_post_op_gas_limit =
-            Some(sponsor_response.paymaster_post_op_gas_limit);
+            sponsor_response.paymaster_verification_gas_limit;
+        self.paymaster_post_op_gas_limit = sponsor_response.paymaster_post_op_gas_limit;
 
         // Update gas fields
         self.pre_verification_gas = sponsor_response.pre_verification_gas;
