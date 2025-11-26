@@ -339,8 +339,8 @@ where
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorUserOperationResponseLite<'a> {
-    paymaster: &'a str,
-    paymaster_data: &'a str,
+    paymaster: Option<&'a str>,
+    paymaster_data: Option<&'a str>,
     pre_verification_gas: String,
     verification_gas_limit: String,
     call_gas_limit: String,
@@ -394,8 +394,8 @@ where
             // Respond with minimal, sane gas values and no paymaster
             "wa_sponsorUserOperation" => {
                 let result = SponsorUserOperationResponseLite {
-                    paymaster: "0x0000000000000000000000000000000000000000",
-                    paymaster_data: "0x",
+                    paymaster: None,
+                    paymaster_data: None,
                     pre_verification_gas: "0x200000".into(), // 2M
                     verification_gas_limit: "0x200000".into(), // 2M
                     call_gas_limit: "0x200000".into(),       // 2M
