@@ -43,31 +43,11 @@ sol! {
     }
 }
 
-/// The action to perform on the `WorldGiftManager` contract.
-pub enum GiftAction {
-    /// Send a gift to a recipient.
-    Gift,
-    /// Redeem a gift.
-    Redeem,
-    /// Cancel a gift.
-    Cancel,
-}
-
-impl GiftAction {
-    const fn tx_type_id(&self) -> TransactionTypeId {
-        match self {
-            Self::Gift => TransactionTypeId::WorldGiftManagerGift,
-            Self::Redeem => TransactionTypeId::WorldGiftManagerRedeem,
-            Self::Cancel => TransactionTypeId::WorldGiftManagerCancel,
-        }
-    }
-}
-
 /// Enables operations with the `WorldGiftManager` contract.
 pub struct WorldGiftManager {
     /// The 17-byte gift ID (stored as bytes for nonce encoding).
     gift_id: [u8; 17],
-    action: GiftAction,
+    tx_type_id: TransactionTypeId,
     /// The inner call data for the function.
     call_data: Vec<u8>,
     operation: SafeOperation,
@@ -114,7 +94,7 @@ impl WorldGiftManager {
         let bundle = MultiSend::build_bundle(&entries);
         Self {
             gift_id,
-            action: GiftAction::Gift,
+            tx_type_id: TransactionTypeId::WorldGiftManagerGift,
             call_data: bundle.data,
             operation: bundle.operation,
             to: bundle.to,
@@ -127,7 +107,7 @@ impl WorldGiftManager {
         let call_data = IWorldGiftManager::redeemCall { giftId: gift_id }.abi_encode();
         Self {
             gift_id: u256_to_gift_id(gift_id),
-            action: GiftAction::Redeem,
+            tx_type_id: TransactionTypeId::WorldGiftManagerRedeem,
             call_data,
             operation: SafeOperation::Call,
             to: world_gift_manager_address(),
@@ -140,7 +120,7 @@ impl WorldGiftManager {
         let call_data = IWorldGiftManager::cancelCall { giftId: gift_id }.abi_encode();
         Self {
             gift_id: u256_to_gift_id(gift_id),
-            action: GiftAction::Cancel,
+            tx_type_id: TransactionTypeId::WorldGiftManagerCancel,
             call_data,
             operation: SafeOperation::Call,
             to: world_gift_manager_address(),
@@ -177,7 +157,7 @@ impl Is4337Encodable for WorldGiftManager {
         random_tail.copy_from_slice(&self.gift_id[10..17]);
 
         let key = NonceKeyV1::with_random_tail(
-            self.action.tx_type_id(),
+            self.tx_type_id,
             InstructionFlag::Default,
             metadata_bytes,
             random_tail,
