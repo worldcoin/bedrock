@@ -4,7 +4,7 @@ use std::str::FromStr;
 use alloy::{
     network::Ethereum,
     node_bindings::AnvilInstance,
-    primitives::{address, keccak256, Address, FixedBytes, Log, U256},
+    primitives::{address, keccak256, Address, FixedBytes, Log, U128, U256},
     providers::{ext::AnvilApi, Provider},
     sol,
     sol_types::{SolCall, SolEvent, SolValue},
@@ -216,10 +216,10 @@ where
 }
 
 /// Pack two U128 in 32 bytes
-pub fn pack_pair(a: &u128, b: &u128) -> FixedBytes<32> {
+pub fn pack_pair(a: &U128, b: &U128) -> FixedBytes<32> {
     let mut out = [0u8; 32];
-    out[..16].copy_from_slice(a.to_be_bytes().as_slice());
-    out[16..].copy_from_slice(b.to_be_bytes().as_slice());
+    out[..16].copy_from_slice(&a.to_be_bytes::<16>());
+    out[16..].copy_from_slice(&b.to_be_bytes::<16>());
     out.into()
 }
 
@@ -339,8 +339,8 @@ where
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorUserOperationResponseLite<'a> {
-    paymaster: &'a str,
-    paymaster_data: &'a str,
+    paymaster: Option<&'a str>,
+    paymaster_data: Option<&'a str>,
     pre_verification_gas: String,
     verification_gas_limit: String,
     call_gas_limit: String,
@@ -394,8 +394,8 @@ where
             // Respond with minimal, sane gas values and no paymaster
             "wa_sponsorUserOperation" => {
                 let result = SponsorUserOperationResponseLite {
-                    paymaster: "0x0000000000000000000000000000000000000000",
-                    paymaster_data: "0x",
+                    paymaster: None,
+                    paymaster_data: None,
                     pre_verification_gas: "0x200000".into(), // 2M
                     verification_gas_limit: "0x200000".into(), // 2M
                     call_gas_limit: "0x200000".into(),       // 2M
@@ -452,10 +452,10 @@ where
                     max_fee_per_gas: get_or_zero("maxFeePerGas"),
                     max_priority_fee_per_gas: get_or_zero("maxPriorityFeePerGas"),
                     paymaster: get_opt("paymaster"),
-                    paymaster_verification_gas_limit: get_or_zero(
+                    paymaster_verification_gas_limit: get_opt(
                         "paymasterVerificationGasLimit",
                     ),
-                    paymaster_post_op_gas_limit: get_or_zero("paymasterPostOpGasLimit"),
+                    paymaster_post_op_gas_limit: get_opt("paymasterPostOpGasLimit"),
                     paymaster_data: get_opt("paymasterData"),
                     signature: get_required("signature")?,
                     factory: get_opt("factory"),

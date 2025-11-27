@@ -260,6 +260,15 @@ impl ParseFromForeignBinding for u128 {
     }
 }
 
+impl ParseFromForeignBinding for U128 {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+            attribute: attr.to_string(),
+            error_message: e.to_string(),
+        })
+    }
+}
+
 impl ParseFromForeignBinding for Bytes {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         let raw = s.strip_prefix("0x").unwrap_or(s);

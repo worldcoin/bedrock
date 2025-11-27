@@ -88,7 +88,7 @@ pub trait Is4337Encodable {
             .await?;
 
         // 3. Merge paymaster data
-        user_operation = user_operation.with_paymaster_data(&sponsor_response)?;
+        user_operation = user_operation.with_paymaster_data(&sponsor_response);
 
         // 4. Compute validity timestamps
         // validAfter = 0 (immediately valid)
@@ -164,8 +164,8 @@ mod tests {
         max_fee_per_gas: "0x1af6f".to_string(),
         max_priority_fee_per_gas: "0x1adb0".to_string(),
         paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
-        paymaster_verification_gas_limit: "0x7415".to_string(),
-        paymaster_post_op_gas_limit: "0x".to_string(),
+        paymaster_verification_gas_limit: Some("0x7415".to_string()),
+        paymaster_post_op_gas_limit: Some("0x".to_string()),
         paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
         factory: None,
         factory_data: None,
@@ -198,8 +198,8 @@ mod tests {
     #[test]
     fn test_get_init_code_allows_no_factory() {
         let user_op_no_factory = UserOperation {
-            factory: Address::ZERO,
-            factory_data: Bytes::new(),
+            factory: None,
+            factory_data: None,
             ..Default::default()
         };
         let code = user_op_no_factory.get_init_code();
@@ -212,8 +212,8 @@ mod tests {
     #[test]
     fn test_get_init_code_parse_valid_factory_no_data() {
         let user_op_valid_factory = UserOperation {
-            factory: address!("0x1111111111111111111111111111111111111111"),
-            factory_data: Bytes::new(),
+            factory: Some(address!("0x1111111111111111111111111111111111111111")),
+            factory_data: Some(Bytes::new()),
             ..Default::default()
         };
         let code = user_op_valid_factory.get_init_code();
@@ -227,8 +227,8 @@ mod tests {
     #[test]
     fn test_get_init_code_parse_valid_factory_and_data() {
         let user_op_with_data = UserOperation {
-            factory: address!("0x2222222222222222222222222222222222222222"),
-            factory_data: Bytes::from_str("0x1234abcd").unwrap(),
+            factory: Some(address!("0x2222222222222222222222222222222222222222")),
+            factory_data: Some(Bytes::from_str("0x1234abcd").unwrap()),
             ..Default::default()
         };
         let code = user_op_with_data.get_init_code();
@@ -250,8 +250,8 @@ mod tests {
         );
 
         // Set some initial values
-        user_op.call_gas_limit = 100;
-        user_op.verification_gas_limit = 200;
+        user_op.call_gas_limit = U128::from(100);
+        user_op.verification_gas_limit = U128::from(200);
 
         let sponsor_response = SponsorUserOperationResponse {
             paymaster: Some(address!("0x2222222222222222222222222222222222222222")),
@@ -259,42 +259,46 @@ mod tests {
             pre_verification_gas: U256::from(300),
             verification_gas_limit: U128::from(400),
             call_gas_limit: U128::from(500),
-            paymaster_verification_gas_limit: U128::from(600),
-            paymaster_post_op_gas_limit: U128::from(700),
+            paymaster_verification_gas_limit: Some(U128::from(600)),
+            paymaster_post_op_gas_limit: Some(U128::from(700)),
             max_priority_fee_per_gas: U128::from(800),
             max_fee_per_gas: U128::from(900),
             provider_name: RpcProviderName::Pimlico,
         };
 
-        let result = user_op.with_paymaster_data(&sponsor_response);
-        assert!(result.is_ok());
-
-        let updated_user_op = result.unwrap();
+        let updated_user_op = user_op.with_paymaster_data(&sponsor_response);
         assert_eq!(
             updated_user_op.paymaster,
-            address!("0x2222222222222222222222222222222222222222")
+            Some(address!("0x2222222222222222222222222222222222222222"))
         );
         assert_eq!(
             updated_user_op.paymaster_data,
-            Bytes::from_str("0xabcd").unwrap()
+            Some(Bytes::from_str("0xabcd").unwrap())
         );
         assert_eq!(updated_user_op.pre_verification_gas, U256::from(300));
-        assert_eq!(updated_user_op.paymaster_verification_gas_limit, 600);
-        assert_eq!(updated_user_op.paymaster_post_op_gas_limit, 700);
-        assert_eq!(updated_user_op.max_priority_fee_per_gas, 800);
-        assert_eq!(updated_user_op.max_fee_per_gas, 900);
+        assert_eq!(
+            updated_user_op.paymaster_verification_gas_limit,
+            Some(U128::from(600))
+        );
+        assert_eq!(
+            updated_user_op.paymaster_post_op_gas_limit,
+            Some(U128::from(700))
+        );
+        assert_eq!(updated_user_op.max_priority_fee_per_gas, U128::from(800));
+        assert_eq!(updated_user_op.max_fee_per_gas, U128::from(900));
     }
 
     #[test]
     fn test_get_paymaster_and_data_no_paymaster() {
         let user_op = UserOperation {
-            paymaster: Address::ZERO,
+            paymaster: None,
+            paymaster_data: None,
             ..Default::default()
         };
         let data = user_op.get_paymaster_and_data();
         assert!(
             data.is_empty(),
-            "Expected empty data when paymaster is zero"
+            "Expected empty data when paymaster is None"
         );
     }
 
@@ -302,10 +306,10 @@ mod tests {
     fn test_get_paymaster_and_data_with_paymaster_when_there_is_no_additional_paymaster_data(
     ) {
         let user_op = UserOperation {
-            paymaster: address!("0x1111111111111111111111111111111111111111"),
-            paymaster_verification_gas_limit: 1000,
-            paymaster_post_op_gas_limit: 2000,
-            paymaster_data: Bytes::new(),
+            paymaster: Some(address!("0x1111111111111111111111111111111111111111")),
+            paymaster_verification_gas_limit: Some(U128::from(1000)),
+            paymaster_post_op_gas_limit: Some(U128::from(2000)),
+            paymaster_data: Some(Bytes::new()),
             ..Default::default()
         };
         let data = user_op.get_paymaster_and_data();
@@ -332,10 +336,10 @@ mod tests {
     fn test_get_paymaster_and_data_full() {
         let paymaster_data = Bytes::from_str("0x1234abcd").unwrap();
         let user_op = UserOperation {
-            paymaster: address!("0x2222222222222222222222222222222222222222"),
-            paymaster_verification_gas_limit: 3000,
-            paymaster_post_op_gas_limit: 4000,
-            paymaster_data,
+            paymaster: Some(address!("0x2222222222222222222222222222222222222222")),
+            paymaster_verification_gas_limit: Some(U128::from(3000)),
+            paymaster_post_op_gas_limit: Some(U128::from(4000)),
+            paymaster_data: Some(paymaster_data),
             ..Default::default()
         };
         let data = user_op.get_paymaster_and_data();

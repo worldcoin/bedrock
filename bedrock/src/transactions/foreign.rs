@@ -1,7 +1,7 @@
 //! This module introduces foreign bindings (Swift and Kotlin) for specific Solidity types where
 //! the native app requires functionality to craft those transactions manually.
 
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes, U128, U256};
 
 use crate::{
     primitives::{ParseFromForeignBinding, PrimitiveError},
@@ -36,9 +36,9 @@ pub struct UnparsedUserOperation {
     /// Paymaster contact address (Solidity type: `address`)
     pub paymaster: Option<String>,
     /// Paymaster verification gas limit (Solidity type: `uint128`)
-    pub paymaster_verification_gas_limit: String,
+    pub paymaster_verification_gas_limit: Option<String>,
     /// Paymaster post-operation gas limit (Solidity type: `uint128`)
-    pub paymaster_post_op_gas_limit: String,
+    pub paymaster_post_op_gas_limit: Option<String>,
     /// Paymaster additional data for verification (Solidity type: `bytes`)
     pub paymaster_data: Option<String>,
     /// Used to validate a `UserOperation` along with the nonce during verification (Solidity type: `bytes`)
@@ -60,9 +60,9 @@ impl TryFrom<UnparsedUserOperation> for UserOperation {
         let call_data = Bytes::parse_from_ffi(&user_op.call_data, "call_data")?;
 
         let call_gas_limit =
-            u128::parse_from_ffi(&user_op.call_gas_limit, "call_gas_limit")?;
+            U128::parse_from_ffi(&user_op.call_gas_limit, "call_gas_limit")?;
 
-        let verification_gas_limit = u128::parse_from_ffi(
+        let verification_gas_limit = U128::parse_from_ffi(
             &user_op.verification_gas_limit,
             "verification_gas_limit",
         )?;
@@ -73,46 +73,44 @@ impl TryFrom<UnparsedUserOperation> for UserOperation {
         )?;
 
         let max_fee_per_gas =
-            u128::parse_from_ffi(&user_op.max_fee_per_gas, "max_fee_per_gas")?;
+            U128::parse_from_ffi(&user_op.max_fee_per_gas, "max_fee_per_gas")?;
 
-        let max_priority_fee_per_gas = u128::parse_from_ffi(
+        let max_priority_fee_per_gas = U128::parse_from_ffi(
             &user_op.max_priority_fee_per_gas,
             "max_priority_fee_per_gas",
         )?;
 
-        let paymaster = match user_op.paymaster {
-            Some(p) => Address::parse_from_ffi(&p, "paymaster")?,
-            None => Address::ZERO,
-        };
+        let paymaster = user_op
+            .paymaster
+            .map(|p| Address::parse_from_ffi(&p, "paymaster"))
+            .transpose()?;
 
-        let paymaster_verification_gas_limit = u128::parse_from_ffi(
-            &user_op.paymaster_verification_gas_limit,
-            "paymaster_verification_gas_limit",
-        )?;
+        let paymaster_verification_gas_limit = user_op
+            .paymaster_verification_gas_limit
+            .map(|p| U128::parse_from_ffi(&p, "paymaster_verification_gas_limit"))
+            .transpose()?;
 
-        let paymaster_post_op_gas_limit = u128::parse_from_ffi(
-            &user_op.paymaster_post_op_gas_limit,
-            "paymaster_post_op_gas_limit",
-        )?;
+        let paymaster_post_op_gas_limit = user_op
+            .paymaster_post_op_gas_limit
+            .map(|p| U128::parse_from_ffi(&p, "paymaster_post_op_gas_limit"))
+            .transpose()?;
 
         let paymaster_data = user_op
             .paymaster_data
             .map(|p| Bytes::parse_from_ffi(&p, "paymaster_data"))
-            .transpose()?
-            .unwrap_or_default();
+            .transpose()?;
 
         let signature = Bytes::parse_from_ffi(&user_op.signature, "signature")?;
 
-        let factory = match user_op.factory {
-            Some(f) => Address::parse_from_ffi(&f, "factory")?,
-            None => Address::ZERO,
-        };
+        let factory = user_op
+            .factory
+            .map(|f| Address::parse_from_ffi(&f, "factory"))
+            .transpose()?;
 
         let factory_data = user_op
             .factory_data
             .map(|f| Bytes::parse_from_ffi(&f, "factory_data"))
-            .transpose()?
-            .unwrap_or_default();
+            .transpose()?;
 
         Ok(Self {
             sender,

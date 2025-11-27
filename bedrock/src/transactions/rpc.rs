@@ -185,9 +185,9 @@ pub struct SponsorUserOperationResponse {
     /// Call gas limit
     pub call_gas_limit: U128,
     /// Paymaster verification gas limit
-    pub paymaster_verification_gas_limit: U128,
+    pub paymaster_verification_gas_limit: Option<U128>,
     /// Paymaster post-op gas limit
-    pub paymaster_post_op_gas_limit: U128,
+    pub paymaster_post_op_gas_limit: Option<U128>,
     /// Max priority fee per gas
     pub max_priority_fee_per_gas: U128,
     /// Max fee per gas
@@ -441,41 +441,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_user_operation_serialization() {
-        let user_op = UserOperation {
-            sender: address!("5a6b47F4131bf1feAFA56A05573314BcF44C9149"),
-            nonce: U256::from_str_radix("845ADB2C711129D4F3966735ED98A9F09FC4CE57", 16)
-                .unwrap(),
-            factory: Address::ZERO,
-            factory_data: Bytes::default(),
-            call_data: bytes!("0xe9ae5c53"),
-            call_gas_limit: 0x13_880,
-            verification_gas_limit: 0x60_B01,
-            pre_verification_gas: U256::from(0xD3E3),
-            max_fee_per_gas: 0x3B9A_CA00,
-            max_priority_fee_per_gas: 0x3B9A_CA00,
-            paymaster: Address::ZERO,
-            paymaster_verification_gas_limit: 0,
-            paymaster_post_op_gas_limit: 0,
-            paymaster_data: Bytes::default(),
-            signature: vec![0xff; 77].into(),
-        };
-
-        let serialized = serde_json::to_value(&user_op).unwrap();
-
-        assert_eq!(
-            serialized["sender"],
-            "0x5a6b47f4131bf1feafa56a05573314bcf44c9149"
-        );
-        assert_eq!(
-            serialized["nonce"],
-            "0x845adb2c711129d4f3966735ed98a9f09fc4ce57"
-        );
-        assert_eq!(serialized["callData"], "0xe9ae5c53");
-        assert_eq!(serialized["callGasLimit"], "0x13880"); // ERC-7769: numeric fields as hex strings
-    }
-
-    #[test]
     fn test_sponsor_response_parsing() {
         let json_response = json!({
             "paymaster": "0x0000000000000039cd5e8aE05257CE51C473ddd1",
@@ -515,57 +480,131 @@ mod tests {
     }
 
     #[test]
-    fn test_user_operation_direct_serialization_works() {
+    fn test_user_operation_serialization_with_null_fields() {
         let user_op = UserOperation {
             sender: address!("5a6b47F4131bf1feAFA56A05573314BcF44C9149"),
-            nonce: U256::from_str_radix("845ADB2C711129D4F3966735ED98A9F09FC4CE57", 16)
-                .unwrap(),
-            factory: Address::ZERO,
-            factory_data: Bytes::default(),
+            nonce: U256::from_str_radix(
+                "009aaffd82ed9852f394acca3e4b30ef51880188532374de0000000000000000",
+                16,
+            )
+            .unwrap(),
+            factory: None,
+            factory_data: None,
             call_data: bytes!("0xe9ae5c53"),
-            call_gas_limit: 0x13_880,
-            verification_gas_limit: 0x60_B01,
+            call_gas_limit: U128::from(0x13_880),
+            verification_gas_limit: U128::from(0x60_B01),
             pre_verification_gas: U256::from(0xD3E3),
-            max_fee_per_gas: 0x3B9A_CA00,
-            max_priority_fee_per_gas: 0x3B9A_CA00,
-            paymaster: Address::ZERO,
-            paymaster_verification_gas_limit: 0,
-            paymaster_post_op_gas_limit: 0,
-            paymaster_data: Bytes::default(),
+            max_fee_per_gas: U128::from(0x3B9A_CA00),
+            max_priority_fee_per_gas: U128::from(0x2B9A_CA00),
+            paymaster: None,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_data: None,
             signature: vec![0xff; 77].into(),
         };
 
-        // Test that UserOperation can be serialized directly
+        // Test that UserOperation can be serialized
         let serialized = serde_json::to_value(&user_op).unwrap();
 
         // Print the actual serialized output to see the format
         println!(
-            "Direct UserOperation serialization: {}",
+            "UserOperation serialization: {}",
             serde_json::to_string_pretty(&serialized).unwrap()
-        );
-
-        // Check if the field names match the expected RPC format
-        // Note: alloy's sol! macro might use different field names than camelCase
-        println!(
-            "Available fields: {:?}",
-            serialized.as_object().unwrap().keys().collect::<Vec<_>>()
         );
 
         // Verify the key field is properly serialized with camelCase naming
         assert_eq!(serialized["callData"], "0xe9ae5c53");
+        assert_eq!(serialized["callGasLimit"], "0x13880");
+        assert_eq!(serialized["maxFeePerGas"], "0x3b9aca00");
+        assert_eq!(serialized["maxPriorityFeePerGas"], "0x2b9aca00");
+        assert_eq!(
+            serialized["nonce"],
+            "0x9aaffd82ed9852f394acca3e4b30ef51880188532374de0000000000000000" // no leading zeroes
+        );
+        assert_eq!(serialized["preVerificationGas"], "0xd3e3");
+        assert_eq!(
+            serialized["sender"],
+            "0x5a6b47f4131bf1feafa56a05573314bcf44c9149"
+        );
+        assert_eq!(
+            serialized["signature"],
+            "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        );
+        assert_eq!(serialized["verificationGasLimit"], "0x60b01");
 
-        // ERC-7769: All fields MUST be present and hex-encoded; empty bytes must be "0x"
+        // Optional fields should be null when None
+        assert!(serialized["factory"].is_null());
+        assert!(serialized["factoryData"].is_null());
+        assert!(serialized["paymaster"].is_null());
+        assert!(serialized["paymasterData"].is_null());
+        assert!(serialized["paymasterVerificationGasLimit"].is_null());
+        assert!(serialized["paymasterPostOpGasLimit"].is_null());
+    }
+
+    #[test]
+    fn test_user_operation_serialization_with() {
+        let user_op = UserOperation {
+            sender: address!("5a6b47F4131bf1feAFA56A05573314BcF44C9149"),
+            nonce: U256::from_str_radix(
+                "009aaffd82ed9852f394acca3e4b30ef51880188532374de0000000000000000",
+                16,
+            )
+            .unwrap(),
+            factory: Some(address!("0x0000000071727De22E5E9d8BAf0edAc6f37da032")),
+            factory_data: Some(bytes!("0x7702")),
+            call_data: bytes!("0xe9ae5c53"),
+            call_gas_limit: U128::from(0x13_880),
+            verification_gas_limit: U128::from(0x60_B01),
+            pre_verification_gas: U256::from(0xD3E3),
+            max_fee_per_gas: U128::from(0x3B9A_CA00),
+            max_priority_fee_per_gas: U128::from(0x2B9A_CA00),
+            paymaster: Some(address!("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B")),
+            paymaster_verification_gas_limit: Some(U128::from(10)),
+            paymaster_post_op_gas_limit: Some(U128::from(0)),
+            paymaster_data: Some(bytes!("0x")),
+            signature: vec![0xff; 77].into(),
+        };
+
+        // Test that UserOperation can be serialized
+        let serialized = serde_json::to_value(&user_op).unwrap();
+
+        // Print the actual serialized output to see the format
+        println!(
+            "UserOperation serialization: {}",
+            serde_json::to_string_pretty(&serialized).unwrap()
+        );
+
+        // Verify the key field is properly serialized with camelCase naming
+        assert_eq!(serialized["callData"], "0xe9ae5c53");
+        assert_eq!(serialized["callGasLimit"], "0x13880");
+        assert_eq!(serialized["maxFeePerGas"], "0x3b9aca00");
+        assert_eq!(serialized["maxPriorityFeePerGas"], "0x2b9aca00");
+        assert_eq!(
+            serialized["nonce"],
+            "0x9aaffd82ed9852f394acca3e4b30ef51880188532374de0000000000000000" // no leading zeroes
+        );
+        assert_eq!(serialized["preVerificationGas"], "0xd3e3");
+        assert_eq!(
+            serialized["sender"],
+            "0x5a6b47f4131bf1feafa56a05573314bcf44c9149"
+        );
+        assert_eq!(
+            serialized["signature"],
+            "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        );
+        assert_eq!(serialized["verificationGasLimit"], "0x60b01");
+
         assert_eq!(
             serialized["factory"],
-            "0x0000000000000000000000000000000000000000"
+            "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
         );
-        assert_eq!(serialized["factoryData"], "0x");
+        assert_eq!(serialized["factoryData"], "0x7702");
         assert_eq!(
             serialized["paymaster"],
-            "0x0000000000000000000000000000000000000000"
+            "0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B"
         );
         assert_eq!(serialized["paymasterData"], "0x");
-        assert_eq!(serialized["paymasterVerificationGasLimit"], "0x0");
+        assert_eq!(serialized["paymasterVerificationGasLimit"], "0xa");
         assert_eq!(serialized["paymasterPostOpGasLimit"], "0x0");
     }
 }
