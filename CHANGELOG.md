@@ -2,6 +2,19 @@
 
 
 
+## [0.0.31] - 2025-11-27
+
+## What's Changed
+* refactor: world gift manager by @aurel-fr in https://github.com/worldcoin/bedrock/pull/204
+* fix: userop serialization by @aurel-fr in https://github.com/worldcoin/bedrock/pull/206
+* fix: Update gift campaign contract by @Takaros999 in https://github.com/worldcoin/bedrock/pull/205
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.30...0.0.31
+
+
+
+
 ## [0.0.30] - 2025-11-25
 
 ## What's Changed
