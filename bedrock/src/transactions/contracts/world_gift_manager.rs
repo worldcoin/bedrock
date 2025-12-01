@@ -24,10 +24,10 @@ use crate::{
 pub fn world_gift_manager_address() -> Address {
     match current_environment_or_default() {
         BedrockEnvironment::Staging => {
-            address!("0x91479943841A4350f614Abb9745314F262F45b2e") // TODO replace with post-audit contract
+            address!("0x91479943841A4350f614Abb9745314F262F45b2e")
         }
         BedrockEnvironment::Production => {
-            address!("0x91479943841A4350f614Abb9745314F262F45b2e") // TODO replace with post-audit contract
+            address!("0x7A25B4AD051433c12F74fb0FE8D433706FEE7007")
         }
     }
 }
