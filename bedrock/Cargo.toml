@@ -22,7 +22,7 @@ default = ["tooling_tests"]
 tooling_tests = ["dep:tokio"]
 
 [dependencies]
-alloy = { version = "1.0.30", default-features = false, features = [
+alloy = { version = "1.1.2", default-features = false, features = [
   "dyn-abi",
   "eip712",
   "signer-local",
@@ -78,7 +78,7 @@ hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
 # bumping this requires crypto_box to update rand: https://github.com/RustCrypto/nacl-compat/issues/176
 
 [dev-dependencies]
-alloy = { version = "1.0.30", default-features = false, features = [
+alloy = { version = "1.1.2", default-features = false, features = [
   "json",
   "contract",
   "node-bindings",
