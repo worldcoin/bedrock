@@ -49,6 +49,8 @@ pub enum BackupReportEventKind {
     AddMainFactor,
     /// Remove main factor
     RemoveMainFactor,
+    /// Triggered when a user performs a log in (prev. called restore) with the new system
+    LogIn,
 }
 
 /// Minimal representation of an OIDC factor for reporting
