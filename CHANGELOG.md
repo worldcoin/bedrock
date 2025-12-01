@@ -2,6 +2,20 @@
 
 
 
+## [0.0.32] - 2025-12-01
+
+## What's Changed
+* feat: add log in client side event by @paolodamico in https://github.com/worldcoin/bedrock/pull/212
+* build(deps): bump flate2 from 1.1.1 to 1.1.5 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/211
+* build(deps): bump alloy from 1.0.38 to 1.1.2 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/210
+* build(deps): bump strum from 0.27.1 to 0.27.2 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/209
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.31...0.0.32
+
+
+
+
 ## [0.0.31] - 2025-11-27
 
 ## What's Changed
