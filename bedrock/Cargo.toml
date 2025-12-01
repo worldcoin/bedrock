@@ -39,7 +39,7 @@ ciborium = "0.2.2"
 coset = "0.3.8"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 dryoc = "0.7.0"
-flate2 = "1.0.28"
+flate2 = "1.1.5"
 hex = "0.4.3"
 hpke = { version = "0.10", features = [
   "alloc",
