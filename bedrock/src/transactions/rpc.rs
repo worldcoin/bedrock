@@ -118,7 +118,6 @@ struct ErrorPayload {
 
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
-#[derive(Debug, Deserialize)]
 
 pub enum RpcError {
     /// HTTP request failed
@@ -411,13 +410,12 @@ impl RpcClient {
         .await
     }
 
-    /// Makes a generic RPC call with typed parameters and result, adding provider header
+    /// Makes a read call to a smart contract via `eth_call` on latest block
     ///
     /// # Arguments
     /// - `network`: target network
-    /// - `method`: JSON-RPC method to invoke
-    /// - `params`: JSON-RPC params (typed)
-    /// - `provider`: selected 4337 provider to include in headers
+    /// - `to`: address of the contract to call
+    /// - `data`: data to call the contract with
     /// # Errors
     /// - Will throw an RPC error if the RPC call fails.
     pub async fn eth_call(
@@ -441,12 +439,7 @@ impl RpcClient {
         ];
 
         let result: String = self
-            .rpc_call(
-                network,
-                RpcMethod::EthCall,
-                params,
-                RpcProviderName::Alchemy,
-            )
+            .rpc_call(network, RpcMethod::EthCall, params, RpcProviderName::Any)
             .await?;
 
         Bytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
