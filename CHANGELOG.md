@@ -2,6 +2,17 @@
 
 
 
+## [0.0.33] - 2025-12-02
+
+## What's Changed
+* chore: campaign and gift managers addrs by @aurel-fr in https://github.com/worldcoin/bedrock/pull/214
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.32...0.0.33
+
+
+
+
 ## [0.0.32] - 2025-12-01
 
 ## What's Changed
