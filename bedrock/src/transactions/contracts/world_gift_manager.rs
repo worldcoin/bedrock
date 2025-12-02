@@ -5,6 +5,7 @@ use alloy::{
     sol,
     sol_types::SolCall,
 };
+use rand::Rng;
 
 use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::{
@@ -45,8 +46,8 @@ sol! {
 
 /// Enables operations with the `WorldGiftManager` contract.
 pub struct WorldGiftManager {
-    /// The 17-byte gift ID (stored as bytes for nonce encoding).
-    gift_id: [u8; 17],
+    /// The 14-byte gift ID (stored as bytes for nonce encoding).
+    gift_id: [u8; 14],
     tx_type_id: TransactionTypeId,
     /// The inner call data for the function.
     call_data: Vec<u8>,
@@ -61,7 +62,7 @@ impl WorldGiftManager {
         token: Address,
         recipient: Address,
         amount: U256,
-        gift_id: [u8; 17],
+        gift_id: [u8; 14],
     ) -> Self {
         let approve_data = Erc20::encode_approve(world_gift_manager_address(), amount);
 
@@ -154,7 +155,9 @@ impl Is4337Encodable for WorldGiftManager {
         metadata_bytes.copy_from_slice(&self.gift_id[0..10]);
 
         let mut random_tail = [0u8; 7];
-        random_tail.copy_from_slice(&self.gift_id[10..17]);
+        random_tail[..4].copy_from_slice(&self.gift_id[10..14]);
+        // fill the last 3 bytes with random data
+        rand::thread_rng().fill(&mut random_tail[4..7]);
 
         let key = NonceKeyV1::with_random_tail(
             self.tx_type_id,
@@ -172,20 +175,20 @@ impl Is4337Encodable for WorldGiftManager {
     }
 }
 
-/// Converts a 17-byte gift ID to a U256 (zero-padded on the left).
+/// Converts a 14-byte gift ID to a U256 (zero-padded on the left).
 #[inline]
-fn gift_id_to_u256(gift_id: &[u8; 17]) -> U256 {
+fn gift_id_to_u256(gift_id: &[u8; 14]) -> U256 {
     let mut padded = [0u8; 32];
-    padded[32 - 17..].copy_from_slice(gift_id);
+    padded[32 - 14..].copy_from_slice(gift_id);
     U256::from_be_bytes(padded)
 }
 
-/// Extracts the 17-byte gift ID from a U256.
+/// Extracts the 14-byte gift ID from a U256.
 #[inline]
-fn u256_to_gift_id(gift_id: U256) -> [u8; 17] {
+fn u256_to_gift_id(gift_id: U256) -> [u8; 14] {
     let bytes: [u8; 32] = gift_id.to_be_bytes();
-    let mut result = [0u8; 17];
-    result.copy_from_slice(&bytes[32 - 17..]);
+    let mut result = [0u8; 14];
+    result.copy_from_slice(&bytes[32 - 14..]);
     result
 }
 
@@ -203,7 +206,7 @@ mod tests {
             Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
         let to =
             Address::from_str("0x44db85bca667056bdbf397f8e3f6db294587b288").unwrap();
-        let mut gift_id = [0u8; 17];
+        let mut gift_id = [0u8; 14];
         rand::thread_rng().fill_bytes(&mut gift_id);
         let gift = WorldGiftManager::gift(token, to, U256::from(1), gift_id);
 
@@ -220,8 +223,8 @@ mod tests {
         // Metadata = gift_id[0..10] (bytes 7..16)
         assert_eq!(&be[7..=16], &gift.gift_id[0..10]);
 
-        // Random tail = gift_id[10..17] (bytes 17..23)
-        assert_eq!(&be[17..=23], &gift.gift_id[10..17]);
+        // First four bytes of the random tail has the last four bytes of the gift_id
+        assert_eq!(&be[17..=20], &gift.gift_id[10..14]);
 
         // Sequence number = 0 (bytes 24..31)
         assert_eq!(&be[24..32], &[0u8; 8]);
@@ -242,8 +245,8 @@ mod tests {
 
         assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
         assert_eq!(be[5], TransactionTypeId::WorldGiftManagerRedeem as u8);
-        assert_eq!(&be[7..=16], &gift_id_bytes[15..25]);
-        assert_eq!(&be[17..=23], &gift_id_bytes[25..32]);
+        assert_eq!(&be[7..=16], &gift_id_bytes[18..28]);
+        assert_eq!(&be[17..=20], &gift_id_bytes[28..32]);
 
         // Sequence number = 0 (bytes 24..31)
         assert_eq!(&be[24..32], &[0u8; 8]);
@@ -264,8 +267,8 @@ mod tests {
 
         assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
         assert_eq!(be[5], TransactionTypeId::WorldGiftManagerCancel as u8);
-        assert_eq!(&be[7..=16], &gift_id_bytes[15..25]);
-        assert_eq!(&be[17..=23], &gift_id_bytes[25..32]);
+        assert_eq!(&be[7..=16], &gift_id_bytes[18..28]);
+        assert_eq!(&be[17..=20], &gift_id_bytes[28..32]);
 
         // Sequence number = 0 (bytes 24..31)
         assert_eq!(&be[24..32], &[0u8; 8]);

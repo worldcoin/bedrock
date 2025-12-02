@@ -128,7 +128,7 @@ impl SafeSmartAccount {
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
 
-        let mut gift_id = [0u8; 17];
+        let mut gift_id = [0u8; 14];
         rand::thread_rng().fill_bytes(&mut gift_id);
 
         let transaction =
