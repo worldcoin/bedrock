@@ -14,7 +14,7 @@ use crate::{
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
 
 /// Global RPC client instance for Bedrock operations
@@ -42,6 +42,9 @@ pub enum RpcMethod {
     /// Submit a signed `UserOperation`
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
+    /// Make a read call to a smart contract
+    #[serde(rename = "eth_call")]
+    EthCall,
 }
 
 /// 4337 provider selection to be passed by native apps
@@ -76,6 +79,7 @@ impl RpcMethod {
             Self::SponsorUserOperation => "wa_sponsorUserOperation",
             Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
             Self::SendUserOperation => "eth_sendUserOperation",
+            Self::EthCall => "eth_call",
         }
     }
 }
@@ -114,6 +118,8 @@ struct ErrorPayload {
 
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
+#[derive(Debug, Deserialize)]
+
 pub enum RpcError {
     /// HTTP request failed
     #[error("HTTP request failed: {0}")]
@@ -403,6 +409,49 @@ impl RpcClient {
             RpcProviderName::Any,
         )
         .await
+    }
+
+    /// Makes a generic RPC call with typed parameters and result, adding provider header
+    ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `method`: JSON-RPC method to invoke
+    /// - `params`: JSON-RPC params (typed)
+    /// - `provider`: selected 4337 provider to include in headers
+    /// # Errors
+    /// - Will throw an RPC error if the RPC call fails.
+    pub async fn eth_call(
+        &self,
+        network: Network,
+        to: Address,
+        data: Bytes,
+    ) -> Result<Bytes, RpcError> {
+        let params = vec![
+            serde_json::Value::Object(Map::from_iter([
+                (
+                    "to".to_string(),
+                    serde_json::Value::String(format!("{to:?}")),
+                ),
+                (
+                    "data".to_string(),
+                    serde_json::Value::String(format!("{data:?}")),
+                ),
+            ])),
+            serde_json::Value::String("latest".to_string()),
+        ];
+
+        let result: String = self
+            .rpc_call(
+                network,
+                RpcMethod::EthCall,
+                params,
+                RpcProviderName::Alchemy,
+            )
+            .await?;
+
+        Bytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            error_message: format!("Invalid eth_call result format: {e}"),
+        })
     }
 }
 
