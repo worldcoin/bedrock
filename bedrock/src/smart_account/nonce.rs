@@ -28,6 +28,10 @@ pub enum TransactionTypeId {
     WorldCampaignManagerSponsor = 130,
     /// `WorldCampaignManager` claim
     WorldCampaignManagerClaim = 131,
+    /// Morpho vault deposit
+    MorphoDeposit = 132,
+    /// Morpho vault withdraw
+    MorphoWithdraw = 133,
 }
 
 impl TransactionTypeId {
