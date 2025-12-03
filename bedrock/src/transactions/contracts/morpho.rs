@@ -28,10 +28,6 @@ use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
 // Contract Addresses
 // =============================================================================
 
-/// The Morpho vault contract address on World Chain.
-pub const MORPHO_VAULT_ADDRESS: Address =
-    address!("0xb1e80387ebe53ff75a89736097d34dc8d9e9045b");
-
 // =============================================================================
 // Contract ABIs
 // =============================================================================
@@ -101,6 +97,19 @@ impl MorphoToken {
 }
 
 // =============================================================================
+// Morpho Action Enum
+// =============================================================================
+
+/// The type of Morpho vault action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MorphoAction {
+    /// Deposit tokens into the vault.
+    Deposit,
+    /// Withdraw tokens from the vault.
+    Withdraw,
+}
+
+// =============================================================================
 // Morpho Transaction Types
 // =============================================================================
 
@@ -110,6 +119,8 @@ pub struct Morpho {
     call_data: Vec<u8>,
     /// The token used for this operation (for metadata).
     token: MorphoToken,
+    /// The action type (deposit or withdraw).
+    action: MorphoAction,
 }
 
 impl Morpho {
@@ -160,10 +171,11 @@ impl Morpho {
         Self {
             call_data: bundle.data,
             token,
+            action: MorphoAction::Deposit,
         }
     }
 
-    /// Creates a new withdraw operation (approve vault token + withdraw via MultiSend).
+    /// Creates a new withdraw operation (direct call to vault, no approval needed).
     ///
     /// # Arguments
     /// * `token` - The token to withdraw (maps to the corresponding vault token).
@@ -179,12 +191,6 @@ impl Morpho {
         receiver: Address,
         owner: Address,
     ) -> Self {
-        let vault_token_address = token.vault_token_address();
-
-        // 1. Encode the approve call (approve vault token to Morpho vault)
-        let approve_data = Erc20::encode_approve(MORPHO_VAULT_ADDRESS, amount);
-
-        // 2. Encode the withdraw call
         let withdraw_data = IMorphoVault::withdrawCall {
             assets: amount,
             receiver,
@@ -192,29 +198,10 @@ impl Morpho {
         }
         .abi_encode();
 
-        // 3. Build the MultiSend bundle (approve + withdraw)
-        let entries = vec![
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: vault_token_address,
-                value: U256::ZERO,
-                data_length: U256::from(approve_data.len()),
-                data: approve_data.into(),
-            },
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: MORPHO_VAULT_ADDRESS,
-                value: U256::ZERO,
-                data_length: U256::from(withdraw_data.len()),
-                data: withdraw_data.into(),
-            },
-        ];
-
-        let bundle = MultiSend::build_bundle(&entries);
-
         Self {
-            call_data: bundle.data,
+            call_data: withdraw_data,
             token,
+            action: MorphoAction::Withdraw,
         }
     }
 }
@@ -223,11 +210,21 @@ impl Is4337Encodable for Morpho {
     type MetadataArg = ();
 
     fn as_execute_user_op_call_data(&self) -> Bytes {
+        let (to, operation) = match self.action {
+            MorphoAction::Deposit => (
+                crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+                SafeOperation::DelegateCall,
+            ),
+            MorphoAction::Withdraw => {
+                (self.token.vault_token_address(), SafeOperation::Call)
+            }
+        };
+
         ISafe4337Module::executeUserOpCall {
-            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+            to,
             value: U256::ZERO,
             data: self.call_data.clone().into(),
-            operation: SafeOperation::DelegateCall as u8,
+            operation: operation as u8,
         }
         .abi_encode()
         .into()
@@ -373,13 +370,5 @@ mod tests {
         assert_eq!(MorphoToken::USDC.program_id(), 1);
         assert_eq!(MorphoToken::WETH.program_id(), 2);
         assert_eq!(MorphoToken::WBTC.program_id(), 3);
-    }
-
-    #[test]
-    fn test_contract_addresses() {
-        assert_eq!(
-            MORPHO_VAULT_ADDRESS,
-            Address::from_str("0xb1e80387ebe53ff75a89736097d34dc8d9e9045b").unwrap()
-        );
     }
 }
