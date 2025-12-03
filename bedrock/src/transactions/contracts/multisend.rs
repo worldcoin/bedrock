@@ -6,6 +6,7 @@ use alloy::{
 
 use crate::smart_account::SafeOperation;
 
+/// The MultiSend contract address on World Chain.
 pub const MULTISEND_ADDRESS: Address =
     address!("0x38869bf66a61cf6bdb996a6ae40d5853fd43b526");
 
@@ -35,13 +36,19 @@ sol! {
     }
 }
 
+/// A bundle of transactions to be executed via MultiSend.
 pub struct MultiSendBundle {
+    /// The operation type (Call or DelegateCall).
     pub operation: SafeOperation,
+    /// The target address (MultiSend contract).
     pub to: Address,
+    /// The ETH value to send.
     pub value: U256,
+    /// The encoded MultiSend call data.
     pub data: Vec<u8>,
 }
 
+/// Helper for building MultiSend transaction bundles.
 pub struct MultiSend;
 
 impl MultiSend {

@@ -41,4 +41,3 @@ pub const MORPHO_VAULT_WETH_TOKEN_ADDRESS: Address =
 /// Morpho vault token for USDC deposits.
 pub const MORPHO_VAULT_USDC_TOKEN_ADDRESS: Address =
     address!("0xb1E80387EbE53Ff75a89736097D34dC8D9E9045B");
-

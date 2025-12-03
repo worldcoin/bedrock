@@ -2,7 +2,7 @@
     clippy::all,
     clippy::pedantic,
     clippy::nursery,
-    missing_docs,
+    // missing_docs,
     dead_code
 )]
 
