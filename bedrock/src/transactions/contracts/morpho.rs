@@ -125,8 +125,10 @@ impl Morpho {
     pub fn deposit(token: MorphoToken, amount: U256, receiver: Address) -> Self {
         let token_address = token.token_address();
 
+        let vault_token_address = token.vault_token_address();
+
         // 1. Encode the approve call (approve token to Morpho vault)
-        let approve_data = Erc20::encode_approve(MORPHO_VAULT_ADDRESS, amount);
+        let approve_data = Erc20::encode_approve(vault_token_address, amount);
 
         // 2. Encode the deposit call
         let deposit_data = IMorphoVault::depositCall {
@@ -146,7 +148,7 @@ impl Morpho {
             },
             MultiSendTx {
                 operation: SafeOperation::Call as u8,
-                to: MORPHO_VAULT_ADDRESS,
+                to: vault_token_address,
                 value: U256::ZERO,
                 data_length: U256::from(deposit_data.len()),
                 data: deposit_data.into(),
