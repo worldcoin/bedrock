@@ -39,6 +39,7 @@ impl Erc20 {
     /// * `token_address` - The address of the ERC-20 token contract.
     /// * `to` - The recipient address.
     /// * `value` - The amount of tokens to transfer.
+    #[must_use]
     pub fn new(token_address: Address, to: Address, value: U256) -> Self {
         let call_data = IErc20::transferCall { to, value }.abi_encode();
 
@@ -53,6 +54,7 @@ impl Erc20 {
     /// # Arguments
     /// * `spender` - The address to approve.
     /// * `value` - The amount of tokens to approve.
+    #[must_use]
     pub fn encode_approve(spender: Address, value: U256) -> Vec<u8> {
         IErc20::approveCall { spender, value }.abi_encode()
     }

@@ -1,12 +1,12 @@
 //! This module introduces the Morpho vault contract interface for deposits and withdrawals.
 //!
-//! Morpho deposits require a MultiSend to approve the token and then deposit into the vault.
-//! Morpho withdrawals require a MultiSend to approve the vault token and then withdraw.
+//! Morpho deposits require a `MultiSend` to approve the token and then deposit into the vault.
+//! Morpho withdrawals require a `MultiSend` to approve the vault token and then withdraw.
 
 #![allow(dead_code)]
 
 use alloy::{
-    primitives::{address, Address, Bytes, U256},
+    primitives::{Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -124,7 +124,7 @@ pub struct Morpho {
 }
 
 impl Morpho {
-    /// Creates a new deposit operation (approve token + deposit via MultiSend).
+    /// Creates a new deposit operation (approve token + deposit via `MultiSend`).
     ///
     /// # Arguments
     /// * `token` - The token to deposit.
@@ -133,6 +133,7 @@ impl Morpho {
     ///
     /// # Returns
     /// A `Morpho` struct configured for a deposit operation.
+    #[must_use]
     pub fn deposit(token: MorphoToken, amount: U256, receiver: Address) -> Self {
         let token_address = token.token_address();
 
@@ -185,6 +186,7 @@ impl Morpho {
     ///
     /// # Returns
     /// A `Morpho` struct configured for a withdraw operation.
+    #[must_use]
     pub fn withdraw(
         token: MorphoToken,
         amount: U256,
