@@ -22,14 +22,6 @@ use crate::transactions::contracts::constants::{
 use crate::transactions::contracts::erc20::Erc20;
 use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
 
-// =============================================================================
-// Contract Addresses
-// =============================================================================
-
-// =============================================================================
-// Contract ABIs
-// =============================================================================
-
 sol! {
     /// The Morpho vault contract interface.
     /// Reference: Morpho vault implementation
