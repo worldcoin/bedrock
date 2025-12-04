@@ -9,6 +9,7 @@ use crate::{
     transactions::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
+            morpho::{Morpho, MorphoToken},
             world_campaign_manager::WorldCampaignManager,
             world_gift_manager::WorldGiftManager,
         },
@@ -250,6 +251,68 @@ impl SafeSmartAccount {
             .await
             .map_err(|e| TransactionError::Generic {
                 error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Deposits tokens into a Morpho vault on World Chain.
+    ///
+    /// # Arguments
+    /// - `token`: The token to deposit (WLD, WBTC, WETH, or USDC).
+    /// - `amount`: The amount of tokens to deposit as a stringified integer with the token's decimals.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if the amount is invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_morpho_deposit(
+        &self,
+        token: MorphoToken,
+        amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let amount = U256::parse_from_ffi(amount, "amount")?;
+        let receiver = self.wallet_address;
+
+        let transaction = Morpho::deposit(token, amount, receiver);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute Morpho deposit: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Withdraws tokens from a Morpho vault on World Chain.
+    ///
+    /// # Arguments
+    /// - `token`: The token to withdraw (WLD, WBTC, WETH, or USDC).
+    /// - `amount`: The amount of tokens to withdraw as a stringified integer with the token's decimals.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if the amount is invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_morpho_withdraw(
+        &self,
+        token: MorphoToken,
+        amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let amount = U256::parse_from_ffi(amount, "amount")?;
+        let wallet = self.wallet_address;
+
+        let transaction = Morpho::withdraw(token, amount, wallet, wallet);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute Morpho withdraw: {e}"),
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)

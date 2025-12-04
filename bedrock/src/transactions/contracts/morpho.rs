@@ -37,7 +37,7 @@ sol! {
 // =============================================================================
 
 /// Supported tokens for Morpho vault deposits and withdrawals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum MorphoToken {
     /// Worldcoin (WLD)

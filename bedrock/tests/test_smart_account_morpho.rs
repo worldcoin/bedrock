@@ -16,10 +16,10 @@ use common::{
 
 use bedrock::{
     primitives::http_client::set_http_client,
-    smart_account::{Is4337Encodable, SafeSmartAccount, ENTRYPOINT_4337},
+    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     transactions::contracts::{
         constants::{MORPHO_VAULT_WLD_TOKEN_ADDRESS, WLD_TOKEN_ADDRESS},
-        morpho::{Morpho, MorphoToken},
+        morpho::MorphoToken,
     },
 };
 
@@ -93,17 +93,8 @@ async fn test_morpho_deposit_and_withdraw_wld() -> anyhow::Result<()> {
     // 8) Create and execute Morpho deposit
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 
-    let morpho_deposit =
-        Morpho::deposit(MorphoToken::WLD, deposit_amount, safe_address);
-
-    let _user_op_hash = morpho_deposit
-        .sign_and_execute(
-            &safe_account,
-            bedrock::primitives::Network::WorldChain,
-            None,
-            None,
-            bedrock::transactions::RpcProviderName::Any,
-        )
+    let _user_op_hash = safe_account
+        .transaction_morpho_deposit(MorphoToken::WLD, &deposit_amount.to_string())
         .await
         .expect("Morpho deposit failed");
 
@@ -136,21 +127,8 @@ async fn test_morpho_deposit_and_withdraw_wld() -> anyhow::Result<()> {
     // 10) Withdraw half the deposited amount
     let withdraw_amount = deposit_amount / U256::from(2u8); // 0.5 WLD
 
-    let morpho_withdraw = Morpho::withdraw(
-        MorphoToken::WLD,
-        withdraw_amount,
-        safe_address,
-        safe_address,
-    );
-
-    let _user_op_hash = morpho_withdraw
-        .sign_and_execute(
-            &safe_account,
-            bedrock::primitives::Network::WorldChain,
-            None,
-            None,
-            bedrock::transactions::RpcProviderName::Any,
-        )
+    let _user_op_hash = safe_account
+        .transaction_morpho_withdraw(MorphoToken::WLD, &withdraw_amount.to_string())
         .await
         .expect("Morpho withdraw failed");
 
