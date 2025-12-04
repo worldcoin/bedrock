@@ -111,6 +111,10 @@ pub struct Morpho {
     token: MorphoToken,
     /// The action type (deposit or withdraw).
     action: MorphoAction,
+    /// The target address for the operation.
+    to: Address,
+    /// The Safe operation type for the operation.
+    operation: SafeOperation,
 }
 
 impl Morpho {
@@ -163,6 +167,8 @@ impl Morpho {
             call_data: bundle.data,
             token,
             action: MorphoAction::Deposit,
+            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+            operation: SafeOperation::DelegateCall,
         }
     }
 
@@ -194,6 +200,8 @@ impl Morpho {
             call_data: withdraw_data,
             token,
             action: MorphoAction::Withdraw,
+            to: token.vault_token_address(),
+            operation: SafeOperation::Call,
         }
     }
 }
@@ -202,21 +210,11 @@ impl Is4337Encodable for Morpho {
     type MetadataArg = ();
 
     fn as_execute_user_op_call_data(&self) -> Bytes {
-        let (to, operation) = match self.action {
-            MorphoAction::Deposit => (
-                crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
-                SafeOperation::DelegateCall,
-            ),
-            MorphoAction::Withdraw => {
-                (self.token.vault_token_address(), SafeOperation::Call)
-            }
-        };
-
         ISafe4337Module::executeUserOpCall {
-            to,
+            to: self.to,
             value: U256::ZERO,
             data: self.call_data.clone().into(),
-            operation: operation as u8,
+            operation: self.operation.clone() as u8,
         }
         .abi_encode()
         .into()
