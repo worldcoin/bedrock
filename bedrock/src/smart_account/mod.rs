@@ -335,7 +335,7 @@ impl SafeSmartAccount {
 /// The type of operation to perform on behalf of the Safe Smart Account.
 ///
 /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/libraries/Enum.sol#L9>
-#[derive(uniffi::Enum, Clone, Debug)]
+#[derive(uniffi::Enum, Clone, Debug, Copy)]
 #[repr(u8)]
 pub enum SafeOperation {
     /// Performs a standard message call.

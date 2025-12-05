@@ -36,8 +36,11 @@ sol! {
     }
 }
 
+/// The type of action to perform on a campaign.
 pub enum CampaignAction {
+    /// Sponsor a campaign for a recipient.
     Sponsor,
+    /// Claim rewards from a campaign.
     Claim,
 }
 
@@ -72,6 +75,8 @@ impl WorldCampaignManager {
             action,
         }
     }
+    /// Creates a sponsor operation for a campaign.
+    #[must_use]
     pub fn sponsor(campaign_id: U256, recipient: Address) -> Self {
         let call_data = IWorldCampaignManager::sponsorCall {
             campaignId: campaign_id,
@@ -81,6 +86,9 @@ impl WorldCampaignManager {
 
         Self::new(call_data, campaign_id, CampaignAction::Sponsor)
     }
+
+    /// Creates a claim operation for a campaign.
+    #[must_use]
     pub fn claim(campaign_id: U256) -> Self {
         let call_data = IWorldCampaignManager::claimCall {
             campaignId: campaign_id,
