@@ -16,7 +16,7 @@ pub const AWS_NITRO_ROOT_CERT_PROD: &[u8] = include_bytes!("aws_nitro_root_g1.de
 pub const AWS_NITRO_ROOT_CERT_STAGING: &[u8] = AWS_NITRO_ROOT_CERT_PROD;
 
 /// Compile-time constants for PCR expected values (48 bytes each for SHA-384)
-/// From: https://github.com/worldcoin/world-chat-backend/tree/6d989e651a6e7d3a72e107eb4c0e151ebd13ff44
+/// From: <https://github.com/worldcoin/world-chat-backend/tree/6d989e651a6e7d3a72e107eb4c0e151ebd13ff44>
 const WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE: [u8; 48] = hex!("e0b2c9f77bc3084eda211aaf2072e9af8c525a7b9320da80d7828939444f9366ffb1ccbf00506ba088431fef96faf900");
 const WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE: [u8; 48] = hex!("0343b056cd8485ca7890ddd833476d78460aed2aa161548e4e26bedf321726696257d623e8805f3f605946b3d8b0c6aa");
 const WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE: [u8; 48] = hex!("a509ea868e426cd3cd94185ad97a0391ef53f2a7aa762a30c35934779df2ffdd1cb7f45d837d390f2cdeadb35aa1cece");
