@@ -145,6 +145,6 @@ mod tests {
         assert_eq!(production_configs.len(), 1);
         let staging_configs =
             staging_pcr_configs(&EnclaveApplication::WorldChatNotifications);
-        assert_eq!(staging_configs.len(), 1);
+        assert_eq!(staging_configs.len(), 2);
     }
 }
