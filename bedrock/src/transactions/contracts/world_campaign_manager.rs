@@ -18,7 +18,7 @@ use crate::smart_account::{
 pub fn world_campaign_manager_address() -> Address {
     match current_environment_or_default() {
         BedrockEnvironment::Staging => {
-            address!("0xF19Bf1F55ce9466c90DC1cF4781362D89547dab5") // https://github.com/worldcoin/worldcoin-gift-contracts/pull/2
+            address!("0xF743F06e520042DFaDDE1D1B9A8ed6301206E68D") // https://github.com/worldcoin/worldcoin-gift-contracts/tree/staging-contract
         }
         BedrockEnvironment::Production => {
             address!("0xcf2Ab38031cFe6e5A3b7f17b0f6406F8ecF43f57")
