@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::nitro_enclave::types::{EnclaveApplication, PcrMeasurement};
 
 use aws_nitro_enclaves_nsm_api::api::Digest;
+use hex_literal::hex;
 use once_cell::sync::OnceCell;
 
 /// AWS Nitro Root Certificate for Production
@@ -15,9 +16,10 @@ pub const AWS_NITRO_ROOT_CERT_PROD: &[u8] = include_bytes!("aws_nitro_root_g1.de
 pub const AWS_NITRO_ROOT_CERT_STAGING: &[u8] = AWS_NITRO_ROOT_CERT_PROD;
 
 /// Compile-time constants for PCR expected values (48 bytes each for SHA-384)
-const PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE: [u8; 48] = [0; 48];
-const PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE: [u8; 48] = [0; 48];
-const PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE: [u8; 48] = [0; 48];
+/// From: https://github.com/worldcoin/world-chat-backend/tree/6d989e651a6e7d3a72e107eb4c0e151ebd13ff44
+const WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE: [u8; 48] = hex!("e0b2c9f77bc3084eda211aaf2072e9af8c525a7b9320da80d7828939444f9366ffb1ccbf00506ba088431fef96faf900");
+const WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE: [u8; 48] = hex!("0343b056cd8485ca7890ddd833476d78460aed2aa161548e4e26bedf321726696257d623e8805f3f605946b3d8b0c6aa");
+const WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE: [u8; 48] = hex!("a509ea868e426cd3cd94185ad97a0391ef53f2a7aa762a30c35934779df2ffdd1cb7f45d837d390f2cdeadb35aa1cece");
 
 /// Expected PCR configurations for production enclaves
 static PRODUCTION_PCR_CONFIGS: OnceCell<
@@ -43,15 +45,15 @@ pub fn production_pcr_configs(
                 vec![vec![
                     PcrMeasurement::new(
                         0,
-                        PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE.to_vec(),
+                        WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE.to_vec(),
                     ),
                     PcrMeasurement::new(
                         1,
-                        PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE.to_vec(),
+                        WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE.to_vec(),
                     ),
                     PcrMeasurement::new(
                         2,
-                        PROD_WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE.to_vec(),
+                        WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE.to_vec(),
                     ),
                 ]],
             );
@@ -63,9 +65,9 @@ pub fn production_pcr_configs(
 }
 
 // Compile-time constants for staging PCR expected values (48 bytes each for SHA-384)
-const STAGING_PCR0_VALUE: [u8; 48] = [0; 48];
-const STAGING_PCR1_VALUE: [u8; 48] = [0; 48];
-const STAGING_PCR2_VALUE: [u8; 48] = [0; 48];
+const STAGING_DEBUG_PCR0_VALUE: [u8; 48] = [0; 48];
+const STAGING_DEBUG_PCR1_VALUE: [u8; 48] = [0; 48];
+const STAGING_DEBUG_PCR2_VALUE: [u8; 48] = [0; 48];
 
 /// Expected PCR configurations for staging enclaves
 static STAGING_PCR_CONFIGS: OnceCell<
@@ -88,11 +90,27 @@ pub fn staging_pcr_configs(
                 HashMap::new();
             map.insert(
                 EnclaveApplication::WorldChatNotifications,
-                vec![vec![
-                    PcrMeasurement::new(0, STAGING_PCR0_VALUE.to_vec()),
-                    PcrMeasurement::new(1, STAGING_PCR1_VALUE.to_vec()),
-                    PcrMeasurement::new(2, STAGING_PCR2_VALUE.to_vec()),
-                ]],
+                vec![
+                    vec![
+                        PcrMeasurement::new(
+                            0,
+                            WORLD_CHAT_NOTIFICATIONS_V1_PCR0_VALUE.to_vec(),
+                        ),
+                        PcrMeasurement::new(
+                            1,
+                            WORLD_CHAT_NOTIFICATIONS_V1_PCR1_VALUE.to_vec(),
+                        ),
+                        PcrMeasurement::new(
+                            2,
+                            WORLD_CHAT_NOTIFICATIONS_V1_PCR2_VALUE.to_vec(),
+                        ),
+                    ],
+                    vec![
+                        PcrMeasurement::new(0, STAGING_DEBUG_PCR0_VALUE.to_vec()),
+                        PcrMeasurement::new(1, STAGING_DEBUG_PCR1_VALUE.to_vec()),
+                        PcrMeasurement::new(2, STAGING_DEBUG_PCR2_VALUE.to_vec()),
+                    ],
+                ],
             );
             map
         })
