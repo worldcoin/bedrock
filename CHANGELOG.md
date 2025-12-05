@@ -2,6 +2,22 @@
 
 
 
+## [0.0.34] - 2025-12-05
+
+## What's Changed
+* fix: gift id by @aurel-fr in https://github.com/worldcoin/bedrock/pull/217
+* feat: add eth_call to RpcClient by @karankurbur in https://github.com/worldcoin/bedrock/pull/216
+* fix: use v2 endpoint for eth_call only by @karankurbur in https://github.com/worldcoin/bedrock/pull/219
+* chore: update prod campaign manager addr by @aurel-fr in https://github.com/worldcoin/bedrock/pull/220
+* chore: update staging campaign manager contract by @Takaros999 in https://github.com/worldcoin/bedrock/pull/221
+* chore: Seal enclave PCRs by @Takaros999 in https://github.com/worldcoin/bedrock/pull/222
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.33...0.0.34
+
+
+
+
 ## [0.0.33] - 2025-12-02
 
 ## What's Changed
