@@ -390,7 +390,7 @@ impl BackupManager {
             Ok(()) => Ok(()),
             Err(e) => {
                 crate::error!("Failed to send backup event: {e:?}");
-                Ok(())
+                Err(e.into())
             }
         }
     }
@@ -566,7 +566,6 @@ impl<'de> Deserialize<'de> for BackupFileDesignator {
 
 /// Errors that can occur when working with backups and manifests.
 #[crate::bedrock_error]
-#[uniffi(flat_error)]
 pub enum BackupError {
     #[error("Failed to decode factor secret as hex")]
     /// Failed to decode factor secret as hex.
@@ -640,6 +639,9 @@ pub enum BackupError {
     #[error("Invalid manifest hash")]
     /// Invalid manifest hash.
     InvalidManifestHash,
+    #[error("Client events error: {0}")]
+    /// Backup not found.
+    ClientEventsError(String),
 }
 
 impl From<crate::primitives::http_client::HttpError> for BackupError {
@@ -680,6 +682,12 @@ impl From<ciborium::de::Error<std::io::Error>> for BackupError {
 impl From<std::io::Error> for BackupError {
     fn from(e: std::io::Error) -> Self {
         Self::IoError(e.to_string())
+    }
+}
+
+impl From<ClientEventsError> for BackupError {
+    fn from(e: ClientEventsError) -> Self {
+        Self::ClientEventsError(e.to_string())
     }
 }
 
