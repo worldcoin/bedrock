@@ -2,6 +2,17 @@
 
 
 
+## [0.0.35] - 2025-12-08
+
+## What's Changed
+* fix: expose client-side errors to native by @paolodamico in https://github.com/worldcoin/bedrock/pull/224
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.34...0.0.35
+
+
+
+
 ## [0.0.34] - 2025-12-05
 
 ## What's Changed
