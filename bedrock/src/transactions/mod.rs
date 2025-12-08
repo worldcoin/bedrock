@@ -242,7 +242,7 @@ impl SafeSmartAccount {
         campaign_id_str: &str,
     ) -> Result<HexEncodedData, TransactionError> {
         let campaign_id = U256::parse_from_ffi(campaign_id_str, "campaign_id")?;
-        let transaction = WorldCampaignManager::claim(campaign_id);
+        let transaction: WorldCampaignManager = WorldCampaignManager::claim(campaign_id);
 
         let provider = RpcProviderName::Any;
 

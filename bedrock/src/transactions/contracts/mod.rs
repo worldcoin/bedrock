@@ -3,6 +3,8 @@
 
 pub mod constants;
 pub mod erc20;
+/// Generic ERC-4626 vault contract interface and implementation.
+pub mod erc4626;
 pub mod morpho;
 /// Utilities for batching multiple transactions via the Safe `MultiSend` contract.
 pub mod multisend;

@@ -333,6 +333,26 @@ where
     P: Provider<Ethereum> + Clone + Send + Sync + 'static,
 {
     pub provider: P,
+    /// Custom responses for eth_call based on contract address
+    pub custom_eth_call_responses: std::collections::HashMap<Address, String>,
+}
+
+impl<P> AnvilBackedHttpClient<P>
+where
+    P: Provider<Ethereum> + Clone + Send + Sync + 'static,
+{
+    /// Creates a new AnvilBackedHttpClient with no custom responses
+    pub fn new(provider: P) -> Self {
+        Self {
+            provider,
+            custom_eth_call_responses: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Adds a custom response for eth_call to a specific contract address
+    pub fn add_eth_call_response(&mut self, to_address: Address, response_hex: String) {
+        self.custom_eth_call_responses.insert(to_address, response_hex);
+    }
 }
 
 /// Represents a response from 'wa_sponsorUserOperation' rpc method
@@ -605,6 +625,76 @@ where
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": result,
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
+            // Handle eth_call with custom responses for testing
+            "eth_call" => {
+                let params = params.as_array().ok_or(HttpError::Generic {
+                    error_message: "invalid params".into(),
+                })?;
+
+                let call_params = params.first().ok_or(HttpError::Generic {
+                    error_message: "missing call params".into(),
+                })?;
+
+                let call_obj = call_params.as_object().ok_or(HttpError::Generic {
+                    error_message: "call params must be an object".into(),
+                })?;
+
+                // Extract the 'to' address from the call parameters
+                let to_str = call_obj
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .ok_or(HttpError::Generic {
+                        error_message: "missing 'to' address in eth_call".into(),
+                    })?;
+
+                let to_address = Address::from_str(to_str).map_err(|_| HttpError::Generic {
+                    error_message: "invalid 'to' address format".into(),
+                })?;
+
+                // Check if we have a custom response for this address
+                if let Some(custom_response) = self.custom_eth_call_responses.get(&to_address) {
+                    let resp = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": custom_response,
+                    });
+                    return Ok(serde_json::to_vec(&resp).unwrap());
+                }
+
+                // If no custom response, forward to the actual provider
+                // This allows tests to use real contract calls when needed
+                let call_data = call_obj
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .ok_or(HttpError::Generic {
+                        error_message: "missing 'data' in eth_call".into(),
+                    })?;
+
+                // Forward to real provider using simpler call interface
+                let result = self
+                    .provider
+                    .raw_request::<_, alloy::primitives::Bytes>(
+                        "eth_call".into(),
+                        [
+                            serde_json::json!({
+                                "to": format!("{to_address:?}"),
+                                "data": call_data
+                            }),
+                            serde_json::json!("latest")
+                        ]
+                    )
+                    .await
+                    .map_err(|e| HttpError::Generic {
+                        error_message: format!("eth_call failed: {e}"),
+                    })?;
+
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": format!("0x{}", hex::encode(result)),
                 });
                 Ok(serde_json::to_vec(&resp).unwrap())
             }

@@ -28,10 +28,18 @@ pub enum TransactionTypeId {
     WorldCampaignManagerSponsor = 130,
     /// `WorldCampaignManager` claim
     WorldCampaignManagerClaim = 131,
-    /// Morpho vault deposit
-    MorphoDeposit = 132,
-    /// Morpho vault withdraw
-    MorphoWithdraw = 133,
+    /// Generic ERC-4626 deposit
+    ERC4626Deposit = 132,
+    /// Generic ERC-4626 mint
+    ERC4626Mint = 133,
+    /// Generic ERC-4626 withdraw
+    ERC4626Withdraw = 134,
+    /// Generic ERC-4626 redeem
+    ERC4626Redeem = 135,
+    /// Morpho-specific vault deposit
+    MorphoDeposit = 136,
+    /// Morpho-specific vault withdraw
+    MorphoWithdraw = 137,
 }
 
 impl TransactionTypeId {
