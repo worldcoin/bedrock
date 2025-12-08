@@ -9,7 +9,7 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::primitives::{PrimitiveError, Network};
+use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{
     ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
     TransactionTypeId, UserOperation,
@@ -27,7 +27,7 @@ sol! {
         function deposit(uint256 assets, address receiver) external returns (uint256 shares);
         function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares);
         function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
-        
+
         // View functions
         function asset() public view returns (address assetTokenAddress);
         function totalAssets() external view returns (uint256);
@@ -62,11 +62,11 @@ pub struct Erc4626Vault {
     vault_address: Address,
     /// Metadata for nonce generation (protocol-specific).
     metadata: [u8; 10],
-} 
+}
 
 impl Erc4626Vault {
     /// Creates a new deposit operation (approve asset + deposit via `MultiSend`).
-    /// 
+    ///
     /// This function queries the vault's underlying asset address using the `asset()` function
     /// before creating the approval and deposit transactions.
     ///
@@ -80,7 +80,7 @@ impl Erc4626Vault {
     ///
     /// # Returns
     /// An `Erc4626Vault` struct configured for a deposit operation.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if the RPC call to query the asset address fails.
     pub async fn deposit(
@@ -96,7 +96,7 @@ impl Erc4626Vault {
         let asset_result = rpc_client
             .eth_call(network, vault_address, asset_call_data.into())
             .await?;
-        
+
         // Decode the asset address from the result
         let asset_address = Address::from_slice(&asset_result[12..32]); // Last 20 bytes of 32-byte word
 
@@ -268,9 +268,9 @@ impl Is4337Encodable for Erc4626Vault {
 
 #[cfg(test)]
 mod tests {
+    use alloy::{node_bindings::Anvil, providers::ProviderBuilder};
     use std::str::FromStr;
     use std::sync::Arc;
-    use alloy::{node_bindings::Anvil, providers::ProviderBuilder};
 
     use crate::primitives::Network;
     use crate::transactions::rpc::RpcClient;
@@ -278,32 +278,48 @@ mod tests {
     use super::*;
 
     // For testing, we'll create simple test utilities that reuse the existing pattern
-    
+
     // Helper function to create a test RPC client with custom eth_call responses
-    async fn create_test_rpc_client_with_zero_asset(vault_address: Address) -> RpcClient {
+    async fn create_test_rpc_client_with_zero_asset(
+        vault_address: Address,
+    ) -> RpcClient {
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new().on_http(anvil.endpoint_url());
-        
-        let http_client = crate::test_utils::AnvilBackedHttpClient::with_zero_asset_response(provider, vault_address);
+
+        let http_client =
+            crate::test_utils::AnvilBackedHttpClient::with_zero_asset_response(
+                provider,
+                vault_address,
+            );
         RpcClient::new(Arc::new(http_client))
     }
 
-    async fn create_test_rpc_client_with_custom_asset(vault_address: Address, asset_address: Address) -> RpcClient {
+    async fn create_test_rpc_client_with_custom_asset(
+        vault_address: Address,
+        asset_address: Address,
+    ) -> RpcClient {
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new().on_http(anvil.endpoint_url());
-        
-        let http_client = crate::test_utils::AnvilBackedHttpClient::with_asset_response(provider, vault_address, asset_address);
+
+        let http_client = crate::test_utils::AnvilBackedHttpClient::with_asset_response(
+            provider,
+            vault_address,
+            asset_address,
+        );
         RpcClient::new(Arc::new(http_client))
     }
 
     #[tokio::test]
     async fn test_erc4626_deposit_with_zero_asset() {
-        let vault_address = Address::from_str("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd").unwrap();
-        let receiver = Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let vault_address =
+            Address::from_str("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd").unwrap();
+        let receiver =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
         let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
         // Setup test RPC client that returns zero address for asset() call
-        let test_rpc_client = create_test_rpc_client_with_zero_asset(vault_address).await;
+        let test_rpc_client =
+            create_test_rpc_client_with_zero_asset(vault_address).await;
 
         // Test deposit with test RPC client
         let vault = Erc4626Vault::deposit(
@@ -313,25 +329,34 @@ mod tests {
             U256::from(1_000_000),
             receiver,
             metadata,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         // Verify the transaction was built correctly
         assert_eq!(vault.action(), TransactionTypeId::ERC4626Deposit);
         assert_eq!(vault.vault_address(), vault_address);
         assert_eq!(vault.asset_address(), Address::ZERO); // Should be zero address from mock
         assert_eq!(vault.operation as u8, SafeOperation::DelegateCall as u8);
-        assert_eq!(vault.to, crate::transactions::contracts::multisend::MULTISEND_ADDRESS);
+        assert_eq!(
+            vault.to,
+            crate::transactions::contracts::multisend::MULTISEND_ADDRESS
+        );
     }
 
     #[tokio::test]
     async fn test_erc4626_deposit_with_custom_asset() {
-        let vault_address = Address::from_str("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd").unwrap();
-        let custom_asset = Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
-        let receiver = Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let vault_address =
+            Address::from_str("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd").unwrap();
+        let custom_asset =
+            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
+        let receiver =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
         let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
         // Setup test RPC client that returns custom asset address
-        let test_rpc_client = create_test_rpc_client_with_custom_asset(vault_address, custom_asset).await;
+        let test_rpc_client =
+            create_test_rpc_client_with_custom_asset(vault_address, custom_asset).await;
 
         // Test deposit with test RPC client
         let vault = Erc4626Vault::deposit(
@@ -341,7 +366,9 @@ mod tests {
             U256::from(1_000_000),
             receiver,
             metadata,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         // Verify the custom asset address was used
         assert_eq!(vault.asset_address(), custom_asset);

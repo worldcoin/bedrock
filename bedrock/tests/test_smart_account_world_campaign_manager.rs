@@ -3,7 +3,7 @@ use std::sync::Arc;
 mod common;
 use common::{
     deploy_safe, set_address_verified_until_for_account, set_erc20_balance_for_safe,
-    setup_anvil, AnvilBackedHttpClient, IEntryPoint, IERC20,
+    setup_anvil, IEntryPoint, IERC20,
 };
 
 use alloy::{
@@ -16,6 +16,7 @@ use alloy::{
 use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
+    test_utils::AnvilBackedHttpClient,
     transactions::world_campaign_manager_address,
 };
 
@@ -79,9 +80,7 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
     let before_giftor = wld.balanceOf(safe_address_giftor).call().await?;
     let before_giftee = wld.balanceOf(safe_address_giftee).call().await?;
 
-    let client = AnvilBackedHttpClient {
-        provider: provider.clone(),
-    };
+    let client = AnvilBackedHttpClient::new(provider.clone());
 
     set_http_client(Arc::new(client));
 

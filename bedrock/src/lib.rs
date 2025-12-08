@@ -43,8 +43,7 @@ pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 /// Key management for World App.
 mod root_key;
 
-/// Test utilities for unit tests
-#[cfg(test)]
+/// Test utilities for unit and integration tests
 pub mod test_utils;
 
 uniffi::setup_scaffolding!("bedrock");

@@ -1,17 +1,111 @@
-//! Test utilities for unit tests.
-
-use std::collections::HashMap;
+//! Test utilities for unit tests and E2E tests for mocking RPC responses either from Anvil or hard-coded for unit tests.
+#![allow(dead_code)]
 use std::str::FromStr;
 
 use alloy::{
     network::Ethereum,
+    primitives::{keccak256, Address, FixedBytes, Log, U128, U256},
     providers::Provider,
-    primitives::Address,
+    sol,
+    sol_types::{SolEvent, SolValue},
 };
 
-use crate::primitives::{
-    http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
+use crate::{
+    primitives::{
+        http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
+        PrimitiveError,
+    },
+    smart_account::UserOperation,
+    transactions::foreign::UnparsedUserOperation,
 };
+
+/// Represents a response from 'wa_sponsorUserOperation' rpc method
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SponsorUserOperationResponseLite<'a> {
+    paymaster: Option<&'a str>,
+    paymaster_data: Option<&'a str>,
+    pre_verification_gas: String,
+    verification_gas_limit: String,
+    call_gas_limit: String,
+    paymaster_verification_gas_limit: String,
+    paymaster_post_op_gas_limit: String,
+    max_priority_fee_per_gas: String,
+    max_fee_per_gas: String,
+    provider_name: String,
+}
+
+sol! {
+    /// Packed user operation for EntryPoint
+    #[sol(rename_all = "camelCase")]
+    struct PackedUserOperation {
+        address sender;
+        uint256 nonce;
+        bytes init_code;
+        bytes call_data;
+        bytes32 account_gas_limits;
+        uint256 pre_verification_gas;
+        bytes32 gas_fees;
+        bytes paymaster_and_data;
+        bytes signature;
+    }
+
+    #[sol(rpc)]
+    interface IEntryPoint {
+        event UserOperationRevertReason(
+            bytes32 indexed userOpHash,
+            address indexed sender,
+            uint256 nonce,
+            bytes revertReason
+        );
+
+        event UserOperationEvent(
+            bytes32 indexed userOpHash,
+            address indexed sender,
+            address indexed paymaster,
+            uint256 nonce,
+            bool success,
+            uint256 actualGasCost,
+            uint256 actualGasUsed
+        );
+        function handleOps(PackedUserOperation[] calldata ops, address payable beneficiary) external;
+    }
+
+}
+
+/// Pack two U128 in 32 bytes
+pub fn pack_pair(a: &U128, b: &U128) -> FixedBytes<32> {
+    let mut out = [0u8; 32];
+    out[..16].copy_from_slice(&a.to_be_bytes::<16>());
+    out[16..].copy_from_slice(&b.to_be_bytes::<16>());
+    out.into()
+}
+
+impl TryFrom<&UserOperation> for PackedUserOperation {
+    type Error = PrimitiveError;
+
+    fn try_from(user_op: &UserOperation) -> Result<Self, Self::Error> {
+        Ok(Self {
+            sender: user_op.sender,
+            nonce: user_op.nonce,
+            init_code: user_op.get_init_code(),
+            call_data: user_op.call_data.clone(),
+            account_gas_limits: pack_pair(
+                &user_op.verification_gas_limit,
+                &user_op.call_gas_limit,
+            ),
+            pre_verification_gas: user_op.pre_verification_gas,
+            gas_fees: pack_pair(
+                &user_op.max_priority_fee_per_gas,
+                &user_op.max_fee_per_gas,
+            ),
+            paymaster_and_data: user_op.get_paymaster_and_data(),
+            signature: user_op.signature.clone(),
+        })
+    }
+}
+
+use std::collections::HashMap;
 
 /// Mock HTTP client for testing that can provide custom responses for eth_call
 #[derive(Clone)]
@@ -39,7 +133,8 @@ where
 
     /// Adds a custom response for eth_call to a specific contract address
     pub fn add_eth_call_response(&mut self, to_address: Address, response_hex: String) {
-        self.custom_eth_call_responses.insert(to_address, response_hex);
+        self.custom_eth_call_responses
+            .insert(to_address, response_hex);
     }
 
     /// Creates a new client with a custom eth_call response for asset() calls
@@ -47,12 +142,20 @@ where
     pub fn with_zero_asset_response(provider: P, vault_address: Address) -> Self {
         let mut client = Self::new(provider);
         // Asset() returns address(0) - 32 bytes with address in last 20 bytes
-        client.add_eth_call_response(vault_address, "0x0000000000000000000000000000000000000000000000000000000000000000".to_string());
+        client.add_eth_call_response(
+            vault_address,
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+        );
         client
     }
 
     /// Creates a new client with a custom asset address response
-    pub fn with_asset_response(provider: P, vault_address: Address, asset_address: Address) -> Self {
+    pub fn with_asset_response(
+        provider: P,
+        vault_address: Address,
+        asset_address: Address,
+    ) -> Self {
         let mut client = Self::new(provider);
         // Convert address to 32-byte padded hex string
         let mut padded_bytes = [0u8; 32];
@@ -70,7 +173,7 @@ where
 {
     async fn fetch_from_app_backend(
         &self,
-        _url: String,
+        url: String,
         method: HttpMethod,
         _headers: Vec<HttpHeader>,
         body: Option<Vec<u8>>,
@@ -103,7 +206,223 @@ where
             .unwrap_or(serde_json::Value::Null);
 
         match method {
-            // Handle eth_call with custom responses for testing
+            // Respond with minimal, sane gas values and no paymaster
+            "wa_sponsorUserOperation" => {
+                let result = SponsorUserOperationResponseLite {
+                    paymaster: None,
+                    paymaster_data: None,
+                    pre_verification_gas: "0x200000".into(), // 2M
+                    verification_gas_limit: "0x200000".into(), // 2M
+                    call_gas_limit: "0x200000".into(),       // 2M
+                    paymaster_verification_gas_limit: "0x0".into(),
+                    paymaster_post_op_gas_limit: "0x0".into(),
+                    max_priority_fee_per_gas: "0x12A05F200".into(), // 5 gwei
+                    max_fee_per_gas: "0x12A05F200".into(),          // 5 gwei
+                    provider_name: "pimlico".into(),
+                };
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": result,
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
+            // Execute the inner call directly through the Safe 4337 Module (no sponsorship path)
+            "eth_sendUserOperation" => {
+                let params = params.as_array().ok_or(HttpError::Generic {
+                    error_message: "invalid params".into(),
+                })?;
+                let user_op_val = params.first().ok_or(HttpError::Generic {
+                    error_message: "missing userOp param".into(),
+                })?;
+                let entry_point_str = params.get(1).and_then(|v| v.as_str()).ok_or(
+                    HttpError::Generic {
+                        error_message: "missing entryPoint param".into(),
+                    },
+                )?;
+                // Build UnparsedUserOperation from JSON (which uses hex strings), then convert
+                let obj = user_op_val.as_object().ok_or(HttpError::Generic {
+                    error_message: "userOp param must be an object".into(),
+                })?;
+
+                let get_opt = |k: &str| -> Option<String> {
+                    obj.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
+                };
+                let get_or_zero = |k: &str| -> String {
+                    get_opt(k).unwrap_or_else(|| "0x0".to_string())
+                };
+                let get_required = |k: &str| -> Result<String, HttpError> {
+                    get_opt(k).ok_or(HttpError::Generic {
+                        error_message: format!("missing or invalid {k}"),
+                    })
+                };
+
+                let unparsed = UnparsedUserOperation {
+                    sender: get_required("sender")?,
+                    nonce: get_required("nonce")?,
+                    call_data: get_required("callData")?,
+                    call_gas_limit: get_or_zero("callGasLimit"),
+                    verification_gas_limit: get_or_zero("verificationGasLimit"),
+                    pre_verification_gas: get_or_zero("preVerificationGas"),
+                    max_fee_per_gas: get_or_zero("maxFeePerGas"),
+                    max_priority_fee_per_gas: get_or_zero("maxPriorityFeePerGas"),
+                    paymaster: get_opt("paymaster"),
+                    paymaster_verification_gas_limit: get_opt(
+                        "paymasterVerificationGasLimit",
+                    ),
+                    paymaster_post_op_gas_limit: get_opt("paymasterPostOpGasLimit"),
+                    paymaster_data: get_opt("paymasterData"),
+                    signature: get_required("signature")?,
+                    factory: get_opt("factory"),
+                    factory_data: get_opt("factoryData"),
+                };
+
+                let user_op: UserOperation =
+                    unparsed.try_into().map_err(|e| HttpError::Generic {
+                        error_message: format!("invalid userOp: {e}"),
+                    })?;
+
+                // Convert to the packed format expected by EntryPoint
+                let packed = PackedUserOperation::try_from(&user_op).map_err(|e| {
+                    HttpError::Generic {
+                        error_message: format!("pack userOp failed: {e}"),
+                    }
+                })?;
+
+                // Compute the EntryPoint userOpHash per EIP-4337 spec
+                let packed_for_hash =
+                    PackedUserOperation::try_from(&user_op).map_err(|e| {
+                        HttpError::Generic {
+                            error_message: format!("pack userOp for hash failed: {e}"),
+                        }
+                    })?;
+                let chain_id_u64 = self.provider.get_chain_id().await.map_err(|e| {
+                    HttpError::Generic {
+                        error_message: format!("getChainId failed: {e}"),
+                    }
+                })?;
+                let inner_encoded = (
+                    packed_for_hash.sender,
+                    packed_for_hash.nonce,
+                    keccak256(packed_for_hash.init_code.clone()),
+                    keccak256(packed_for_hash.call_data.clone()),
+                    packed_for_hash.account_gas_limits,
+                    packed_for_hash.pre_verification_gas,
+                    packed_for_hash.gas_fees,
+                    keccak256(packed_for_hash.paymaster_and_data.clone()),
+                )
+                    .abi_encode();
+                let inner_hash = keccak256(inner_encoded);
+
+                // Execute via EntryPoint.handleOps on-chain
+                let entry_point_addr =
+                    Address::from_str(entry_point_str).map_err(|_| {
+                        HttpError::Generic {
+                            error_message: "invalid entryPoint".into(),
+                        }
+                    })?;
+                let entry_point = IEntryPoint::new(entry_point_addr, &self.provider);
+                let tx = entry_point
+                    .handleOps(vec![packed], user_op.sender)
+                    .send()
+                    .await
+                    .map_err(|e| HttpError::Generic {
+                        error_message: format!("handleOps failed: {e}"),
+                    })?;
+                let receipt =
+                    tx.get_receipt().await.map_err(|e| HttpError::Generic {
+                        error_message: format!("handleOps receipt failed: {e}"),
+                    })?;
+
+                // Check for error events in the receipt
+                for log in receipt.inner.logs() {
+                    let raw_log = Log {
+                        address: log.address(),
+                        data: log.data().clone(),
+                    };
+
+                    // Check for UserOperationRevertReason event
+                    if let Ok(revert_event) =
+                        IEntryPoint::UserOperationRevertReason::decode_log(&raw_log)
+                    {
+                        let revert_reason = if revert_event.revertReason.is_empty() {
+                            "Unknown revert reason".to_string()
+                        } else {
+                            String::from_utf8(revert_event.revertReason.to_vec())
+                                .unwrap_or_else(|_| {
+                                    format!(
+                                        "0x{}",
+                                        hex::encode(&revert_event.revertReason)
+                                    )
+                                })
+                        };
+
+                        return Err(HttpError::Generic {
+                            error_message: format!(
+                                "UserOperation reverted - sender: {}, nonce: {}, reason: {}",
+                                revert_event.sender, revert_event.nonce, revert_reason
+                            ),
+                        });
+                    }
+
+                    // Log UserOperationEvent for debugging
+                    if let Ok(event) =
+                        IEntryPoint::UserOperationEvent::decode_log(&raw_log)
+                    {
+                        println!(
+                            "UserOperationEvent - sender: {}, success: {}, actualGasCost: {}, actualGasUsed: {}",
+                            event.sender, event.success, event.actualGasCost, event.actualGasUsed
+                        );
+                    }
+                }
+
+                // Return the chain userOpHash (EntryPoint-wrapped)
+                let enc = (inner_hash, entry_point_addr, U256::from(chain_id_u64))
+                    .abi_encode();
+                let user_op_hash = keccak256(enc);
+
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": format!("0x{}", hex::encode(user_op_hash)),
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
+            // Return a mocked wa_getUserOperationReceipt response with static values
+            "wa_getUserOperationReceipt" => {
+                let params = params.as_array().ok_or(HttpError::Generic {
+                    error_message: "invalid params".into(),
+                })?;
+                let user_op_hash = params.get(0).and_then(|v| v.as_str()).ok_or(
+                    HttpError::Generic {
+                        error_message: "missing userOpHash param".into(),
+                    },
+                )?;
+
+                // Extract the network from the URL path (e.g. "/v1/rpc/worldchain" -> "worldchain")
+                let network_name = url.rsplit('/').next().unwrap_or_default();
+
+                let result = serde_json::json!({
+                    "network": network_name,
+                    "userOpHash": user_op_hash,
+                    "transactionHash":
+                        "0x3a9b7d5e1f0a4c2e6b8d7f9a1c3e5f0b2d4a6c8e9f1b3d5c7a9e0f2c4b6d8a0",
+                    "sender": "0x1234567890abcdef1234567890abcdef12345678",
+                    "status": "mined_success",
+                    "source": "campaign_gift_sponsor",
+                    "sourceId": "0x1",
+                    "selfSponsorToken": serde_json::Value::Null,
+                    "selfSponsorAmount": serde_json::Value::Null,
+                    "blockTimestamp": "2025-11-24T20:15:32.000Z",
+                });
+
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": result,
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
             "eth_call" => {
                 let params = params.as_array().ok_or(HttpError::Generic {
                     error_message: "invalid params".into(),
@@ -118,19 +437,21 @@ where
                 })?;
 
                 // Extract the 'to' address from the call parameters
-                let to_str = call_obj
-                    .get("to")
-                    .and_then(|v| v.as_str())
-                    .ok_or(HttpError::Generic {
+                let to_str = call_obj.get("to").and_then(|v| v.as_str()).ok_or(
+                    HttpError::Generic {
                         error_message: "missing 'to' address in eth_call".into(),
+                    },
+                )?;
+
+                let to_address =
+                    Address::from_str(to_str).map_err(|_| HttpError::Generic {
+                        error_message: "invalid 'to' address format".into(),
                     })?;
 
-                let to_address = Address::from_str(to_str).map_err(|_| HttpError::Generic {
-                    error_message: "invalid 'to' address format".into(),
-                })?;
-
                 // Check if we have a custom response for this address
-                if let Some(custom_response) = self.custom_eth_call_responses.get(&to_address) {
+                if let Some(custom_response) =
+                    self.custom_eth_call_responses.get(&to_address)
+                {
                     let resp = serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -140,12 +461,11 @@ where
                 }
 
                 // If no custom response, forward to the actual provider
-                let call_data = call_obj
-                    .get("data")
-                    .and_then(|v| v.as_str())
-                    .ok_or(HttpError::Generic {
+                let call_data = call_obj.get("data").and_then(|v| v.as_str()).ok_or(
+                    HttpError::Generic {
                         error_message: "missing 'data' in eth_call".into(),
-                    })?;
+                    },
+                )?;
 
                 // Forward to real provider using simpler call interface
                 let result = self
@@ -157,8 +477,8 @@ where
                                 "to": format!("{to_address:?}"),
                                 "data": call_data
                             }),
-                            serde_json::json!("latest")
-                        ]
+                            serde_json::json!("latest"),
+                        ],
                     )
                     .await
                     .map_err(|e| HttpError::Generic {
