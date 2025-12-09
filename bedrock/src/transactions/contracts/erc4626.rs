@@ -55,6 +55,59 @@ pub struct Erc4626Vault {
 }
 
 impl Erc4626Vault {
+    /// Helper function to fetch and decode an asset address from an RPC call.
+    /// Validates that the response is at least 32 bytes before extracting the address.
+    async fn fetch_asset_address(
+        rpc_client: &RpcClient,
+        network: Network,
+        contract_address: Address,
+        call_data: Vec<u8>,
+    ) -> Result<Address, RpcError> {
+        let result = rpc_client
+            .eth_call(network, contract_address, call_data.into())
+            .await?;
+
+        // Ensure the response is at least 32 bytes (standard ABI encoding for address)
+        if result.len() < 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid asset() response: expected at least 32 bytes, got {} bytes",
+                    result.len()
+                ),
+            });
+        }
+
+        // Extract the address from the last 20 bytes of the 32-byte word
+        Ok(Address::from_slice(&result[12..32]))
+    }
+
+    /// Helper function to fetch and decode a U256 value (balance) from an RPC call.
+    /// Validates that the response is at least 32 bytes before decoding.
+    async fn fetch_balance(
+        rpc_client: &RpcClient,
+        network: Network,
+        contract_address: Address,
+        call_data: Vec<u8>,
+        function_name: &str,
+    ) -> Result<U256, RpcError> {
+        let result = rpc_client
+            .eth_call(network, contract_address, call_data.into())
+            .await?;
+
+        // Ensure the response is at least 32 bytes (standard ABI encoding for uint256)
+        if result.len() < 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid {}() response: expected at least 32 bytes, got {} bytes",
+                    function_name,
+                    result.len()
+                ),
+            });
+        }
+
+        Ok(U256::from_be_slice(&result))
+    }
+
     /// Creates a new deposit operation (approve asset + deposit via `MultiSend`).
     ///
     /// This function queries the vault's underlying asset address and checks the receiver's
@@ -87,22 +140,25 @@ impl Erc4626Vault {
     ) -> Result<Self, RpcError> {
         // 1. Query the asset address from the vault contract
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
-        let asset_result = rpc_client
-            .eth_call(network, vault_address, asset_call_data.into())
-            .await?;
-
-        // Decode the asset address from the result
-        let asset_address = Address::from_slice(&asset_result[12..32]); // Last 20 bytes of 32-byte word
+        let asset_address = Self::fetch_asset_address(
+            rpc_client,
+            network,
+            vault_address,
+            asset_call_data,
+        )
+        .await?;
 
         // 2. Query the receiver's balance of the asset token
         let balance_call_data =
             IErc20::balanceOfCall { account: receiver }.abi_encode();
-        let balance_result = rpc_client
-            .eth_call(network, asset_address, balance_call_data.into())
-            .await?;
-
-        // Decode the balance from the result
-        let balance = U256::from_be_slice(&balance_result);
+        let balance = Self::fetch_balance(
+            rpc_client,
+            network,
+            asset_address,
+            balance_call_data,
+            "balanceOf",
+        )
+        .await?;
 
         // 3. Use the minimum of the requested amount and the actual balance
         let actual_amount = asset_amount.min(balance);
@@ -184,24 +240,28 @@ impl Erc4626Vault {
             account: user_address,
         }
         .abi_encode();
-        let share_balance_result = rpc_client
-            .eth_call(network, vault_address, share_balance_call_data.into())
-            .await?;
-
-        // Decode the share balance from the result
-        let share_balance = U256::from_be_slice(&share_balance_result);
+        let share_balance = Self::fetch_balance(
+            rpc_client,
+            network,
+            vault_address,
+            share_balance_call_data,
+            "balanceOf",
+        )
+        .await?;
 
         // 2. Query how many shares are needed for the requested asset amount
         let preview_call_data = IERC4626::previewWithdrawCall {
             assets: asset_amount,
         }
         .abi_encode();
-        let preview_result = rpc_client
-            .eth_call(network, vault_address, preview_call_data.into())
-            .await?;
-
-        // Decode the required shares from the result
-        let required_shares = U256::from_be_slice(&preview_result);
+        let required_shares = Self::fetch_balance(
+            rpc_client,
+            network,
+            vault_address,
+            preview_call_data,
+            "previewWithdraw",
+        )
+        .await?;
 
         // 3. Use the minimum shares available (limit by user's balance)
         let actual_shares = required_shares.min(share_balance);
@@ -221,10 +281,14 @@ impl Erc4626Vault {
                 shares: actual_shares,
             }
             .abi_encode();
-            let redeem_result = rpc_client
-                .eth_call(network, vault_address, redeem_call_data.into())
-                .await?;
-            U256::from_be_slice(&redeem_result)
+            Self::fetch_balance(
+                rpc_client,
+                network,
+                vault_address,
+                redeem_call_data,
+                "previewRedeem",
+            )
+            .await?
         } else {
             asset_amount
         };
@@ -276,12 +340,14 @@ impl Erc4626Vault {
             account: user_address,
         }
         .abi_encode();
-        let balance_result = rpc_client
-            .eth_call(network, vault_address, balance_call_data.into())
-            .await?;
-
-        // Decode the share balance from the result
-        let share_balance = U256::from_be_slice(&balance_result);
+        let share_balance = Self::fetch_balance(
+            rpc_client,
+            network,
+            vault_address,
+            balance_call_data,
+            "balanceOf",
+        )
+        .await?;
 
         // 2. Use the minimum of requested shares and available balance
         let actual_share_amount = share_amount.min(share_balance);

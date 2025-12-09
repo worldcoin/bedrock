@@ -75,7 +75,7 @@ sol! {
 }
 
 /// Pack two U128 in 32 bytes
-#[must_use] 
+#[must_use]
 pub fn pack_pair(a: &U128, b: &U128) -> FixedBytes<32> {
     let mut out = [0u8; 32];
     out[..16].copy_from_slice(&a.to_be_bytes::<16>());
@@ -237,7 +237,9 @@ where
                 })?;
 
                 let get_opt = |k: &str| -> Option<String> {
-                    obj.get(k).and_then(|v| v.as_str()).map(std::string::ToString::to_string)
+                    obj.get(k)
+                        .and_then(|v| v.as_str())
+                        .map(std::string::ToString::to_string)
                 };
                 let get_or_zero = |k: &str| -> String {
                     get_opt(k).unwrap_or_else(|| "0x0".to_string())

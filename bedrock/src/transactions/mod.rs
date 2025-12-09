@@ -278,7 +278,9 @@ impl SafeSmartAccount {
         let receiver = self.wallet_address;
 
         // Get the RPC client and create the ERC4626 deposit transaction
-        let rpc_client = get_rpc_client().unwrap();
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
         let transaction =
             crate::transactions::contracts::erc4626::Erc4626Vault::deposit(
                 rpc_client,
