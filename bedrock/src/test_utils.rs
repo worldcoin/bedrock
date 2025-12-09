@@ -1,5 +1,4 @@
 //! Test utilities for unit tests and E2E tests for mocking RPC responses either from Anvil or hard-coded for unit tests.
-#![allow(dead_code)]
 use std::str::FromStr;
 
 use alloy::{
