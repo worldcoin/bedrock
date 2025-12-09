@@ -611,56 +611,19 @@ mod tests {
 
     #[test]
     fn test_catch_callback_panic_handles_panic() {
-        // Create a FileSystem that panics on read_file to simulate what happens
-        // when Kotlin throws CancellationException during a callback
-        struct PanickingFileSystem;
+        // Test that catch_callback_panic catches panics and converts them to errors.
+        // This simulates what happens when Kotlin throws CancellationException
+        // during a FileSystem callback.
 
-        impl FileSystem for PanickingFileSystem {
-            fn file_exists(&self, _file_path: String) -> Result<bool, FileSystemError> {
-                Ok(false)
-            }
-
-            fn read_file(
-                &self,
-                _file_path: String,
-            ) -> Result<Vec<u8>, FileSystemError> {
+        // Test with a closure that panics
+        let result = catch_callback_panic(
+            "test_operation",
+            std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, FileSystemError> {
                 panic!("Simulated panic from Kotlin callback (e.g., CancellationException)");
-            }
-
-            fn list_files_at_directory(
-                &self,
-                _folder_path: String,
-            ) -> Result<Vec<String>, FileSystemError> {
-                Ok(vec![])
-            }
-
-            fn read_file_range(
-                &self,
-                _file_path: String,
-                _offset: u64,
-                _max_length: u64,
-            ) -> Result<Vec<u8>, FileSystemError> {
-                Ok(vec![])
-            }
-
-            fn write_file(
-                &self,
-                _file_path: String,
-                _file_buffer: Vec<u8>,
-            ) -> Result<(), FileSystemError> {
-                Ok(())
-            }
-
-            fn delete_file(&self, _file_path: String) -> Result<(), FileSystemError> {
-                Ok(())
-            }
-        }
-
-        let _ = FILESYSTEM_INSTANCE.set(Arc::new(PanickingFileSystem));
-        let middleware = FileSystemMiddleware::new("test");
+            }),
+        );
 
         // Should return error, not panic
-        let result = middleware.read_file("test.txt");
         assert!(
             matches!(
                 result,
@@ -672,9 +635,28 @@ mod tests {
         // Verify the error message contains the operation name
         if let Err(FileSystemError::UnexpectedUniFFICallbackError(msg)) = result {
             assert!(
-                msg.contains("read_file"),
+                msg.contains("test_operation"),
                 "Error message should mention the operation: {msg}"
             );
         }
+
+        // Test with a closure that returns Ok
+        let ok_result = catch_callback_panic(
+            "test_operation",
+            std::panic::AssertUnwindSafe(|| Ok::<(), FileSystemError>(())),
+        );
+        assert!(ok_result.is_ok(), "Should pass through Ok results");
+
+        // Test with a closure that returns Err
+        let err_result = catch_callback_panic(
+            "test_operation",
+            std::panic::AssertUnwindSafe(|| {
+                Err::<(), FileSystemError>(FileSystemError::FileDoesNotExist)
+            }),
+        );
+        assert!(
+            matches!(err_result, Err(FileSystemError::FileDoesNotExist)),
+            "Should pass through regular errors"
+        );
     }
 }
