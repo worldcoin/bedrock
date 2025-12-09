@@ -20,7 +20,8 @@ sol! {
     #[derive(serde::Serialize)]
     interface IErc20 {
         function transfer(address to, uint256 value) external returns (bool);
-          function approve(address spender, uint256 value) external returns (bool);
+        function approve(address spender, uint256 value) external returns (bool);
+        function balanceOf(address account) external view returns (uint256);
     }
 }
 
@@ -33,6 +34,13 @@ pub struct Erc20 {
 }
 
 impl Erc20 {
+    /// Creates a new ERC-20 transfer operation.
+    ///
+    /// # Arguments
+    /// * `token_address` - The address of the ERC-20 token contract.
+    /// * `to` - The recipient address.
+    /// * `value` - The amount of tokens to transfer.
+    #[must_use]
     pub fn new(token_address: Address, to: Address, value: U256) -> Self {
         let call_data = IErc20::transferCall { to, value }.abi_encode();
 
@@ -41,21 +49,32 @@ impl Erc20 {
             token_address,
         }
     }
+
+    /// Encodes an ERC-20 approve call.
+    ///
+    /// # Arguments
+    /// * `spender` - The address to approve.
+    /// * `value` - The amount of tokens to approve.
+    #[must_use]
     pub fn encode_approve(spender: Address, value: U256) -> Vec<u8> {
         IErc20::approveCall { spender, value }.abi_encode()
     }
 }
 
-/// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set"
-/// NOTE: Ordering should never change, only new values should be added
+/// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set".
+/// NOTE: Ordering should never change, only new values should be added.
 #[derive(Debug, uniffi::Enum)]
 #[repr(u8)]
 pub enum TransferAssociation {
+    /// No association.
     None = 1,
+    /// Transfer associated with an XMTP message.
     XmtpMessage = 2,
 }
 
+/// Metadata argument for ERC-20 transfer operations.
 pub struct MetadataArg {
+    /// Optional transfer association metadata.
     pub association: Option<TransferAssociation>,
 }
 

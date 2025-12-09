@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 mod common;
 use alloy::{providers::ProviderBuilder, signers::local::PrivateKeySigner};
-use common::{setup_anvil, AnvilBackedHttpClient};
+use common::setup_anvil;
 
 use bedrock::{
     primitives::http_client::set_http_client, smart_account::SafeSmartAccount,
+    test_utils::AnvilBackedHttpClient,
 };
 
 #[tokio::test]
@@ -23,9 +24,7 @@ async fn test_wa_get_user_operation_receipt_uses_mocked_response() -> anyhow::Re
         .connect_http(anvil.endpoint_url());
 
     // Install the shared Anvil-backed HTTP client which now also mocks wa_getUserOperationReceipt
-    let client = AnvilBackedHttpClient {
-        provider: provider.clone(),
-    };
+    let client = AnvilBackedHttpClient::new(provider.clone());
     set_http_client(Arc::new(client));
 
     // Construct a SafeSmartAccount; the on-chain state is irrelevant for this test

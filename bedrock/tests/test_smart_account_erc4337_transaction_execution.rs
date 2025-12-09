@@ -4,19 +4,18 @@ use alloy::{
     signers::local::PrivateKeySigner,
     sol_types::SolCall,
 };
+use bedrock::test_utils::PackedUserOperation;
 use bedrock::{
     primitives::Network,
     smart_account::{
         EncodedSafeOpStruct, SafeSmartAccount, SafeSmartAccountSigner, UserOperation,
         ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
     },
+    test_utils::IEntryPoint,
     transactions::foreign::UnparsedUserOperation,
 };
-
 mod common;
-use common::{
-    deploy_safe, setup_anvil, IEntryPoint, ISafe4337Module, PackedUserOperation,
-};
+use common::{deploy_safe, setup_anvil, ISafe4337Module};
 
 /// Integration test for the encoding, signing and execution of a 4337 transaction.
 ///
