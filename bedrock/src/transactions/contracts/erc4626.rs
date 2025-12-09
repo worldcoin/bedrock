@@ -38,9 +38,10 @@ sol! {
 // =============================================================================
 
 /// Represents a generic ERC-4626 vault operation.
+#[derive(Debug)]
 pub struct Erc4626Vault {
     /// The encoded call data for the operation.
-    call_data: Vec<u8>,
+    pub call_data: Vec<u8>,
     /// The action type.
     action: TransactionTypeId,
     /// The target address for the operation.
@@ -88,14 +89,7 @@ impl Erc4626Vault {
         receiver: Address,
         metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
-        // 1. Validate that the amount is not zero
-        if asset_amount.is_zero() {
-            return Err(RpcError::InvalidResponse {
-                error_message: "Asset amount cannot be zero".to_string(),
-            });
-        }
-
-        // 2. Query the asset address from the vault contract
+        // 1. Query the asset address from the vault contract
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
         let asset_result = rpc_client
             .eth_call(network, vault_address, asset_call_data.into())
@@ -104,7 +98,7 @@ impl Erc4626Vault {
         // Decode the asset address from the result
         let asset_address = Address::from_slice(&asset_result[12..32]); // Last 20 bytes of 32-byte word
 
-        // 3. Query the receiver's balance of the asset token
+        // 2. Query the receiver's balance of the asset token
         let balance_call_data =
             IErc20::balanceOfCall { account: receiver }.abi_encode();
         let balance_result = rpc_client
@@ -114,8 +108,15 @@ impl Erc4626Vault {
         // Decode the balance from the result
         let balance = U256::from_be_slice(&balance_result);
 
-        // 4. Use the minimum of the requested amount and the actual balance
+        // 3. Use the minimum of the requested amount and the actual balance
         let actual_amount = asset_amount.min(balance);
+
+        // 4. Validate that the actual amount is not zero (user has no balance)
+        if actual_amount.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message: "Cannot deposit zero amount - user has no balance of the asset token".to_string(),
+            });
+        }
 
         // 5. Encode the approve call (approve asset to vault)
         let approve_data = Erc20::encode_approve(vault_address, actual_amount);
@@ -276,125 +277,71 @@ mod tests {
 
     use super::*;
 
-    async fn create_test_rpc_client_with_zero_asset_and_balance(
+    /// Creates a test RPC client with mocked responses for asset() and balanceOf() calls
+    async fn setup_test_rpc_client(
         vault_address: Address,
         asset_address: Address,
-        _receiver: Address,
+        receiver: Address,
         balance: U256,
     ) -> RpcClient {
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
 
-        let mut http_client =
-            crate::test_utils::AnvilBackedHttpClient::with_zero_asset_response(
-                provider,
-                vault_address,
-            );
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
 
-        // Add balance response for the receiver
-        let mut padded_balance = [0u8; 32];
-        balance
-            .to_be_bytes_vec()
-            .iter()
-            .rev()
-            .enumerate()
-            .for_each(|(i, &b)| {
-                if i < 32 {
-                    padded_balance[31 - i] = b;
-                }
-            });
-        let balance_response = format!("0x{}", hex::encode(padded_balance));
-        http_client.add_eth_call_response(asset_address, balance_response);
-
-        RpcClient::new(Arc::new(http_client))
-    }
-
-    async fn create_test_rpc_client_with_custom_asset_and_balance(
-        vault_address: Address,
-        asset_address: Address,
-        _receiver: Address,
-        balance: U256,
-    ) -> RpcClient {
-        let anvil = Anvil::new().spawn();
-        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
-
-        let mut http_client =
-            crate::test_utils::AnvilBackedHttpClient::with_asset_response(
-                provider,
-                vault_address,
-                asset_address,
-            );
-
-        // Add balance response for the receiver
-        let mut padded_balance = [0u8; 32];
-        balance
-            .to_be_bytes_vec()
-            .iter()
-            .rev()
-            .enumerate()
-            .for_each(|(i, &b)| {
-                if i < 32 {
-                    padded_balance[31 - i] = b;
-                }
-            });
-        let balance_response = format!("0x{}", hex::encode(padded_balance));
-        http_client.add_eth_call_response(asset_address, balance_response);
-
-        RpcClient::new(Arc::new(http_client))
-    }
-
-    #[tokio::test]
-    async fn test_erc4626_deposit_with_zero_asset() {
-        let vault_address =
-            Address::from_str("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd").unwrap();
-        let receiver =
-            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-
-        // Setup test RPC client that returns zero address for asset() call and large balance
-        let test_rpc_client = create_test_rpc_client_with_zero_asset_and_balance(
+        // Set response for asset() call
+        let asset_call_data = IERC4626::assetCall {}.abi_encode();
+        let mut padded_asset = [0u8; 32];
+        padded_asset[12..32].copy_from_slice(asset_address.as_slice());
+        let asset_response = format!("0x{}", hex::encode(padded_asset));
+        http_client.set_response_for_address_and_data(
             vault_address,
-            Address::ZERO,
-            receiver,
-            U256::from(2_000_000),
-        )
-        .await;
-
-        // Test deposit with test RPC client
-        let vault = Erc4626Vault::deposit(
-            &test_rpc_client,
-            Network::WorldChain,
-            vault_address,
-            U256::from(1_000_000),
-            receiver,
-            metadata,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(vault.operation as u8, SafeOperation::DelegateCall as u8);
-        assert_eq!(
-            vault.to,
-            crate::transactions::contracts::multisend::MULTISEND_ADDRESS
+            format!("0x{}", hex::encode(asset_call_data)),
+            asset_response,
         );
+
+        // Set response for balanceOf() call
+        let balance_call_data =
+            IErc20::balanceOfCall { account: receiver }.abi_encode();
+        let mut padded_balance = [0u8; 32];
+        balance
+            .to_be_bytes_vec()
+            .iter()
+            .rev()
+            .enumerate()
+            .for_each(|(i, &b)| {
+                if i < 32 {
+                    padded_balance[31 - i] = b;
+                }
+            });
+        let balance_response = format!("0x{}", hex::encode(padded_balance));
+        http_client.set_response_for_address_and_data(
+            asset_address,
+            format!("0x{}", hex::encode(balance_call_data)),
+            balance_response,
+        );
+
+        RpcClient::new(Arc::new(http_client))
     }
 
     #[tokio::test]
-    async fn test_erc4626_deposit_with_custom_asset() {
+    async fn test_erc4626_deposit() {
         let vault_address =
-            Address::from_str("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd").unwrap();
-        let custom_asset =
-            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
         let receiver =
-            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
         let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let deposit_amount = U256::from(10u128.pow(18)); // 1 WLD
 
         // Setup test RPC client that returns custom asset address and large balance
-        let test_rpc_client = create_test_rpc_client_with_custom_asset_and_balance(
+        let test_rpc_client = setup_test_rpc_client(
             vault_address,
-            custom_asset,
+            asset_address,
             receiver,
-            U256::from(2_000_000),
+            deposit_amount,
         )
         .await;
 
@@ -403,7 +350,7 @@ mod tests {
             &test_rpc_client,
             Network::WorldChain,
             vault_address,
-            U256::from(1_000_000),
+            deposit_amount,
             receiver,
             metadata,
         )
@@ -415,5 +362,43 @@ mod tests {
             vault.to,
             crate::transactions::contracts::multisend::MULTISEND_ADDRESS
         );
+        assert_eq!(hex::encode(vault.call_data), "8d80ff0a00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000132002cfc85d8e48f8eab294be644d9e25c303086300300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044095ea7b3000000000000000000000000348831b46876d3df2db98bdec5e3b4083329ab9f0000000000000000000000000000000000000000000000000de0b6b3a764000000348831b46876d3df2db98bdec5e3b4083329ab9f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000446e553f650000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000009bb365324edef7a608c316abbf1d88460c556ab00000000000000000000000000000");
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_deposit_with_zero_balance_error() {
+        let vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let receiver =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        // Setup test RPC client where user has zero balance
+        let test_rpc_client = setup_test_rpc_client(
+            vault_address,
+            asset_address,
+            receiver,
+            U256::from(0), // User has no balance
+        )
+        .await;
+
+        // Test deposit should fail due to zero balance
+        let result = Erc4626Vault::deposit(
+            &test_rpc_client,
+            Network::WorldChain,
+            vault_address,
+            U256::from(1_000_000),
+            receiver,
+            metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Cannot deposit zero amount - user has no balance"));
     }
 }

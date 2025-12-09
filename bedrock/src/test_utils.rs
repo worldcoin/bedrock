@@ -68,6 +68,8 @@ sol! {
             uint256 actualGasCost,
             uint256 actualGasUsed
         );
+
+        function depositTo(address account) external payable;
         function handleOps(PackedUserOperation[] calldata ops, address payable beneficiary) external;
     }
 
@@ -115,8 +117,10 @@ where
 {
     /// The underlying Ethereum provider
     pub provider: P,
-    /// Custom responses for eth_call based on contract address
-    pub custom_eth_call_responses: HashMap<Address, String>,
+    /// Custom responses for eth_call based on contract address only
+    pub address_responses: HashMap<Address, String>,
+    /// Custom responses for eth_call based on contract address AND call data
+    pub address_data_responses: HashMap<(Address, String), String>,
 }
 
 impl<P> AnvilBackedHttpClient<P>
@@ -127,42 +131,29 @@ where
     pub fn new(provider: P) -> Self {
         Self {
             provider,
-            custom_eth_call_responses: HashMap::new(),
+            address_responses: HashMap::new(),
+            address_data_responses: HashMap::new(),
         }
     }
 
-    /// Adds a custom response for eth_call to a specific contract address
-    pub fn add_eth_call_response(&mut self, to_address: Address, response_hex: String) {
-        self.custom_eth_call_responses
-            .insert(to_address, response_hex);
+    /// Sets a custom response for eth_call based on contract address only
+    pub fn set_response_for_address(
+        &mut self,
+        to_address: Address,
+        response_hex: String,
+    ) {
+        self.address_responses.insert(to_address, response_hex);
     }
 
-    /// Creates a new client with a custom eth_call response for asset() calls
-    /// Returns zero address (useful for ERC-4626 testing)
-    pub fn with_zero_asset_response(provider: P, vault_address: Address) -> Self {
-        let mut client = Self::new(provider);
-        // Asset() returns address(0) - 32 bytes with address in last 20 bytes
-        client.add_eth_call_response(
-            vault_address,
-            "0x0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
-        );
-        client
-    }
-
-    /// Creates a new client with a custom asset address response
-    pub fn with_asset_response(
-        provider: P,
-        vault_address: Address,
-        asset_address: Address,
-    ) -> Self {
-        let mut client = Self::new(provider);
-        // Convert address to 32-byte padded hex string
-        let mut padded_bytes = [0u8; 32];
-        padded_bytes[12..32].copy_from_slice(asset_address.as_slice());
-        let response = format!("0x{}", hex::encode(padded_bytes));
-        client.add_eth_call_response(vault_address, response);
-        client
+    /// Sets a custom response for eth_call based on contract address AND call data
+    pub fn set_response_for_address_and_data(
+        &mut self,
+        to_address: Address,
+        call_data: String,
+        response_hex: String,
+    ) {
+        self.address_data_responses
+            .insert((to_address, call_data), response_hex);
     }
 }
 
@@ -448,9 +439,17 @@ where
                         error_message: "invalid 'to' address format".into(),
                     })?;
 
-                // Check if we have a custom response for this address
-                if let Some(custom_response) =
-                    self.custom_eth_call_responses.get(&to_address)
+                // Extract call data
+                let call_data = call_obj.get("data").and_then(|v| v.as_str()).ok_or(
+                    HttpError::Generic {
+                        error_message: "missing 'data' in eth_call".into(),
+                    },
+                )?;
+
+                // First check if we have a custom response for this specific address + data combination
+                if let Some(custom_response) = self
+                    .address_data_responses
+                    .get(&(to_address, call_data.to_string()))
                 {
                     let resp = serde_json::json!({
                         "jsonrpc": "2.0",
@@ -460,12 +459,17 @@ where
                     return Ok(serde_json::to_vec(&resp).unwrap());
                 }
 
+                // Then check if we have a custom response for this address only
+                if let Some(custom_response) = self.address_responses.get(&to_address) {
+                    let resp = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": custom_response,
+                    });
+                    return Ok(serde_json::to_vec(&resp).unwrap());
+                }
+
                 // If no custom response, forward to the actual provider
-                let call_data = call_obj.get("data").and_then(|v| v.as_str()).ok_or(
-                    HttpError::Generic {
-                        error_message: "missing 'data' in eth_call".into(),
-                    },
-                )?;
 
                 // Forward to real provider using simpler call interface
                 let result = self

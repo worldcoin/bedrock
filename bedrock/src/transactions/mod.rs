@@ -288,6 +288,55 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
+    /// Deposits tokens into an ERC4626 vault on World Chain.
+    ///
+    /// This method uses the generic ERC4626 implementation that queries the vault's
+    /// asset address and checks the user's balance before creating the transaction.
+    ///
+    /// # Arguments
+    /// - `vault_address`: The address of the ERC4626 vault contract.
+    /// - `amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_erc4626_deposit(
+        &self,
+        vault_address: &str,
+        amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
+        let amount = U256::parse_from_ffi(amount, "amount")?;
+        let receiver = self.wallet_address;
+
+        // Get the RPC client and create the ERC4626 deposit transaction
+        let rpc_client = get_rpc_client().unwrap();
+        let transaction =
+            crate::transactions::contracts::erc4626::Erc4626Vault::deposit(
+                rpc_client,
+                Network::WorldChain,
+                vault_address,
+                amount,
+                receiver,
+                [0u8; 10], // metadata
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create ERC4626 deposit: {e}"),
+            })?;
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute ERC4626 deposit: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
     /// Withdraws tokens from a Morpho vault on World Chain.
     ///
     /// # Arguments
