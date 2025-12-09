@@ -141,7 +141,7 @@ impl Is4337Encodable for WorldGiftManager {
             to: self.to,
             value: self.value,
             data: self.call_data.clone().into(),
-            operation: self.operation.clone() as u8,
+            operation: self.operation as u8,
         }
         .abi_encode()
         .into()

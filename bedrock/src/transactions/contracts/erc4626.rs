@@ -20,7 +20,7 @@ use crate::transactions::rpc::{RpcClient, RpcError};
 
 sol! {
     /// The ERC-4626 vault contract interface.
-    /// Reference: https://eips.ethereum.org/EIPS/eip-4626
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-4626>
     #[derive(serde::Serialize)]
     interface IERC4626 {
         // Core ERC-4626 functions
@@ -354,7 +354,7 @@ mod tests {
 
     use super::*;
 
-    /// Creates a test RPC client with mocked responses for asset() and balanceOf() calls
+    /// Creates a test RPC client with mocked responses for `asset()` and `balanceOf()` calls
     async fn setup_test_rpc_client(
         vault_address: Address,
         asset_address: Address,

@@ -19,7 +19,7 @@ use crate::{
     transactions::foreign::UnparsedUserOperation,
 };
 
-/// Represents a response from 'wa_sponsorUserOperation' rpc method
+/// Represents a response from '`wa_sponsorUserOperation`' rpc method
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorUserOperationResponseLite<'a> {
@@ -36,7 +36,7 @@ struct SponsorUserOperationResponseLite<'a> {
 }
 
 sol! {
-    /// Packed user operation for EntryPoint
+    /// Packed user operation for `EntryPoint`
     #[sol(rename_all = "camelCase")]
     struct PackedUserOperation {
         address sender;
@@ -76,6 +76,7 @@ sol! {
 }
 
 /// Pack two U128 in 32 bytes
+#[must_use] 
 pub fn pack_pair(a: &U128, b: &U128) -> FixedBytes<32> {
     let mut out = [0u8; 32];
     out[..16].copy_from_slice(&a.to_be_bytes::<16>());
@@ -109,7 +110,7 @@ impl TryFrom<&UserOperation> for PackedUserOperation {
 
 use std::collections::HashMap;
 
-/// Mock HTTP client for testing that can provide custom responses for eth_call
+/// Mock HTTP client for testing that can provide custom responses for `eth_call`
 #[derive(Clone)]
 pub struct AnvilBackedHttpClient<P>
 where
@@ -117,9 +118,9 @@ where
 {
     /// The underlying Ethereum provider
     pub provider: P,
-    /// Custom responses for eth_call based on contract address only
+    /// Custom responses for `eth_call` based on contract address only
     pub address_responses: HashMap<Address, String>,
-    /// Custom responses for eth_call based on contract address AND call data
+    /// Custom responses for `eth_call` based on contract address AND call data
     pub address_data_responses: HashMap<(Address, String), String>,
 }
 
@@ -127,7 +128,7 @@ impl<P> AnvilBackedHttpClient<P>
 where
     P: Provider<Ethereum> + Clone + Send + Sync + 'static,
 {
-    /// Creates a new AnvilBackedHttpClient with no custom responses
+    /// Creates a new `AnvilBackedHttpClient` with no custom responses
     pub fn new(provider: P) -> Self {
         Self {
             provider,
@@ -136,7 +137,7 @@ where
         }
     }
 
-    /// Sets a custom response for eth_call based on contract address only
+    /// Sets a custom response for `eth_call` based on contract address only
     pub fn set_response_for_address(
         &mut self,
         to_address: Address,
@@ -145,7 +146,7 @@ where
         self.address_responses.insert(to_address, response_hex);
     }
 
-    /// Sets a custom response for eth_call based on contract address AND call data
+    /// Sets a custom response for `eth_call` based on contract address AND call data
     pub fn set_response_for_address_and_data(
         &mut self,
         to_address: Address,
@@ -237,7 +238,7 @@ where
                 })?;
 
                 let get_opt = |k: &str| -> Option<String> {
-                    obj.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
+                    obj.get(k).and_then(|v| v.as_str()).map(std::string::ToString::to_string)
                 };
                 let get_or_zero = |k: &str| -> String {
                     get_opt(k).unwrap_or_else(|| "0x0".to_string())
@@ -384,7 +385,7 @@ where
                 let params = params.as_array().ok_or(HttpError::Generic {
                     error_message: "invalid params".into(),
                 })?;
-                let user_op_hash = params.get(0).and_then(|v| v.as_str()).ok_or(
+                let user_op_hash = params.first().and_then(|v| v.as_str()).ok_or(
                     HttpError::Generic {
                         error_message: "missing userOpHash param".into(),
                     },

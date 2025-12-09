@@ -93,7 +93,7 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
     // First, giftor sponsors giftee. This makes giftee eligible to claim.
     safe_account_giftor
         .transaction_world_campaign_manager_sponsor(
-            &campaign_id_str.to_string(),
+            campaign_id_str,
             &safe_address_giftee.to_string(),
         )
         .await
@@ -102,7 +102,7 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
     // Then, giftee also sponsors giftor so that giftee has sponsored someone and can claim.
     safe_account_giftee
         .transaction_world_campaign_manager_sponsor(
-            &campaign_id_str.to_string(),
+            campaign_id_str,
             &safe_address_giftor.to_string(),
         )
         .await
@@ -116,7 +116,7 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
 
     // Now giftee can claim the reward.
     safe_account_giftee
-        .transaction_world_campaign_manager_claim(&campaign_id_str)
+        .transaction_world_campaign_manager_claim(campaign_id_str)
         .await
         .expect("transaction_world_campaign_manager_claim failed");
 
