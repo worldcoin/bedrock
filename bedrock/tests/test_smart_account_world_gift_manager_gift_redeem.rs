@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 mod common;
-use common::{
-    deploy_safe, set_erc20_balance_for_safe, setup_anvil, IEntryPoint, IERC20,
-};
+use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use alloy::{
     primitives::{address, U256},
@@ -14,7 +12,7 @@ use alloy::{
 use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    test_utils::AnvilBackedHttpClient,
+    test_utils::{AnvilBackedHttpClient, IEntryPoint},
 };
 
 #[tokio::test]

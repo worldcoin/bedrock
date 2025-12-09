@@ -30,6 +30,8 @@ sol! {
 
         // View functions
         function asset() public view returns (address assetTokenAddress);
+        function previewWithdraw(uint256 assets) external view returns (uint256 shares);
+        function previewRedeem(uint256 shares) external view returns (uint256 assets);
     }
 }
 
@@ -48,12 +50,6 @@ pub struct Erc4626Vault {
     to: Address,
     /// The Safe operation type for the operation.
     operation: SafeOperation,
-    /// The underlying asset address.
-    #[allow(dead_code)]
-    asset_address: Address,
-    /// The vault address.
-    #[allow(dead_code)]
-    vault_address: Address,
     /// Metadata for nonce generation (protocol-specific).
     metadata: [u8; 10],
 }
@@ -153,84 +149,165 @@ impl Erc4626Vault {
             action: TransactionTypeId::ERC4626Deposit,
             to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
             operation: SafeOperation::DelegateCall,
-            asset_address,
-            vault_address,
             metadata,
         })
     }
 
     /// Creates a new withdraw operation (direct call to vault, no approval needed).
     ///
+    /// This function checks the user's asset balance and vault share balance before creating the transaction.
+    ///
     /// # Arguments
+    /// * `rpc_client` - The RPC client for making blockchain queries.
+    /// * `network` - The blockchain network to use.
     /// * `vault_address` - The vault contract address.
     /// * `asset_amount` - The amount of assets to withdraw.
-    /// * `receiver` - The address that will receive the withdrawn assets.
-    /// * `owner` - The address that owns the vault shares.
+    /// * `user_address` - The address that owns the vault shares and will receive the withdrawn assets.
     /// * `metadata` - Protocol-specific metadata for nonce generation.
     ///
     /// # Returns
     /// An `Erc4626Vault` struct configured for a withdraw operation.
-    #[must_use]
-    pub fn withdraw(
+    ///
+    /// # Errors
+    /// - The user has insufficient vault share balance
+    /// - The RPC call to query balances fails
+    pub async fn withdraw(
+        rpc_client: &RpcClient,
+        network: Network,
         vault_address: Address,
         asset_amount: U256,
-        receiver: Address,
-        owner: Address,
+        user_address: Address,
         metadata: [u8; 10],
-    ) -> Self {
-        let withdraw_data = IERC4626::withdrawCall {
+    ) -> Result<Self, RpcError> {
+        // 1. Query the user's vault share balance
+        let share_balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let share_balance_result = rpc_client
+            .eth_call(network, vault_address, share_balance_call_data.into())
+            .await?;
+
+        // Decode the share balance from the result
+        let share_balance = U256::from_be_slice(&share_balance_result);
+
+        // 2. Query how many shares are needed for the requested asset amount
+        let preview_call_data = IERC4626::previewWithdrawCall {
             assets: asset_amount,
-            receiver,
-            owner,
+        }
+        .abi_encode();
+        let preview_result = rpc_client
+            .eth_call(network, vault_address, preview_call_data.into())
+            .await?;
+
+        // Decode the required shares from the result
+        let required_shares = U256::from_be_slice(&preview_result);
+
+        // 3. Use the minimum shares available (limit by user's balance)
+        let actual_shares = required_shares.min(share_balance);
+
+        // 4. Validate that the actual shares are not zero
+        if actual_shares.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message: "Cannot withdraw zero amount - user has no vault shares"
+                    .to_string(),
+            });
+        }
+
+        // 5. If we're limited by share balance, calculate the actual asset amount we can withdraw
+        let actual_asset_amount = if actual_shares < required_shares {
+            // Use previewRedeem to convert limited shares to asset amount
+            let redeem_call_data = IERC4626::previewRedeemCall {
+                shares: actual_shares,
+            }
+            .abi_encode();
+            let redeem_result = rpc_client
+                .eth_call(network, vault_address, redeem_call_data.into())
+                .await?;
+            U256::from_be_slice(&redeem_result)
+        } else {
+            asset_amount
+        };
+
+        let withdraw_data = IERC4626::withdrawCall {
+            assets: actual_asset_amount,
+            receiver: user_address,
+            owner: user_address,
         }
         .abi_encode();
 
-        Self {
+        Ok(Self {
             call_data: withdraw_data,
             action: TransactionTypeId::ERC4626Withdraw,
             to: vault_address,
             operation: SafeOperation::Call,
-            asset_address: Address::ZERO, // Not needed for withdraw
-            vault_address,
             metadata,
-        }
+        })
     }
 
     /// Creates a new redeem operation (direct call to vault, no approval needed).
     ///
+    /// This function checks the user's vault share balance before creating the transaction.
+    ///
     /// # Arguments
+    /// * `rpc_client` - The RPC client for making blockchain queries.
+    /// * `network` - The blockchain network to use.
     /// * `vault_address` - The vault contract address.
     /// * `share_amount` - The amount of shares to redeem.
-    /// * `receiver` - The address that will receive the redeemed assets.
-    /// * `owner` - The address that owns the vault shares.
+    /// * `user_address` - The address that owns the vault shares and will receive the redeemed assets.
     /// * `metadata` - Protocol-specific metadata for nonce generation.
     ///
     /// # Returns
     /// An `Erc4626Vault` struct configured for a redeem operation.
-    #[must_use]
-    pub fn redeem(
+    ///
+    /// # Errors
+    /// - The user has insufficient vault share balance
+    /// - The RPC call to query the user's share balance fails
+    pub async fn redeem(
+        rpc_client: &RpcClient,
+        network: Network,
         vault_address: Address,
         share_amount: U256,
-        receiver: Address,
-        owner: Address,
+        user_address: Address,
         metadata: [u8; 10],
-    ) -> Self {
+    ) -> Result<Self, RpcError> {
+        // 1. Query the user's vault share balance
+        let balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let balance_result = rpc_client
+            .eth_call(network, vault_address, balance_call_data.into())
+            .await?;
+
+        // Decode the share balance from the result
+        let share_balance = U256::from_be_slice(&balance_result);
+
+        // 2. Use the minimum of requested shares and available balance
+        let actual_share_amount = share_amount.min(share_balance);
+
+        // 3. Validate that the actual share amount is not zero
+        if actual_share_amount.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message: "Cannot redeem zero amount - user has no vault shares"
+                    .to_string(),
+            });
+        }
+
         let redeem_data = IERC4626::redeemCall {
-            shares: share_amount,
-            receiver,
-            owner,
+            shares: actual_share_amount,
+            receiver: user_address,
+            owner: user_address,
         }
         .abi_encode();
 
-        Self {
+        Ok(Self {
             call_data: redeem_data,
             action: TransactionTypeId::ERC4626Redeem,
             to: vault_address,
             operation: SafeOperation::Call,
-            asset_address: Address::ZERO, // Not needed for redeem
-            vault_address,
             metadata,
-        }
+        })
     }
 }
 
@@ -400,5 +477,243 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Cannot deposit zero amount - user has no balance"));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_withdraw() {
+        // Use real parameters from E2E test
+        let vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let user_address =
+            Address::from_str("0x545c97c6664e6f9c37b0e6e2b80e68954413f70b").unwrap();
+        let metadata = [0u8; 10]; // Same as E2E test
+
+        let asset_amount = U256::from(500000000000000000u64); // 0.5 WLD (from E2E test)
+        let share_balance = U256::from(10u128.pow(18)); // 1 share available
+        let required_shares = U256::from(5 * 10u128.pow(17)); // 0.5 shares needed (1:1 ratio for simplicity)
+
+        // Setup test RPC client with mocked responses
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+
+        // Mock balanceOf(user_address) - vault share balance
+        let balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let mut padded_balance = [0u8; 32];
+        padded_balance[..32].copy_from_slice(&share_balance.to_be_bytes::<32>());
+        let balance_response = format!("0x{}", hex::encode(padded_balance));
+        http_client.set_response_for_address_and_data(
+            vault_address,
+            format!("0x{}", hex::encode(balance_call_data)),
+            balance_response,
+        );
+
+        // Mock previewWithdraw(assets) - shares needed
+        let preview_call_data = IERC4626::previewWithdrawCall {
+            assets: asset_amount,
+        }
+        .abi_encode();
+        let mut padded_shares = [0u8; 32];
+        padded_shares[..32].copy_from_slice(&required_shares.to_be_bytes::<32>());
+        let preview_response = format!("0x{}", hex::encode(padded_shares));
+        http_client.set_response_for_address_and_data(
+            vault_address,
+            format!("0x{}", hex::encode(preview_call_data)),
+            preview_response,
+        );
+
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        // Test withdraw with test RPC client
+        let vault = Erc4626Vault::withdraw(
+            &test_rpc_client,
+            Network::WorldChain,
+            vault_address,
+            asset_amount,
+            user_address,
+            metadata,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(vault.operation as u8, SafeOperation::Call as u8);
+        assert_eq!(vault.to, vault_address);
+        assert_eq!(vault.action, TransactionTypeId::ERC4626Withdraw);
+
+        // Assert exact call data matches E2E test output
+        let expected_call_data = "b460af9400000000000000000000000000000000000000000000000006f05b59d3b20000000000000000000000000000545c97c6664e6f9c37b0e6e2b80e68954413f70b000000000000000000000000545c97c6664e6f9c37b0e6e2b80e68954413f70b";
+        assert_eq!(hex::encode(&vault.call_data), expected_call_data);
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_withdraw_with_insufficient_shares() {
+        let vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let asset_amount = U256::from(10u128.pow(18)); // 1 asset
+        let share_balance = U256::from(0); // No shares
+
+        // Setup test RPC client with zero share balance
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+
+        // Mock balanceOf(user_address) - zero vault share balance
+        let balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let mut padded_balance = [0u8; 32];
+        padded_balance[..32].copy_from_slice(&share_balance.to_be_bytes::<32>());
+        let balance_response = format!("0x{}", hex::encode(padded_balance));
+        http_client.set_response_for_address_and_data(
+            vault_address,
+            format!("0x{}", hex::encode(balance_call_data)),
+            balance_response,
+        );
+
+        // Mock previewWithdraw(assets) - shares needed
+        let required_shares = U256::from(10u128.pow(18)); // 1 share needed
+        let preview_call_data = IERC4626::previewWithdrawCall {
+            assets: asset_amount,
+        }
+        .abi_encode();
+        let mut padded_shares = [0u8; 32];
+        padded_shares[..32].copy_from_slice(&required_shares.to_be_bytes::<32>());
+        let preview_response = format!("0x{}", hex::encode(padded_shares));
+        http_client.set_response_for_address_and_data(
+            vault_address,
+            format!("0x{}", hex::encode(preview_call_data)),
+            preview_response,
+        );
+
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        // Test withdraw should fail due to zero share balance
+        let result = Erc4626Vault::withdraw(
+            &test_rpc_client,
+            Network::WorldChain,
+            vault_address,
+            asset_amount,
+            user_address,
+            metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Cannot withdraw zero amount - user has no vault shares"));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_redeem() {
+        // Use real parameters from E2E test
+        let vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let user_address =
+            Address::from_str("0x545c97c6664e6f9c37b0e6e2b80e68954413f70b").unwrap();
+        let metadata = [0u8; 10]; // Same as E2E test
+
+        let share_amount = U256::from(124985199400075175u64); // From E2E test redeem amount
+        let share_balance = U256::from(10u128.pow(18)); // 1 share available
+
+        // Setup test RPC client with mocked responses
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+
+        // Mock balanceOf(user_address) - vault share balance
+        let balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let mut padded_balance = [0u8; 32];
+        padded_balance[..32].copy_from_slice(&share_balance.to_be_bytes::<32>());
+        let balance_response = format!("0x{}", hex::encode(padded_balance));
+        http_client.set_response_for_address_and_data(
+            vault_address,
+            format!("0x{}", hex::encode(balance_call_data)),
+            balance_response,
+        );
+
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        // Test redeem with test RPC client
+        let vault = Erc4626Vault::redeem(
+            &test_rpc_client,
+            Network::WorldChain,
+            vault_address,
+            share_amount,
+            user_address,
+            metadata,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(vault.operation as u8, SafeOperation::Call as u8);
+        assert_eq!(vault.to, vault_address);
+        assert_eq!(vault.action, TransactionTypeId::ERC4626Redeem);
+
+        // Assert exact call data matches E2E test output
+        let expected_call_data = "ba08765200000000000000000000000000000000000000000000000001bc09606c6c3fa7000000000000000000000000545c97c6664e6f9c37b0e6e2b80e68954413f70b000000000000000000000000545c97c6664e6f9c37b0e6e2b80e68954413f70b";
+        assert_eq!(hex::encode(&vault.call_data), expected_call_data);
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_redeem_with_insufficient_shares() {
+        let vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let share_amount = U256::from(10u128.pow(18)); // 1 share to redeem
+        let share_balance = U256::from(0); // No shares available
+
+        // Setup test RPC client with zero share balance
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+
+        // Mock balanceOf(user_address) - zero vault share balance
+        let balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let mut padded_balance = [0u8; 32];
+        padded_balance[..32].copy_from_slice(&share_balance.to_be_bytes::<32>());
+        let balance_response = format!("0x{}", hex::encode(padded_balance));
+        http_client.set_response_for_address_and_data(
+            vault_address,
+            format!("0x{}", hex::encode(balance_call_data)),
+            balance_response,
+        );
+
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        // Test redeem should fail due to zero share balance
+        let result = Erc4626Vault::redeem(
+            &test_rpc_client,
+            Network::WorldChain,
+            vault_address,
+            share_amount,
+            user_address,
+            metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Cannot redeem zero amount - user has no vault shares"));
     }
 }
