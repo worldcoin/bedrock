@@ -196,15 +196,13 @@ fn catch_callback_panic<T, F>(operation: &str, f: F) -> Result<T, FileSystemErro
 where
     F: FnOnce() -> Result<T, FileSystemError> + std::panic::UnwindSafe,
 {
-    std::panic::catch_unwind(f).map_or_else(
-        |_| {
-            Err(FileSystemError::UnexpectedUniFFICallbackError(format!(
-                "panic in FileSystem.{} callback",
-                operation
-            )))
-        },
-        |result| result,
-    )
+    std::panic::catch_unwind(f)
+        .map_err(|_| {
+            FileSystemError::UnexpectedUniFFICallbackError(format!(
+                "panic in FileSystem.{operation} callback"
+            ))
+        })
+        .and_then(|result| result)
 }
 
 /// Middleware wrapper that enforces path prefixing for filesystem operations
