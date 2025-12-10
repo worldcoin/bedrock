@@ -2,6 +2,17 @@
 
 
 
+## [0.0.36] - 2025-12-09
+
+## What's Changed
+* fix: add catch_callback_panic to all filesystem operations by @lukejmann in https://github.com/worldcoin/bedrock/pull/226
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.35...0.0.36
+
+
+
+
 ## [0.0.35] - 2025-12-08
 
 ## What's Changed
