@@ -345,7 +345,7 @@ impl Default for ClientEventsReporter {
 impl ClientEventsReporter {
     const FS_PREFIX: &'static str = "backup_client_events";
     const BASE_FILE: &'static str = "base_report.json";
-    const EVENTS_ENDPOINT: &'static str = "/v1/backup/status";
+    const EVENTS_ENDPOINT: &'static str = "/v1/backup/events";
 
     /// Ensure an installation ID exists and is persisted. Returns the ID.
     fn ensure_installation_id(&self) -> Result<String, ClientEventsError> {
