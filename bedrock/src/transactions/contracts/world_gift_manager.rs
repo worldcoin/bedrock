@@ -58,6 +58,7 @@ pub struct WorldGiftManager {
 
 impl WorldGiftManager {
     /// Creates a new gift operation (approve + gift multi-send).
+    #[must_use]
     pub fn gift(
         token: Address,
         recipient: Address,
@@ -104,6 +105,7 @@ impl WorldGiftManager {
     }
 
     /// Creates a redeem operation.
+    #[must_use]
     pub fn redeem(gift_id: U256) -> Self {
         let call_data = IWorldGiftManager::redeemCall { giftId: gift_id }.abi_encode();
         Self {
@@ -117,6 +119,7 @@ impl WorldGiftManager {
     }
 
     /// Creates a cancel operation.
+    #[must_use]
     pub fn cancel(gift_id: U256) -> Self {
         let call_data = IWorldGiftManager::cancelCall { giftId: gift_id }.abi_encode();
         Self {
@@ -138,7 +141,7 @@ impl Is4337Encodable for WorldGiftManager {
             to: self.to,
             value: self.value,
             data: self.call_data.clone().into(),
-            operation: self.operation.clone() as u8,
+            operation: self.operation as u8,
         }
         .abi_encode()
         .into()

@@ -6,14 +6,12 @@ use alloy::{
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
-use common::{
-    deploy_safe, set_erc20_balance_for_safe, setup_anvil, AnvilBackedHttpClient,
-    IEntryPoint, IERC20,
-};
+use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
+    test_utils::{AnvilBackedHttpClient, IEntryPoint},
 };
 
 #[tokio::test]
@@ -62,9 +60,7 @@ async fn test_transaction_world_gift_manager_gift_cancel_user_operations(
     let before_giftor = wld.balanceOf(safe_address_giftor).call().await?;
     let before_giftee = wld.balanceOf(safe_address_giftee).call().await?;
 
-    let client = AnvilBackedHttpClient {
-        provider: provider.clone(),
-    };
+    let client = AnvilBackedHttpClient::new(provider.clone());
 
     set_http_client(Arc::new(client));
 

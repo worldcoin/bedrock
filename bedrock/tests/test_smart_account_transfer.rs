@@ -6,14 +6,12 @@ use alloy::{
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
-use common::{
-    deploy_safe, set_erc20_balance_for_safe, setup_anvil, AnvilBackedHttpClient,
-    IEntryPoint, IERC20,
-};
+use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
+    test_utils::{AnvilBackedHttpClient, IEntryPoint},
 };
 
 // ------------------ The test for the full transaction_transfer flow ------------------
@@ -68,9 +66,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     let before_safe = wld.balanceOf(safe_address).call().await?;
 
     // 7) Install mocked HTTP client that routes calls to Anvil
-    let client = AnvilBackedHttpClient {
-        provider: provider.clone(),
-    };
+    let client = AnvilBackedHttpClient::new(provider.clone());
 
     set_http_client(Arc::new(client));
 
