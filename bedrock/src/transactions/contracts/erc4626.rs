@@ -94,18 +94,18 @@ impl Erc4626Vault {
             .eth_call(network, contract_address, call_data.into())
             .await?;
 
-        // Ensure the response is at least 32 bytes (standard ABI encoding for uint256)
-        if result.len() < 32 {
+        // Ensure the response is exactly 32 bytes (standard ABI encoding for uint256)
+        if result.len() != 32 {
             return Err(RpcError::InvalidResponse {
                 error_message: format!(
-                    "Invalid {}() response: expected at least 32 bytes, got {} bytes",
+                    "Invalid {}() response: expected exactly 32 bytes, got {} bytes",
                     function_name,
                     result.len()
                 ),
             });
         }
 
-        Ok(U256::from_be_slice(&result))
+        Ok(U256::from_be_slice(&result[..32]))
     }
 
     /// Creates a new deposit operation (approve asset + deposit via `MultiSend`).
@@ -274,27 +274,31 @@ impl Erc4626Vault {
             });
         }
 
-        // 5. If we're limited by share balance, calculate the actual asset amount we can withdraw
-        let actual_asset_amount = if actual_shares < required_shares {
-            // Use previewRedeem to convert limited shares to asset amount
-            let redeem_call_data = IERC4626::previewRedeemCall {
+        // 5. If we're limited by share balance, use redeem instead of withdraw to avoid rounding issues.
+        // Due to ERC-4626 rounding rules: previewRedeem rounds DOWN while previewWithdraw rounds UP.
+        // This means previewWithdraw(previewRedeem(actual_shares)) can exceed actual_shares, causing reverts.
+        // By using redeem(actual_shares) directly, we guarantee using exactly the available shares.
+        if actual_shares < required_shares {
+            // Share-limited: use redeem to guarantee exact share usage
+            let redeem_data = IERC4626::redeemCall {
                 shares: actual_shares,
+                receiver: user_address,
+                owner: user_address,
             }
             .abi_encode();
-            Self::fetch_balance(
-                rpc_client,
-                network,
-                vault_address,
-                redeem_call_data,
-                "previewRedeem",
-            )
-            .await?
-        } else {
-            asset_amount
-        };
 
+            return Ok(Self {
+                call_data: redeem_data,
+                action: TransactionTypeId::ERC4626Redeem,
+                to: vault_address,
+                operation: SafeOperation::Call,
+                metadata,
+            });
+        }
+
+        // 6. User has enough shares: proceed with withdraw
         let withdraw_data = IERC4626::withdrawCall {
-            assets: actual_asset_amount,
+            assets: asset_amount,
             receiver: user_address,
             owner: user_address,
         }

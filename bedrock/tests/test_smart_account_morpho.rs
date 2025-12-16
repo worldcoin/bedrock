@@ -263,12 +263,87 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
         "Morpho vault shares did not decrease after redeem"
     );
 
+    // 14) Test withdraw with share-limited scenario (should switch to redeem internally)
+    println!("\n--- Testing ERC4626 Withdraw (Share-Limited) ---");
+
+    // Request more assets than we have shares for - this should trigger the share-limited path
+    // and cause withdraw to internally use redeem
+    let remaining_shares = after_redeem_shares;
+    let large_withdraw_amount = deposit_amount * U256::from(10u8); // Request way more than we have
+
+    // Create the withdraw transaction - this should detect share limitation and switch to redeem
+    let erc4626_withdraw_limited = Erc4626Vault::withdraw(
+        rpc_client,
+        Network::WorldChain,
+        morpho_vault_wld_token_address,
+        large_withdraw_amount, // Request more than available
+        safe_address,
+        [0u8; 10], // metadata
+    )
+    .await
+    .expect("Failed to create ERC4626 withdraw (share-limited)");
+
+    // Verify that the call data uses redeem function selector (proving the logic switch worked)
+    // redeem(uint256,address,address) selector: 0xba087652
+    // withdraw(uint256,address,address) selector: 0xb460af94
+    let call_data_hex = hex::encode(&erc4626_withdraw_limited.call_data);
+    assert!(
+        call_data_hex.starts_with("ba087652"),
+        "Withdraw should have switched to redeem when share-limited. Call data starts with: {}",
+        &call_data_hex[..8]
+    );
+    println!("✓ Withdraw correctly switched to redeem (share-limited logic verified)");
+
+    // Log the call data
+    println!("🔍 ERC4626 Withdraw (Share-Limited) Call Data:");
+    println!(
+        "🔍   Call Data: 0x{}",
+        hex::encode(&erc4626_withdraw_limited.call_data)
+    );
+    println!("🔍   Requested Asset Amount: {}", large_withdraw_amount);
+    println!("🔍   Available Shares: {}", remaining_shares);
+
+    // Execute the withdraw transaction (which internally uses redeem)
+    let _user_op_hash_withdraw_limited = erc4626_withdraw_limited
+        .sign_and_execute(
+            &safe_account,
+            Network::WorldChain,
+            None,
+            None,
+            bedrock::transactions::RpcProviderName::Any,
+        )
+        .await
+        .expect("ERC4626 withdraw (share-limited) failed");
+
+    println!("✓ ERC4626 withdraw (share-limited) executed");
+
+    // 15) Verify all assets have been withdrawn
+    let final_wld = wld.balanceOf(safe_address).call().await?;
+    let final_shares = morpho_vault.balanceOf(safe_address).call().await?;
+
+    println!("✓ Final Safe WLD balance: {}", final_wld);
+    println!("✓ Final Safe Morpho vault shares: {}", final_shares);
+
+    // All vault shares should be withdrawn (may have small rounding remainder, but should be near zero)
+    assert!(
+        final_shares < U256::from(1000u64), // Allow for small rounding remainders
+        "Not all vault shares were withdrawn. Remaining: {}",
+        final_shares
+    );
+
+    // WLD balance should have increased from the final withdrawal
+    assert!(
+        final_wld > after_redeem_wld,
+        "WLD balance did not increase after final withdrawal"
+    );
+
     println!("\n--- Final Summary ---");
     println!("Initial WLD balance: {}", starting_balance);
     println!("After deposit WLD balance: {}", after_deposit_wld);
     println!("After withdraw WLD balance: {}", after_withdraw_wld);
     println!("After redeem WLD balance: {}", after_redeem_wld);
-    println!("Final vault shares: {}", after_redeem_shares);
+    println!("Final WLD balance: {}", final_wld);
+    println!("Final vault shares: {} (should be 0)", final_shares);
 
     Ok(())
 }
