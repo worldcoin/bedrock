@@ -324,11 +324,9 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
     println!("✓ Final Safe WLD balance: {}", final_wld);
     println!("✓ Final Safe Morpho vault shares: {}", final_shares);
 
-    // All vault shares should be withdrawn (may have small rounding remainder, but should be near zero)
     assert!(
-        final_shares < U256::from(1000u64), // Allow for small rounding remainders
-        "Not all vault shares were withdrawn. Remaining: {}",
-        final_shares
+        final_shares == U256::ZERO,
+        "Not all vault shares were withdrawn. Remaining: {final_shares}"
     );
 
     // WLD balance should have increased from the final withdrawal
