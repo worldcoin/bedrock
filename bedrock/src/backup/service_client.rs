@@ -132,11 +132,11 @@ impl BackupServiceClient {
                 );
             }
         }
-        let hash = response.manifest_hash.clone();
+        let hash = response.manifest_hash.trim_start_matches("0x");
         let hash = hex::decode(hash)
             .map_err(|_| BackupError::Generic {
                 error_message:
-                    format!("[BackupServiceClient] invalid response from retrieve_metadata, manifest hash is not hex data: {} with length {}",
+                    format!("[BackupServiceClient] invalid response from retrieve_metadata, manifest hash is not hex data: {} with str length {}",
                         response.manifest_hash.chars().take(10).collect::<String>(),
                         response.manifest_hash.len()),
             })?;
