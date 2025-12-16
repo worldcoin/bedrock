@@ -241,9 +241,13 @@ impl RpcClient {
         Self { http_client }
     }
 
-    /// Constructs the RPC endpoint URL for the specified network
-    fn rpc_endpoint(network: Network) -> String {
-        format!("/v1/rpc/{}", network.network_name())
+    /// Constructs the RPC endpoint URL for the specified network and method
+    fn rpc_endpoint(network: Network, method: &RpcMethod) -> String {
+        let version = match method {
+            RpcMethod::EthCall => "v2",
+            _ => "v1",
+        };
+        format!("/{version}/rpc/{}", network.network_name())
     }
 
     /// Makes a generic RPC call with typed parameters and result, adding provider header
@@ -267,6 +271,7 @@ impl RpcClient {
         // unique request ID
         let id = Id::String(format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())));
 
+        let endpoint = Self::rpc_endpoint(network, &method);
         let request = JsonRpcRequest::new(method, id, params);
         let request = serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
@@ -285,12 +290,7 @@ impl RpcClient {
         let response_bytes = self
             .http_client
             .as_ref()
-            .fetch_from_app_backend(
-                Self::rpc_endpoint(network),
-                HttpMethod::Post,
-                headers,
-                Some(request),
-            )
+            .fetch_from_app_backend(endpoint, HttpMethod::Post, headers, Some(request))
             .await?;
 
         let json_response: Value =

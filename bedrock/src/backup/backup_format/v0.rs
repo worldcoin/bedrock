@@ -144,8 +144,13 @@ impl V0Backup {
         }
 
         // Validate the root secret.
-        let root_secret = RootKey::from_json(&root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let root_secret = RootKey::from_json(&root_secret).map_err(|_| {
+            BackupError::InvalidRootSecretError(format!(
+                "[Critical] Invalid root secret in decrypted backup: {} with length {}.",
+                root_secret.chars().next().unwrap_or_default() == '{',
+                root_secret.len()
+            ))
+        })?;
 
         Ok(Self { root_secret, files })
     }
@@ -301,7 +306,7 @@ mod tests {
         encoder.finish().unwrap();
         assert_eq!(
             V0Backup::from_bytes(&result).unwrap_err().to_string(),
-            BackupError::InvalidRootSecretError.to_string()
+            "Invalid root secret provided: [Critical] Invalid root secret in decrypted backup: false with length 16."
         );
     }
 
@@ -329,7 +334,7 @@ mod tests {
 
         assert_eq!(
             V0Backup::from_bytes(&result).unwrap_err().to_string(),
-            BackupError::InvalidRootSecretError.to_string()
+            "Invalid root secret provided: [Critical] Invalid root secret in decrypted backup: false with length 0."
         );
     }
 

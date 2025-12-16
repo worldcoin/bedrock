@@ -107,15 +107,12 @@ fn init_test_globals() -> Arc<FakeBackupServiceApi> {
     // Filesystem
     set_filesystem(Arc::new(InMemoryFileSystem::new()));
     // API
-    TEST_API.get().cloned().map_or_else(
-        || {
-            let api = Arc::new(FakeBackupServiceApi::default());
-            let _ = set_backup_service_api(api.clone());
-            let _ = TEST_API.set(api.clone());
-            api
-        },
-        |api| api,
-    )
+    TEST_API.get().cloned().unwrap_or_else(|| {
+        let api = Arc::new(FakeBackupServiceApi::default());
+        let _ = set_backup_service_api(api.clone());
+        let _ = TEST_API.set(api.clone());
+        api
+    })
 }
 
 fn write_manifest_with_prefix(manifest: &BackupManifest, prefix: &str) {

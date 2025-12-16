@@ -498,8 +498,12 @@ impl ManifestManager {
     where
         F: FnOnce(&mut V0BackupManifest) -> Result<ManifestMutation, BackupError>,
     {
-        let root = RootKey::from_json(root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let root = RootKey::from_json(root_secret).map_err(|_| {
+            BackupError::InvalidRootSecretError(format!(
+                "invalid secret provided for mutating the manifest: {}",
+                root_secret.chars().next().unwrap_or_default() == '{'
+            ))
+        })?;
         let pk_bytes = hex::decode(backup_keypair_public_key)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
         let pk = PublicKey::from_slice(&pk_bytes)

@@ -183,6 +183,28 @@ pub(crate) fn get_filesystem_raw(
         .ok_or(FileSystemError::NotInitialized)
 }
 
+/// Safely invoke a filesystem callback, catching any panics from UniFFI lifting.
+///
+/// When foreign implementations (Kotlin/Swift) throw exceptions during callbacks,
+/// UniFFI may panic while lifting the return value. This helper catches those panics
+/// and converts them to proper errors.
+///
+/// This is particularly important when Kotlin coroutines are cancelled mid-callback,
+/// as the `CancellationException` cannot be properly represented in the return type
+/// and causes UniFFI to panic during `RustBuffer` destruction.
+fn catch_callback_panic<T, F>(operation: &str, f: F) -> Result<T, FileSystemError>
+where
+    F: FnOnce() -> Result<T, FileSystemError> + std::panic::UnwindSafe,
+{
+    std::panic::catch_unwind(f)
+        .map_err(|_| {
+            FileSystemError::UnexpectedUniFFICallbackError(format!(
+                "panic in FileSystem.{operation} callback"
+            ))
+        })
+        .and_then(|result| result)
+}
+
 /// Middleware wrapper that enforces path prefixing for filesystem operations
 ///
 /// This struct is created by the `bedrock_export` macro and ensures all filesystem
@@ -224,7 +246,10 @@ impl FileSystemMiddleware {
     pub fn file_exists(&self, file_path: &str) -> Result<bool, FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
-        fs.file_exists(prefixed_path)
+        catch_callback_panic(
+            "file_exists",
+            std::panic::AssertUnwindSafe(|| fs.file_exists(prefixed_path)),
+        )
     }
 
     /// Read file contents (with prefix)
@@ -235,7 +260,10 @@ impl FileSystemMiddleware {
     pub fn read_file(&self, file_path: &str) -> Result<Vec<u8>, FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
-        fs.read_file(prefixed_path)
+        catch_callback_panic(
+            "read_file",
+            std::panic::AssertUnwindSafe(|| fs.read_file(prefixed_path)),
+        )
     }
 
     /// Read a specific byte range from a file (with prefix)
@@ -251,7 +279,12 @@ impl FileSystemMiddleware {
     ) -> Result<Vec<u8>, FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
-        fs.read_file_range(prefixed_path, offset, max_length)
+        catch_callback_panic(
+            "read_file_range",
+            std::panic::AssertUnwindSafe(|| {
+                fs.read_file_range(prefixed_path, offset, max_length)
+            }),
+        )
     }
 
     /// List files in a directory (with prefix)
@@ -265,7 +298,10 @@ impl FileSystemMiddleware {
     ) -> Result<Vec<String>, FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(folder_path);
-        fs.list_files_at_directory(prefixed_path)
+        catch_callback_panic(
+            "list_files_at_directory",
+            std::panic::AssertUnwindSafe(|| fs.list_files_at_directory(prefixed_path)),
+        )
     }
 
     /// Write file contents (with prefix)
@@ -280,7 +316,10 @@ impl FileSystemMiddleware {
     ) -> Result<(), FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
-        fs.write_file(prefixed_path, file_buffer)
+        catch_callback_panic(
+            "write_file",
+            std::panic::AssertUnwindSafe(|| fs.write_file(prefixed_path, file_buffer)),
+        )
     }
 
     /// Delete a file (with prefix)
@@ -292,7 +331,10 @@ impl FileSystemMiddleware {
     pub fn delete_file(&self, file_path: &str) -> Result<(), FileSystemError> {
         let fs = get_filesystem_raw()?;
         let prefixed_path = self.prefix_path(file_path);
-        fs.delete_file(prefixed_path)
+        catch_callback_panic(
+            "delete_file",
+            std::panic::AssertUnwindSafe(|| fs.delete_file(prefixed_path)),
+        )
     }
 }
 
@@ -564,6 +606,57 @@ mod tests {
         assert_eq!(
             middleware.prefix_path("test_module/file.txt"),
             "test_module/file.txt"
+        );
+    }
+
+    #[test]
+    fn test_catch_callback_panic_handles_panic() {
+        // Test that catch_callback_panic catches panics and converts them to errors.
+        // This simulates what happens when Kotlin throws CancellationException
+        // during a FileSystem callback.
+
+        // Test with a closure that panics
+        let result = catch_callback_panic(
+            "test_operation",
+            std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, FileSystemError> {
+                panic!("Simulated panic from Kotlin callback (e.g., CancellationException)");
+            }),
+        );
+
+        // Should return error, not panic
+        assert!(
+            matches!(
+                result,
+                Err(FileSystemError::UnexpectedUniFFICallbackError(_))
+            ),
+            "Expected UnexpectedUniFFICallbackError, got: {result:?}"
+        );
+
+        // Verify the error message contains the operation name
+        if let Err(FileSystemError::UnexpectedUniFFICallbackError(msg)) = result {
+            assert!(
+                msg.contains("test_operation"),
+                "Error message should mention the operation: {msg}"
+            );
+        }
+
+        // Test with a closure that returns Ok
+        let ok_result = catch_callback_panic(
+            "test_operation",
+            std::panic::AssertUnwindSafe(|| Ok::<(), FileSystemError>(())),
+        );
+        assert!(ok_result.is_ok(), "Should pass through Ok results");
+
+        // Test with a closure that returns Err
+        let err_result = catch_callback_panic(
+            "test_operation",
+            std::panic::AssertUnwindSafe(|| {
+                Err::<(), FileSystemError>(FileSystemError::FileDoesNotExist)
+            }),
+        );
+        assert!(
+            matches!(err_result, Err(FileSystemError::FileDoesNotExist)),
+            "Should pass through regular errors"
         );
     }
 }

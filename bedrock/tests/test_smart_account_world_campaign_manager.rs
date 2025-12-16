@@ -39,6 +39,7 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
 
     let safe_address_giftor = deploy_safe(&provider, owner, U256::ZERO).await?;
     let safe_address_giftee = deploy_safe(&provider, owner, U256::from(1)).await?;
+    let safe_address_third = deploy_safe(&provider, owner, U256::from(2)).await?;
 
     let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
     for safe in [safe_address_giftor, safe_address_giftee] {
@@ -64,18 +65,14 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
     // Mark both Safe accounts as verified in the WorldIDAddressBook so that
     // WorldCampaignManager::sponsor passes the NotVerified checks.
     let far_future_timestamp = U256::from(2_000_000_000u64);
-    set_address_verified_until_for_account(
-        &provider,
-        safe_address_giftor,
-        far_future_timestamp,
-    )
-    .await?;
-    set_address_verified_until_for_account(
-        &provider,
-        safe_address_giftee,
-        far_future_timestamp,
-    )
-    .await?;
+    for addr in [
+        &safe_address_giftor,
+        &safe_address_giftee,
+        &safe_address_third,
+    ] {
+        set_address_verified_until_for_account(&provider, *addr, far_future_timestamp)
+            .await?;
+    }
 
     let before_giftor = wld.balanceOf(safe_address_giftor).call().await?;
     let before_giftee = wld.balanceOf(safe_address_giftee).call().await?;
@@ -90,7 +87,7 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
         SafeSmartAccount::new(owner_key_hex.clone(), &safe_address_giftee.to_string())?;
     let campaign_id_str = "1";
 
-    // First, giftor sponsors giftee. This makes giftee eligible to claim.
+    // First, giftor sponsors giftee. This makes giftee eligible to claim after he has sponsored someone.
     safe_account_giftor
         .transaction_world_campaign_manager_sponsor(
             campaign_id_str,
@@ -99,14 +96,14 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
         .await
         .expect("transaction_world_campaign_manager_sponsor (giftor -> giftee) failed");
 
-    // Then, giftee also sponsors giftor so that giftee has sponsored someone and can claim.
+    // Then, giftee sponsors third safe so that giftee has sponsored someone and can claim.
     safe_account_giftee
         .transaction_world_campaign_manager_sponsor(
-            campaign_id_str,
-            &safe_address_giftor.to_string(),
+            &campaign_id_str.to_string(),
+            &safe_address_third.to_string(),
         )
         .await
-        .expect("transaction_world_campaign_manager_sponsor (giftee -> giftor) failed");
+        .expect("transaction_world_campaign_manager_sponsor (giftee -> third) failed");
 
     let after_giftor = wld.balanceOf(safe_address_giftor).call().await?;
     let after_giftee = wld.balanceOf(safe_address_giftee).call().await?;
@@ -139,7 +136,9 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
 ///   - slot `base + 3`: `bool wasEndedEarly`
 ///   - slot `base + 4`: `uint256 lowerBound`
 ///   - slot `base + 5`: `uint256 upperBound`
-///   - slot `base + 6`: `uint256 randomnessSeed`
+///   - slot `base + 6`: `uint256 bonusRewardThreshold`
+///   - slot `base + 7`: `uint256 bonusRewardAmount`
+///   - slot `base + 8`: `uint256 randomnessSeed`
 ///
 /// NOTE: This is tailored for tests only.
 pub async fn setup_fake_world_campaign<P>(
@@ -222,11 +221,29 @@ where
         )
         .await?;
 
-    // Slot 6: randomnessSeed (arbitrary non-zero value).
+    // Slot 6: bonusRewardThreshold = reward_amount (must be >= lowerBound and <= upperBound).
     provider
         .anvil_set_storage_at(
             world_campaign_manager_address,
             base_slot + U256::from(6u8),
+            reward_amount.into(),
+        )
+        .await?;
+
+    // Slot 7: bonusRewardAmount = reward_amount (must be >= upperBound, and this is what gets paid when bonus triggers).
+    provider
+        .anvil_set_storage_at(
+            world_campaign_manager_address,
+            base_slot + U256::from(7u8),
+            reward_amount.into(),
+        )
+        .await?;
+
+    // Slot 8: randomnessSeed (arbitrary non-zero value).
+    provider
+        .anvil_set_storage_at(
+            world_campaign_manager_address,
+            base_slot + U256::from(8u8),
             U256::from(1u8).into(),
         )
         .await?;

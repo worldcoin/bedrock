@@ -83,12 +83,16 @@ impl BackupManager {
         );
 
         // 1: Decode the root secret from multiple formats
-        let root_key = RootKey::from_json(root_secret)
-            .map_err(|_| BackupError::InvalidRootSecretError)?;
+        let root_key = RootKey::from_json(root_secret).map_err(|_| {
+            BackupError::InvalidRootSecretError(format!(
+                "attempting to add an invalid secret to a new backup: {}",
+                root_secret.chars().next().unwrap_or_default() == '{'
+            ))
+        })?;
         let backup_account_id =
             root_key.derive_public_backup_account_id().map_err(|e| {
-                crate::error!("Error deriving public backup account id: {e:?}");
-                BackupError::InvalidRootSecretError
+                let msg = format!("Unexpected. Deriving public backup id: {e:?}");
+                BackupError::Generic { error_message: msg }
             })?;
 
         // 2.1: Decode factor secret from hex
@@ -229,10 +233,12 @@ impl BackupManager {
 
         match unsealed_backup {
             BackupFormat::V0(backup) => Ok(DecryptedBackup {
-                root_key_json: backup
-                    .root_secret
-                    .danger_to_json()
-                    .map_err(|_| BackupError::InvalidRootSecretError)?,
+                root_key_json: backup.root_secret.danger_to_json().map_err(|_| {
+                    BackupError::Generic {
+                        error_message: "unexpected. failed to serialize root secret"
+                            .to_string(),
+                    }
+                })?,
                 backup_keypair_public_key: hex::encode(
                     backup_secret_key.public_key().as_bytes(),
                 ),
@@ -390,7 +396,7 @@ impl BackupManager {
             Ok(()) => Ok(()),
             Err(e) => {
                 crate::error!("Failed to send backup event: {e:?}");
-                Ok(())
+                Err(e.into())
             }
         }
     }
@@ -566,7 +572,6 @@ impl<'de> Deserialize<'de> for BackupFileDesignator {
 
 /// Errors that can occur when working with backups and manifests.
 #[crate::bedrock_error]
-#[uniffi(flat_error)]
 pub enum BackupError {
     #[error("Failed to decode factor secret as hex")]
     /// Failed to decode factor secret as hex.
@@ -592,9 +597,9 @@ pub enum BackupError {
     #[error("IO error: {0}")]
     /// IO error while reading/writing backup data.
     IoError(String),
-    #[error("Invalid root secret in the backup")]
-    /// Root secret inside backup is invalid.
-    InvalidRootSecretError,
+    #[error("Invalid root secret provided: {0}")]
+    /// Root secret is invalid.
+    InvalidRootSecretError(String),
     #[error("Backup version is not detected")]
     /// Backup version cannot be detected.
     VersionNotDetectedError,
@@ -640,6 +645,9 @@ pub enum BackupError {
     #[error("Invalid manifest hash")]
     /// Invalid manifest hash.
     InvalidManifestHash,
+    #[error("Client events error: {0}")]
+    /// Backup not found.
+    ClientEventsError(String),
 }
 
 impl From<crate::primitives::http_client::HttpError> for BackupError {
@@ -680,6 +688,12 @@ impl From<ciborium::de::Error<std::io::Error>> for BackupError {
 impl From<std::io::Error> for BackupError {
     fn from(e: std::io::Error) -> Self {
         Self::IoError(e.to_string())
+    }
+}
+
+impl From<ClientEventsError> for BackupError {
+    fn from(e: ClientEventsError) -> Self {
+        Self::ClientEventsError(e.to_string())
     }
 }
 
