@@ -132,17 +132,21 @@ impl BackupServiceClient {
                 );
             }
         }
-        let hash: [u8; 32] = hex::decode(response.manifest_hash)
+        let hash = response.manifest_hash.clone();
+        let hash = hex::decode(hash)
             .map_err(|_| BackupError::Generic {
                 error_message:
-                    "[BackupServiceApi] invalid response from retrieve_metadata"
-                        .to_string(),
-            })?
+                    format!("[BackupServiceClient] invalid response from retrieve_metadata, manifest hash is not hex data: {} with length {}",
+                        response.manifest_hash.chars().take(10).collect::<String>(),
+                        response.manifest_hash.len()),
+            })?;
+
+        let hash_len = hash.len();
+        let hash: [u8; 32] = hash
             .try_into()
             .map_err(|_| BackupError::Generic {
                 error_message:
-                    "[BackupServiceApi] invalid response from retrieve_metadata"
-                        .to_string(),
+                    format!("[BackupServiceClient] invalid response from retrieve_metadata, manifest_hash is not the correct length: {hash_len}"),
             })?;
         Ok(hash)
     }
