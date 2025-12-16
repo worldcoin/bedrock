@@ -99,7 +99,7 @@ async fn test_transaction_world_campaign_manager_sponsor_claim_user_operations(
     // Then, giftee sponsors third safe so that giftee has sponsored someone and can claim.
     safe_account_giftee
         .transaction_world_campaign_manager_sponsor(
-            &campaign_id_str.to_string(),
+            campaign_id_str,
             &safe_address_third.to_string(),
         )
         .await
