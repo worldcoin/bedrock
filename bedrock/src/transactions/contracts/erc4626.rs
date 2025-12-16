@@ -425,7 +425,7 @@ mod tests {
     use super::*;
 
     /// Creates a test RPC client with mocked responses for `asset()` and `balanceOf()` calls
-    async fn setup_test_rpc_client(
+    fn setup_test_rpc_client(
         vault_address: Address,
         asset_address: Address,
         receiver: Address,
@@ -489,8 +489,7 @@ mod tests {
             asset_address,
             receiver,
             deposit_amount,
-        )
-        .await;
+        );
 
         // Test deposit with test RPC client
         let vault = Erc4626Vault::deposit(
@@ -528,8 +527,7 @@ mod tests {
             asset_address,
             receiver,
             U256::from(0), // User has no balance
-        )
-        .await;
+        );
 
         // Test deposit should fail due to zero balance
         let result = Erc4626Vault::deposit(
@@ -558,7 +556,7 @@ mod tests {
             Address::from_str("0x545c97c6664e6f9c37b0e6e2b80e68954413f70b").unwrap();
         let metadata = [0u8; 10]; // Same as E2E test
 
-        let asset_amount = U256::from(500000000000000000u64); // 0.5 WLD (from E2E test)
+        let asset_amount = U256::from(500_000_000_000_000_000u64); // 0.5 WLD (from E2E test)
         let share_balance = U256::from(10u128.pow(18)); // 1 share available
         let required_shares = U256::from(5 * 10u128.pow(17)); // 0.5 shares needed (1:1 ratio for simplicity)
 
@@ -692,7 +690,7 @@ mod tests {
             Address::from_str("0x545c97c6664e6f9c37b0e6e2b80e68954413f70b").unwrap();
         let metadata = [0u8; 10]; // Same as E2E test
 
-        let share_amount = U256::from(124985199400075175u64); // From E2E test redeem amount
+        let share_amount = U256::from(124_985_199_400_075_175u64); // From E2E test redeem amount
         let share_balance = U256::from(10u128.pow(18)); // 1 share available
 
         // Setup test RPC client with mocked responses

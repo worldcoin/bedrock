@@ -1,4 +1,5 @@
 //! Test utilities for unit tests and E2E tests for mocking RPC responses either from Anvil or hard-coded for unit tests.
+#![allow(clippy::all)]
 use std::str::FromStr;
 
 use alloy::{
@@ -162,6 +163,7 @@ impl<P> AuthenticatedHttpClient for AnvilBackedHttpClient<P>
 where
     P: Provider<Ethereum> + Clone + Send + Sync + 'static,
 {
+    #[allow(clippy::too_many_lines, clippy::or_fun_call)]
     async fn fetch_from_app_backend(
         &self,
         url: String,
