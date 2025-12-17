@@ -2,6 +2,20 @@
 
 
 
+## [0.0.37] - 2025-12-17
+
+## What's Changed
+* feat: improve error handling for root secret parsing by @paolodamico in https://github.com/worldcoin/bedrock/pull/229
+* feat: ERC4646 deposit/withdraw by @karankurbur in https://github.com/worldcoin/bedrock/pull/218
+* fix: improve error handling for manifest hash by @paolodamico in https://github.com/worldcoin/bedrock/pull/230
+* chore: change backup events endpoint url by @paolodamico in https://github.com/worldcoin/bedrock/pull/228
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.36...0.0.37
+
+
+
+
 ## [0.0.36] - 2025-12-09
 
 ## What's Changed
