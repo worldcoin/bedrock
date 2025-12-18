@@ -275,6 +275,7 @@ impl ClientEventsReporter {
         success: bool,
         error_message: Option<String>,
         timestamp_iso8601: String,
+        is_public: bool,
     ) -> Result<(), ClientEventsError> {
         // Ensure installation ID exists before sending
         let ensured_installation_id = self.ensure_installation_id()?;
@@ -318,17 +319,23 @@ impl ClientEventsReporter {
 
         let body = serde_json::to_vec(&event).map_err(|_| ClientEventsError::Json)?;
 
-        let headers: Vec<HttpHeader> = vec![HttpHeader {
+        let mut headers: Vec<HttpHeader> = vec![HttpHeader {
             name: "Content-Type".to_string(),
             value: "application/json".to_string(),
         }];
-        http.fetch_from_app_backend(
-            Self::EVENTS_ENDPOINT.to_string(),
-            HttpMethod::Post,
-            headers,
-            Some(body),
-        )
-        .await?;
+
+        let endpoint = if is_public {
+            headers.push(HttpHeader {
+                name: "Authorization".to_string(),
+                value: "".to_string(),
+            });
+            Self::PUBLIC_EVENTS_ENDPOINT.to_string()
+        } else {
+            Self::EVENTS_ENDPOINT.to_string()
+        };
+
+        http.fetch_from_app_backend(endpoint, HttpMethod::Post, headers, Some(body))
+            .await?;
 
         Ok(())
     }
@@ -346,6 +353,7 @@ impl ClientEventsReporter {
     const FS_PREFIX: &'static str = "backup_client_events";
     const BASE_FILE: &'static str = "base_report.json";
     const EVENTS_ENDPOINT: &'static str = "/v1/backup/events";
+    const PUBLIC_EVENTS_ENDPOINT: &'static str = "/public/v1/backup/events";
 
     /// Ensure an installation ID exists and is persisted. Returns the ID.
     fn ensure_installation_id(&self) -> Result<String, ClientEventsError> {
