@@ -2,6 +2,17 @@
 
 
 
+## [0.0.38] - 2025-12-18
+
+## What's Changed
+* fix:set panic=unwind by @lukejmann in https://github.com/worldcoin/bedrock/pull/233
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.37...0.0.38
+
+
+
+
 ## [0.0.37] - 2025-12-17
 
 ## What's Changed
