@@ -327,7 +327,7 @@ impl ClientEventsReporter {
         let endpoint = if is_public {
             headers.push(HttpHeader {
                 name: "Authorization".to_string(),
-                value: "".to_string(),
+                value: String::new(),
             });
             Self::PUBLIC_EVENTS_ENDPOINT.to_string()
         } else {

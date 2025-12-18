@@ -551,6 +551,7 @@ impl ManifestManager {
                 result.is_ok(),
                 result.as_ref().err().map(std::string::ToString::to_string),
                 Utc::now().to_rfc3339(),
+                false,
             )
             .await
         {
