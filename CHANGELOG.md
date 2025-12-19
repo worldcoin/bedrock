@@ -2,6 +2,18 @@
 
 
 
+## [0.1.0] - 2025-12-19
+
+## What's Changed
+* fix:set panic=unwind by @lukejmann in https://github.com/worldcoin/bedrock/pull/233
+* feat: backup report public events by @paolodamico in https://github.com/worldcoin/bedrock/pull/232
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.0.37...0.1.0
+
+
+
+
 ## [0.0.37] - 2025-12-17
 
 ## What's Changed
