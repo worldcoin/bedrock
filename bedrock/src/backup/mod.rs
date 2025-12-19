@@ -368,7 +368,16 @@ impl BackupManager {
 
     /// Send a single event by merging with base report and posting to backend.
     ///
-    /// Sends events to the REST API endpoint `/v1/backup/status`.
+    /// Sends events to the REST API endpoint `/v1/backup/events` or `/public/v1/backup/events`.
+    ///
+    /// # Arguments
+    ///
+    /// * `kind` - The type of event being reported.
+    /// * `success` - Whether the event was successful.
+    /// * `error_message` - An optional error message if the event failed.
+    /// * `timestamp_iso8601` - The current timestamp in ISO 8601 format.
+    /// * `is_public` - Whether the event is being reported unauthenticated (because the user
+    /// has not authenticated yet). This is used for log in failures.
     ///
     /// # Errors
     /// Returns an error if HTTP client is not initialized or network/serialization fails.
@@ -378,6 +387,7 @@ impl BackupManager {
         success: bool,
         error_message: Option<String>,
         timestamp_iso8601: String,
+        is_public: bool,
     ) -> Result<(), BackupError> {
         if kind == BackupReportEventKind::Sync {
             return Err(BackupError::Generic {
@@ -389,7 +399,7 @@ impl BackupManager {
         let client_events = ClientEventsReporter::new();
 
         let result = client_events
-            .send_event(kind, success, error_message, timestamp_iso8601)
+            .send_event(kind, success, error_message, timestamp_iso8601, is_public)
             .await;
 
         match result {
