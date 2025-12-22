@@ -67,9 +67,9 @@ export IPHONEOS_DEPLOYMENT_TARGET="13.0"
 export RUSTFLAGS="-C link-arg=-Wl,-application_extension"
 
 # Build for all iOS targets
-cargo build --package $PACKAGE_NAME --target aarch64-apple-ios-sim --release
-cargo build --package $PACKAGE_NAME --target aarch64-apple-ios --release
-cargo build --package $PACKAGE_NAME --target x86_64-apple-ios --release
+cargo build --package $PACKAGE_NAME --target aarch64-apple-ios-sim --release --features foreign_tests
+cargo build --package $PACKAGE_NAME --target aarch64-apple-ios --release --features foreign_tests
+cargo build --package $PACKAGE_NAME --target x86_64-apple-ios --release --features foreign_tests
 
 echo "Rust packages built. Combining simulator targets into universal binary..."
 

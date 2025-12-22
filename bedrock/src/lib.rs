@@ -44,7 +44,7 @@ pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 mod root_key;
 
 /// Test utilities for unit and integration tests
-#[cfg(any(test, feature = "tooling_tests"))]
+#[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;
 
 uniffi::setup_scaffolding!("bedrock");

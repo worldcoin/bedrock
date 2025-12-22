@@ -18,9 +18,10 @@ crate-type = ["lib", "staticlib", "cdylib"]
 name = "bedrock"
 
 [features]
-# Tooling tests are for unit and integration tests.
-tooling_tests = []
-__test = ["tooling_tests"]
+default = ["tooling_tests"]
+# Test_utils are for unit and integration tests.
+test_utils = []
+__test = ["test_utils"]
 
 [dependencies]
 alloy = { version = "1.1.2", default-features = false, features = [

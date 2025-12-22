@@ -25,7 +25,7 @@ Thank you for your interest in contributing to our project! This document provid
 
 4. Run tests to ensure everything is working as expected. This will run **all tests** including integration tests and doctests.
    ```bash
-   cargo test --features tooling_tests
+   cargo test --features test_utils
    ```
 
 ### Dependencies for Foreign Tests

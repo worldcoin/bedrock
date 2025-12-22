@@ -14,7 +14,7 @@ rm -rf "$JAVA_SRC_DIR" "$LIBS_DIR"
 mkdir -p "$JAVA_SRC_DIR" "$LIBS_DIR"
 
 echo "🟢 Building Rust cdylib for host platform"
-cargo build --package bedrock --release
+cargo build --package bedrock --release --features foreign_tests
 
 # Determine the correct library file extension and copy it
 if [[ "$OSTYPE" == "darwin"* ]]; then
