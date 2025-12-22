@@ -59,7 +59,7 @@ pub mod http_client;
 
 /// Introduces test elements to ensure tooling (logging and error handling) is working as expected.
 /// The elements in this module are only used in Foreign Tests and are not available in built binaries.
-#[cfg(any(feature = "tooling_tests", feature = "foreign_tests"))]
+#[cfg(feature = "tooling_tests")]
 pub mod tooling_tests;
 
 /// Contract interfaces and data structures for ERC-4337 account abstraction

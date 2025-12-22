@@ -19,6 +19,7 @@ name = "bedrock"
 
 [features]
 default = ["tooling_tests"]
+tooling_tests = []
 # Test_utils are for unit and integration tests.
 test_utils = []
 __test = ["test_utils"]
