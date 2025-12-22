@@ -26,7 +26,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.91.1
 
       - name: Check code formatting
         run: cargo fmt -- --check
@@ -60,7 +60,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.91.1
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
       - name: Build and test Swift bindings
@@ -85,7 +85,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
+          toolchain: 1.91.1
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -120,7 +120,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v1
         with:
           command: check ${{ matrix.checks }}
-          rust-version: stable
+          rust-version: 1.91.1
 
   kotlin-build-and-test:
     name: Build and Test Kotlin Bindings
@@ -134,7 +134,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.91.1
 
       - name: Build and test Kotlin bindings
         run: ./kotlin/test_kotlin.sh
