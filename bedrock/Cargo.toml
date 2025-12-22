@@ -18,11 +18,9 @@ crate-type = ["lib", "staticlib", "cdylib"]
 name = "bedrock"
 
 [features]
-default = ["tooling_tests"]
-tooling_tests = ["dep:tokio"]
-test-utils = []
-# Automatically enable test-utils when running tests
-__test = ["test-utils"]
+# Tooling tests are for unit and integration tests.
+tooling_tests = []
+__test = ["tooling_tests"]
 
 [dependencies]
 alloy = { version = "1.1.2", default-features = false, features = [
@@ -71,7 +69,7 @@ strum = { version = "0.27.2", features = ["derive"] }
 subtle = { version = "2.6.1", default-features = false }
 tar = "0.4.40"
 thiserror = "2.0.17"
-tokio = { version = "1.47.1", features = ["time"], optional = true }
+tokio = { version = "1.47.1", features = ["time"] }
 turnkey_enclave_encrypt = "0.3.0"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 uuid = { version = "1.18.1", features = ["v4"], default-features = false }
