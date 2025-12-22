@@ -98,7 +98,7 @@ jobs:
           WORLDCHAIN_RPC_URL: ${{ secrets.WORLDCHAIN_RPC_URL || 'https://worldchain-mainnet.g.alchemy.com/public' }}
         run: |
           cp .env.example .env
-          cargo test --all
+          cargo test --all --features tooling_tests
 
   deny:
     name: Cargo deny
