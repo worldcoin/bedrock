@@ -20,6 +20,9 @@ name = "bedrock"
 [features]
 default = ["tooling_tests"]
 tooling_tests = ["dep:tokio"]
+test-utils = []
+# Automatically enable test-utils when running tests
+__test = ["test-utils"]
 
 [dependencies]
 alloy = { version = "1.1.2", default-features = false, features = [
