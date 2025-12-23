@@ -19,7 +19,10 @@ name = "bedrock"
 
 [features]
 default = ["tooling_tests"]
-tooling_tests = ["dep:tokio"]
+tooling_tests = []
+# Test_utils are for unit and integration tests.
+test_utils = []
+__test = ["test_utils"]
 
 [dependencies]
 alloy = { version = "1.1.2", default-features = false, features = [
@@ -68,7 +71,7 @@ strum = { version = "0.27.2", features = ["derive"] }
 subtle = { version = "2.6.1", default-features = false }
 tar = "0.4.40"
 thiserror = "2.0.17"
-tokio = { version = "1.47.1", features = ["time"], optional = true }
+tokio = { version = "1.47.1", features = ["time"] }
 turnkey_enclave_encrypt = "0.3.0"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 uuid = { version = "1.18.1", features = ["v4"], default-features = false }
@@ -85,7 +88,6 @@ alloy = { version = "1.1.2", default-features = false, features = [
   "json",
   "contract",
   "node-bindings",
-  "reqwest-rustls-tls",
 ] }
 dotenvy = "0.15.7"
 k256 = { version = "0.13.4", default-features = false, features = ["std", "ecdsa"] }

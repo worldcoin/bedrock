@@ -21,6 +21,7 @@ use crate::transactions::rpc::{RpcClient, RpcError};
 sol! {
     /// The ERC-4626 vault contract interface.
     /// Reference: <https://eips.ethereum.org/EIPS/eip-4626>
+    /// Reference: <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol>
     #[derive(serde::Serialize)]
     interface IERC4626 {
         // Core ERC-4626 functions
