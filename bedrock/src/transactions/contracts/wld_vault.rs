@@ -11,7 +11,9 @@ use crate::smart_account::{
 };
 use crate::transactions::contracts::erc20::{Erc20, IErc20};
 use crate::transactions::contracts::erc4626::IERC4626;
-use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx, MULTISEND_ADDRESS};
+use crate::transactions::contracts::multisend::{
+    MultiSend, MultiSendTx, MULTISEND_ADDRESS,
+};
 use crate::transactions::rpc::{RpcClient, RpcError};
 
 /// The WLD token address on World Chain.
@@ -122,7 +124,8 @@ impl WldVault {
         // 2. Validate that the user has funds to migrate
         if wld_amount.is_zero() {
             return Err(RpcError::InvalidResponse {
-                error_message: "Cannot migrate - user has no funds in the old vault".to_string(),
+                error_message: "Cannot migrate - user has no funds in the old vault"
+                    .to_string(),
             });
         }
 
@@ -262,11 +265,8 @@ mod tests {
 
         let wld_balance = U256::from(10u128.pow(18)); // 1 WLD
 
-        let test_rpc_client = setup_test_rpc_client(
-            old_vault_address,
-            user_address,
-            wld_balance,
-        );
+        let test_rpc_client =
+            setup_test_rpc_client(old_vault_address, user_address, wld_balance);
 
         let migration = WldVault::migrate_to_re7wld(
             &test_rpc_client,
@@ -297,11 +297,8 @@ mod tests {
 
         let wld_balance = U256::from(0); // No funds
 
-        let test_rpc_client = setup_test_rpc_client(
-            old_vault_address,
-            user_address,
-            wld_balance,
-        );
+        let test_rpc_client =
+            setup_test_rpc_client(old_vault_address, user_address, wld_balance);
 
         let result = WldVault::migrate_to_re7wld(
             &test_rpc_client,
@@ -334,11 +331,8 @@ mod tests {
 
         let wld_balance = U256::from(10u128.pow(18));
 
-        let test_rpc_client = setup_test_rpc_client(
-            old_vault_address,
-            user_address,
-            wld_balance,
-        );
+        let test_rpc_client =
+            setup_test_rpc_client(old_vault_address, user_address, wld_balance);
 
         let migration = WldVault::migrate_to_re7wld(
             &test_rpc_client,
