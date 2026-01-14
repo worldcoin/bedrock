@@ -263,18 +263,18 @@ impl SafeSmartAccount {
     ///
     /// # Arguments
     /// - `vault_address`: The address of the ERC4626 vault contract.
-    /// - `amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
+    /// - `asset_amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
     ///
     /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or asset_amount is invalid.
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_erc4626_deposit(
         &self,
         vault_address: &str,
-        amount: &str,
+        asset_amount: &str,
     ) -> Result<HexEncodedData, TransactionError> {
         let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
-        let amount = U256::parse_from_ffi(amount, "amount")?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
         let receiver = self.wallet_address;
 
         // Get the RPC client and create the ERC4626 deposit transaction
@@ -286,7 +286,7 @@ impl SafeSmartAccount {
                 rpc_client,
                 Network::WorldChain,
                 vault_address,
-                amount,
+                asset_amount,
                 receiver,
                 [0u8; 10], // metadata
             )
@@ -302,6 +302,108 @@ impl SafeSmartAccount {
             .await
             .map_err(|e| TransactionError::Generic {
                 error_message: format!("Failed to execute ERC4626 deposit: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Withdraws assets from an ERC4626 vault on World Chain.
+    ///
+    /// This method uses the generic ERC4626 implementation that queries the vault's
+    /// share balance and automatically handles share-limited scenarios by switching to redeem.
+    ///
+    /// # Arguments
+    /// - `vault_address`: The address of the ERC4626 vault contract.
+    /// - `asset_amount`: The amount of assets to withdraw as a stringified integer with the asset's decimals.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or asset_amount is invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_erc4626_withdraw(
+        &self,
+        vault_address: &str,
+        asset_amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
+        let receiver = self.wallet_address;
+
+        // Get the RPC client and create the ERC4626 withdraw transaction
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::erc4626::Erc4626Vault::withdraw(
+                rpc_client,
+                Network::WorldChain,
+                vault_address,
+                asset_amount,
+                receiver,
+                [0u8; 10], // metadata
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create ERC4626 withdraw: {e}"),
+            })?;
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute ERC4626 withdraw: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Redeems shares from an ERC4626 vault on World Chain.
+    ///
+    /// This method uses the generic ERC4626 implementation that queries the vault's
+    /// share balance before creating the transaction.
+    ///
+    /// # Arguments
+    /// - `vault_address`: The address of the ERC4626 vault contract.
+    /// - `share_amount`: The amount of shares to redeem as a stringified integer.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or share_amount is invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    pub async fn transaction_erc4626_redeem(
+        &self,
+        vault_address: &str,
+        share_amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
+        let share_amount = U256::parse_from_ffi(share_amount, "share_amount")?;
+        let receiver = self.wallet_address;
+
+        // Get the RPC client and create the ERC4626 redeem transaction
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::erc4626::Erc4626Vault::redeem(
+                rpc_client,
+                Network::WorldChain,
+                vault_address,
+                share_amount,
+                receiver,
+                [0u8; 10], // metadata
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create ERC4626 redeem: {e}"),
+            })?;
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute ERC4626 redeem: {e}"),
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)

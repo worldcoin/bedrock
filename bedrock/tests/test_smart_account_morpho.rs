@@ -14,7 +14,7 @@ use std::str::FromStr;
 
 use bedrock::{
     primitives::{http_client::set_http_client, Network},
-    smart_account::{Is4337Encodable, SafeSmartAccount, ENTRYPOINT_4337},
+    smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
     transactions::contracts::erc4626::Erc4626Vault,
 };
@@ -171,14 +171,11 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
     );
     println!("🔍   Withdraw Asset Amount: {}", withdraw_asset_amount);
 
-    // Execute the withdraw transaction directly using the struct
-    let _user_op_hash_withdraw = erc4626_withdraw
-        .sign_and_execute(
-            &safe_account,
-            Network::WorldChain,
-            None,
-            None,
-            bedrock::transactions::RpcProviderName::Any,
+    // Execute using the high-level API
+    let _user_op_hash_withdraw = safe_account
+        .transaction_erc4626_withdraw(
+            &morpho_vault_wld_token_address.to_string(),
+            &withdraw_asset_amount.to_string(),
         )
         .await
         .expect("ERC4626 withdraw failed");
@@ -230,14 +227,11 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
     );
     println!("🔍   Redeem Share Amount: {}", redeem_share_amount);
 
-    // Execute the redeem transaction directly using the struct
-    let _user_op_hash_redeem = erc4626_redeem
-        .sign_and_execute(
-            &safe_account,
-            Network::WorldChain,
-            None,
-            None,
-            bedrock::transactions::RpcProviderName::Any,
+    // Execute using the high-level API
+    let _user_op_hash_redeem = safe_account
+        .transaction_erc4626_redeem(
+            &morpho_vault_wld_token_address.to_string(),
+            &redeem_share_amount.to_string(),
         )
         .await
         .expect("ERC4626 redeem failed");
@@ -272,6 +266,7 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
     let large_withdraw_amount = deposit_amount * U256::from(10u8); // Request way more than we have
 
     // Create the withdraw transaction - this should detect share limitation and switch to redeem
+    // We still create it separately to verify the internal logic switch
     let erc4626_withdraw_limited = Erc4626Vault::withdraw(
         rpc_client,
         Network::WorldChain,
@@ -303,14 +298,11 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
     println!("🔍   Requested Asset Amount: {}", large_withdraw_amount);
     println!("🔍   Available Shares: {}", remaining_shares);
 
-    // Execute the withdraw transaction (which internally uses redeem)
-    let _user_op_hash_withdraw_limited = erc4626_withdraw_limited
-        .sign_and_execute(
-            &safe_account,
-            Network::WorldChain,
-            None,
-            None,
-            bedrock::transactions::RpcProviderName::Any,
+    // Execute using the high-level API (which internally handles the share-limited scenario)
+    let _user_op_hash_withdraw_limited = safe_account
+        .transaction_erc4626_withdraw(
+            &morpho_vault_wld_token_address.to_string(),
+            &large_withdraw_amount.to_string(),
         )
         .await
         .expect("ERC4626 withdraw (share-limited) failed");
