@@ -266,7 +266,7 @@ impl SafeSmartAccount {
     /// - `asset_amount`: The amount of assets to deposit as a stringified integer with the asset's decimals.
     ///
     /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or asset_amount is invalid.
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or `asset_amount` is invalid.
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_erc4626_deposit(
         &self,
@@ -317,7 +317,7 @@ impl SafeSmartAccount {
     /// - `asset_amount`: The amount of assets to withdraw as a stringified integer with the asset's decimals.
     ///
     /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or asset_amount is invalid.
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or `asset_amount` is invalid.
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_erc4626_withdraw(
         &self,
@@ -368,7 +368,7 @@ impl SafeSmartAccount {
     /// - `share_amount`: The amount of shares to redeem as a stringified integer.
     ///
     /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or share_amount is invalid.
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or `share_amount` is invalid.
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     pub async fn transaction_erc4626_redeem(
         &self,
