@@ -40,6 +40,8 @@ pub enum TransactionTypeId {
     MorphoDeposit = 136,
     /// Morpho-specific vault withdraw
     MorphoWithdraw = 137,
+    /// Morpho vault migration (withdraw from old vault, approve, deposit to new vault)
+    MorphoMigrate = 138,
 }
 
 impl TransactionTypeId {

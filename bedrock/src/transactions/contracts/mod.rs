@@ -5,5 +5,7 @@ pub mod erc20;
 pub mod erc4626;
 /// Utilities for batching multiple transactions via the Safe `MultiSend` contract.
 pub mod multisend;
+/// WLD vault operations including migration to re7WLD.
+pub mod wld_vault;
 pub mod world_campaign_manager;
 pub mod world_gift_manager;
