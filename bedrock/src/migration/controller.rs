@@ -1,7 +1,7 @@
 use crate::device::{DeviceKeyValueStore, KeyValueStoreError};
+use crate::migration::error::MigrationResult;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::state::{MigrationRecord, MigrationStatus};
-use crate::OxideResult;
 use chrono::{Duration, Utc};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
@@ -26,11 +26,17 @@ static MIGRATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 /// Summary of a migration run
 #[derive(Debug, uniffi::Record)]
 pub struct MigrationRunSummary {
+    /// Total number of migrations
     pub total: i32,
+    /// Number of migrations that succeeded
     pub succeeded: i32,
+    /// Number of migrations that failed but are retryable
     pub failed_retryable: i32,
+    /// Number of migrations that failed with terminal errors
     pub failed_terminal: i32,
+    /// Number of migrations blocked waiting for user action
     pub blocked: i32,
+    /// Number of migrations skipped
     pub skipped: i32,
 }
 
@@ -84,12 +90,12 @@ impl MigrationController {
     ///
     /// # Errors
     ///
-    /// Returns `OxideError::InvalidOperation` if another migration run is already in progress.
+    /// Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
     /// Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
-    pub async fn run_migrations(&self) -> OxideResult<MigrationRunSummary> {
+    pub async fn run_migrations(&self) -> MigrationResult<MigrationRunSummary> {
         // Try to acquire the global lock. If another migration is running, fail immediately.
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
-            crate::OxideError::InvalidOperation(
+            crate::migration::MigrationError::InvalidOperation(
                 "Migration is already in progress. Please wait for the current migration to complete.".to_string(),
             )
         })?;
@@ -121,7 +127,7 @@ impl MigrationController {
     }
 
     /// Internal async implementation of run_migrations
-    async fn run_migrations_async(&self) -> OxideResult<MigrationRunSummary> {
+    async fn run_migrations_async(&self) -> MigrationResult<MigrationRunSummary> {
         info!("Migration run started");
 
         // Summary of this migration run for analytics. Not stored.
@@ -280,7 +286,7 @@ impl MigrationController {
     /// If the stored JSON is corrupted or invalid, this method treats it as a reset
     /// and returns a new `MigrationRecord`. This prevents one corrupted record from
     /// blocking all migrations permanently.
-    fn load_record(&self, migration_id: &str) -> OxideResult<MigrationRecord> {
+    fn load_record(&self, migration_id: &str) -> MigrationResult<MigrationRecord> {
         let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
         match self.kv_store.get(key) {
             Ok(json) => {
@@ -308,7 +314,7 @@ impl MigrationController {
 
     /// Save a single migration record to persistent storage
     /// Each migration is stored under its own key: "migration:{migration_id}"
-    fn save_record(&self, migration_id: &str, record: &MigrationRecord) -> OxideResult<()> {
+    fn save_record(&self, migration_id: &str, record: &MigrationRecord) -> MigrationResult<()> {
         let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
         let json = serde_json::to_string(record)?;
         self.kv_store.set(key, json)?;
@@ -372,11 +378,11 @@ mod tests {
             &self.id
         }
 
-        async fn is_applicable(&self) -> OxideResult<bool> {
+        async fn is_applicable(&self) -> MigrationResult<bool> {
             Ok(true)
         }
 
-        async fn execute(&self) -> OxideResult<ProcessorResult> {
+        async fn execute(&self) -> MigrationResult<ProcessorResult> {
             self.execution_count.fetch_add(1, Ordering::SeqCst);
             if self.delay_ms > 0 {
                 sleep(Duration::from_millis(self.delay_ms)).await;
@@ -441,7 +447,7 @@ mod tests {
         // Second should fail with InvalidOperation
         assert!(result2.is_err());
         match result2.unwrap_err() {
-            crate::OxideError::InvalidOperation(msg) => {
+            crate::migration::MigrationError::InvalidOperation(msg) => {
                 assert!(msg.contains("already in progress"));
             }
             e => panic!("Expected InvalidOperation error, got: {:?}", e),
@@ -542,7 +548,7 @@ mod tests {
         // Second should fail with InvalidOperation (same global lock)
         assert!(result2.is_err());
         match result2.unwrap_err() {
-            crate::OxideError::InvalidOperation(msg) => {
+            crate::migration::MigrationError::InvalidOperation(msg) => {
                 assert!(msg.contains("already in progress"));
             }
             e => panic!("Expected InvalidOperation error, got: {:?}", e),
@@ -661,7 +667,7 @@ mod tests {
             let result = handle.await.unwrap();
             match result {
                 Ok(_) => success_count += 1,
-                Err(crate::OxideError::InvalidOperation(_)) => failure_count += 1,
+                Err(crate::migration::MigrationError::InvalidOperation(_)) => failure_count += 1,
                 Err(e) => panic!("Unexpected error: {:?}", e),
             }
         }

@@ -58,7 +58,7 @@
 //! first, not just migration records. Example:
 //!
 //! ```rust,ignore
-//! async fn is_applicable(&self, record: Option<&MigrationRecord>) -> OxideResult<bool> {
+//! async fn is_applicable(&self, record: Option<&MigrationRecord>) -> MigrationResult<bool> {
 //!     // 1. Check if migration outcome already exists (e.g., v4 credential restored from backup)
 //!     if self.credential_store.has_v4_credential().await? {
 //!         return Ok(false);  // Skip - already have what this migration creates
@@ -69,13 +69,15 @@
 //! ```
 
 mod controller;
+mod error;
 mod processor;
 mod state;
 
-// Example processors
+/// Migration processor implementations
 pub mod processors;
 
 // Public API exports
 pub use controller::{MigrationController, MigrationRunSummary};
+pub use error::{MigrationError, MigrationResult};
 pub use processor::{MigrationProcessor, ProcessorResult};
 pub use state::{MigrationRecord, MigrationStatus};

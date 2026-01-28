@@ -1,5 +1,5 @@
+use crate::migration::error::MigrationResult;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
-use crate::OxideResult;
 use async_trait::async_trait;
 use log::info;
 
@@ -21,6 +21,7 @@ pub struct ExampleProcessor {
 }
 
 impl ExampleProcessor {
+    /// Create a new example processor
     #[allow(dead_code)]
     #[must_use]
     pub const fn new() -> Self {
@@ -48,7 +49,7 @@ impl MigrationProcessor for ExampleProcessor {
         "example.migration.v1"
     }
 
-    async fn is_applicable(&self) -> OxideResult<bool> {
+    async fn is_applicable(&self) -> MigrationResult<bool> {
         // IMPORTANT: Check actual state, not migration records
         // This ensures idempotency and handles reinstalls gracefully.
 
@@ -78,7 +79,7 @@ impl MigrationProcessor for ExampleProcessor {
         Ok(false)
     }
 
-    async fn execute(&self) -> OxideResult<ProcessorResult> {
+    async fn execute(&self) -> MigrationResult<ProcessorResult> {
         info!("Executing example migration");
 
         // TODO: Implement your migration logic here

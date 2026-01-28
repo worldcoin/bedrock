@@ -1,4 +1,4 @@
-use crate::OxideResult;
+use crate::migration::MigrationResult;
 use async_trait::async_trait;
 
 /// Result of executing a migration processor
@@ -8,16 +8,27 @@ pub enum ProcessorResult {
 
     /// Migration failed but can be retried
     Retryable {
+        /// Error code for this failure
         error_code: String,
+        /// Human-readable error message
         error_message: String,
+        /// Optional suggestion for when to retry (in milliseconds)
         retry_after_ms: Option<i64>,
     },
 
     /// Migration failed with terminal error (won't retry)
-    Terminal { error_code: String, error_message: String },
+    Terminal {
+        /// Error code for this terminal failure
+        error_code: String,
+        /// Human-readable error message
+        error_message: String,
+    },
 
     /// Migration blocked pending user action
-    BlockedUserAction { reason: String },
+    BlockedUserAction {
+        /// Reason why the migration is blocked
+        reason: String,
+    },
 }
 
 /// Trait that all migration processors must implement
@@ -38,9 +49,9 @@ pub trait MigrationProcessor: Send + Sync {
     /// - `Ok(true)` if the migration should run
     /// - `Ok(false)` if the migration should be skipped
     /// - `Err(_)` if unable to determine (migration will be skipped with error logged)
-    async fn is_applicable(&self) -> OxideResult<bool>;
+    async fn is_applicable(&self) -> MigrationResult<bool>;
 
     /// Execute the migration
     /// Called by the controller when the migration is ready to run
-    async fn execute(&self) -> OxideResult<ProcessorResult>;
+    async fn execute(&self) -> MigrationResult<ProcessorResult>;
 }
