@@ -231,6 +231,8 @@ impl BackupManager {
 
         Self::unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
 
+        crate::info!("Backup successfully unpacked to filesystem.");
+
         match unsealed_backup {
             BackupFormat::V0(backup) => Ok(DecryptedBackup {
                 root_key_json: backup.root_secret.danger_to_json().map_err(|_| {
@@ -437,26 +439,39 @@ impl BackupManager {
         Ok(true)
     }
 
-    /// **For debugging purposes only**.
-    ///
-    /// Returns the local manifest from disk as a JSON string.
+    /// **For debugging purposes only**. Returns information on the local manifest.
     ///
     /// # Errors
     /// Returns an error if the manifest is not found or cannot be serialized.
-    pub fn debug_get_local_manifest(&self) -> Result<String, BackupError> {
+    pub fn debug_get_local_manifest(&self) -> Result<ManifestDebug, BackupError> {
         let manifest_manager = ManifestManager::new();
-        let (manifest, _) = manifest_manager.read_manifest()?;
-        serde_json::to_string(&manifest).map_err(|_| BackupError::Generic {
-            error_message: "error serializing manifest to JSON".to_string(),
+        let (manifest, manifest_hash) = manifest_manager.read_manifest()?;
+        let manifest_json =
+            serde_json::to_string(&manifest).map_err(|_| BackupError::Generic {
+                error_message: "error serializing manifest to JSON".to_string(),
+            })?;
+
+        Ok(ManifestDebug {
+            manifest_json,
+            manifest_hash: hex::encode(manifest_hash),
         })
     }
+}
+
+/// Debug information about the local manifest on disk.
+#[derive(Debug, uniffi::Record)]
+pub struct ManifestDebug {
+    /// The stringified JSON representation of the manifest.
+    pub manifest_json: String,
+    /// The hash of the manifest.
+    pub manifest_hash: String,
 }
 
 // Internal helpers (not exported)
 impl BackupManager {
     fn unpack_backup_to_filesystem(
         unsealed_backup: &BackupFormat,
-        _current_manifest_hash_hex: &str,
+        current_manifest_hash_hex: &str,
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
 
@@ -518,7 +533,7 @@ impl BackupManager {
         });
 
         crate::info!(
-            "Saving manifest file with {} files and hash: {}",
+            "Saving manifest file with {} files and hash: {} (current hash: {current_manifest_hash_hex})",
             manifest.entries_length(),
             hex::encode(manifest.to_hash()?)
         );
