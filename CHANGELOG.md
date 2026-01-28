@@ -2,6 +2,20 @@
 
 
 
+## [0.1.1] - 2026-01-28
+
+## What's Changed
+* chore: move test_utils behind feature flag by @karankurbur in https://github.com/worldcoin/bedrock/pull/236
+* chore: remove empty file by @karankurbur in https://github.com/worldcoin/bedrock/pull/237
+* chore: add missing high level 4626 withdraw/redeem functions, update in e2e by @karankurbur in https://github.com/worldcoin/bedrock/pull/242
+* feat: better debug information for unpacking by @paolodamico in https://github.com/worldcoin/bedrock/pull/243
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.1.0...0.1.1
+
+
+
+
 ## [0.1.0] - 2025-12-19
 
 ## What's Changed
