@@ -61,17 +61,27 @@ pub trait DeviceFileSystem: Send + Sync {
 /// Some foreign language implementations (e.g., Kotlin coroutines) may throw exceptions such as
 /// `CancellationException` which cannot be represented in the `String` return type and can cause
 /// FFI lifting to panic. This helper catches any panic that occurs during the callback invocation
-/// and converts it into a `DeviceFileSystemError` so callers can propagate a proper `OxideError`
+/// and converts it into a `DeviceFileSystemError` so callers can propagate a proper error
 /// instead of aborting the process.
+///
+/// # Errors
+/// Returns `DeviceFileSystemError::UnexpectedUniFFICallbackError` if the callback panics.
 #[inline]
-pub fn try_get_user_data_directory(file_system: &dyn DeviceFileSystem) -> Result<String, DeviceFileSystemError> {
+pub fn try_get_user_data_directory(
+    file_system: &dyn DeviceFileSystem,
+) -> Result<String, DeviceFileSystemError> {
     // Use catch_unwind to guard against panics raised while lifting the foreign return.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| file_system.get_user_data_directory())) {
-        Ok(path) => Ok(path),
-        Err(_) => Err(DeviceFileSystemError::UnexpectedUniFFICallbackError(
-            "panic in DeviceFileSystem.get_user_data_directory callback".to_string(),
-        )),
-    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        file_system.get_user_data_directory()
+    }))
+    .map_or_else(
+        |_| {
+            Err(DeviceFileSystemError::UnexpectedUniFFICallbackError(
+                "panic in DeviceFileSystem.get_user_data_directory callback".to_string(),
+            ))
+        },
+        Ok,
+    )
 }
 
 /// Errors that can occur during key-value store operations
