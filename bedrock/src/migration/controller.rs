@@ -419,6 +419,23 @@ mod tests {
         }
     }
 
+    /// Test key-value store that fails on all operations
+    struct FailingKvStore;
+
+    impl DeviceKeyValueStore for FailingKvStore {
+        fn get(&self, _key: String) -> Result<String, KeyValueStoreError> {
+            Err(KeyValueStoreError::KeyNotFound)
+        }
+
+        fn set(&self, _key: String, _value: String) -> Result<(), KeyValueStoreError> {
+            Err(KeyValueStoreError::UpdateFailure)
+        }
+
+        fn delete(&self, _key: String) -> Result<(), KeyValueStoreError> {
+            Err(KeyValueStoreError::UpdateFailure)
+        }
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_single_migration_run_succeeds() {
@@ -474,7 +491,7 @@ mod tests {
             MigrationError::InvalidOperation(msg) => {
                 assert!(msg.contains("already in progress"));
             }
-            e => panic!("Expected InvalidOperation error, got: {:?}", e),
+            e => panic!("Expected InvalidOperation error, got: {e:?}"),
         }
 
         // Processor should only have executed once (first migration)
@@ -513,23 +530,6 @@ mod tests {
 
         // Create a processor that will cause the migration to fail by using
         // an invalid KV store that errors on save
-        struct FailingKvStore;
-        impl DeviceKeyValueStore for FailingKvStore {
-            fn get(&self, _key: String) -> Result<String, KeyValueStoreError> {
-                Err(KeyValueStoreError::KeyNotFound)
-            }
-            fn set(
-                &self,
-                _key: String,
-                _value: String,
-            ) -> Result<(), KeyValueStoreError> {
-                Err(KeyValueStoreError::UpdateFailure)
-            }
-            fn delete(&self, _key: String) -> Result<(), KeyValueStoreError> {
-                Err(KeyValueStoreError::UpdateFailure)
-            }
-        }
-
         let failing_kv = Arc::new(FailingKvStore);
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
         let controller1 =
@@ -588,7 +588,7 @@ mod tests {
             MigrationError::InvalidOperation(msg) => {
                 assert!(msg.contains("already in progress"));
             }
-            e => panic!("Expected InvalidOperation error, got: {:?}", e),
+            e => panic!("Expected InvalidOperation error, got: {e:?}"),
         }
     }
 
@@ -722,7 +722,7 @@ mod tests {
             match result {
                 Ok(_) => success_count += 1,
                 Err(MigrationError::InvalidOperation(_)) => failure_count += 1,
-                Err(e) => panic!("Unexpected error: {:?}", e),
+                Err(e) => panic!("Unexpected error: {e:?}"),
             }
         }
 

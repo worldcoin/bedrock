@@ -6,7 +6,7 @@ use super::*;
 /// In-memory implementation of [`DeviceFileSystem`] for testing
 #[allow(clippy::module_name_repetitions)]
 pub struct TestInMemoryDeviceFileSystem {
-    /// Files stored in memory as a HashMap
+    /// Files stored in memory as a `HashMap`
     pub files: Mutex<HashMap<String, Vec<u8>>>,
     /// Mock user data directory path returned by `get_user_data_directory`
     pub mock_get_user_data_directory: String,
@@ -96,6 +96,12 @@ impl InMemoryDeviceKeyValueStore {
         Self {
             store: Mutex::new(HashMap::new()),
         }
+    }
+}
+
+impl Default for InMemoryDeviceKeyValueStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
