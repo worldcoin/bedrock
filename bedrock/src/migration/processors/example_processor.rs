@@ -6,7 +6,7 @@ use log::info;
 /// Example processor skeleton showing how to implement a migration
 ///
 /// This is a **template** - copy this file and customize it for your actual migration.
-/// Replace `ExampleProcessor` with your processor name and update the migration_id.
+/// Replace `ExampleProcessor` with your processor name and update the `migration_id`.
 ///
 /// For actual implementations, see the migration spec and implement processors like:
 /// - `AccountBootstrapProcessor` for "worldid.account.bootstrap.v1"

@@ -19,7 +19,7 @@ pub enum MigrationStatus {
 }
 
 /// Record of a single migration's execution state
-/// e.g. this could be the PoH refresh migration stage.
+/// e.g. this could be the `PoH` refresh migration stage.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MigrationRecord {
     /// Current status

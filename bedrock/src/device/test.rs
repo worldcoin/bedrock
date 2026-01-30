@@ -65,7 +65,10 @@ impl DeviceFileSystem for TestInMemoryDeviceFileSystem {
             .unwrap()
             .keys()
             .filter(|key| key.starts_with(&folder_path))
-            .map(|key| key.trim_start_matches(&format!("{folder_path}/")).to_string())
+            .map(|key| {
+                key.trim_start_matches(&format!("{folder_path}/"))
+                    .to_string()
+            })
             .collect();
         files.sort();
         files

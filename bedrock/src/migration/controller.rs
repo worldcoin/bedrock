@@ -14,10 +14,10 @@ const MAX_RETRY_DELAY_MS: i64 = 86_400_000; // 1 day
 
 /// Global lock to prevent concurrent migration runs across all controller instances.
 /// This is a process-wide coordination mechanism that ensures only one migration
-/// can execute at a time, regardless of how many MigrationController instances exist.
+/// can execute at a time, regardless of how many [`MigrationController`] instances exist.
 ///
 /// **Application-level Requirements:**
-/// The calling application should ensure only one `MigrationController` instance is
+/// The calling application should ensure only one [`MigrationController`] instance is
 /// instantiated at a time. While this process-wide lock provides thread-safety within
 /// a single process, applications should use app-level constructs (singletons, dependency
 /// injection, etc.) to prevent multiple controller instances as an additional safeguard.
@@ -44,7 +44,7 @@ pub struct MigrationRunSummary {
 ///
 /// ## Storage Architecture
 ///
-/// Each migration's state is stored independently in the DeviceKeyValueStore using
+/// Each migration's state is stored independently in the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore) using
 /// a namespaced key pattern: `migration:{migration_id}`.
 ///
 /// For example:
@@ -54,7 +54,7 @@ pub struct MigrationRunSummary {
 /// This approach ensures:
 /// - **Scalability**: No size limits on the total number of migrations
 /// - **Isolation**: Each migration's state is independent and can be managed separately
-/// - **Platform compatibility**: Avoids hitting single-key size limits in SharedPreferences (Android) and UserDefaults (iOS)
+/// - **Platform compatibility**: Avoids hitting single-key size limits in `SharedPreferences` (Android) and `UserDefaults` (iOS)
 ///
 /// Each key stores a JSON-serialized `MigrationRecord` containing execution state,
 /// timestamps, and error information.
@@ -66,7 +66,7 @@ pub struct MigrationController {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl MigrationController {
-    /// Create a new MigrationController
+    /// Create a new [`MigrationController`]
     /// Processors are registered internally
     #[uniffi::constructor]
     pub fn new(kv_store: Arc<dyn DeviceKeyValueStore>) -> Arc<Self> {
@@ -112,7 +112,10 @@ impl MigrationController {
         kv_store: Arc<dyn DeviceKeyValueStore>,
         processors: Vec<Arc<dyn MigrationProcessor>>,
     ) -> Arc<Self> {
-        Arc::new(Self { kv_store, processors })
+        Arc::new(Self {
+            kv_store,
+            processors,
+        })
     }
 
     /// Get the default list of processors to run
@@ -126,13 +129,16 @@ impl MigrationController {
         ]
     }
 
-    /// Internal async implementation of run_migrations
-    async fn run_migrations_async(&self) -> Result<MigrationRunSummary, MigrationError> {
+    /// Internal async implementation of `run_migrations`
+    #[allow(clippy::too_many_lines)]
+    async fn run_migrations_async(
+        &self,
+    ) -> Result<MigrationRunSummary, MigrationError> {
         info!("Migration run started");
 
         // Summary of this migration run for analytics. Not stored.
         let mut summary = MigrationRunSummary {
-            total: self.processors.len() as i32,
+            total: i32::try_from(self.processors.len()).unwrap_or(i32::MAX),
             succeeded: 0,
             failed_retryable: 0,
             failed_terminal: 0,
@@ -191,7 +197,11 @@ impl MigrationController {
             }
 
             // Execute the migration
-            info!("Starting migration: {} (attempt {})", migration_id, record.attempts + 1);
+            info!(
+                "Starting migration: {} (attempt {})",
+                migration_id,
+                record.attempts + 1
+            );
 
             // Update record for execution
             if record.started_at.is_none() {
@@ -229,8 +239,10 @@ impl MigrationController {
                     // record.next_attempt_at field. When the app is next opened and the
                     // migration is run again; the controller will check whether to run the
                     // migration again based on the record.next_attempt_at field.
-                    let retry_delay_ms = retry_after_ms.unwrap_or_else(|| calculate_backoff_delay(record.attempts));
-                    record.next_attempt_at = Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
+                    let retry_delay_ms = retry_after_ms
+                        .unwrap_or_else(|| calculate_backoff_delay(record.attempts));
+                    record.next_attempt_at =
+                        Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
                     summary.failed_retryable += 1;
                 }
@@ -260,7 +272,8 @@ impl MigrationController {
 
                     // Schedule retry with backoff
                     let retry_delay_ms = calculate_backoff_delay(record.attempts);
-                    record.next_attempt_at = Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
+                    record.next_attempt_at =
+                        Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
                     summary.failed_retryable += 1;
                 }
@@ -278,15 +291,18 @@ impl MigrationController {
         Ok(summary)
     }
 
-    /// Load a single migration record from the DeviceKeyValueStore
-    /// Each migration is stored under its own key: "migration:{migration_id}"
+    /// Load a single migration record from the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore)
+    /// Each migration is stored under its own key: `"migration:{migration_id}"`
     ///
     /// # Corruption Handling
     ///
     /// If the stored JSON is corrupted or invalid, this method treats it as a reset
     /// and returns a new `MigrationRecord`. This prevents one corrupted record from
     /// blocking all migrations permanently.
-    fn load_record(&self, migration_id: &str) -> Result<MigrationRecord, MigrationError> {
+    fn load_record(
+        &self,
+        migration_id: &str,
+    ) -> Result<MigrationRecord, MigrationError> {
         let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
         match self.kv_store.get(key) {
             Ok(json) => {
@@ -313,8 +329,12 @@ impl MigrationController {
     }
 
     /// Save a single migration record to persistent storage
-    /// Each migration is stored under its own key: "migration:{migration_id}"
-    fn save_record(&self, migration_id: &str, record: &MigrationRecord) -> Result<(), MigrationError> {
+    /// Each migration is stored under its own key: `"migration:{migration_id}"`
+    fn save_record(
+        &self,
+        migration_id: &str,
+        record: &MigrationRecord,
+    ) -> Result<(), MigrationError> {
         let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
         let json = serde_json::to_string(record)?;
         self.kv_store.set(key, json)?;
@@ -325,7 +345,7 @@ impl MigrationController {
 /// Calculate exponential backoff delay based on number of attempts
 fn calculate_backoff_delay(attempts: i32) -> i64 {
     // attempts: 1 => base, 2 => 2x, 3 => 4x, ...
-    let exp = (attempts.saturating_sub(1)).clamp(0, 16) as u32; // cap exponent
+    let exp = (attempts.saturating_sub(1)).clamp(0, 16).cast_unsigned(); // cap exponent
     let factor = 1_i64.checked_shl(exp).unwrap_or(i64::MAX);
     (DEFAULT_RETRY_DELAY_MS.saturating_mul(factor)).min(MAX_RETRY_DELAY_MS)
 }
@@ -404,7 +424,8 @@ mod tests {
     async fn test_single_migration_run_succeeds() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
-        let controller = MigrationController::with_processors(kv_store, vec![processor.clone()]);
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         let result = controller.run_migrations().await;
         assert!(result.is_ok());
@@ -421,8 +442,10 @@ mod tests {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
 
         // Create a processor with a delay so the first migration holds the lock
-        let processor = Arc::new(TestProcessor::new("test.migration.v1").with_delay(100));
-        let controller = MigrationController::with_processors(kv_store, vec![processor.clone()]);
+        let processor =
+            Arc::new(TestProcessor::new("test.migration.v1").with_delay(100));
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // Clone controller for concurrent access
         let controller_clone = controller.clone();
@@ -434,7 +457,8 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
 
         // Try to start second migration while first is running
-        let handle2 = tokio::spawn(async move { controller_clone.run_migrations().await });
+        let handle2 =
+            tokio::spawn(async move { controller_clone.run_migrations().await });
 
         // Wait for both to complete
         let result1 = handle1.await.unwrap();
@@ -462,7 +486,8 @@ mod tests {
     async fn test_sequential_migrations_succeed() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
-        let controller = MigrationController::with_processors(kv_store, vec![processor.clone()]);
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // First migration
         let result1 = controller.run_migrations().await;
@@ -493,7 +518,11 @@ mod tests {
             fn get(&self, _key: String) -> Result<String, KeyValueStoreError> {
                 Err(KeyValueStoreError::KeyNotFound)
             }
-            fn set(&self, _key: String, _value: String) -> Result<(), KeyValueStoreError> {
+            fn set(
+                &self,
+                _key: String,
+                _value: String,
+            ) -> Result<(), KeyValueStoreError> {
                 Err(KeyValueStoreError::UpdateFailure)
             }
             fn delete(&self, _key: String) -> Result<(), KeyValueStoreError> {
@@ -503,15 +532,18 @@ mod tests {
 
         let failing_kv = Arc::new(FailingKvStore);
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
-        let controller1 = MigrationController::with_processors(failing_kv, vec![processor.clone()]);
+        let controller1 =
+            MigrationController::with_processors(failing_kv, vec![processor.clone()]);
 
         // First migration fails
         let result1 = controller1.run_migrations().await;
         assert!(result1.is_err());
 
         // Create another controller with working KV store
-        let controller2 =
-            MigrationController::with_processors(kv_store, vec![Arc::new(TestProcessor::new("test.migration.v2"))]);
+        let controller2 = MigrationController::with_processors(
+            kv_store,
+            vec![Arc::new(TestProcessor::new("test.migration.v2"))],
+        );
 
         // Second migration should succeed (lock was released despite error)
         let result2 = controller2.run_migrations().await;
@@ -524,11 +556,16 @@ mod tests {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
 
         // Create two separate controller instances
-        let processor1 = Arc::new(TestProcessor::new("test.migration1.v1").with_delay(100));
-        let controller1 = MigrationController::with_processors(kv_store.clone(), vec![processor1.clone()]);
+        let processor1 =
+            Arc::new(TestProcessor::new("test.migration1.v1").with_delay(100));
+        let controller1 = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor1.clone()],
+        );
 
         let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
-        let controller2 = MigrationController::with_processors(kv_store, vec![processor2.clone()]);
+        let controller2 =
+            MigrationController::with_processors(kv_store, vec![processor2.clone()]);
 
         // Start first controller's migration
         let handle1 = tokio::spawn(async move { controller1.run_migrations().await });
@@ -562,7 +599,10 @@ mod tests {
         let processor1 = Arc::new(TestProcessor::new("test.migration1.v1"));
         let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
 
-        let controller = MigrationController::with_processors(kv_store.clone(), vec![processor1, processor2]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor1, processor2],
+        );
 
         // Run migrations
         let result = controller.run_migrations().await;
@@ -578,8 +618,10 @@ mod tests {
         let record2_json = kv_store.get(key2).expect("Migration 2 record should exist");
 
         // Verify they can be deserialized
-        let record1: MigrationRecord = serde_json::from_str(&record1_json).expect("Should deserialize");
-        let record2: MigrationRecord = serde_json::from_str(&record2_json).expect("Should deserialize");
+        let record1: MigrationRecord =
+            serde_json::from_str(&record1_json).expect("Should deserialize");
+        let record2: MigrationRecord =
+            serde_json::from_str(&record2_json).expect("Should deserialize");
 
         // Both should be in Succeeded status
         assert!(matches!(record1.status, MigrationStatus::Succeeded));
@@ -598,7 +640,10 @@ mod tests {
             .set(key.clone(), "{invalid json!!!".to_string())
             .expect("Should store corrupted data");
 
-        let controller = MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Migration should still run despite corrupted record
         let result = controller.run_migrations().await;
@@ -610,7 +655,8 @@ mod tests {
 
         // Verify the corrupted data was overwritten with valid JSON
         let updated_json = kv_store.get(key).expect("Record should exist");
-        let record: MigrationRecord = serde_json::from_str(&updated_json).expect("Should be valid JSON now");
+        let record: MigrationRecord =
+            serde_json::from_str(&updated_json).expect("Should be valid JSON now");
         assert!(matches!(record.status, MigrationStatus::Succeeded));
     }
 
@@ -624,7 +670,11 @@ mod tests {
                 Err(KeyValueStoreError::ParsingFailure)
             }
 
-            fn set(&self, _key: String, _value: String) -> Result<(), KeyValueStoreError> {
+            fn set(
+                &self,
+                _key: String,
+                _value: String,
+            ) -> Result<(), KeyValueStoreError> {
                 Ok(())
             }
 
@@ -649,14 +699,18 @@ mod tests {
     #[serial]
     async fn test_many_concurrent_attempts_only_one_succeeds() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
-        let processor = Arc::new(TestProcessor::new("test.migration.v1").with_delay(50));
-        let controller = MigrationController::with_processors(kv_store, vec![processor.clone()]);
+        let processor =
+            Arc::new(TestProcessor::new("test.migration.v1").with_delay(50));
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // Launch 10 concurrent attempts
         let mut handles = vec![];
         for _ in 0..10 {
             let controller_clone = controller.clone();
-            handles.push(tokio::spawn(async move { controller_clone.run_migrations().await }));
+            handles.push(tokio::spawn(async move {
+                controller_clone.run_migrations().await
+            }));
         }
 
         // Collect results
