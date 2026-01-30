@@ -1,4 +1,4 @@
-use crate::OxideResult;
+use crate::migration::MigrationError;
 use async_trait::async_trait;
 
 /// Result of executing a migration processor
@@ -38,9 +38,9 @@ pub trait MigrationProcessor: Send + Sync {
     /// - `Ok(true)` if the migration should run
     /// - `Ok(false)` if the migration should be skipped
     /// - `Err(_)` if unable to determine (migration will be skipped with error logged)
-    async fn is_applicable(&self) -> OxideResult<bool>;
+    async fn is_applicable(&self) -> Result<bool, MigrationError>;
 
     /// Execute the migration
     /// Called by the controller when the migration is ready to run
-    async fn execute(&self) -> OxideResult<ProcessorResult>;
+    async fn execute(&self) -> Result<ProcessorResult, MigrationError>;
 }

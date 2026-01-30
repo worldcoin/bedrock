@@ -2,9 +2,6 @@ use thiserror::Error;
 
 use crate::device::KeyValueStoreError;
 
-/// Result type for migration operations
-pub type MigrationResult<T> = std::result::Result<T, MigrationError>;
-
 /// Error types for migration operations
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Error, uniffi::Error)]
