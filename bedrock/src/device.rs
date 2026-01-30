@@ -77,7 +77,8 @@ pub fn try_get_user_data_directory(
     .map_or_else(
         |_| {
             Err(DeviceFileSystemError::UnexpectedUniFFICallbackError(
-                "panic in DeviceFileSystem.get_user_data_directory callback".to_string(),
+                "panic in DeviceFileSystem.get_user_data_directory callback"
+                    .to_string(),
             ))
         },
         Ok,
