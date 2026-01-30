@@ -21,6 +21,7 @@ pub struct ExampleProcessor {
 }
 
 impl ExampleProcessor {
+    /// Creates a new example processor
     #[allow(dead_code)]
     #[must_use]
     pub const fn new() -> Self {

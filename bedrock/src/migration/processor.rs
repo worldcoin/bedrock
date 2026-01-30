@@ -8,16 +8,27 @@ pub enum ProcessorResult {
 
     /// Migration failed but can be retried
     Retryable {
+        /// Error code for categorizing the failure
         error_code: String,
+        /// Human-readable error message
         error_message: String,
+        /// Optional delay in milliseconds before retrying
         retry_after_ms: Option<i64>,
     },
 
     /// Migration failed with terminal error (won't retry)
-    Terminal { error_code: String, error_message: String },
+    Terminal {
+        /// Error code for categorizing the failure
+        error_code: String,
+        /// Human-readable error message
+        error_message: String,
+    },
 
     /// Migration blocked pending user action
-    BlockedUserAction { reason: String },
+    BlockedUserAction {
+        /// Reason why the migration is blocked
+        reason: String,
+    },
 }
 
 /// Trait that all migration processors must implement

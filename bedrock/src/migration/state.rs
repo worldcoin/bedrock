@@ -4,11 +4,17 @@ use serde::{Deserialize, Serialize};
 /// Status of a single migration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum MigrationStatus {
+    /// Migration has not been started yet
     NotStarted,
+    /// Migration is currently in progress
     InProgress,
+    /// Migration completed successfully
     Succeeded,
+    /// Migration failed but can be retried
     FailedRetryable,
+    /// Migration failed with terminal error (won't retry)
     FailedTerminal,
+    /// Migration blocked pending user action
     BlockedUserAction,
 }
 
@@ -43,6 +49,7 @@ pub struct MigrationRecord {
 }
 
 impl MigrationRecord {
+    /// Creates a new migration record with default values
     #[must_use]
     pub const fn new() -> Self {
         Self {

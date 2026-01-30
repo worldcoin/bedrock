@@ -73,7 +73,7 @@ mod error;
 mod processor;
 mod state;
 
-// Example processors
+/// Example processors showing how to implement migrations
 pub mod processors;
 
 // Public API exports

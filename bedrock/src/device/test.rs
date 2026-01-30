@@ -2,13 +2,18 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use super::*;
+
+/// In-memory implementation of [`DeviceFileSystem`] for testing
 #[allow(clippy::module_name_repetitions)]
 pub struct TestInMemoryDeviceFileSystem {
+    /// Files stored in memory as a HashMap
     pub files: Mutex<HashMap<String, Vec<u8>>>,
+    /// Mock user data directory path returned by `get_user_data_directory`
     pub mock_get_user_data_directory: String,
 }
 
 impl TestInMemoryDeviceFileSystem {
+    /// Creates a new in-memory filesystem for testing
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -76,11 +81,13 @@ impl DeviceFileSystem for TestInMemoryDeviceFileSystem {
 // KeyValueStore
 ////////////////////////////////////////////////////////////////////////////////
 
+/// In-memory implementation of [`DeviceKeyValueStore`] for testing
 pub struct InMemoryDeviceKeyValueStore {
     store: Mutex<HashMap<String, String>>,
 }
 
 impl InMemoryDeviceKeyValueStore {
+    /// Creates a new in-memory key-value store for testing
     #[must_use]
     pub fn new() -> Self {
         Self {

@@ -26,11 +26,17 @@ static MIGRATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 /// Summary of a migration run
 #[derive(Debug, uniffi::Record)]
 pub struct MigrationRunSummary {
+    /// Total number of migrations attempted
     pub total: i32,
+    /// Number of migrations that succeeded
     pub succeeded: i32,
+    /// Number of migrations that failed but can be retried
     pub failed_retryable: i32,
+    /// Number of migrations that failed with terminal errors (won't retry)
     pub failed_terminal: i32,
+    /// Number of migrations blocked pending user action
     pub blocked: i32,
+    /// Number of migrations that were skipped (already completed or not applicable)
     pub skipped: i32,
 }
 

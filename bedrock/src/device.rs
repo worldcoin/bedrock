@@ -1,12 +1,21 @@
+//! Device abstractions for filesystem and key-value storage
+//!
+//! This module provides traits for interacting with device-level storage,
+//! implemented by native platform code (Swift/Kotlin).
+
 use thiserror::Error;
 
+/// Errors that can occur during device filesystem operations
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Error, uniffi::Error)]
 pub enum DeviceFileSystemError {
+    /// Failed to read the file
     #[error("failed to read the file")]
     ReadFileError,
+    /// Tried to read a file that doesn't exist
     #[error("tried to read a file that doesn't exist")]
     FileDoesNotExitError,
+    /// Unexpected error in foreign callback
     #[error("unexpected error in foreign callback: {0}")]
     UnexpectedUniFFICallbackError(String),
 }
@@ -17,22 +26,33 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for DeviceFileSystemError {
     }
 }
 
+/// Boolean success indicator for filesystem operations
 pub type Success = bool;
 
+/// Trait for device filesystem operations
+///
+/// This trait is implemented by native platform code (Swift/Kotlin) to provide
+/// filesystem access. All file paths are relative to the user data directory.
 #[allow(clippy::missing_errors_doc)]
 #[allow(clippy::module_name_repetitions)]
 #[uniffi::export(with_foreign)]
 pub trait DeviceFileSystem: Send + Sync {
+    /// Returns the user data directory path
     fn get_user_data_directory(&self) -> String;
 
+    /// Checks if a file exists at the given path
     fn file_exists(&self, file_path: String) -> bool;
 
+    /// Reads a file from the given path
     fn read_file(&self, file_path: String) -> Result<Vec<u8>, DeviceFileSystemError>;
 
+    /// Lists all files in a folder
     fn list_files(&self, folder_path: String) -> Vec<String>;
 
+    /// Writes a file to the given path
     fn write_file(&self, file_path: String, file_buffer: Vec<u8>) -> Success;
 
+    /// Deletes a file at the given path
     fn delete_file(&self, file_path: String) -> Success;
 }
 
@@ -54,15 +74,20 @@ pub fn try_get_user_data_directory(file_system: &dyn DeviceFileSystem) -> Result
     }
 }
 
+/// Errors that can occur during key-value store operations
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Error, uniffi::Error)]
 pub enum KeyValueStoreError {
+    /// The requested key was not found in the store
     #[error("key not found")]
     KeyNotFound,
+    /// Failed to parse the stored value
     #[error("failed to parse value")]
     ParsingFailure,
+    /// Failed to update the value in the store
     #[error("failed to update value")]
     UpdateFailure,
+    /// Unexpected error in foreign callback
     #[error("unexpected error in foreign callback: {0}")]
     UnexpectedUniFFICallbackError(String),
 }
@@ -108,5 +133,6 @@ pub trait DeviceKeyValueStore: Send + Sync {
     fn delete(&self, key: String) -> Result<(), KeyValueStoreError>;
 }
 
+/// Test utilities for device abstractions
 #[cfg(test)]
 pub mod test;

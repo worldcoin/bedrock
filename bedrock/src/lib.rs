@@ -43,10 +43,6 @@ pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 /// Key management for World App.
 mod root_key;
 
-/// Error types for bedrock
-mod error;
-pub use error::{BedrockError, BedrockResult};
-
 /// Device abstractions for filesystem and key-value storage
 pub mod device;
 
