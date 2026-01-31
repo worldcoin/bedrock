@@ -1,8 +1,7 @@
-/// Example migration processors
+/// Migration processor implementations
 ///
-/// This module contains skeleton implementations of migration processors
-/// that can be used as templates for actual migrations.
-pub mod example_processor;
+/// See `poh_migration_processor.rs` for an example pattern to follow.
+pub mod poh_migration_processor;
 
 // Re-export for convenience
-pub use example_processor::ExampleProcessor;
+pub use poh_migration_processor::PoHMigrationProcessor;
