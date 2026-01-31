@@ -2,6 +2,7 @@ use crate::migration::MigrationError;
 use async_trait::async_trait;
 
 /// Result of executing a migration processor
+#[derive(uniffi::Enum)]
 pub enum ProcessorResult {
     /// Migration succeeded
     Success,
@@ -32,18 +33,20 @@ pub enum ProcessorResult {
 }
 
 /// Trait that all migration processors must implement
+///
+/// Implement this trait in concrete processor structs (e.g., `PoHMigrationProcessor`).
+/// Platform code provides dependencies via the processor's constructor.
 #[async_trait]
 pub trait MigrationProcessor: Send + Sync {
     /// Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
     /// The version should be included in the ID itself (e.g., ".v1", ".v2")
-    fn migration_id(&self) -> &str;
+    fn migration_id(&self) -> String;
 
     /// Check if this migration is applicable
     ///
     /// This method should check **actual state** (e.g., does v4 credential exist?)
     /// to determine if the migration needs to run. This ensures the system is
     /// truly idempotent and handles edge cases gracefully.
-    ///
     ///
     /// # Returns
     /// - `Ok(true)` if the migration should run

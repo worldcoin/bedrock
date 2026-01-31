@@ -14,21 +14,60 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use oxide::migration::MigrationController;
-//! use std::sync::Arc;
+//! ## Platform Usage (Swift/Kotlin)
 //!
-//! // Create controller (processors are registered internally)
-//! let controller = MigrationController::new(kv_store);
+//! ```swift
+//! // 1. Create processor with dependencies
+//! let processor = MyMigrationProcessor(
+//!     dependency1: dep1,
+//!     dependency2: dep2
+//! )
 //!
-//! let summary = controller.run_migrations()?;
+//! // 2. Register processor
+//! registerMyProcessor(processor: processor)
+//!
+//! // 3. Create controller and run
+//! let controller = MigrationController(kvStore: kvStore)
+//! let summary = try await controller.runMigrations()
 //! ```
 //!
-//! # Adding New Processors
+//! ```kotlin
+//! // 1. Create processor with dependencies
+//! val processor = MyMigrationProcessor(dep1, dep2)
 //!
-//! To add a new migration processor:
-//! 1. Implement the `MigrationProcessor` trait in `processors/`
-//! 2. Add it to `MigrationController::default_processors()`
+//! // 2. Register processor
+//! registerMyProcessor(processor)
+//!
+//! // 3. Create controller and run
+//! val controller = MigrationController(kvStore)
+//! val summary = controller.runMigrations()
+//! ```
+//!
+//! ## Adding New Migrations
+//!
+//! 1. **Create processor in Rust** (see `processors/example_processor.rs` as template)
+//!    - Define struct with dependency fields
+//!    - Add `#[uniffi::constructor]` that takes dependencies
+//!    - Implement `MigrationProcessor` trait with migration logic
+//!
+//! 2. **Add global storage and registration** in `controller.rs`:
+//!    ```rust
+//!    static MY_PROCESSOR: OnceLock<Arc<dyn MigrationProcessor>> = OnceLock::new();
+//!
+//!    #[uniffi::export]
+//!    pub fn register_my_processor(processor: Arc<MyProcessor>) {
+//!        MY_PROCESSOR.set(processor).ok();
+//!    }
+//!    ```
+//!
+//! 3. **Wire into controller** - add to `run_migrations_async()`:
+//!    ```rust
+//!    if let Some(p) = MY_PROCESSOR.get() {
+//!        processors.push(p.clone());
+//!    }
+//!    ```
+//!
+//! 4. **Platform creates and registers** with injected dependencies
 //!
 //! ## Versioning
 //!
@@ -77,7 +116,7 @@ mod state;
 pub mod processors;
 
 // Public API exports
-pub use controller::{MigrationController, MigrationRunSummary};
+pub use controller::{register_poh_processor, MigrationController, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
 pub use state::{MigrationRecord, MigrationStatus};
