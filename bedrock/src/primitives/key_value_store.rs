@@ -61,7 +61,6 @@ pub trait DeviceKeyValueStore: Send + Sync {
 
 #[cfg(test)]
 /// In-memory implementation of `DeviceKeyValueStore` for testing purposes
-#[allow(dead_code)]
 pub struct InMemoryDeviceKeyValueStore {
     store: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
@@ -70,8 +69,14 @@ pub struct InMemoryDeviceKeyValueStore {
 impl InMemoryDeviceKeyValueStore {
     /// Creates a new empty in-memory key-value store
     #[must_use]
-    #[allow(dead_code)]
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[cfg(test)]
+impl Default for InMemoryDeviceKeyValueStore {
+    fn default() -> Self {
         Self {
             store: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
