@@ -43,6 +43,9 @@ pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 /// Key management for World App.
 mod root_key;
 
+/// Migration system for handling data migrations
+pub mod migration;
+
 /// Test utilities for unit and integration tests
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;

@@ -40,7 +40,11 @@ aws-nitro-enclaves-nsm-api = "0.4.0"
 base64 = "0.22.1"
 bedrock-macros = { path = "../bedrock-macros" }
 blake3 = "1.5.5"
-chrono = { version = "0.4.42", default-features = false, features = ["now", "std"] }
+chrono = { version = "0.4.42", default-features = false, features = [
+  "now",
+  "std",
+  "serde",
+] }
 ciborium = "0.2.2"
 coset = "0.3.8"
 crypto_box = { version = "0.9.1", features = ["seal"] }
