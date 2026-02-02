@@ -1,7 +1,7 @@
-use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::state::{MigrationRecord, MigrationStatus};
+use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
 use chrono::{Duration, Utc};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
