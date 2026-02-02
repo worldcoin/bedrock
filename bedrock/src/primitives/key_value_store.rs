@@ -60,38 +60,38 @@ pub trait DeviceKeyValueStore: Send + Sync {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+/// In-memory implementation of `DeviceKeyValueStore` for testing purposes
+#[allow(dead_code)]
+pub struct InMemoryDeviceKeyValueStore {
+    store: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
 
-    pub struct InMemoryDeviceKeyValueStore {
-        store: Mutex<HashMap<String, String>>,
-    }
-
-    impl InMemoryDeviceKeyValueStore {
-        #[must_use]
-        pub fn new() -> Self {
-            Self {
-                store: Mutex::new(HashMap::new()),
-            }
+#[cfg(test)]
+impl InMemoryDeviceKeyValueStore {
+    /// Creates a new empty in-memory key-value store
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self {
+            store: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
+}
 
-    impl DeviceKeyValueStore for InMemoryDeviceKeyValueStore {
-        fn get(&self, key: String) -> Result<String, KeyValueStoreError> {
-            let value = self.store.lock().unwrap().get(&key).cloned();
-            value.ok_or(KeyValueStoreError::KeyNotFound)
-        }
+#[cfg(test)]
+impl DeviceKeyValueStore for InMemoryDeviceKeyValueStore {
+    fn get(&self, key: String) -> Result<String, KeyValueStoreError> {
+        let value = self.store.lock().unwrap().get(&key).cloned();
+        value.ok_or(KeyValueStoreError::KeyNotFound)
+    }
 
-        fn set(&self, key: String, value: String) -> Result<(), KeyValueStoreError> {
-            self.store.lock().unwrap().insert(key, value);
-            Ok(())
-        }
+    fn set(&self, key: String, value: String) -> Result<(), KeyValueStoreError> {
+        self.store.lock().unwrap().insert(key, value);
+        Ok(())
+    }
 
-        fn delete(&self, key: String) -> Result<(), KeyValueStoreError> {
-            self.store.lock().unwrap().remove(&key);
-            Ok(())
-        }
+    fn delete(&self, key: String) -> Result<(), KeyValueStoreError> {
+        self.store.lock().unwrap().remove(&key);
+        Ok(())
     }
 }
