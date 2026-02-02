@@ -1,8 +1,8 @@
-use crate::device::{DeviceKeyValueStore, KeyValueStoreError};
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::processors::PoHMigrationProcessor;
 use crate::migration::state::{MigrationRecord, MigrationStatus};
+use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
 use chrono::{Duration, Utc};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
@@ -416,7 +416,7 @@ mod tests {
     //! The `#[serial]` attribute ensures they don't interfere with each other.
 
     use super::*;
-    use crate::device::test::InMemoryDeviceKeyValueStore;
+    use crate::primitives::key_value_store::InMemoryDeviceKeyValueStore;
     use async_trait::async_trait;
     use serial_test::serial;
     use std::sync::atomic::{AtomicU32, Ordering};

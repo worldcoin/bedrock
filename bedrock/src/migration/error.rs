@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::device::KeyValueStoreError;
+use crate::primitives::key_value_store::KeyValueStoreError;
 
 /// Error types for migration operations
 #[allow(clippy::module_name_repetitions)]

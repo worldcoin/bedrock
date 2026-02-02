@@ -43,9 +43,6 @@ pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 /// Key management for World App.
 mod root_key;
 
-/// Device abstractions for filesystem and key-value storage
-pub mod device;
-
 /// Migration system for handling data migrations
 pub mod migration;
 
