@@ -1,68 +1,19 @@
 use thiserror::Error;
 
-#[allow(clippy::module_name_repetitions)]
-#[derive(Debug, Error, uniffi::Error)]
-pub enum DeviceFileSystemError {
-    #[error("failed to read the file")]
-    ReadFileError,
-    #[error("tried to read a file that doesn't exist")]
-    FileDoesNotExitError,
-    #[error("unexpected error in foreign callback: {0}")]
-    UnexpectedUniFFICallbackError(String),
-}
-
-impl From<uniffi::UnexpectedUniFFICallbackError> for DeviceFileSystemError {
-    fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        Self::UnexpectedUniFFICallbackError(e.reason)
-    }
-}
-
-pub type Success = bool;
-
-#[allow(clippy::missing_errors_doc)]
-#[allow(clippy::module_name_repetitions)]
-#[uniffi::export(with_foreign)]
-pub trait DeviceFileSystem: Send + Sync {
-    fn get_user_data_directory(&self) -> String;
-
-    fn file_exists(&self, file_path: String) -> bool;
-
-    fn read_file(&self, file_path: String) -> Result<Vec<u8>, DeviceFileSystemError>;
-
-    fn list_files(&self, folder_path: String) -> Vec<String>;
-
-    fn write_file(&self, file_path: String, file_buffer: Vec<u8>) -> Success;
-
-    fn delete_file(&self, file_path: String) -> Success;
-}
-
-/// Safely call into the foreign `DeviceFileSystem.get_user_data_directory` callback.
-///
-/// Some foreign language implementations (e.g., Kotlin coroutines) may throw exceptions such as
-/// `CancellationException` which cannot be represented in the `String` return type and can cause
-/// FFI lifting to panic. This helper catches any panic that occurs during the callback invocation
-/// and converts it into a `DeviceFileSystemError` so callers can propagate a proper `OxideError`
-/// instead of aborting the process.
-#[inline]
-pub fn try_get_user_data_directory(file_system: &dyn DeviceFileSystem) -> Result<String, DeviceFileSystemError> {
-    // Use catch_unwind to guard against panics raised while lifting the foreign return.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| file_system.get_user_data_directory())) {
-        Ok(path) => Ok(path),
-        Err(_) => Err(DeviceFileSystemError::UnexpectedUniFFICallbackError(
-            "panic in DeviceFileSystem.get_user_data_directory callback".to_string(),
-        )),
-    }
-}
-
+/// Errors that can occur when interacting with the device key-value store
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Error, uniffi::Error)]
 pub enum KeyValueStoreError {
+    /// The requested key was not found in the store
     #[error("key not found")]
     KeyNotFound,
+    /// Failed to parse the value retrieved from the store
     #[error("failed to parse value")]
     ParsingFailure,
+    /// Failed to update the value in the store
     #[error("failed to update value")]
     UpdateFailure,
+    /// An unexpected error occurred in the foreign callback
     #[error("unexpected error in foreign callback: {0}")]
     UnexpectedUniFFICallbackError(String),
 }
@@ -109,4 +60,38 @@ pub trait DeviceKeyValueStore: Send + Sync {
 }
 
 #[cfg(test)]
-pub mod test;
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    pub struct InMemoryDeviceKeyValueStore {
+        store: Mutex<HashMap<String, String>>,
+    }
+
+    impl InMemoryDeviceKeyValueStore {
+        #[must_use]
+        pub fn new() -> Self {
+            Self {
+                store: Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    impl DeviceKeyValueStore for InMemoryDeviceKeyValueStore {
+        fn get(&self, key: String) -> Result<String, KeyValueStoreError> {
+            let value = self.store.lock().unwrap().get(&key).cloned();
+            value.ok_or(KeyValueStoreError::KeyNotFound)
+        }
+
+        fn set(&self, key: String, value: String) -> Result<(), KeyValueStoreError> {
+            self.store.lock().unwrap().insert(key, value);
+            Ok(())
+        }
+
+        fn delete(&self, key: String) -> Result<(), KeyValueStoreError> {
+            self.store.lock().unwrap().remove(&key);
+            Ok(())
+        }
+    }
+}
