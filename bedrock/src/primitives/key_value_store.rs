@@ -95,3 +95,51 @@ impl DeviceKeyValueStore for InMemoryDeviceKeyValueStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_and_get() {
+        let store = InMemoryDeviceKeyValueStore::new();
+
+        store.set("test_key".to_string(), "test_value".to_string()).unwrap();
+        let value = store.get("test_key".to_string()).unwrap();
+
+        assert_eq!(value, "test_value");
+    }
+
+    #[test]
+    fn test_get_nonexistent_key() {
+        let store = InMemoryDeviceKeyValueStore::new();
+
+        let result = store.get("nonexistent".to_string());
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), KeyValueStoreError::KeyNotFound));
+    }
+
+    #[test]
+    fn test_delete() {
+        let store = InMemoryDeviceKeyValueStore::new();
+
+        store.set("test_key".to_string(), "test_value".to_string()).unwrap();
+        store.delete("test_key".to_string()).unwrap();
+
+        let result = store.get("test_key".to_string());
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), KeyValueStoreError::KeyNotFound));
+    }
+
+    #[test]
+    fn test_overwrite_value() {
+        let store = InMemoryDeviceKeyValueStore::new();
+
+        store.set("test_key".to_string(), "value1".to_string()).unwrap();
+        store.set("test_key".to_string(), "value2".to_string()).unwrap();
+
+        let value = store.get("test_key".to_string()).unwrap();
+        assert_eq!(value, "value2");
+    }
+}
