@@ -57,6 +57,9 @@ pub mod filesystem;
 /// Introduces authenticated HTTP client functionality that native applications must implement for bedrock.
 pub mod http_client;
 
+/// Introduces key-value store functionality for persisting device data.
+pub mod key_value_store;
+
 /// Introduces test elements to ensure tooling (logging and error handling) is working as expected.
 /// The elements in this module are only used in Foreign Tests and are not available in built binaries.
 #[cfg(feature = "tooling_tests")]
