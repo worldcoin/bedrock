@@ -15,7 +15,9 @@ pub struct PoHMigrationProcessor {
     // identity: Arc<dyn Identity>,
     // personal_custody_keypair: Arc<dyn PersonalCustodyKeypair>,
     // attestation_generator: Arc<dyn AttestationGenerator>,
+    #[allow(dead_code)]
     jwt_token: String,
+    #[allow(dead_code)]
     sub: Option<String>,
 }
 
