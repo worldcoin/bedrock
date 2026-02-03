@@ -6,16 +6,12 @@ use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError
 use chrono::{Duration, Utc};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 const MIGRATION_KEY_PREFIX: &str = "migration:";
 const DEFAULT_RETRY_DELAY_MS: i64 = 60_000; // 1 minute
 const MAX_RETRY_DELAY_MS: i64 = 86_400_000; // 1 day
-
-/// Global storage for registered `PoH` migration processor
-/// Platform code registers a processor instance before creating the controller
-static POH_PROCESSOR: OnceLock<Arc<PoHMigrationProcessor>> = OnceLock::new();
 
 /// Global lock to prevent concurrent migration runs across all controller instances.
 /// This is a process-wide coordination mechanism that ensures only one migration
@@ -71,35 +67,50 @@ pub struct MigrationController {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl MigrationController {
-    /// Create a migration controller
+    /// Create a migration controller with dependency-injected processors
     ///
     /// # Parameters
     /// - `kv_store`: The persistent key-value store for migration state
+    /// - `poh_processor`: Optional `PoH` migration processor with injected dependencies
     ///
     /// # Returns
     /// Arc-wrapped controller ready to run migrations
     ///
-    /// # Note
-    /// Processors can be registered before or after creating the controller.
-    /// The controller checks global processor storage when migrations run.
+    /// # Credential Rotation
+    /// When credentials need to be updated (JWT rotation, user logout/login), create a new
+    /// controller instance with updated processors. Each controller is immutable and thread-safe.
     ///
     /// # Example (Swift)
     /// ```swift
-    /// // 1. Create processor with dependencies
-    /// let processor = MyProcessor(dependency1: dep1, dependency2: dep2)
-    ///
-    /// // 2. Register processor
-    /// registerMyProcessor(processor: processor)
-    ///
-    /// // 3. Create controller and run
-    /// let controller = MigrationController(kvStore: kvStore)
+    /// // Create controller with processors
+    /// let pohProcessor = PoHMigrationProcessor(jwtToken: token, sub: sub)
+    /// let controller = MigrationController(
+    ///     kvStore: kvStore,
+    ///     pohProcessor: pohProcessor
+    /// )
     /// let summary = try await controller.runMigrations()
+    ///
+    /// // Later, when credentials update, create new controller
+    /// let newPohProcessor = PoHMigrationProcessor(jwtToken: newToken, sub: newSub)
+    /// let newController = MigrationController(
+    ///     kvStore: kvStore,
+    ///     pohProcessor: newPohProcessor
+    /// )
     /// ```
     #[uniffi::constructor]
-    pub fn new(kv_store: Arc<dyn DeviceKeyValueStore>) -> Arc<Self> {
+    pub fn new(
+        kv_store: Arc<dyn DeviceKeyValueStore>,
+        poh_processor: Option<Arc<PoHMigrationProcessor>>,
+    ) -> Arc<Self> {
+        let mut processors: Vec<Arc<dyn MigrationProcessor>> = vec![];
+
+        if let Some(p) = poh_processor {
+            processors.push(p);
+        }
+
         Arc::new(Self {
             kv_store,
-            processors: vec![], // Will be built dynamically from global storage
+            processors,
         })
     }
 
@@ -155,13 +166,8 @@ impl MigrationController {
     ) -> Result<MigrationRunSummary, MigrationError> {
         info!("Migration run started");
 
-        // Build processor list from stored processors + registered global processors
-        let mut processors: Vec<Arc<dyn MigrationProcessor>> = self.processors.clone();
-
-        // Add PoH processor if registered
-        if let Some(poh_processor) = POH_PROCESSOR.get() {
-            processors.push(poh_processor.clone());
-        }
+        // Use processors injected via constructor
+        let processors = &self.processors;
 
         // Summary of this migration run for analytics. Not stored.
         let mut summary = MigrationRunSummary {
@@ -376,19 +382,6 @@ fn calculate_backoff_delay(attempts: i32) -> i64 {
     let exp = (attempts.saturating_sub(1)).clamp(0, 16).cast_unsigned(); // cap exponent
     let factor = 1_i64.checked_shl(exp).unwrap_or(i64::MAX);
     (DEFAULT_RETRY_DELAY_MS.saturating_mul(factor)).min(MAX_RETRY_DELAY_MS)
-}
-
-/// Register a `PoH` migration processor
-///
-/// Platform code creates the processor with injected dependencies and registers it
-/// before creating the [`MigrationController`].
-///
-#[uniffi::export]
-pub fn register_poh_processor(processor: Arc<PoHMigrationProcessor>) {
-    match POH_PROCESSOR.set(processor) {
-        Ok(()) => info!("PoH migration processor registered"),
-        Err(_) => warn!("PoH migration processor already registered, ignoring"),
-    }
 }
 
 #[cfg(test)]
@@ -782,8 +775,10 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_registration_pattern_with_poh_processor() {
+    async fn test_direct_processor_injection() {
         use crate::migration::processors::PoHMigrationProcessor;
+
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
 
         // Create a PoH processor with injected dependencies
         let poh_processor = PoHMigrationProcessor::new(
@@ -791,15 +786,10 @@ mod tests {
             Some("test_subject".to_string()),
         );
 
-        // Register it using the registration function
-        register_poh_processor(poh_processor);
+        // Pass processor directly to controller constructor
+        let controller = MigrationController::new(kv_store, Some(poh_processor));
 
-        // Create controller WITHOUT using with_processors
-        // This tests that the controller picks up globally registered processors
-        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
-        let controller = MigrationController::new(kv_store);
-
-        // Run migrations - should pick up the registered PoH processor
+        // Run migrations
         let result = controller.run_migrations().await;
 
         // Verify migrations ran successfully
@@ -807,11 +797,43 @@ mod tests {
         let summary = result.unwrap();
 
         // The PoH processor's is_applicable returns false (placeholder),
-        // so it should be skipped. But it proves the registration pattern works.
-        assert!(summary.total >= 1, "Should have at least the PoH processor");
-        assert!(
-            summary.skipped >= 1,
+        // so it should be skipped. This proves direct injection works.
+        assert_eq!(summary.total, 1, "Should have exactly 1 processor");
+        assert_eq!(
+            summary.skipped, 1,
             "PoH processor should be skipped (not applicable)"
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_credential_rotation_via_new_controller() {
+        use crate::migration::processors::PoHMigrationProcessor;
+
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+
+        // Create initial controller with credentials
+        let processor1 = PoHMigrationProcessor::new(
+            "old_token".to_string(),
+            Some("old_sub".to_string()),
+        );
+        let controller1 = MigrationController::new(kv_store.clone(), Some(processor1));
+
+        let result1 = controller1.run_migrations().await;
+        assert!(result1.is_ok());
+
+        // Simulate credential rotation by creating new controller with updated processor
+        let processor2 = PoHMigrationProcessor::new(
+            "new_token".to_string(),
+            Some("new_sub".to_string()),
+        );
+        let controller2 = MigrationController::new(kv_store, Some(processor2));
+
+        let result2 = controller2.run_migrations().await;
+        assert!(result2.is_ok());
+
+        // Both controllers work independently with their respective credentials
+        let summary2 = result2.unwrap();
+        assert_eq!(summary2.skipped, 1, "Migration should be skipped again");
     }
 }

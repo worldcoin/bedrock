@@ -17,57 +17,64 @@
 //! ## Platform Usage (Swift/Kotlin)
 //!
 //! ```swift
-//! // 1. Create processor with dependencies
-//! let processor = MyMigrationProcessor(
-//!     dependency1: dep1,
-//!     dependency2: dep2
+//! // 1. Create processors with dependencies
+//! let pohProcessor = PoHMigrationProcessor(jwtToken: token, sub: sub)
+//!
+//! // 2. Create controller with processors
+//! let controller = MigrationController(
+//!     kvStore: kvStore,
+//!     pohProcessor: pohProcessor
 //! )
 //!
-//! // 2. Register processor
-//! registerMyProcessor(processor: processor)
-//!
-//! // 3. Create controller and run
-//! let controller = MigrationController(kvStore: kvStore)
+//! // 3. Run migrations
 //! let summary = try await controller.runMigrations()
+//!
+//! // When credentials rotate, create new controller
+//! let newPohProcessor = PoHMigrationProcessor(jwtToken: newToken, sub: newSub)
+//! let newController = MigrationController(
+//!     kvStore: kvStore,
+//!     pohProcessor: newPohProcessor
+//! )
 //! ```
 //!
 //! ```kotlin
-//! // 1. Create processor with dependencies
-//! val processor = MyMigrationProcessor(dep1, dep2)
+//! // 1. Create processors with dependencies
+//! val pohProcessor = PoHMigrationProcessor(token, sub)
 //!
-//! // 2. Register processor
-//! registerMyProcessor(processor)
+//! // 2. Create controller with processors
+//! val controller = MigrationController(kvStore, pohProcessor)
 //!
-//! // 3. Create controller and run
-//! val controller = MigrationController(kvStore)
+//! // 3. Run migrations
 //! val summary = controller.runMigrations()
+//!
+//! // When credentials rotate, create new controller
+//! val newPohProcessor = PoHMigrationProcessor(newToken, newSub)
+//! val newController = MigrationController(kvStore, newPohProcessor)
 //! ```
 //!
 //! ## Adding New Migrations
 //!
 //! 1. **Create processor in Rust** (see `processors/poh_migration_processor.rs` as template)
-//!    - Define struct with dependency fields
+//!    - Define struct with dependency fields (use `#[allow(dead_code)]` for placeholder fields)
 //!    - Add `#[uniffi::constructor]` that takes dependencies
 //!    - Implement `MigrationProcessor` trait with migration logic
 //!
-//! 2. **Add global storage and registration** in `controller.rs`:
+//! 2. **Add processor parameter to controller constructor** in `controller.rs`:
 //!    ```rust
-//!    static MY_PROCESSOR: OnceLock<Arc<dyn MigrationProcessor>> = OnceLock::new();
-//!
-//!    #[uniffi::export]
-//!    pub fn register_my_processor(processor: Arc<MyProcessor>) {
-//!        MY_PROCESSOR.set(processor).ok();
+//!    #[uniffi::constructor]
+//!    pub fn new(
+//!        kv_store: Arc<dyn DeviceKeyValueStore>,
+//!        poh_processor: Option<Arc<PoHMigrationProcessor>>,
+//!        my_processor: Option<Arc<MyProcessor>>,  // Add new parameter
+//!    ) -> Arc<Self> {
+//!        let mut processors: Vec<Arc<dyn MigrationProcessor>> = vec![];
+//!        if let Some(p) = poh_processor { processors.push(p); }
+//!        if let Some(p) = my_processor { processors.push(p); }  // Add to list
+//!        // ...
 //!    }
 //!    ```
 //!
-//! 3. **Wire into controller** - add to `run_migrations_async()`:
-//!    ```rust
-//!    if let Some(p) = MY_PROCESSOR.get() {
-//!        processors.push(p.clone());
-//!    }
-//!    ```
-//!
-//! 4. **Platform creates and registers** with injected dependencies
+//! 3. **Platform creates controller with processors** - dependencies injected via constructor
 //!
 //! ## Versioning
 //!
@@ -116,9 +123,7 @@ mod state;
 pub mod processors;
 
 // Public API exports
-pub use controller::{
-    register_poh_processor, MigrationController, MigrationRunSummary,
-};
+pub use controller::{MigrationController, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
 pub use state::{MigrationRecord, MigrationStatus};
