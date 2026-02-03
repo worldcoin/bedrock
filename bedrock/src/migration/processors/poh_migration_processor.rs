@@ -14,9 +14,10 @@ use std::sync::Arc;
 /// When implementing, add the necessary types and uncomment the dependency fields.
 #[derive(uniffi::Object)]
 pub struct PoHMigrationProcessor {
-    // TODO: Uncomment and implement when these types are available in bedrock:
-    // identity: Arc<Identity>,
-    // personal_custody_keypair: Arc<PersonalCustodyKeypair>,
+    // TODO: Add these dependencies when implementing the actual migration logic.
+    // These should be foreign traits (with_foreign) implemented by platform code:
+    // identity: Arc<dyn Identity>,
+    // personal_custody_keypair: Arc<dyn PersonalCustodyKeypair>,
     // attestation_generator: Arc<dyn AttestationGenerator>,
     jwt_token: String,
     sub: Option<String>,
@@ -32,7 +33,7 @@ impl PoHMigrationProcessor {
     ///
     /// # Note
     /// Additional dependencies (`identity`, `personal_custody_keypair`, `attestation_generator`)
-    /// should be added when these types become available in bedrock.
+    /// will be added as foreign traits (implemented by platform code) when implementing the actual migration logic.
     ///
     /// # Platform usage (Swift)
     /// ```swift
