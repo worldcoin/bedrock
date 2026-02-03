@@ -243,68 +243,69 @@ impl MigrationController {
                     summary.failed_retryable += 1;
                 }
                 Ok(result) => match result {
-                Ok(ProcessorResult::Success) => {
-                    info!("Migration {migration_id} succeeded");
-                    record.status = MigrationStatus::Succeeded;
-                    record.completed_at = Some(Utc::now());
-                    record.last_error_code = None;
-                    record.last_error_message = None;
-                    record.next_attempt_at = None; // Clear retry time
-                    summary.succeeded += 1;
-                }
-                Ok(ProcessorResult::Retryable {
-                    error_code,
-                    error_message,
-                    retry_after_ms,
-                }) => {
-                    warn!("Migration {migration_id} failed (retryable): {error_code} - {error_message}");
-                    record.status = MigrationStatus::FailedRetryable;
-                    record.last_error_code = Some(error_code);
-                    record.last_error_message = Some(error_message);
+                    Ok(ProcessorResult::Success) => {
+                        info!("Migration {migration_id} succeeded");
+                        record.status = MigrationStatus::Succeeded;
+                        record.completed_at = Some(Utc::now());
+                        record.last_error_code = None;
+                        record.last_error_message = None;
+                        record.next_attempt_at = None; // Clear retry time
+                        summary.succeeded += 1;
+                    }
+                    Ok(ProcessorResult::Retryable {
+                        error_code,
+                        error_message,
+                        retry_after_ms,
+                    }) => {
+                        warn!("Migration {migration_id} failed (retryable): {error_code} - {error_message}");
+                        record.status = MigrationStatus::FailedRetryable;
+                        record.last_error_code = Some(error_code);
+                        record.last_error_message = Some(error_message);
 
-                    // Retry time is calculated according to exponential backoff and set on the
-                    // record.next_attempt_at field. When the app is next opened and the
-                    // migration is run again; the controller will check whether to run the
-                    // migration again based on the record.next_attempt_at field.
-                    let retry_delay_ms = retry_after_ms
-                        .unwrap_or_else(|| calculate_backoff_delay(record.attempts));
-                    record.next_attempt_at =
-                        Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
+                        // Retry time is calculated according to exponential backoff and set on the
+                        // record.next_attempt_at field. When the app is next opened and the
+                        // migration is run again; the controller will check whether to run the
+                        // migration again based on the record.next_attempt_at field.
+                        let retry_delay_ms = retry_after_ms.unwrap_or_else(|| {
+                            calculate_backoff_delay(record.attempts)
+                        });
+                        record.next_attempt_at =
+                            Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
-                    summary.failed_retryable += 1;
-                }
-                Ok(ProcessorResult::Terminal {
-                    error_code,
-                    error_message,
-                }) => {
-                    error!("Migration {migration_id} failed (terminal): {error_code} - {error_message}");
-                    record.status = MigrationStatus::FailedTerminal;
-                    record.last_error_code = Some(error_code);
-                    record.last_error_message = Some(error_message);
-                    record.next_attempt_at = None; // Clear retry time
-                    summary.failed_terminal += 1;
-                }
-                Ok(ProcessorResult::BlockedUserAction { reason }) => {
-                    warn!("Migration {migration_id} blocked: {reason}");
-                    record.status = MigrationStatus::BlockedUserAction;
-                    record.last_error_message = Some(reason);
-                    record.next_attempt_at = None; // Clear retry time
-                    summary.blocked += 1;
-                }
-                Err(e) => {
-                    error!("Migration {migration_id} threw error: {e:?}");
-                    record.status = MigrationStatus::FailedRetryable;
-                    record.last_error_code = Some("UNEXPECTED_ERROR".to_string());
-                    record.last_error_message = Some(format!("{e:?}"));
+                        summary.failed_retryable += 1;
+                    }
+                    Ok(ProcessorResult::Terminal {
+                        error_code,
+                        error_message,
+                    }) => {
+                        error!("Migration {migration_id} failed (terminal): {error_code} - {error_message}");
+                        record.status = MigrationStatus::FailedTerminal;
+                        record.last_error_code = Some(error_code);
+                        record.last_error_message = Some(error_message);
+                        record.next_attempt_at = None; // Clear retry time
+                        summary.failed_terminal += 1;
+                    }
+                    Ok(ProcessorResult::BlockedUserAction { reason }) => {
+                        warn!("Migration {migration_id} blocked: {reason}");
+                        record.status = MigrationStatus::BlockedUserAction;
+                        record.last_error_message = Some(reason);
+                        record.next_attempt_at = None; // Clear retry time
+                        summary.blocked += 1;
+                    }
+                    Err(e) => {
+                        error!("Migration {migration_id} threw error: {e:?}");
+                        record.status = MigrationStatus::FailedRetryable;
+                        record.last_error_code = Some("UNEXPECTED_ERROR".to_string());
+                        record.last_error_message = Some(format!("{e:?}"));
 
-                    // Schedule retry with backoff
-                    let retry_delay_ms = calculate_backoff_delay(record.attempts);
-                    record.next_attempt_at =
-                        Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
+                        // Schedule retry with backoff
+                        let retry_delay_ms = calculate_backoff_delay(record.attempts);
+                        record.next_attempt_at =
+                            Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
-                    summary.failed_retryable += 1;
-                }
-                }
+                        summary.failed_retryable += 1;
+                    }
+                },
             }
 
             // Save the final result (success/failure) to storage
