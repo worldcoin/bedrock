@@ -50,6 +50,7 @@ impl PoHMigrationProcessor {
     /// registerPoHProcessor(processor)
     /// ```
     #[uniffi::constructor]
+    #[must_use]
     pub fn new(jwt_token: String, sub: Option<String>) -> Arc<Self> {
         Arc::new(Self { jwt_token, sub })
     }
