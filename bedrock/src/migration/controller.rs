@@ -762,4 +762,204 @@ mod tests {
         // Processor should only execute once
         assert_eq!(processor.execution_count(), 1);
     }
+
+    /// Test processor that hangs indefinitely during execute
+    struct HangingExecuteProcessor {
+        id: String,
+    }
+
+    impl HangingExecuteProcessor {
+        fn new(id: &str) -> Self {
+            Self { id: id.to_string() }
+        }
+    }
+
+    #[async_trait]
+    impl MigrationProcessor for HangingExecuteProcessor {
+        fn migration_id(&self) -> String {
+            self.id.clone()
+        }
+
+        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+            Ok(true)
+        }
+
+        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+            // Hang longer than the test timeout (1 second)
+            sleep(Duration::from_secs(10)).await;
+            Ok(ProcessorResult::Success)
+        }
+    }
+
+    /// Test processor that hangs indefinitely during is_applicable check
+    struct HangingApplicabilityProcessor {
+        id: String,
+    }
+
+    impl HangingApplicabilityProcessor {
+        fn new(id: &str) -> Self {
+            Self { id: id.to_string() }
+        }
+    }
+
+    #[async_trait]
+    impl MigrationProcessor for HangingApplicabilityProcessor {
+        fn migration_id(&self) -> String {
+            self.id.clone()
+        }
+
+        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+            // Hang longer than the test timeout (1 second)
+            sleep(Duration::from_secs(10)).await;
+            Ok(true)
+        }
+
+        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+            Ok(ProcessorResult::Success)
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_execute_timeout_marks_migration_as_retryable() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(HangingExecuteProcessor::new("test.migration.v1"));
+        let controller =
+            MigrationController::with_processors(kv_store.clone(), vec![processor]);
+
+        // Run migrations - should timeout
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+
+        let summary = result.unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.failed_retryable, 1);
+        assert_eq!(summary.succeeded, 0);
+
+        // Verify the migration record was saved with timeout error
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+
+        assert!(matches!(record.status, MigrationStatus::FailedRetryable));
+        assert_eq!(
+            record.last_error_code,
+            Some("MIGRATION_TIMEOUT".to_string())
+        );
+        assert!(record
+            .last_error_message
+            .unwrap()
+            .contains("timed out after"));
+        assert!(record.next_attempt_at.is_some()); // Should schedule retry
+        assert_eq!(record.attempts, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_is_applicable_timeout_skips_migration() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor =
+            Arc::new(HangingApplicabilityProcessor::new("test.migration.v1"));
+        let controller =
+            MigrationController::with_processors(kv_store.clone(), vec![processor]);
+
+        // Run migrations - should skip due to is_applicable timeout
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+
+        let summary = result.unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.succeeded, 0);
+        assert_eq!(summary.failed_retryable, 0);
+
+        // Verify the migration record was NOT created or updated (skipped before execution)
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let record_result = kv_store.get(key);
+        // Record might exist from attempt to check applicability, but should not show InProgress
+        if let Ok(record_json) = record_result {
+            let record: MigrationRecord =
+                serde_json::from_str(&record_json).expect("Should deserialize");
+            // Should not be InProgress or Succeeded
+            assert!(
+                !matches!(record.status, MigrationStatus::InProgress)
+                    && !matches!(record.status, MigrationStatus::Succeeded)
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_timeout_does_not_block_subsequent_migrations() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+
+        // First processor will timeout, second should succeed
+        let processor1 = Arc::new(HangingExecuteProcessor::new("test.migration1.v1"));
+        let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor1, processor2.clone()],
+        );
+
+        // Run migrations
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+
+        let summary = result.unwrap();
+        assert_eq!(summary.total, 2);
+        assert_eq!(summary.failed_retryable, 1); // First migration timed out
+        assert_eq!(summary.succeeded, 1); // Second migration succeeded
+
+        // Verify first migration is marked as retryable
+        let key1 = format!("{MIGRATION_KEY_PREFIX}test.migration1.v1");
+        let record1_json = kv_store.get(key1).expect("Migration 1 record should exist");
+        let record1: MigrationRecord =
+            serde_json::from_str(&record1_json).expect("Should deserialize");
+        assert!(matches!(record1.status, MigrationStatus::FailedRetryable));
+        assert_eq!(
+            record1.last_error_code,
+            Some("MIGRATION_TIMEOUT".to_string())
+        );
+
+        // Verify second migration succeeded
+        let key2 = format!("{MIGRATION_KEY_PREFIX}test.migration2.v1");
+        let record2_json = kv_store.get(key2).expect("Migration 2 record should exist");
+        let record2: MigrationRecord =
+            serde_json::from_str(&record2_json).expect("Should deserialize");
+        assert!(matches!(record2.status, MigrationStatus::Succeeded));
+
+        // Verify second processor actually executed
+        assert_eq!(processor2.execution_count(), 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_timeout_with_exponential_backoff() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(HangingExecuteProcessor::new("test.migration.v1"));
+        let controller =
+            MigrationController::with_processors(kv_store.clone(), vec![processor]);
+
+        // Run migrations multiple times to test backoff
+        for attempt in 1..=3 {
+            let result = controller.run_migrations().await;
+            assert!(result.is_ok());
+
+            let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+            let record_json = kv_store.get(key.clone()).expect("Record should exist");
+            let record: MigrationRecord =
+                serde_json::from_str(&record_json).expect("Should deserialize");
+
+            assert_eq!(record.attempts, attempt);
+            assert!(record.next_attempt_at.is_some());
+
+            // Clear next_attempt_at to allow immediate retry in test
+            let mut record_for_retry = record;
+            record_for_retry.next_attempt_at = None;
+            let json = serde_json::to_string(&record_for_retry).unwrap();
+            kv_store.set(key, json).unwrap();
+        }
+    }
 }
