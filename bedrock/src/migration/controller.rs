@@ -17,6 +17,12 @@ const MIGRATION_TIMEOUT_SECS: u64 = 20; // 20 seconds in production
 #[cfg(test)]
 const MIGRATION_TIMEOUT_SECS: u64 = 1; // 1 second in tests
 
+// Consider InProgress migrations stale after this duration (indicates crash/abandon)
+#[cfg(not(test))]
+const STALE_IN_PROGRESS_MINS: i64 = 5; // 5 minutes in production
+#[cfg(test)]
+const STALE_IN_PROGRESS_MINS: i64 = 0; // Immediately stale in tests (for testing)
+
 /// Global lock to prevent concurrent migration runs across all controller instances.
 /// This is a process-wide coordination mechanism that ensures only one migration
 /// can execute at a time, regardless of how many [`MigrationController`] instances exist.
@@ -179,6 +185,28 @@ impl MigrationController {
                 info!("Migration {migration_id} blocked pending user action, skipping");
                 summary.blocked += 1;
                 continue;
+            }
+
+            // Check for stale InProgress status (likely from app crash)
+            if matches!(record.status, MigrationStatus::InProgress) {
+                if let Some(last_attempted) = record.last_attempted_at {
+                    let elapsed = Utc::now() - last_attempted;
+                    if elapsed > Duration::minutes(STALE_IN_PROGRESS_MINS) {
+                        warn!(
+                            "Migration {migration_id} stuck in InProgress for {elapsed:?}, resetting to retryable"
+                        );
+                        record.status = MigrationStatus::FailedRetryable;
+                        record.last_error_code = Some("STALE_IN_PROGRESS".to_string());
+                        record.last_error_message = Some(format!(
+                            "Migration was stuck in InProgress state for {elapsed:?}, likely due to app crash"
+                        ));
+                        // Don't increment attempts since this wasn't a real attempt
+                        // Schedule immediate retry (no backoff for crash recovery)
+                        record.next_attempt_at = Some(Utc::now());
+                        self.save_record(&migration_id, &record)?;
+                        // Continue to retry logic below
+                    }
+                }
             }
 
             // Check if we should retry (based on next_attempt_at)
@@ -999,8 +1027,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations - should skip blocked migration
         let result = controller.run_migrations().await;
@@ -1023,5 +1053,82 @@ mod tests {
             updated_record.status,
             MigrationStatus::BlockedUserAction
         ));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_stale_in_progress_resets_and_retries() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+
+        // Create a stale InProgress record (simulating app crash)
+        let mut record = MigrationRecord::new();
+        record.status = MigrationStatus::InProgress;
+        record.attempts = 1;
+        // Set last_attempted_at to 10 minutes ago (stale)
+        record.last_attempted_at = Some(Utc::now() - chrono::Duration::minutes(10));
+
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let json = serde_json::to_string(&record).unwrap();
+        kv_store.set(key.clone(), json).unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        // Run migrations - should detect staleness and retry
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+
+        let summary = result.unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.succeeded, 1); // Should succeed after reset
+        assert_eq!(summary.failed_retryable, 0);
+
+        // Verify the migration was executed
+        assert_eq!(processor.execution_count(), 1);
+
+        // Verify the final status is Succeeded
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
+        // Attempt counter should have incremented
+        assert_eq!(updated_record.attempts, 2);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_fresh_in_progress_not_treated_as_stale() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+
+        // Create a fresh InProgress record (recent)
+        let mut record = MigrationRecord::new();
+        record.status = MigrationStatus::InProgress;
+        record.attempts = 1;
+        // Set last_attempted_at to now (not stale)
+        record.last_attempted_at = Some(Utc::now());
+
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let json = serde_json::to_string(&record).unwrap();
+        kv_store.set(key.clone(), json).unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        // Run migrations - should treat as normal InProgress and retry
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+
+        let summary = result.unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.succeeded, 1);
+
+        // Verify the migration was executed
+        assert_eq!(processor.execution_count(), 1);
     }
 }
