@@ -14,7 +14,6 @@ const MAX_RETRY_DELAY_MS: i64 = 86_400_000; // 1 day
 
 #[cfg(not(test))]
 const MIGRATION_TIMEOUT_SECS: u64 = 20; // 20 seconds in production
-                                        // Use a shorter timeout in tests to speed up test ex
 #[cfg(test)]
 const MIGRATION_TIMEOUT_SECS: u64 = 1; // 1 second in tests
 
