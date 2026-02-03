@@ -45,8 +45,6 @@ pub struct MigrationRunSummary {
     pub failed_retryable: i32,
     /// Number of migrations that failed with terminal errors (won't retry)
     pub failed_terminal: i32,
-    /// Number of migrations blocked pending user action
-    pub blocked: i32,
     /// Number of migrations that were skipped (already completed or not applicable)
     pub skipped: i32,
 }
@@ -155,7 +153,6 @@ impl MigrationController {
             succeeded: 0,
             failed_retryable: 0,
             failed_terminal: 0,
-            blocked: 0,
             skipped: 0,
         };
 
@@ -177,13 +174,6 @@ impl MigrationController {
             if matches!(record.status, MigrationStatus::FailedTerminal) {
                 info!("Migration {migration_id} failed terminally, skipping");
                 summary.skipped += 1;
-                continue;
-            }
-
-            // Skip if blocked pending user action
-            if matches!(record.status, MigrationStatus::BlockedUserAction) {
-                info!("Migration {migration_id} blocked pending user action, skipping");
-                summary.blocked += 1;
                 continue;
             }
 
@@ -334,13 +324,6 @@ impl MigrationController {
                         record.next_attempt_at = None; // Clear retry time
                         summary.failed_terminal += 1;
                     }
-                    Ok(ProcessorResult::BlockedUserAction { reason }) => {
-                        warn!("Migration {migration_id} blocked: {reason}");
-                        record.status = MigrationStatus::BlockedUserAction;
-                        record.last_error_message = Some(reason);
-                        record.next_attempt_at = None; // Clear retry time
-                        summary.blocked += 1;
-                    }
                     Err(e) => {
                         error!("Migration {migration_id} threw error: {e:?}");
                         record.status = MigrationStatus::FailedRetryable;
@@ -362,8 +345,8 @@ impl MigrationController {
         }
 
         info!(
-            "Migration run completed: {} succeeded, {} retryable, {} terminal, {} blocked, {} skipped",
-            summary.succeeded, summary.failed_retryable, summary.failed_terminal, summary.blocked, summary.skipped
+            "Migration run completed: {} succeeded, {} retryable, {} terminal, {} skipped",
+            summary.succeeded, summary.failed_retryable, summary.failed_terminal, summary.skipped
         );
 
         Ok(summary)
@@ -1010,49 +993,6 @@ mod tests {
             let json = serde_json::to_string(&record_for_retry).unwrap();
             kv_store.set(key, json).unwrap();
         }
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_blocked_user_action_skips_migration() {
-        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
-        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
-
-        // Manually create a record with BlockedUserAction status
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::BlockedUserAction;
-        record.last_error_message = Some("Waiting for user consent".to_string());
-
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
-        let json = serde_json::to_string(&record).unwrap();
-        kv_store.set(key.clone(), json).unwrap();
-
-        let controller = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor.clone()],
-        );
-
-        // Run migrations - should skip blocked migration
-        let result = controller.run_migrations().await;
-        assert!(result.is_ok());
-
-        let summary = result.unwrap();
-        assert_eq!(summary.total, 1);
-        assert_eq!(summary.blocked, 1);
-        assert_eq!(summary.succeeded, 0);
-        assert_eq!(summary.failed_retryable, 0);
-
-        // Verify the migration was NOT executed
-        assert_eq!(processor.execution_count(), 0);
-
-        // Verify the status is still BlockedUserAction
-        let record_json = kv_store.get(key).expect("Record should exist");
-        let updated_record: MigrationRecord =
-            serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(
-            updated_record.status,
-            MigrationStatus::BlockedUserAction
-        ));
     }
 
     #[tokio::test]
