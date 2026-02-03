@@ -383,23 +383,6 @@ fn calculate_backoff_delay(attempts: i32) -> i64 {
 /// Platform code creates the processor with injected dependencies and registers it
 /// before creating the [`MigrationController`].
 ///
-/// # Example (Swift)
-/// ```swift
-/// let processor = PoHMigrationProcessor(
-///     identity: identity,
-///     jwtToken: jwtToken,
-///     personalCustodyKeypair: keypair,
-///     attestationGenerator: generator,
-///     sub: sub
-/// )
-/// registerPoHProcessor(processor: processor)
-/// ```
-///
-/// # Example (Kotlin)
-/// ```kotlin
-/// val processor = PoHMigrationProcessor(identity, jwtToken, keypair, generator, sub)
-/// registerPoHProcessor(processor)
-/// ```
 #[uniffi::export]
 pub fn register_poh_processor(processor: Arc<PoHMigrationProcessor>) {
     match POH_PROCESSOR.set(processor) {
