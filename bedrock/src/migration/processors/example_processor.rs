@@ -39,14 +39,14 @@ impl Default for ExampleProcessor {
 
 #[async_trait]
 impl MigrationProcessor for ExampleProcessor {
-    fn migration_id(&self) -> &'static str {
+    fn migration_id(&self) -> String {
         // TODO: Replace with your actual migration ID
         // Format: "namespace.category.action.v1"
         // Examples:
         //   - "worldid.account.bootstrap.v1"
         //   - "worldid.credentials.poh.refresh.v1"
         //   - "worldid.credentials.nfc.refresh.v1"
-        "example.migration.v1"
+        "example.migration.v1".to_string()
     }
 
     async fn is_applicable(&self) -> Result<bool, MigrationError> {

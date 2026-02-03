@@ -69,8 +69,11 @@ impl MigrationController {
     /// Create a new [`MigrationController`]
     /// Processors are registered internally
     #[uniffi::constructor]
-    pub fn new(kv_store: Arc<dyn DeviceKeyValueStore>) -> Arc<Self> {
-        Self::with_processors(kv_store, Self::default_processors())
+    pub fn new(
+        kv_store: Arc<dyn DeviceKeyValueStore>,
+        processors: Vec<Arc<dyn MigrationProcessor>>,
+    ) -> Arc<Self> {
+        Self::with_processors(kv_store, processors)
     }
 
     /// Run all registered migrations
@@ -118,17 +121,6 @@ impl MigrationController {
         })
     }
 
-    /// Get the default list of processors to run
-    /// Add new processors here as they're implemented
-    fn default_processors() -> Vec<Arc<dyn MigrationProcessor>> {
-        vec![
-            // Add actual processors here as they're implemented:
-            // Arc::new(AccountBootstrapProcessor::new()),
-            // Arc::new(PoHRefreshProcessor::new()),
-            // Arc::new(NfcRefreshProcessor::new()),
-        ]
-    }
-
     /// Internal async implementation of `run_migrations`
     #[allow(clippy::too_many_lines)]
     async fn run_migrations_async(
@@ -151,7 +143,7 @@ impl MigrationController {
             let migration_id = processor.migration_id();
 
             // Load the current record for this migration (or create new one if first time)
-            let mut record = self.load_record(migration_id)?;
+            let mut record = self.load_record(&migration_id)?;
 
             // Skip if already succeeded
             if matches!(record.status, MigrationStatus::Succeeded) {
@@ -212,7 +204,7 @@ impl MigrationController {
             record.last_attempted_at = Some(Utc::now());
 
             // Save record before execution so we don't lose progress if the app crashes mid-migration
-            self.save_record(migration_id, &record)?;
+            self.save_record(&migration_id, &record)?;
 
             // Execute
             match processor.execute().await {
@@ -280,7 +272,7 @@ impl MigrationController {
             }
 
             // Save the final result (success/failure) to storage
-            self.save_record(migration_id, &record)?;
+            self.save_record(&migration_id, &record)?;
         }
 
         info!(
@@ -394,8 +386,8 @@ mod tests {
 
     #[async_trait]
     impl MigrationProcessor for TestProcessor {
-        fn migration_id(&self) -> &str {
-            &self.id
+        fn migration_id(&self) -> String {
+            self.id.clone()
         }
 
         async fn is_applicable(&self) -> Result<bool, MigrationError> {

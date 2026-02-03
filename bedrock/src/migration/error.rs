@@ -1,25 +1,26 @@
-use thiserror::Error;
+use bedrock_macros::bedrock_error;
 
 use crate::primitives::key_value_store::KeyValueStoreError;
 
 /// Error types for migration operations
 #[allow(clippy::module_name_repetitions)]
-#[derive(Debug, Error, uniffi::Error)]
-#[uniffi(flat_error)]
+#[bedrock_error]
 pub enum MigrationError {
-    /// Unexpected error with a message
-    #[error("unexpected error: {0}")]
-    UnexpectedError(String),
-
     /// Invalid operation error
     #[error("invalid operation: {0}")]
     InvalidOperation(String),
 
     /// JSON serialization/deserialization error
-    #[error(transparent)]
-    SerdeJsonError(#[from] serde_json::Error),
+    #[error("serde_json_error: {0}")]
+    SerdeJsonError(String),
 
     /// Device key-value store error
     #[error(transparent)]
     DeviceKeyValueStoreError(#[from] KeyValueStoreError),
+}
+
+impl From<serde_json::Error> for MigrationError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::SerdeJsonError(error.to_string())
+    }
 }
