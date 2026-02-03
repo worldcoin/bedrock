@@ -2,6 +2,7 @@ use crate::migration::MigrationError;
 use async_trait::async_trait;
 
 /// Result of executing a migration processor
+#[derive(uniffi::Enum)]
 pub enum ProcessorResult {
     /// Migration succeeded
     Success,
@@ -32,11 +33,12 @@ pub enum ProcessorResult {
 }
 
 /// Trait that all migration processors must implement
+#[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait MigrationProcessor: Send + Sync {
     /// Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
     /// The version should be included in the ID itself (e.g., ".v1", ".v2")
-    fn migration_id(&self) -> &str;
+    fn migration_id(&self) -> String;
 
     /// Check if this migration is applicable
     ///
