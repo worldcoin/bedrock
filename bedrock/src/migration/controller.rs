@@ -174,6 +174,13 @@ impl MigrationController {
                 continue;
             }
 
+            // Skip if blocked pending user action
+            if matches!(record.status, MigrationStatus::BlockedUserAction) {
+                info!("Migration {migration_id} blocked pending user action, skipping");
+                summary.blocked += 1;
+                continue;
+            }
+
             // Check if we should retry (based on next_attempt_at)
             if let Some(next_attempt) = record.next_attempt_at {
                 let now = Utc::now();
@@ -975,5 +982,46 @@ mod tests {
             let json = serde_json::to_string(&record_for_retry).unwrap();
             kv_store.set(key, json).unwrap();
         }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_blocked_user_action_skips_migration() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+
+        // Manually create a record with BlockedUserAction status
+        let mut record = MigrationRecord::new();
+        record.status = MigrationStatus::BlockedUserAction;
+        record.last_error_message = Some("Waiting for user consent".to_string());
+
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let json = serde_json::to_string(&record).unwrap();
+        kv_store.set(key.clone(), json).unwrap();
+
+        let controller =
+            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+
+        // Run migrations - should skip blocked migration
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+
+        let summary = result.unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.blocked, 1);
+        assert_eq!(summary.succeeded, 0);
+        assert_eq!(summary.failed_retryable, 0);
+
+        // Verify the migration was NOT executed
+        assert_eq!(processor.execution_count(), 0);
+
+        // Verify the status is still BlockedUserAction
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(matches!(
+            updated_record.status,
+            MigrationStatus::BlockedUserAction
+        ));
     }
 }
