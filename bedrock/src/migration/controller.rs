@@ -796,4 +796,39 @@ mod tests {
         // Processor should only execute once
         assert_eq!(processor.execution_count(), 1);
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_registration_pattern_with_poh_processor() {
+        use crate::migration::processors::PoHMigrationProcessor;
+
+        // Create a PoH processor with injected dependencies
+        let poh_processor = PoHMigrationProcessor::new(
+            "test_jwt_token".to_string(),
+            Some("test_subject".to_string()),
+        );
+
+        // Register it using the registration function
+        register_poh_processor(poh_processor);
+
+        // Create controller WITHOUT using with_processors
+        // This tests that the controller picks up globally registered processors
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let controller = MigrationController::new(kv_store);
+
+        // Run migrations - should pick up the registered PoH processor
+        let result = controller.run_migrations().await;
+
+        // Verify migrations ran successfully
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+
+        // The PoH processor's is_applicable returns false (placeholder),
+        // so it should be skipped. But it proves the registration pattern works.
+        assert!(summary.total >= 1, "Should have at least the PoH processor");
+        assert!(
+            summary.skipped >= 1,
+            "PoH processor should be skipped (not applicable)"
+        );
+    }
 }
