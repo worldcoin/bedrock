@@ -97,6 +97,16 @@ impl MigrationController {
     /// If another migration is already in progress when this method is called, it will return
     /// immediately with an `InvalidOperation` error rather than waiting.
     ///
+    /// # Timeouts
+    ///
+    /// Each migration is subject to a 20-second timeout for both applicability checks and execution.
+    /// If a migration times out:
+    /// - During `is_applicable()`: The migration is skipped
+    /// - During `execute()`: The migration is marked as retryable and scheduled for retry with exponential backoff
+    ///
+    /// Subsequent migrations will continue regardless of timeouts, ensuring one slow migration
+    /// doesn't block the entire migration system.
+    ///
     /// # Errors
     ///
     /// Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
