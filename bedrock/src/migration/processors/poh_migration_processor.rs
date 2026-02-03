@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use log::info;
 use std::sync::Arc;
 
-/// PoH (Proof of Humanity) credential refresh migration processor
+/// `PoH` (Proof of Humanity) credential refresh migration processor
 ///
-/// This processor handles migrating PoH credentials to a new version/format.
+/// This processor handles migrating `PoH` credentials to a new version/format.
 /// Platform code provides the required dependencies via the constructor.
 ///
 /// # Note
@@ -24,14 +24,14 @@ pub struct PoHMigrationProcessor {
 
 #[uniffi::export]
 impl PoHMigrationProcessor {
-    /// Create a new PoH migration processor with injected dependencies
+    /// Create a new `PoH` migration processor with injected dependencies
     ///
     /// # Parameters
     /// - `jwt_token`: JWT token for authenticated API calls
     /// - `sub`: Optional subject identifier
     ///
     /// # Note
-    /// Additional dependencies (identity, personal_custody_keypair, attestation_generator)
+    /// Additional dependencies (`identity`, `personal_custody_keypair`, `attestation_generator`)
     /// should be added when these types become available in bedrock.
     ///
     /// # Platform usage (Swift)

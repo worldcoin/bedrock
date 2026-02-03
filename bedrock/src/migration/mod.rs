@@ -45,7 +45,7 @@
 //!
 //! ## Adding New Migrations
 //!
-//! 1. **Create processor in Rust** (see `processors/example_processor.rs` as template)
+//! 1. **Create processor in Rust** (see `processors/poh_migration_processor.rs` as template)
 //!    - Define struct with dependency fields
 //!    - Add `#[uniffi::constructor]` that takes dependencies
 //!    - Implement `MigrationProcessor` trait with migration logic
@@ -116,7 +116,9 @@ mod state;
 pub mod processors;
 
 // Public API exports
-pub use controller::{register_poh_processor, MigrationController, MigrationRunSummary};
+pub use controller::{
+    register_poh_processor, MigrationController, MigrationRunSummary,
+};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
 pub use state::{MigrationRecord, MigrationStatus};

@@ -13,7 +13,7 @@ const MIGRATION_KEY_PREFIX: &str = "migration:";
 const DEFAULT_RETRY_DELAY_MS: i64 = 60_000; // 1 minute
 const MAX_RETRY_DELAY_MS: i64 = 86_400_000; // 1 day
 
-/// Global storage for registered PoH migration processor
+/// Global storage for registered `PoH` migration processor
 /// Platform code registers a processor instance before creating the controller
 static POH_PROCESSOR: OnceLock<Arc<PoHMigrationProcessor>> = OnceLock::new();
 
@@ -378,7 +378,7 @@ fn calculate_backoff_delay(attempts: i32) -> i64 {
     (DEFAULT_RETRY_DELAY_MS.saturating_mul(factor)).min(MAX_RETRY_DELAY_MS)
 }
 
-/// Register a PoH migration processor
+/// Register a `PoH` migration processor
 ///
 /// Platform code creates the processor with injected dependencies and registers it
 /// before creating the [`MigrationController`].
