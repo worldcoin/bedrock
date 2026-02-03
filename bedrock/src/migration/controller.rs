@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 const MIGRATION_KEY_PREFIX: &str = "migration:";
 const DEFAULT_RETRY_DELAY_MS: i64 = 60_000; // 1 minute
 const MAX_RETRY_DELAY_MS: i64 = 86_400_000; // 1 day
+const MIGRATION_TIMEOUT_SECS: u64 = 20; // 20 seconds
 
 /// Global lock to prevent concurrent migration runs across all controller instances.
 /// This is a process-wide coordination mechanism that ensures only one migration
@@ -172,18 +173,30 @@ impl MigrationController {
             // Check if migration is applicable and should run, based on processor defined logic.
             // This checks actual state (e.g., "does v4 credential exist?") to ensure idempotency
             // even if migration record is deleted (reinstall scenario).
-            match processor.is_applicable().await {
-                Ok(false) => {
+            // Wrap in timeout to prevent hanging indefinitely
+            let is_applicable_result = tokio::time::timeout(
+                tokio::time::Duration::from_secs(MIGRATION_TIMEOUT_SECS),
+                processor.is_applicable(),
+            )
+            .await;
+
+            match is_applicable_result {
+                Ok(Ok(false)) => {
                     info!("Migration {migration_id} not applicable, skipping");
                     summary.skipped += 1;
                     continue;
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     error!("Failed to check applicability for {migration_id}: {e:?}");
                     summary.skipped += 1;
                     continue;
                 }
-                Ok(true) => {
+                Err(_) => {
+                    error!("Migration {migration_id} is_applicable() timed out after {MIGRATION_TIMEOUT_SECS} seconds, skipping");
+                    summary.skipped += 1;
+                    continue;
+                }
+                Ok(Ok(true)) => {
                     // Continue with execution. Fall through to the execution block below.
                 }
             }
@@ -206,8 +219,30 @@ impl MigrationController {
             // Save record before execution so we don't lose progress if the app crashes mid-migration
             self.save_record(&migration_id, &record)?;
 
-            // Execute
-            match processor.execute().await {
+            // Execute with timeout to prevent indefinite hangs
+            let execute_result = tokio::time::timeout(
+                tokio::time::Duration::from_secs(MIGRATION_TIMEOUT_SECS),
+                processor.execute(),
+            )
+            .await;
+
+            match execute_result {
+                Err(_) => {
+                    // Timeout occurred
+                    error!("Migration {migration_id} timed out after {MIGRATION_TIMEOUT_SECS} seconds");
+                    record.status = MigrationStatus::FailedRetryable;
+                    record.last_error_code = Some("MIGRATION_TIMEOUT".to_string());
+                    record.last_error_message =
+                        Some(format!("Migration execution timed out after {MIGRATION_TIMEOUT_SECS} seconds"));
+
+                    // Schedule retry with backoff
+                    let retry_delay_ms = calculate_backoff_delay(record.attempts);
+                    record.next_attempt_at =
+                        Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
+
+                    summary.failed_retryable += 1;
+                }
+                Ok(result) => match result {
                 Ok(ProcessorResult::Success) => {
                     info!("Migration {migration_id} succeeded");
                     record.status = MigrationStatus::Succeeded;
@@ -268,6 +303,7 @@ impl MigrationController {
                         Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
                     summary.failed_retryable += 1;
+                }
                 }
             }
 
