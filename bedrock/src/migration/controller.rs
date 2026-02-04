@@ -182,10 +182,11 @@ impl MigrationController {
                 MigrationStatus::InProgress => {
                     // Check for staleness (app crash recovery)
                     // InProgress without timestamp is treated as stale
-                    let is_stale = record.last_attempted_at.is_none_or(|last_attempted| {
-                        let elapsed = Utc::now() - last_attempted;
-                        elapsed > Duration::minutes(STALE_IN_PROGRESS_MINS)
-                    });
+                    let is_stale =
+                        record.last_attempted_at.is_none_or(|last_attempted| {
+                            let elapsed = Utc::now() - last_attempted;
+                            elapsed > Duration::minutes(STALE_IN_PROGRESS_MINS)
+                        });
 
                     if is_stale {
                         warn!(
@@ -203,7 +204,9 @@ impl MigrationController {
                         true // Proceed to retry
                     } else {
                         // Fresh InProgress - skip to avoid concurrent execution
-                        info!("Migration {migration_id} currently in progress, skipping");
+                        info!(
+                            "Migration {migration_id} currently in progress, skipping"
+                        );
                         summary.skipped += 1;
                         false
                     }
@@ -1111,8 +1114,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations - should skip
         let result = controller.run_migrations().await;
@@ -1130,10 +1135,7 @@ mod tests {
         let record_json = kv_store.get(key).expect("Record should exist");
         let updated_record: MigrationRecord =
             serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(
-            updated_record.status,
-            MigrationStatus::Succeeded
-        ));
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
     }
 
     #[tokio::test]
@@ -1152,8 +1154,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations multiple times - should always skip
         for _ in 0..3 {
@@ -1184,8 +1188,10 @@ mod tests {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations - NotStarted should check is_applicable and execute
         let result = controller.run_migrations().await;
@@ -1224,8 +1230,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations - should skip due to retry timing
         let result = controller.run_migrations().await;
@@ -1267,8 +1275,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations - should retry and succeed
         let result = controller.run_migrations().await;
@@ -1286,10 +1296,7 @@ mod tests {
         let record_json = kv_store.get(key).expect("Record should exist");
         let updated_record: MigrationRecord =
             serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(
-            updated_record.status,
-            MigrationStatus::Succeeded
-        ));
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
         assert_eq!(updated_record.attempts, 2); // Should increment from 1 to 2
     }
 
@@ -1309,8 +1316,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations - should execute immediately
         let result = controller.run_migrations().await;
@@ -1326,10 +1335,7 @@ mod tests {
         let record_json = kv_store.get(key).expect("Record should exist");
         let updated_record: MigrationRecord =
             serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(
-            updated_record.status,
-            MigrationStatus::Succeeded
-        ));
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
     }
 
     #[tokio::test]
@@ -1348,8 +1354,10 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
-        let controller =
-            MigrationController::with_processors(kv_store.clone(), vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         // Run migrations - should treat as stale and retry
         let result = controller.run_migrations().await;
@@ -1365,10 +1373,7 @@ mod tests {
         let record_json = kv_store.get(key).expect("Record should exist");
         let updated_record: MigrationRecord =
             serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(
-            updated_record.status,
-            MigrationStatus::Succeeded
-        ));
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
     }
 
     #[tokio::test]
