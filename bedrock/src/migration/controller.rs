@@ -191,7 +191,7 @@ impl MigrationController {
                             "Migration was stuck in InProgress state for {elapsed:?}, likely due to app crash"
                         ));
                         // Don't increment attempts since this wasn't a real attempt
-                        // Schedule immediate retry (no backoff for crash recovery)
+                        // Schedule immediate retry
                         record.next_attempt_at = Some(Utc::now());
                         self.save_record(&migration_id, &record)?;
                         // Continue to retry logic below
