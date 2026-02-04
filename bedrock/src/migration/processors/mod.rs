@@ -8,5 +8,5 @@ mod example_processor;
 pub mod nfc_refresh_processor;
 
 pub use nfc_refresh_processor::{
-    ForeignNfcProcessor, ForeignProcessorResult, NfcRefreshProcessor,
+    ForeignNfcProcessor, NfcProcessorResult, NfcRefreshProcessor,
 };

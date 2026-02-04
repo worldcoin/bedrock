@@ -17,7 +17,7 @@
 //!         return hasDocumentPcp(fileSystem: fs) && !credentialStorage.hasNfcCredential()
 //!     }
 //!
-//!     func execute() async throws -> ForeignProcessorResult {
+//!     func execute() async throws -> NfcProcessorResult {
 //!         // 1. Get payload from Oxide
 //!         guard let payload = try prepareNfcRefreshPayload(
 //!             fileSystem: fs,
@@ -54,9 +54,9 @@ use async_trait::async_trait;
 use log::info;
 use std::sync::Arc;
 
-/// Result type for foreign processor execution (FFI-friendly version of `ProcessorResult`)
+/// Result type for NFC processor execution (FFI-friendly version of `ProcessorResult`)
 #[derive(Debug, Clone, uniffi::Enum)]
-pub enum ForeignProcessorResult {
+pub enum NfcProcessorResult {
     /// Migration completed successfully
     Success,
     /// Transient failure, can retry
@@ -82,11 +82,11 @@ pub enum ForeignProcessorResult {
     },
 }
 
-impl From<ForeignProcessorResult> for ProcessorResult {
-    fn from(result: ForeignProcessorResult) -> Self {
+impl From<NfcProcessorResult> for ProcessorResult {
+    fn from(result: NfcProcessorResult) -> Self {
         match result {
-            ForeignProcessorResult::Success => Self::Success,
-            ForeignProcessorResult::Retryable {
+            NfcProcessorResult::Success => Self::Success,
+            NfcProcessorResult::Retryable {
                 error_code,
                 error_message,
                 retry_after_ms,
@@ -95,14 +95,14 @@ impl From<ForeignProcessorResult> for ProcessorResult {
                 error_message,
                 retry_after_ms,
             },
-            ForeignProcessorResult::Terminal {
+            NfcProcessorResult::Terminal {
                 error_code,
                 error_message,
             } => Self::Terminal {
                 error_code,
                 error_message,
             },
-            ForeignProcessorResult::BlockedUserAction { reason } => {
+            NfcProcessorResult::BlockedUserAction { reason } => {
                 Self::BlockedUserAction { reason }
             }
         }
@@ -122,7 +122,7 @@ pub trait ForeignNfcProcessor: Send + Sync {
     async fn is_applicable(&self) -> Result<bool, MigrationError>;
 
     /// Call Oxide → `WalletKit` → `CredentialStorage`
-    async fn execute(&self) -> Result<ForeignProcessorResult, MigrationError>;
+    async fn execute(&self) -> Result<NfcProcessorResult, MigrationError>;
 }
 
 /// Wraps `ForeignNfcProcessor` for use with `MigrationController`
@@ -163,7 +163,7 @@ mod tests {
 
     struct MockForeignProcessor {
         applicable: bool,
-        result: ForeignProcessorResult,
+        result: NfcProcessorResult,
     }
 
     #[async_trait]
@@ -172,7 +172,7 @@ mod tests {
             Ok(self.applicable)
         }
 
-        async fn execute(&self) -> Result<ForeignProcessorResult, MigrationError> {
+        async fn execute(&self) -> Result<NfcProcessorResult, MigrationError> {
             Ok(self.result.clone())
         }
     }
@@ -181,7 +181,7 @@ mod tests {
     async fn test_processor_delegates_to_foreign() {
         let foreign = Arc::new(MockForeignProcessor {
             applicable: true,
-            result: ForeignProcessorResult::Success,
+            result: NfcProcessorResult::Success,
         });
         let processor = NfcRefreshProcessor::new(foreign);
 
@@ -196,7 +196,7 @@ mod tests {
     async fn test_processor_not_applicable() {
         let foreign = Arc::new(MockForeignProcessor {
             applicable: false,
-            result: ForeignProcessorResult::Success,
+            result: NfcProcessorResult::Success,
         });
         let processor = NfcRefreshProcessor::new(foreign);
         assert!(!processor.is_applicable().await.unwrap());
@@ -206,7 +206,7 @@ mod tests {
     async fn test_terminal_error() {
         let foreign = Arc::new(MockForeignProcessor {
             applicable: true,
-            result: ForeignProcessorResult::Terminal {
+            result: NfcProcessorResult::Terminal {
                 error_code: "DOCUMENT_EXPIRED".to_string(),
                 error_message: "Document expired".to_string(),
             },

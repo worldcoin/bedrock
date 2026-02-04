@@ -81,6 +81,6 @@ pub use controller::{MigrationController, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
 pub use processors::{
-    ForeignNfcProcessor, ForeignProcessorResult, NfcRefreshProcessor,
+    ForeignNfcProcessor, NfcProcessorResult, NfcRefreshProcessor,
 };
 pub use state::{MigrationRecord, MigrationStatus};
