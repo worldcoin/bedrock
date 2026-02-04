@@ -163,50 +163,74 @@ impl MigrationController {
             // Load the current record for this migration (or create new one if first time)
             let mut record = self.load_record(&migration_id)?;
 
-            // Skip if already succeeded
-            if matches!(record.status, MigrationStatus::Succeeded) {
-                info!("Migration {migration_id} already succeeded, skipping");
-                summary.skipped += 1;
-                continue;
-            }
+            // Determine if this migration should be attempted based on its current status
+            let should_attempt = match record.status {
+                MigrationStatus::Succeeded => {
+                    // Terminal state - migration completed successfully
+                    info!("Migration {migration_id} already succeeded, skipping");
+                    summary.skipped += 1;
+                    false
+                }
 
-            // Skip if terminal failure (non-retryable)
-            if matches!(record.status, MigrationStatus::FailedTerminal) {
-                info!("Migration {migration_id} failed terminally, skipping");
-                summary.skipped += 1;
-                continue;
-            }
+                MigrationStatus::FailedTerminal => {
+                    // Terminal state - migration failed permanently
+                    info!("Migration {migration_id} failed terminally, skipping");
+                    summary.skipped += 1;
+                    false
+                }
 
-            // Check for stale InProgress status (likely from app crash)
-            if matches!(record.status, MigrationStatus::InProgress) {
-                if let Some(last_attempted) = record.last_attempted_at {
-                    let elapsed = Utc::now() - last_attempted;
-                    if elapsed > Duration::minutes(STALE_IN_PROGRESS_MINS) {
+                MigrationStatus::InProgress => {
+                    // Check for staleness (app crash recovery)
+                    // InProgress without timestamp is treated as stale
+                    let is_stale = record.last_attempted_at.is_none_or(|last_attempted| {
+                        let elapsed = Utc::now() - last_attempted;
+                        elapsed > Duration::minutes(STALE_IN_PROGRESS_MINS)
+                    });
+
+                    if is_stale {
                         warn!(
-                            "Migration {migration_id} stuck in InProgress for {elapsed:?}, resetting to retryable"
+                            "Migration {migration_id} stuck in InProgress, resetting to retryable"
                         );
                         record.status = MigrationStatus::FailedRetryable;
                         record.last_error_code = Some("STALE_IN_PROGRESS".to_string());
-                        record.last_error_message = Some(format!(
-                            "Migration was stuck in InProgress state for {elapsed:?}, likely due to app crash"
-                        ));
-                        // Don't increment attempts since this wasn't a real attempt
+                        record.last_error_message = Some(
+                            "Migration was stuck in InProgress state, likely due to app crash"
+                                .to_string(),
+                        );
                         // Schedule immediate retry
                         record.next_attempt_at = Some(Utc::now());
                         self.save_record(&migration_id, &record)?;
-                        // Continue to retry logic below
+                        true // Proceed to retry
+                    } else {
+                        // Fresh InProgress - skip to avoid concurrent execution
+                        info!("Migration {migration_id} currently in progress, skipping");
+                        summary.skipped += 1;
+                        false
                     }
                 }
-            }
 
-            // Check if we should retry (based on next_attempt_at)
-            if let Some(next_attempt) = record.next_attempt_at {
-                let now = Utc::now();
-                if now < next_attempt {
-                    info!("Migration {migration_id} scheduled for retry at {next_attempt}, skipping");
-                    summary.skipped += 1;
-                    continue;
+                MigrationStatus::FailedRetryable => {
+                    // Check retry timing (exponential backoff)
+                    // No retry time set = attempt immediately
+                    record.next_attempt_at.is_none_or(|next_attempt| {
+                        if Utc::now() < next_attempt {
+                            info!("Migration {migration_id} scheduled for retry at {next_attempt}, skipping");
+                            summary.skipped += 1;
+                            false
+                        } else {
+                            true // Ready to retry
+                        }
+                    })
                 }
+
+                MigrationStatus::NotStarted => {
+                    // First time attempting this migration
+                    true
+                }
+            };
+
+            if !should_attempt {
+                continue;
             }
 
             // Check if migration is applicable and should run, based on processor defined logic.
