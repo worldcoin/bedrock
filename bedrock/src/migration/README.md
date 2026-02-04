@@ -23,14 +23,13 @@ The possible states are:
 - `FailedRetryable` - migration failed, but can be retried (e.g. there was a network error)
 - `FailedTerminal` - migration failed and represents a terminal state. It can not be retried.
 
-Note, this migration state storage is only present to act as an optimisation so that we don't need to repeatedly call `process.is_applicable()` on each app open. If the app data is wiped, the `controller.rs` would iterate through processors, call `process.is_applicable()` and rebuild the state.
+The migration state storage optimizes subsequent app starts by skipping `Succeeded` and `FailedTerminal` migrations without calling `process.is_applicable()`. For `NotStarted` and `FailedRetryable` migrations, `process.is_applicable()` is called each time to detect when they become applicable. This ensures migrations can respond to changing app state.
 
 ## State transitions
 1. `NotStarted`
-   - → `InProgress` when migration execution begins
-   - → `Succeeded` if `is_applicable()` returns false (migration not needed)
+   - → `InProgress` when `is_applicable()` returns true and migration execution begins
+   - Remains `NotStarted` if `is_applicable()` returns false (will be checked again on next app start)
    - → `FailedRetryable` if `is_applicable()` fails or times out
-   - → `FailedTerminal` if execution fails with terminal error
 
 2. `InProgress`
    - → `Succeeded` when `execute()` completes successfully
