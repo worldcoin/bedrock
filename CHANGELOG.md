@@ -2,6 +2,23 @@
 
 
 
+## [0.1.2] - 2026-02-03
+
+## What's Changed
+* feat: Add `DeviceKeyValueStore` abstraction from Oxide by @thomas-waite in https://github.com/worldcoin/bedrock/pull/246
+* feat: copy over Migration code from Oxide by @thomas-waite in https://github.com/worldcoin/bedrock/pull/247
+* build(deps): bump thiserror from 2.0.17 to 2.0.18 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/251
+* build(deps): bump zeroize from 1.8.1 to 1.8.2 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/250
+* fix: refactor migration processor by @paolodamico in https://github.com/worldcoin/bedrock/pull/254
+
+## New Contributors
+* @thomas-waite made their first contribution in https://github.com/worldcoin/bedrock/pull/246
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.1.1...0.1.2
+
+
+
+
 ## [0.1.1] - 2026-01-28
 
 ## What's Changed
