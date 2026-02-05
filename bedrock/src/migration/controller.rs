@@ -2,8 +2,9 @@ use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
+use crate::primitives::logger::LogContext;
 use chrono::{Duration, Utc};
-use log::{error, info, warn};
+use log::warn;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -145,7 +146,16 @@ impl MigrationController {
     async fn run_migrations_async(
         &self,
     ) -> Result<MigrationRunSummary, MigrationError> {
-        info!("Migration run started");
+        let _ctx = LogContext::new("MigrationController");
+
+        // Store start time for duration tracking
+        let run_start_time = Utc::now();
+
+        crate::info!(
+            "migration_run.started total_processors={} timestamp={}",
+            self.processors.len(),
+            run_start_time.to_rfc3339()
+        );
 
         // Summary of this migration run for analytics. Not stored.
         let mut summary = MigrationRunSummary {
@@ -167,14 +177,22 @@ impl MigrationController {
             let should_attempt = match record.status {
                 MigrationStatus::Succeeded => {
                     // Terminal state - migration completed successfully
-                    info!("Migration {migration_id} already succeeded, skipping");
+                    crate::info!(
+                        "migration.skipped id={} reason=already_succeeded timestamp={}",
+                        migration_id,
+                        Utc::now().to_rfc3339()
+                    );
                     summary.skipped += 1;
                     false
                 }
 
                 MigrationStatus::FailedTerminal => {
                     // Terminal state - migration failed permanently
-                    info!("Migration {migration_id} failed terminally, skipping");
+                    crate::info!(
+                        "migration.skipped id={} reason=terminal_failure timestamp={}",
+                        migration_id,
+                        Utc::now().to_rfc3339()
+                    );
                     summary.skipped += 1;
                     false
                 }
