@@ -24,15 +24,24 @@ pub enum ProcessorResult {
         /// Human-readable error message
         error_message: String,
     },
-
-    /// Migration blocked pending user action
-    BlockedUserAction {
-        /// Reason why the migration is blocked
-        reason: String,
-    },
 }
 
 /// Trait that all migration processors must implement
+///
+/// # Timeouts and Cancellation Safety
+///
+/// Both [`is_applicable`](Self::is_applicable) and [`execute`](Self::execute) are subject to timeouts
+/// (20 seconds in production). When a timeout occurs, the future is dropped and the migration
+/// is marked as failed (for `execute`) or skipped (for `is_applicable`).
+///
+/// **IMPORTANT**: Implementations MUST be cancellation-safe:
+///
+/// - **DO NOT** spawn background tasks using `tokio::spawn`, `std::thread::spawn`, or similar
+///   that will continue running after the timeout
+/// - **DO NOT** use blocking operations or FFI calls without proper cleanup
+/// - **ENSURE** all work stops when the future is dropped (cooperative cancellation)
+/// - **MAKE** migrations idempotent so partial execution can be safely retried
+///
 #[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait MigrationProcessor: Send + Sync {
@@ -46,7 +55,6 @@ pub trait MigrationProcessor: Send + Sync {
     /// to determine if the migration needs to run. This ensures the system is
     /// truly idempotent and handles edge cases gracefully.
     ///
-    ///
     /// # Returns
     /// - `Ok(true)` if the migration should run
     /// - `Ok(false)` if the migration should be skipped
@@ -54,6 +62,5 @@ pub trait MigrationProcessor: Send + Sync {
     async fn is_applicable(&self) -> Result<bool, MigrationError>;
 
     /// Execute the migration
-    /// Called by the controller when the migration is ready to run
     async fn execute(&self) -> Result<ProcessorResult, MigrationError>;
 }

@@ -14,8 +14,6 @@ pub enum MigrationStatus {
     FailedRetryable,
     /// Migration failed with terminal error (won't retry)
     FailedTerminal,
-    /// Migration blocked pending user action
-    BlockedUserAction,
 }
 
 /// Record of a single migration's execution state
