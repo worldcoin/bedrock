@@ -282,9 +282,8 @@ impl MigrationController {
                     // record.next_attempt_at field. When the app is next opened and the
                     // migration is run again; the controller will check whether to run the
                     // migration again based on the record.next_attempt_at field.
-                    let retry_delay_ms = retry_after_ms.unwrap_or_else(|| {
-                        calculate_backoff_delay(record.attempts)
-                    });
+                    let retry_delay_ms = retry_after_ms
+                        .unwrap_or_else(|| calculate_backoff_delay(record.attempts));
                     record.next_attempt_at =
                         Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
