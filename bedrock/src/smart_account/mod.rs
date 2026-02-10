@@ -11,7 +11,7 @@ pub use transaction_4337::Is4337Encodable;
 #[cfg(any(test, doc))]
 use crate::primitives::Network;
 use crate::{
-    bedrock_export, debug, error, primitives::HexEncodedData,
+    bedrock_export, debug, primitives::HexEncodedData,
     transactions::foreign::UnparsedUserOperation,
 };
 
@@ -47,11 +47,12 @@ pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
 // Import the generated types from permit2 module
 pub use permit2::{
-    UnparsedPermitTransferFrom, UnparsedTokenPermissions, PERMIT2_ADDRESS,
+    UnparsedPermitDetails, UnparsedPermitSingle, UnparsedPermitTransferFrom,
+    UnparsedTokenPermissions, PERMIT2_ADDRESS,
 };
 
 const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[
-    // Permit2 requires using the custom `sign_permit2_transfer` method which has additional validation and other permission verification.
+    // Permit2 requires using the custom `sign_permit2_transfer` or `sign_permit2_allowance` methods which have additional validation and other permission verification.
     PERMIT2_ADDRESS,
 ];
 
@@ -330,6 +331,36 @@ impl SafeSmartAccount {
         let signature = self.sign_message(signing_hash, chain_id)?;
         Ok(signature.into())
     }
+
+    /// Signs a `Permit2` allowance on behalf of the Safe Smart Account.
+    ///
+    /// Used by World Card. Unlike `sign_permit2_transfer` which authorizes a one-time transfer, this sets up
+    /// a recurring allowance that a spender can draw from until the allowance expires or is exhausted.
+    ///
+    /// # Arguments
+    /// - `chain_id`: The chain ID of the chain where the message is being signed.
+    /// - `permit`: The `Permit2` allowance (`PermitSingle`) to sign.
+    ///
+    /// # Errors
+    /// - Will throw an error if the permit is invalid, particularly if any attribute is not valid.
+    /// - Will throw an error if the signature process unexpectedly fails.
+    pub fn sign_permit2_allowance(
+        &self,
+        chain_id: u32,
+        permit: UnparsedPermitSingle,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let permit_single: permit2::PermitSingle = permit.try_into()?;
+
+        let signing_hash = permit_single
+            .as_typed_data(chain_id)
+            .eip712_signing_hash()
+            .map_err(|e| SafeSmartAccountError::Generic {
+                error_message: format!("failed to calculate EIP-712 signing hash: {e}"),
+            })?;
+
+        let signature = self.sign_message(signing_hash, chain_id)?;
+        Ok(signature.into())
+    }
 }
 
 /// The type of operation to perform on behalf of the Safe Smart Account.
@@ -409,7 +440,9 @@ mod tests {
     use ruint::uint;
     use serde_json::json;
 
-    use crate::smart_account::permit2::{PermitTransferFrom, TokenPermissions};
+    use crate::smart_account::permit2::{
+        PermitDetails, PermitSingle, PermitTransferFrom, TokenPermissions,
+    };
 
     use super::*;
 
@@ -705,5 +738,66 @@ mod tests {
                 format!("the contract {address} is restricted from TypedData signing.")
             );
         }
+    }
+
+    #[test]
+    fn test_cannot_sign_invalid_permit2_allowance() {
+        let details = UnparsedPermitDetails {
+            token: "123".to_string(), // note this is invalid
+            amount: "1000000000000000000".to_string(),
+            expiration: "1704067200".to_string(),
+            nonce: "0".to_string(),
+        };
+
+        let permit_single = UnparsedPermitSingle {
+            details,
+            spender: "0x3f1480266afef1ba51834cfef0a5d61841d57572".to_string(),
+            sigDeadline: "1704067200".to_string(),
+        };
+
+        let smart_account = SafeSmartAccount::random();
+
+        let result = smart_account
+            .sign_permit2_allowance(Network::WorldChain as u32, permit_single);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("Primitive error: invalid input on token: odd number of digits")
+        );
+    }
+
+    #[test]
+    fn test_cannot_sign_restricted_permit2_allowance_typed_data() {
+        let details = PermitDetails {
+            token: address!("0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1"),
+            amount: uint!(1000000000000000000_U160),
+            expiration: uint!(1704067200_U48),
+            nonce: uint!(0_U48),
+        };
+
+        let permit_single = PermitSingle {
+            details,
+            spender: address!("0x3f1480266afef1ba51834cfef0a5d61841d57572"),
+            sigDeadline: uint!(1704067200_U256),
+        };
+
+        let typed_data = serde_json::to_string(
+            &permit_single.as_typed_data(Network::WorldChain as u32),
+        )
+        .unwrap();
+
+        let smart_account = SafeSmartAccount::random();
+
+        let result =
+            smart_account.sign_typed_data(Network::WorldChain as u32, &typed_data);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("the contract 0x000000000022D473030F116dDEE9F6B43aC78BA3 is restricted from TypedData signing.")
+        );
     }
 }

@@ -743,6 +743,8 @@ fn generate_unparsed_struct(struct_info: &StructInfo) -> String {
 
         // 6.3: Use nested unparsed struct for complex types, String for primitives
         let field_type = if is_sol_struct_type(&field.ty) {
+            // 6.4: Add Solidity type comment for nested struct types
+            code.push_str(&format!("    /// Nested struct type: `{}`\n", field.ty));
             format!("Unparsed{}", field.ty)
         } else {
             // 6.4: Add Solidity type comment for primitive types
@@ -808,7 +810,7 @@ fn generate_try_from_impl(
                     field.name, field.name, field.name
                 ),
                 _ => format!(
-                    "            {}: value.{}.parse().map_err(|e| crate::primitives::PrimitiveError::InvalidInput {{ attribute: \"{}\", error_message: format!(\"failed to parse: {{}}\", e) }})?",
+                    "            {}: value.{}.parse().map_err(|e| crate::primitives::PrimitiveError::InvalidInput {{ attribute: \"{}\".to_string(), error_message: format!(\"failed to parse: {{}}\", e) }})?",
                     field.name, field.name, field.name
                 ),
             }
@@ -834,8 +836,10 @@ fn is_sol_struct_type(ty: &str) -> bool {
         ty,
         "address"
             | "uint256"
+            | "uint160"
             | "uint128"
             | "uint64"
+            | "uint48"
             | "uint32"
             | "uint16"
             | "uint8"

@@ -90,4 +90,76 @@ class BedrockSolMacroTests {
         assertEquals("1000000000000000000", modifiedPermissions.amount)
         assertEquals(tokenPermissions.token, modifiedPermissions.token)
     }
+
+    @Test
+    fun `test UnparsedPermitDetails creation`() {
+        // Test creating an UnparsedPermitDetails struct
+        val unparsed = UnparsedPermitDetails(
+            token = "0x1234567890123456789012345678901234567890",
+            amount = "1000000000000000000",
+            expiration = "1704067200",
+            nonce = "0"
+        )
+
+        assertEquals("0x1234567890123456789012345678901234567890", unparsed.token)
+        assertEquals("1000000000000000000", unparsed.amount)
+        assertEquals("1704067200", unparsed.expiration)
+        assertEquals("0", unparsed.nonce)
+    }
+
+    @Test
+    fun `test UnparsedPermitSingle with nesting`() {
+        // Test creating nested structures for allowance
+        val permitDetails = UnparsedPermitDetails(
+            token = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            amount = "1000000",
+            expiration = "1704067200",
+            nonce = "0"
+        )
+
+        val permitSingle = UnparsedPermitSingle(
+            details = permitDetails,
+            spender = "0x0000000000000000000000000000000000000001",
+            sigDeadline = "1704067200"
+        )
+
+        assertEquals("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", permitSingle.details.token)
+        assertEquals("1000000", permitSingle.details.amount)
+        assertEquals("1704067200", permitSingle.details.expiration)
+        assertEquals("0", permitSingle.details.nonce)
+        assertEquals("0x0000000000000000000000000000000000000001", permitSingle.spender)
+        assertEquals("1704067200", permitSingle.sigDeadline)
+    }
+
+    @Test
+    fun `test sign Permit2 allowance integration`() {
+        // Test that the unparsed types work with the signing function
+        val safeAccount = SafeSmartAccount(
+            privateKey = "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583",
+            walletAddress = "0x4564420674EA68fcc61b463C0494807C759d47e6"
+        )
+
+        val permitDetails = UnparsedPermitDetails(
+            token = "0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1",
+            amount = "1000000000000000000",
+            expiration = "1704067200",
+            nonce = "0"
+        )
+
+        val permitSingle = UnparsedPermitSingle(
+            details = permitDetails,
+            spender = "0x3f1480266afef1ba51834cfef0a5d61841d57572",
+            sigDeadline = "1704067200"
+        )
+
+        // This should successfully sign the permit allowance
+        val signature = safeAccount.signPermit2Allowance(
+            chainId = 480u,
+            permit = permitSingle
+        )
+
+        // Verify we got a valid signature back (should be 65 bytes hex = 130 chars + 0x)
+        assertEquals(132, signature.toHexString().length)
+        assertTrue(signature.toHexString().startsWith("0x"))
+    }
 } 

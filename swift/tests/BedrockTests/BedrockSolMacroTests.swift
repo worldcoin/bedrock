@@ -65,4 +65,73 @@ final class BedrockSolMacroTests: XCTestCase {
         XCTAssertEqual(signature.toHexString().count, 132)
         XCTAssertTrue(signature.toHexString().hasPrefix("0x"))
     }
+
+    func testUnparsedPermitDetailsCreation() throws {
+        // Test creating an UnparsedPermitDetails struct
+        let unparsed = UnparsedPermitDetails(
+            token: "0x1234567890123456789012345678901234567890",
+            amount: "1000000000000000000",
+            expiration: "1704067200",
+            nonce: "0"
+        )
+
+        XCTAssertEqual(unparsed.token, "0x1234567890123456789012345678901234567890")
+        XCTAssertEqual(unparsed.amount, "1000000000000000000")
+        XCTAssertEqual(unparsed.expiration, "1704067200")
+        XCTAssertEqual(unparsed.nonce, "0")
+    }
+
+    func testUnparsedPermitSingleWithNesting() throws {
+        // Test creating nested structures for allowance
+        let permitDetails = UnparsedPermitDetails(
+            token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            amount: "1000000",
+            expiration: "1704067200",
+            nonce: "0"
+        )
+
+        let permitSingle = UnparsedPermitSingle(
+            details: permitDetails,
+            spender: "0x0000000000000000000000000000000000000001",
+            sigDeadline: "1704067200"
+        )
+
+        XCTAssertEqual(permitSingle.details.token, "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+        XCTAssertEqual(permitSingle.details.amount, "1000000")
+        XCTAssertEqual(permitSingle.details.expiration, "1704067200")
+        XCTAssertEqual(permitSingle.details.nonce, "0")
+        XCTAssertEqual(permitSingle.spender, "0x0000000000000000000000000000000000000001")
+        XCTAssertEqual(permitSingle.sigDeadline, "1704067200")
+    }
+
+    func testSignPermit2AllowanceIntegration() throws {
+        // Test that the unparsed types work with the signing function
+        let safeAccount = try SafeSmartAccount(
+            privateKey: "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583",
+            walletAddress: "0x4564420674EA68fcc61b463C0494807C759d47e6"
+        )
+
+        let permitDetails = UnparsedPermitDetails(
+            token: "0xdc6ff44d5d932cbd77b52e5612ba0529dc6226f1",
+            amount: "1000000000000000000",
+            expiration: "1704067200",
+            nonce: "0"
+        )
+
+        let permitSingle = UnparsedPermitSingle(
+            details: permitDetails,
+            spender: "0x3f1480266afef1ba51834cfef0a5d61841d57572",
+            sigDeadline: "1704067200"
+        )
+
+        // This should successfully sign the permit allowance
+        let signature = try safeAccount.signPermit2Allowance(
+            chainId: 480,
+            permit: permitSingle
+        )
+
+        // Verify we got a valid signature back (should be 65 bytes hex = 130 chars + 0x)
+        XCTAssertEqual(signature.toHexString().count, 132)
+        XCTAssertTrue(signature.toHexString().hasPrefix("0x"))
+    }
 } 
