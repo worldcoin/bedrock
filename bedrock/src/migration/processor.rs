@@ -41,8 +41,8 @@ pub enum ProcessorResult {
 ///
 /// **For foreign (Kotlin/Swift) implementors:** If your migration logic requires async
 /// operations (network calls, database access, etc.), use a blocking wrapper internally.
-/// 
-/// **Caller requirement:** `run_migrations()` must be called from a background context. 
+///
+/// **Caller requirement:** `run_migrations()` must be called from a background context.
 /// These sync callbacks will block the calling thread for the duration of each migration.
 /// Calling from the main/UI thread will cause UI freezes.
 #[uniffi::export(with_foreign)]
@@ -67,6 +67,9 @@ pub trait MigrationProcessor: Send + Sync {
     /// - `Ok(true)` if the migration should run
     /// - `Ok(false)` if the migration should be skipped
     /// - `Err(_)` if unable to determine (migration will be skipped with error logged)
+    ///
+    /// # Errors
+    /// Returns `MigrationError` if the applicability check fails (e.g., unable to read state).
     fn is_applicable(&self) -> Result<bool, MigrationError>;
 
     /// Execute the migration
@@ -78,5 +81,8 @@ pub trait MigrationProcessor: Send + Sync {
     /// This method is sync to work around a UniFFI async callback bug on Android.
     /// Foreign implementations needing async work should block internally
     /// (e.g., `runBlocking` in Kotlin).
+    ///
+    /// # Errors
+    /// Returns `MigrationError` if the migration encounters an unexpected failure.
     fn execute(&self) -> Result<ProcessorResult, MigrationError>;
 }
