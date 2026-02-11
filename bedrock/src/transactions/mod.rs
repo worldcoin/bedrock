@@ -409,6 +409,46 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
+    /// Constructs and executes a WLD Vault migration transaction bundle on World Chain.
+    pub async fn transaction_wld_vault_migration(
+        &self,
+        wld_vault_address: &str,
+        erc4626_vault_address: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let wld_vault_address =
+            Address::parse_from_ffi(wld_vault_address, "wld_vault_address")?;
+        let erc4626_vault_address =
+            Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
+
+        // Get the RPC client and create the ERC4626 deposit transaction
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction = crate::transactions::contracts::wld_vault::WldVault::migrate(
+            rpc_client,
+            Network::WorldChain,
+            wld_vault_address,
+            erc4626_vault_address,
+            self.wallet_address,
+            [0u8; 10], // metadata
+        )
+        .await
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to create WLDVault migration: {e}"),
+        })?;
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute WLDVault migration: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
     /// Gets a custom user operation receipt for a given user operation hash via the global RPC client.
     ///
     /// This is a convenience wrapper around [`RpcClient::wa_get_user_operation_receipt`]
