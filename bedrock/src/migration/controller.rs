@@ -351,7 +351,6 @@ mod tests {
 
     use super::*;
     use crate::primitives::key_value_store::InMemoryDeviceKeyValueStore;
-    use async_trait::async_trait;
     use serial_test::serial;
     use std::sync::atomic::{AtomicU32, Ordering};
     use tokio::time::{sleep, Duration};
@@ -384,17 +383,16 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl MigrationProcessor for TestProcessor {
         fn migration_id(&self) -> String {
             self.id.clone()
         }
 
-        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+        fn is_applicable(&self) -> Result<bool, MigrationError> {
             Ok(true)
         }
 
-        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+        fn execute(&self) -> Result<ProcessorResult, MigrationError> {
             self.execution_count.fetch_add(1, Ordering::SeqCst);
             if self.delay_ms > 0 {
                 sleep(Duration::from_millis(self.delay_ms)).await;
