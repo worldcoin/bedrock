@@ -395,7 +395,8 @@ mod tests {
         fn execute(&self) -> Result<ProcessorResult, MigrationError> {
             self.execution_count.fetch_add(1, Ordering::SeqCst);
             if self.delay_ms > 0 {
-                sleep(Duration::from_millis(self.delay_ms)).await;
+                // Simulate a slow migration (e.g., foreign code blocking on async work)
+                std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
             }
             if self.should_fail {
                 Ok(ProcessorResult::Retryable {
@@ -443,7 +444,7 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn test_concurrent_migrations_fail_fast() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
@@ -540,7 +541,7 @@ mod tests {
         assert!(result2.is_ok());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn test_multiple_controller_instances_share_lock() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
@@ -685,7 +686,7 @@ mod tests {
         assert!(matches!(record.status, MigrationStatus::NotStarted));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn test_many_concurrent_attempts_only_one_succeeds() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
