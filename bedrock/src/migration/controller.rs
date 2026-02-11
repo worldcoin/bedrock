@@ -172,7 +172,7 @@ impl MigrationController {
             // Check if migration is applicable and should run, based on processor defined logic.
             // This checks actual state (e.g., "does v4 credential exist?") to ensure idempotency
             // even if migration record is deleted (reinstall scenario).
-            match processor.is_applicable().await {
+            match processor.is_applicable() {
                 Ok(false) => {
                     info!("Migration {migration_id} not applicable, skipping");
                     summary.skipped += 1;
@@ -207,7 +207,7 @@ impl MigrationController {
             self.save_record(&migration_id, &record)?;
 
             // Execute
-            match processor.execute().await {
+            match processor.execute() {
                 Ok(ProcessorResult::Success) => {
                     info!("Migration {migration_id} succeeded");
                     record.status = MigrationStatus::Succeeded;
