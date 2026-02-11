@@ -95,6 +95,7 @@ impl MigrationController {
     ///
     /// Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
     /// Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
+    #[allow(clippy::unused_async)] // Must stay async for UniFFI to generate suspend fun (Kotlin) / async (Swift)
     pub async fn run_migrations(&self) -> Result<MigrationRunSummary, MigrationError> {
         // Try to acquire the global lock. If another migration is running, fail immediately.
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
@@ -104,7 +105,7 @@ impl MigrationController {
         })?;
 
         // Lock acquired - we have exclusive access to run migrations
-        self.run_migrations_async().await
+        self.run_migrations_inner()
         // Lock automatically released when _guard is dropped
     }
 }
@@ -121,11 +122,9 @@ impl MigrationController {
         })
     }
 
-    /// Internal async implementation of `run_migrations`
+    /// Internal implementation of `run_migrations`
     #[allow(clippy::too_many_lines)]
-    async fn run_migrations_async(
-        &self,
-    ) -> Result<MigrationRunSummary, MigrationError> {
+    fn run_migrations_inner(&self) -> Result<MigrationRunSummary, MigrationError> {
         info!("Migration run started");
 
         // Summary of this migration run for analytics. Not stored.
