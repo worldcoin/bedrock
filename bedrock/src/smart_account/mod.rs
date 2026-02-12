@@ -47,7 +47,8 @@ pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
 // Import the generated types from permit2 module
 pub use permit2::{
-    UnparsedPermitTransferFrom, UnparsedTokenPermissions, PERMIT2_ADDRESS,
+    Permit2Approve, UnparsedPermitTransferFrom, UnparsedTokenPermissions,
+    PERMIT2_ADDRESS,
 };
 
 const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[

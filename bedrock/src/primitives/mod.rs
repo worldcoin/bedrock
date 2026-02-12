@@ -1,3 +1,4 @@
+use alloy::primitives::aliases::{U160, U48};
 use alloy::primitives::Bytes;
 use alloy::{primitives::Address, signers::Signature};
 use ruint::aliases::{U128, U256};
@@ -264,6 +265,24 @@ impl ParseFromForeignBinding for u128 {
 }
 
 impl ParseFromForeignBinding for U128 {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+            attribute: attr.to_string(),
+            error_message: e.to_string(),
+        })
+    }
+}
+
+impl ParseFromForeignBinding for U160 {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+            attribute: attr.to_string(),
+            error_message: e.to_string(),
+        })
+    }
+}
+
+impl ParseFromForeignBinding for U48 {
     fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
         Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
             attribute: attr.to_string(),

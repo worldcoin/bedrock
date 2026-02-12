@@ -1,10 +1,21 @@
 use alloy::{
     dyn_abi::{Eip712Domain, TypedData},
-    primitives::{address, Address},
-    sol_types::eip712_domain,
+    primitives::{
+        address,
+        aliases::{U160, U48},
+        Address, Bytes, U256,
+    },
+    sol,
+    sol_types::{eip712_domain, SolCall},
 };
 
 use crate::bedrock_sol;
+use crate::primitives::PrimitiveError;
+
+use super::{
+    ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
+    TransactionTypeId, UserOperation,
+};
 
 /// Reference: <https://docs.uniswap.org/contracts/v4/deployments#worldchain-480>
 pub static PERMIT2_ADDRESS: Address =
@@ -56,11 +67,100 @@ impl PermitTransferFrom {
     }
 }
 
+sol! {
+    /// Permit2 `IAllowanceTransfer` interface for on-chain allowance approvals.
+    ///
+    /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/IAllowanceTransfer.sol#L41>
+    interface IAllowanceTransfer {
+        function approve(address token, address spender, uint160 amount, uint48 expiration) external;
+    }
+}
+
+/// Represents a Permit2 `IAllowanceTransfer.approve` call that sets an on-chain allowance
+/// on the Permit2 contract for a given token and spender.
+///
+/// This grants a spender permission to transfer tokens via Permit2's allowance-based transfer
+/// mechanism (`transferFrom` on `IAllowanceTransfer`).
+///
+/// Note: This is distinct from the ERC-20 `approve` call. The ERC-20 approval grants the Permit2
+/// contract itself permission to move tokens, while this Permit2 approval grants a specific spender
+/// permission to use Permit2 to move tokens on the owner's behalf.
+///
+/// Reference: <https://docs.uniswap.org/contracts/permit2/reference/allowance-transfer#approve>
+pub struct Permit2Approve {
+    /// The ABI-encoded calldata for `IAllowanceTransfer.approve(token, spender, amount, expiration)`.
+    call_data: Vec<u8>,
+}
+
+impl Permit2Approve {
+    /// Creates a new Permit2 allowance approve operation.
+    ///
+    /// # Arguments
+    /// * `token` - The ERC-20 token address to set the allowance for.
+    /// * `spender` - The address being granted permission to transfer tokens via Permit2.
+    /// * `amount` - The maximum amount of tokens the spender can transfer (`uint160`).
+    /// * `expiration` - The timestamp (`uint48`) after which the allowance expires.
+    #[must_use]
+    pub fn new(
+        token: Address,
+        spender: Address,
+        amount: U160,
+        expiration: U48,
+    ) -> Self {
+        let call_data = IAllowanceTransfer::approveCall {
+            token,
+            spender,
+            amount,
+            expiration,
+        }
+        .abi_encode();
+
+        Self { call_data }
+    }
+}
+
+impl Is4337Encodable for Permit2Approve {
+    type MetadataArg = ();
+
+    fn as_execute_user_op_call_data(&self) -> Bytes {
+        ISafe4337Module::executeUserOpCall {
+            to: PERMIT2_ADDRESS,
+            value: U256::ZERO,
+            data: self.call_data.clone().into(),
+            operation: SafeOperation::Call as u8,
+        }
+        .abi_encode()
+        .into()
+    }
+
+    fn as_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+        _metadata: Option<Self::MetadataArg>,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let call_data = self.as_execute_user_op_call_data();
+
+        let key = NonceKeyV1::new(
+            TransactionTypeId::Permit2Approve,
+            InstructionFlag::Default,
+            [0u8; 10],
+        );
+        let nonce = key.encode_with_sequence(0);
+
+        Ok(UserOperation::new_with_defaults(
+            wallet_address,
+            nonce,
+            call_data,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitives::Network;
+    use crate::primitives::{Network, BEDROCK_NONCE_PREFIX_CONST};
     use alloy::primitives::{fixed_bytes, uint};
+    use std::str::FromStr;
 
     #[test]
     fn test_permit2_typed_data_and_signing_hash() {
@@ -87,5 +187,78 @@ mod tests {
                 "0x22c2b928cf818940122abf8f5e7e04158c38653b9a985006e295e90f32abd351"
             )
         );
+    }
+
+    #[test]
+    fn test_permit2_approve_call_data() {
+        let token = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
+        let spender = address!("0x1234567890123456789012345678901234567890");
+        let amount = U160::MAX;
+        let expiration = U48::from(1_704_067_200u64);
+
+        let approve = Permit2Approve::new(token, spender, amount, expiration);
+        let execute_user_op_call_data = approve.as_execute_user_op_call_data();
+
+        // The outer call is executeUserOp(to=PERMIT2_ADDRESS, value=0, data=approve(token, spender, amount, expiration), operation=Call)
+        // Verify it targets the Permit2 contract, not the token
+        // The first 4 bytes after the executeUserOp selector encode `to` — which should be PERMIT2_ADDRESS
+        let call_data_bytes: &[u8] = &execute_user_op_call_data;
+
+        // executeUserOp selector is 0x7bb37428
+        assert_eq!(&call_data_bytes[0..4], &[0x7b, 0xb3, 0x74, 0x28]);
+
+        // `to` param (bytes 4..36) should be PERMIT2_ADDRESS (left-padded to 32 bytes)
+        let mut expected_to = [0u8; 32];
+        expected_to[12..32].copy_from_slice(PERMIT2_ADDRESS.as_slice());
+        assert_eq!(&call_data_bytes[4..36], &expected_to);
+    }
+
+    #[test]
+    fn test_permit2_approve_inner_calldata_encodes_correctly() {
+        let token = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
+        let spender = address!("0x1234567890123456789012345678901234567890");
+        let amount = U160::from(1_000_000u64);
+        let expiration = U48::from(1_704_067_200u64);
+
+        let approve = Permit2Approve::new(token, spender, amount, expiration);
+
+        // Verify the inner calldata independently
+        let expected_inner = IAllowanceTransfer::approveCall {
+            token,
+            spender,
+            amount,
+            expiration,
+        }
+        .abi_encode();
+
+        // The inner calldata should match the direct ABI encoding
+        assert_eq!(approve.call_data, expected_inner);
+    }
+
+    #[test]
+    fn test_permit2_approve_preflight_user_operation_nonce() {
+        let token = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
+        let spender = address!("0x1234567890123456789012345678901234567890");
+        let amount = U160::MAX;
+        let expiration = U48::from(1_704_067_200u64);
+
+        let approve = Permit2Approve::new(token, spender, amount, expiration);
+
+        let wallet =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let user_op = approve.as_preflight_user_operation(wallet, None).unwrap();
+
+        // Check nonce layout
+        let be: [u8; 32] = user_op.nonce.to_be_bytes();
+
+        assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
+        assert_eq!(be[5], TransactionTypeId::Permit2Approve as u8);
+        assert_eq!(be[6], 0u8); // instruction flags default
+
+        // Empty metadata
+        assert_eq!(&be[7..=16], &[0u8; 10]);
+
+        // Sequence must be zero
+        assert_eq!(&be[24..32], &[0u8; 8]);
     }
 }
