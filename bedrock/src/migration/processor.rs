@@ -1,5 +1,4 @@
 use crate::migration::MigrationError;
-use async_trait::async_trait;
 
 /// Result of executing a migration processor
 #[derive(uniffi::Enum)]
@@ -26,24 +25,21 @@ pub enum ProcessorResult {
     },
 }
 
-/// Trait that all migration processors must implement
+/// Trait that all migration processors must implement.
 ///
-/// # Timeouts and Cancellation Safety
+/// # Synchronous Interface
 ///
-/// Both [`is_applicable`](Self::is_applicable) and [`execute`](Self::execute) are subject to timeouts
-/// (20 seconds in production). When a timeout occurs, the future is dropped and the migration
-/// is marked as failed (for `execute`) or skipped (for `is_applicable`).
+/// These methods are intentionally **synchronous** to avoid a known UniFFI bug with
+/// async foreign callbacks on Android/Kotlin
+/// ([uniffi-rs#2624](https://github.com/mozilla/uniffi-rs/issues/2624)).
 ///
-/// **IMPORTANT**: Implementations MUST be cancellation-safe:
+/// **For foreign (Kotlin/Swift) implementors:** If your migration logic requires async
+/// operations (network calls, database access, etc.), use a blocking wrapper internally.
 ///
-/// - **DO NOT** spawn background tasks using `tokio::spawn`, `std::thread::spawn`, or similar
-///   that will continue running after the timeout
-/// - **DO NOT** use blocking operations or FFI calls without proper cleanup
-/// - **ENSURE** all work stops when the future is dropped (cooperative cancellation)
-/// - **MAKE** migrations idempotent so partial execution can be safely retried
-///
+/// **Caller requirement:** `run_migrations()` must be called from a background context.
+/// These sync callbacks will block the calling thread for the duration of each migration.
+/// Calling from the main/UI thread will cause UI freezes.
 #[uniffi::export(with_foreign)]
-#[async_trait]
 pub trait MigrationProcessor: Send + Sync {
     /// Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
     /// The version should be included in the ID itself (e.g., ".v1", ".v2")
@@ -55,12 +51,32 @@ pub trait MigrationProcessor: Send + Sync {
     /// to determine if the migration needs to run. This ensures the system is
     /// truly idempotent and handles edge cases gracefully.
     ///
+    /// # Synchronous
+    ///
+    /// This method is sync to work around a UniFFI async callback bug on Android.
+    /// Foreign implementations needing async work should block internally
+    /// (e.g., `runBlocking` in Kotlin).
+    ///
     /// # Returns
     /// - `Ok(true)` if the migration should run
     /// - `Ok(false)` if the migration should be skipped
     /// - `Err(_)` if unable to determine (migration will be skipped with error logged)
-    async fn is_applicable(&self) -> Result<bool, MigrationError>;
+    ///
+    /// # Errors
+    /// Returns `MigrationError` if the applicability check fails (e.g., unable to read state).
+    fn is_applicable(&self) -> Result<bool, MigrationError>;
 
     /// Execute the migration
-    async fn execute(&self) -> Result<ProcessorResult, MigrationError>;
+    ///
+    /// Called by the controller when the migration is ready to run.
+    ///
+    /// # Synchronous
+    ///
+    /// This method is sync to work around a UniFFI async callback bug on Android.
+    /// Foreign implementations needing async work should block internally
+    /// (e.g., `runBlocking` in Kotlin).
+    ///
+    /// # Errors
+    /// Returns `MigrationError` if the migration encounters an unexpected failure.
+    fn execute(&self) -> Result<ProcessorResult, MigrationError>;
 }

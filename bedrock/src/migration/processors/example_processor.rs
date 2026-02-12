@@ -1,6 +1,5 @@
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
-use async_trait::async_trait;
 use log::info;
 
 /// Example processor skeleton showing how to implement a migration
@@ -12,6 +11,14 @@ use log::info;
 /// - `AccountBootstrapProcessor` for "worldid.account.bootstrap.v1"
 /// - `PoHRefreshProcessor` for "worldid.credentials.poh.refresh.v1"
 /// - `NfcRefreshProcessor` for "worldid.credentials.nfc.refresh.v1"
+///
+/// # Synchronous interface
+///
+/// `is_applicable()` and `execute()` are synchronous to work around a UniFFI async
+/// callback bug on Android ([uniffi-rs#2624](https://github.com/mozilla/uniffi-rs/issues/2624)).
+///
+/// **Foreign (Kotlin/Swift) implementations** that need async operations should block
+/// internally
 pub struct ExampleProcessor {
     // Add dependencies here (e.g., authenticator, config, API clients, credential store, etc.)
     // For example:
@@ -37,7 +44,6 @@ impl Default for ExampleProcessor {
     }
 }
 
-#[async_trait]
 impl MigrationProcessor for ExampleProcessor {
     fn migration_id(&self) -> String {
         // TODO: Replace with your actual migration ID
@@ -49,20 +55,23 @@ impl MigrationProcessor for ExampleProcessor {
         "example.migration.v1".to_string()
     }
 
-    async fn is_applicable(&self) -> Result<bool, MigrationError> {
-        // IMPORTANT: Check actual state, not migration records
+    fn is_applicable(&self) -> Result<bool, MigrationError> {
+        // IMPORTANT: Check actual state, not migration records.
         // This ensures idempotency and handles reinstalls gracefully.
+        //
+        // NOTE: This method is synchronous. If your checks require async operations,
+        // use a blocking wrapper (e.g., `runBlocking` in Kotlin).
 
         // Example implementation pattern:
 
         // 1. Check if the migration outcome already exists (e.g., v4 credential exists)
-        // if self.credential_store.has_v4_credential().await? {
+        // if self.credential_store.has_v4_credential()? {
         //     info!("v4 credential already exists, migration not needed");
         //     return Ok(false);
         // }
 
         // 2. Check if the migration source exists (e.g., v3 credential to migrate from)
-        // if !self.credential_store.has_v3_credential().await? {
+        // if !self.credential_store.has_v3_credential()? {
         //     info!("No v3 credential to migrate, skipping");
         //     return Ok(false);
         // }
@@ -79,19 +88,22 @@ impl MigrationProcessor for ExampleProcessor {
         Ok(false)
     }
 
-    async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+    fn execute(&self) -> Result<ProcessorResult, MigrationError> {
         info!("Executing example migration");
 
-        // TODO: Implement your migration logic here
+        // TODO: Implement your migration logic here.
+        //
+        // NOTE: This method is synchronous. If your migration requires async operations
+        // (network calls, database access), use a blocking wrapper.
         //
         // Example patterns:
 
         // SUCCESS CASE:
-        // let result = self.do_migration().await?;
+        // let result = self.do_migration()?;
         // return Ok(ProcessorResult::Success);
 
         // RETRYABLE ERROR (network issues, temporary failures):
-        // if let Err(e) = self.api_call().await {
+        // if let Err(e) = self.api_call() {
         //     return Ok(ProcessorResult::Retryable {
         //         error_code: "NETWORK_ERROR".to_string(),
         //         error_message: format!("Failed to connect: {}", e),
