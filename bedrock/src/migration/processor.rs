@@ -23,12 +23,6 @@ pub enum ProcessorResult {
         /// Human-readable error message
         error_message: String,
     },
-
-    /// Migration blocked pending user action
-    BlockedUserAction {
-        /// Reason why the migration is blocked
-        reason: String,
-    },
 }
 
 /// Trait that all migration processors must implement.
