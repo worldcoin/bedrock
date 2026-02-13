@@ -7,3 +7,5 @@ pub mod erc4626;
 pub mod multisend;
 pub mod world_campaign_manager;
 pub mod world_gift_manager;
+pub mod wld_vault;
+pub mod usd_vault;

@@ -1,0 +1,253 @@
+//! This module introduces USD Vault contract interface.
+
+use alloy::{
+    primitives::{Address, Bytes, U256},
+    sol,
+    sol_types::SolCall,
+};
+
+use crate::transactions::contracts::erc20::{Erc20, IErc20};
+use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
+use crate::transactions::rpc::{RpcClient, RpcError};
+use crate::{
+    primitives::HexEncodedData,
+    smart_account::{
+        ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
+        TransactionTypeId, UserOperation,
+    },
+};
+use crate::{
+    primitives::{Network, PrimitiveError},
+    transactions::contracts::erc4626::Erc4626Vault,
+};
+
+sol! {
+    #[derive(serde::Serialize)]
+    interface USDVault {
+        function USDC() public view returns (address);
+        function SDAI() public view returns (address);
+
+        function getDSRConversionRate() public view returns (uint256);
+
+        function redeemSDAI(
+            address recipient,
+            uint256 amountIn,
+            uint256 amountOutMin,
+            uint256 nonce,
+            uint256 deadline,
+            bytes signature
+        ) external;
+    }
+
+    /// The ERC-4626 vault contract interface.
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-4626>
+    /// Reference: <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol>
+    #[derive(serde::Serialize)]
+    interface IERC4626 {
+        function asset() public view returns (address assetTokenAddress);
+        function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+    }
+}
+
+/// Represents a USD Vault migration transaction bundle.
+#[derive(Debug)]
+pub struct UsdVault {
+    /// The encoded call data for the operation.
+    pub call_data: Vec<u8>,
+    /// The action type.
+    action: TransactionTypeId,
+    /// The target address for the operation.
+    to: Address,
+    /// The Safe operation type for the operation.
+    operation: SafeOperation,
+    /// Metadata for nonce generation (protocol-specific).
+    metadata: [u8; 10],
+}
+
+impl UsdVault {
+    /// Fetches the user's sDAI balance from the USD Vault.
+    pub async fn fetch_sdai_balance(
+        rpc_client: &RpcClient,
+        network: Network,
+        usd_vault_address: Address,
+        user: Address,
+    ) -> Result<(Address, U256), RpcError> {
+        let sdai_call_data = USDVault::SDAICall {}.abi_encode();
+        let sdai_address = Erc4626Vault::fetch_asset_address(
+            rpc_client,
+            network,
+            usd_vault_address,
+            sdai_call_data,
+        )
+        .await?;
+
+        let balance_call_data = IErc20::balanceOfCall { account: user }.abi_encode();
+        let balance = Erc4626Vault::fetch_balance(
+            rpc_client,
+            network,
+            sdai_address,
+            balance_call_data,
+            "balanceOf",
+        )
+        .await?;
+        Ok((sdai_address, balance))
+    }
+
+    /// Constructs a WLD Vault migration transaction bundle.
+    pub async fn migrate(
+        rpc_client: &RpcClient,
+        network: Network,
+        usd_vault_address: Address,
+        erc4626_vault_address: Address,
+        sdai_amount: U256,
+        user: Address,
+        permit2_signature: HexEncodedData,
+        permit2_nonce: U256,
+        permit2_deadline: U256,
+        metadata: [u8; 10],
+    ) -> Result<Self, RpcError> {
+        let usdc_call_data = USDVault::USDCCall {}.abi_encode();
+        let usdc_address = Erc4626Vault::fetch_asset_address(
+            rpc_client,
+            network,
+            usd_vault_address,
+            usdc_call_data,
+        )
+        .await?;
+
+        let asset_call_data = IERC4626::assetCall {}.abi_encode();
+        let asset_address = Erc4626Vault::fetch_asset_address(
+            rpc_client,
+            network,
+            erc4626_vault_address,
+            asset_call_data,
+        )
+        .await?;
+
+        if usdc_address != asset_address {
+            return Err(RpcError::InvalidResponse {
+                error_message:
+                    "Asset address mismatch between USD Vault and ERC-4626 Vault"
+                        .to_string(),
+            });
+        }
+
+        let rate_call_data = USDVault::getDSRConversionRateCall {}.abi_encode();
+        let rate = Erc4626Vault::fetch_balance(
+            rpc_client,
+            network,
+            usd_vault_address,
+            rate_call_data,
+            "getDSRConversionRate",
+        )
+        .await?;
+
+        let decimal_factor = U256::from_str_radix(
+            "1000000000000000000000000000000000000000", // 1e39
+            10,
+        )
+        .unwrap();
+        let usdc_amount = sdai_amount
+            .checked_mul(rate)
+            .ok_or(RpcError::InvalidResponse {
+                error_message: "Multiplication overflow when calculating USDC amount"
+                    .to_string(),
+            })?
+            .checked_div(decimal_factor)
+            .ok_or(RpcError::InvalidResponse {
+                error_message: "Division by zero when calculating USDC amount"
+                    .to_string(),
+            })?;
+
+        let withdraw_all_data = USDVault::redeemSDAICall {
+            recipient: user,
+            amountIn: sdai_amount,
+            amountOutMin: U256::ZERO,
+            nonce: permit2_nonce,
+            deadline: permit2_deadline,
+            signature: permit2_signature
+                .to_vec()
+                .map_err(|e| RpcError::InvalidResponse {
+                    error_message: format!("Invalid permit signature: {e}"),
+                })?
+                .into(),
+        }
+        .abi_encode();
+
+        let approve_data = Erc20::encode_approve(erc4626_vault_address, usdc_amount);
+
+        let deposit_data = IERC4626::depositCall {
+            assets: usdc_amount,
+            receiver: user,
+        }
+        .abi_encode();
+
+        // TODO: add permit2 approve call if needed
+
+        let entries = vec![
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: usd_vault_address,
+                value: U256::ZERO,
+                data_length: U256::from(withdraw_all_data.len()),
+                data: withdraw_all_data.into(),
+            },
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: usdc_address,
+                value: U256::ZERO,
+                data_length: U256::from(approve_data.len()),
+                data: approve_data.into(),
+            },
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: erc4626_vault_address,
+                value: U256::ZERO,
+                data_length: U256::from(deposit_data.len()),
+                data: deposit_data.into(),
+            },
+        ];
+
+        let bundle = MultiSend::build_bundle(&entries);
+
+        Ok(Self {
+            call_data: bundle.data,
+            action: TransactionTypeId::USDVaultMigration,
+            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+            operation: SafeOperation::DelegateCall,
+            metadata,
+        })
+    }
+}
+
+impl Is4337Encodable for UsdVault {
+    type MetadataArg = ();
+
+    fn as_execute_user_op_call_data(&self) -> Bytes {
+        ISafe4337Module::executeUserOpCall {
+            to: self.to,
+            value: U256::ZERO,
+            data: self.call_data.clone().into(),
+            operation: self.operation as u8,
+        }
+        .abi_encode()
+        .into()
+    }
+
+    fn as_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+        _metadata: Option<Self::MetadataArg>,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let call_data = self.as_execute_user_op_call_data();
+
+        let key = NonceKeyV1::new(self.action, InstructionFlag::Default, self.metadata);
+        let nonce = key.encode_with_sequence(0);
+
+        Ok(UserOperation::new_with_defaults(
+            wallet_address,
+            nonce,
+            call_data,
+        ))
+    }
+}
