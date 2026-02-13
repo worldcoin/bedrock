@@ -1,4 +1,4 @@
-//! This module introduces WLD Vault contract interface.
+//! This module introduces WLDVault contract interface.
 
 use alloy::{
     primitives::{Address, Bytes, U256},
@@ -19,9 +19,12 @@ use crate::{
 };
 
 sol! {
+    /// The WLD Vault contract interface.
+    /// Reference: <https://worldchain-mainnet.explorer.alchemy.com/address/0x14a028cC500108307947dca4a1Aa35029FB66CE0?tab=contract>
     #[derive(serde::Serialize)]
     interface WLDVault {
         function token() public view returns (address);
+        function deposit(uint256 amount) external;
         function withdrawAll() external;
     }
 
@@ -35,7 +38,7 @@ sol! {
     }
 }
 
-/// Represents a WLD Vault migration transaction bundle.
+/// Represents a WLDVault operation.
 #[derive(Debug)]
 pub struct WldVault {
     /// The encoded call data for the operation.
@@ -51,13 +54,61 @@ pub struct WldVault {
 }
 
 impl WldVault {
-    /// Constructs a WLD Vault migration transaction bundle.
+    /// Creates a new deposit operation (approve + deposit via `MultiSend`).
+    pub async fn deposit(
+        rpc_client: &RpcClient,
+        network: Network,
+        vault_address: Address,
+        amount: U256,
+        metadata: [u8; 10],
+    ) -> Result<Self, RpcError> {
+        let token_call_data = WLDVault::tokenCall {}.abi_encode();
+        let token_address = Erc4626Vault::fetch_asset_address(
+            rpc_client,
+            network,
+            vault_address,
+            token_call_data,
+        )
+        .await?;
+
+        let approve_data = Erc20::encode_approve(vault_address, amount);
+        let deposit_data = WLDVault::depositCall { amount }.abi_encode();
+
+        let entries = vec![
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: token_address,
+                value: U256::ZERO,
+                data_length: U256::from(approve_data.len()),
+                data: approve_data.into(),
+            },
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: vault_address,
+                value: U256::ZERO,
+                data_length: U256::from(deposit_data.len()),
+                data: deposit_data.into(),
+            },
+        ];
+
+        let bundle = MultiSend::build_bundle(&entries);
+
+        Ok(Self {
+            call_data: bundle.data,
+            action: TransactionTypeId::WLDVaultMigration,
+            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+            operation: SafeOperation::DelegateCall,
+            metadata,
+        })
+    }
+
+    /// Creates a new migration operation (withdrawAll + approve + deposit via `MultiSend`).
     pub async fn migrate(
         rpc_client: &RpcClient,
         network: Network,
         wld_vault_address: Address,
         erc4626_vault_address: Address,
-        user: Address,
+        user_address: Address,
         metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
         let token_call_data = WLDVault::tokenCall {}.abi_encode();
@@ -81,17 +132,19 @@ impl WldVault {
         if token_address != asset_address {
             return Err(RpcError::InvalidResponse {
                 error_message:
-                    "Asset address mismatch between WLD Vault and ERC-4626 Vault"
+                    "Asset address mismatch between WLDVault and ERC-4626 Vault"
                         .to_string(),
             });
         }
 
-        let balance_call_data =
-            IErc20::balanceOfCall { account: user }.abi_encode();
+        let balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
         let balance = Erc4626Vault::fetch_balance(
             rpc_client,
             network,
-            asset_address,
+            wld_vault_address,
             balance_call_data,
             "balanceOf",
         )
@@ -99,7 +152,7 @@ impl WldVault {
 
         if balance.is_zero() {
             return Err(RpcError::InvalidResponse {
-                error_message: "Cannot deposit zero amount - user has no balance of the asset token".to_string(),
+                error_message: "Cannot migrate zero balance".to_string(),
             });
         }
 
@@ -109,7 +162,7 @@ impl WldVault {
 
         let deposit_data = IERC4626::depositCall {
             assets: balance,
-            receiver: user,
+            receiver: user_address,
         }
         .abi_encode();
 

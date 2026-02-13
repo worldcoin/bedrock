@@ -461,8 +461,55 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Constructs and executes a WLD Vault migration transaction bundle on World Chain.
-    pub async fn transaction_wld_vault_migration(
+    /// Deposits WLD tokens into the WLDVault on World Chain.
+    ///
+    /// # Arguments
+    /// - `wld_vault_address`: The address of the WLDVault contract.
+    /// - `amount`:  The amount of tokens to deposit as a stringified integer with the tokens's decimals.
+    pub async fn transaction_wld_vault_deposit(
+        &self,
+        wld_vault_address: &str,
+        amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let wld_vault_address =
+            Address::parse_from_ffi(wld_vault_address, "wld_vault_address")?;
+        let amount = U256::parse_from_ffi(amount, "amount")?;
+
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction = crate::transactions::contracts::wld_vault::WldVault::deposit(
+            rpc_client,
+            Network::WorldChain,
+            wld_vault_address,
+            amount,
+            [0u8; 10], // metadata
+        )
+        .await
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to create WLDVault deposit: {e}"),
+        })?;
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute WLDVault deposit: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Migrates assets from a WLDVault to an ERC4626 vault on World Chain.
+    ///
+    /// After migration, the user will have some dust WLD tokens left.
+    ///
+    /// # Arguments
+    /// - `wld_vault_address`: The address of the WLDVault contract.
+    /// - `erc4626_vault_address`: The address of the ERC4626 vault contract.
+    pub async fn transaction_wld_vault_migrate(
         &self,
         wld_vault_address: &str,
         erc4626_vault_address: &str,
@@ -472,7 +519,6 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
-        // Get the RPC client and create the ERC4626 deposit transaction
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
