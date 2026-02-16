@@ -18,6 +18,58 @@ use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 /// Operations are valid for this duration from the time they are signed.
 pub(crate) const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
 
+impl SafeSmartAccount {
+    /// Signs a `UserOperation` with fresh validity timestamps and sets the composed
+    /// 77-byte signature (`validAfter` + `validUntil` + ECDSA) on the operation.
+    ///
+    /// `validAfter` is set to 0 (immediately valid) and `validUntil` is set to
+    /// [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] from now.
+    ///
+    /// # Errors
+    /// * Returns `RpcError` if the `EncodedSafeOpStruct` cannot be built from the operation
+    /// * Returns `RpcError` if the signing process fails
+    pub(crate) fn sign_user_operation(
+        &self,
+        user_operation: &mut UserOperation,
+        network: Network,
+    ) -> Result<(), RpcError> {
+        // validAfter = 0 (immediately valid)
+        let valid_after_u48 = U48::from(0u64);
+        let valid_after_bytes: [u8; 6] = [0u8; 6];
+
+        // validUntil = now + configured duration
+        let valid_until_seconds = (Utc::now()
+            + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
+        .timestamp();
+        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
+        let valid_until_u48 = U48::from(valid_until_seconds);
+        let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
+        let valid_until_bytes: &[u8] = &valid_until_bytes_full[2..8]; // 48-bit timestamp
+
+        let encoded_safe_op = EncodedSafeOpStruct::from_user_op_with_validity(
+            user_operation,
+            valid_after_u48,
+            valid_until_u48,
+        )?;
+
+        let signature = self.sign_digest(
+            encoded_safe_op.into_transaction_hash(),
+            network as u32,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        )?;
+
+        // Compose the final signature: validAfter (6 bytes) + validUntil (6 bytes) + ECDSA (65 bytes) = 77 bytes
+        let mut full_signature = Vec::with_capacity(77);
+        full_signature.extend_from_slice(&valid_after_bytes);
+        full_signature.extend_from_slice(valid_until_bytes);
+        full_signature.extend_from_slice(&signature.as_bytes()[..]);
+
+        user_operation.signature = full_signature.into();
+
+        Ok(())
+    }
+}
+
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
 pub trait Is4337Encodable {
@@ -90,40 +142,8 @@ pub trait Is4337Encodable {
         // 3. Merge paymaster data
         user_operation = user_operation.with_paymaster_data(&sponsor_response);
 
-        // 4. Compute validity timestamps
-        // validAfter = 0 (immediately valid)
-        let valid_after_u48 = U48::from(0u64);
-        let valid_after_bytes: [u8; 6] = [0u8; 6];
-
-        // Set validUntil to the configured duration from now
-        let valid_until_seconds = (Utc::now()
-            + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
-        .timestamp();
-        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
-        let valid_until_u48 = U48::from(valid_until_seconds);
-        let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
-        let valid_until_bytes: &[u8] = &valid_until_bytes_full[2..8]; // 48-bit timestamp
-
-        // Build EncodedSafeOpStruct using explicit validity (no dependency on user_operation.signature)
-        let encoded_safe_op = EncodedSafeOpStruct::from_user_op_with_validity(
-            &user_operation,
-            valid_after_u48,
-            valid_until_u48,
-        )?;
-
-        let signature = safe_account.sign_digest(
-            encoded_safe_op.into_transaction_hash(),
-            network as u32,
-            Some(*GNOSIS_SAFE_4337_MODULE),
-        )?;
-
-        // Compose the final signature once (timestamps + actual 65-byte signature)
-        let mut full_signature = Vec::with_capacity(77);
-        full_signature.extend_from_slice(&valid_after_bytes);
-        full_signature.extend_from_slice(valid_until_bytes);
-        full_signature.extend_from_slice(&signature.as_bytes()[..]);
-
-        user_operation.signature = full_signature.into();
+        // 4. Sign the UserOperation with fresh validity timestamps
+        safe_account.sign_user_operation(&mut user_operation, network)?;
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
@@ -417,5 +437,87 @@ mod tests {
         } else {
             panic!("Expected InvalidInput error");
         }
+    }
+
+    #[test]
+    fn test_as_bundler_sponsored_zeros_fee_and_paymaster_fields() {
+        let user_op = UserOperation {
+            sender: address!("0x1111111111111111111111111111111111111111"),
+            nonce: U256::from(42),
+            call_data: Bytes::from_str("0x1234").unwrap(),
+            call_gas_limit: U128::from(100_000),
+            verification_gas_limit: U128::from(200_000),
+            pre_verification_gas: U256::from(50_000),
+            max_fee_per_gas: U128::from(1_000_000_000),
+            max_priority_fee_per_gas: U128::from(500_000_000),
+            paymaster: Some(address!("0x2222222222222222222222222222222222222222")),
+            paymaster_verification_gas_limit: Some(U128::from(30_000)),
+            paymaster_post_op_gas_limit: Some(U128::from(40_000)),
+            paymaster_data: Some(Bytes::from_str("0xabcd").unwrap()),
+            signature: vec![0xff; 77].into(),
+            factory: None,
+            factory_data: None,
+        };
+
+        let sponsored = user_op.as_bundler_sponsored();
+
+        // Core fields should be preserved
+        assert_eq!(
+            sponsored.sender,
+            address!("0x1111111111111111111111111111111111111111")
+        );
+        assert_eq!(sponsored.nonce, U256::from(42));
+        assert_eq!(sponsored.call_data, Bytes::from_str("0x1234").unwrap());
+        assert_eq!(sponsored.call_gas_limit, U128::from(100_000));
+        assert_eq!(sponsored.verification_gas_limit, U128::from(200_000));
+
+        // Fee fields should be zeroed
+        assert_eq!(sponsored.pre_verification_gas, U256::ZERO);
+        assert_eq!(sponsored.max_fee_per_gas, U128::ZERO);
+        assert_eq!(sponsored.max_priority_fee_per_gas, U128::ZERO);
+
+        // Paymaster fields should be cleared/zeroed
+        assert_eq!(sponsored.paymaster, None);
+        assert_eq!(
+            sponsored.paymaster_verification_gas_limit,
+            Some(U128::ZERO)
+        );
+        assert_eq!(sponsored.paymaster_post_op_gas_limit, Some(U128::ZERO));
+        assert_eq!(sponsored.paymaster_data, None);
+    }
+
+    #[test]
+    fn test_sign_user_operation_produces_valid_77_byte_signature() {
+        let safe = SafeSmartAccount::new(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+
+        let mut user_op = UserOperation::new_with_defaults(
+            address!("0x4564420674EA68fcc61b463C0494807C759d47e6"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+
+        safe.sign_user_operation(&mut user_op, Network::WorldChain)
+            .unwrap();
+
+        // Signature should be exactly 77 bytes (6 + 6 + 65)
+        assert_eq!(user_op.signature.len(), 77);
+
+        // validAfter (first 6 bytes) should be all zeros (immediately valid)
+        assert_eq!(&user_op.signature[0..6], &[0u8; 6]);
+
+        // validUntil (next 6 bytes) should be non-zero (30 minutes from now)
+        let valid_until_bytes = &user_op.signature[6..12];
+        assert_ne!(valid_until_bytes, &[0u8; 6]);
+
+        // The timestamps should be extractable from the signed operation
+        let (valid_after, valid_until) =
+            user_op.extract_validity_timestamps().unwrap();
+        assert_eq!(valid_after, U48::from(0u64));
+        assert!(valid_until > U48::from(0u64));
     }
 }

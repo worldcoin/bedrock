@@ -476,6 +476,86 @@ pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
         .ok_or(RpcError::HttpClientNotInitialized)
 }
 
+/// Submits a signed `UserOperation` via `eth_sendUserOperation` to an external RPC URL.
+///
+/// This is a standalone function that sends directly to an arbitrary absolute URL
+/// (e.g. a third-party bundler endpoint) using the global HTTP client's
+/// [`fetch_from_url`](crate::primitives::AuthenticatedHttpClient::fetch_from_url) method.
+/// It is intentionally separate from [`RpcClient`], which routes through the app backend.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The global HTTP client has not been initialized
+/// - The HTTP request fails
+/// - The request serialization fails
+/// - The response parsing fails
+/// - The RPC returns an error response
+/// - The returned user operation hash is invalid
+pub async fn send_user_operation_to_url(
+    rpc_url: &str,
+    user_operation: &UserOperation,
+    entrypoint: Address,
+) -> Result<FixedBytes<32>, RpcError> {
+    let http_client = get_http_client().ok_or(RpcError::HttpClientNotInitialized)?;
+
+    let params = vec![
+        serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+        serde_json::Value::String(format!("{entrypoint:?}")),
+    ];
+
+    let id = Id::String(format!(
+        "tx_{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let request = JsonRpcRequest::new(RpcMethod::SendUserOperation, id, params);
+    let request_bytes =
+        serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
+
+    let headers = vec![HttpHeader {
+        name: "Content-Type".to_string(),
+        value: "application/json".to_string(),
+    }];
+
+    let response_bytes = http_client
+        .as_ref()
+        .fetch_from_url(
+            rpc_url.to_string(),
+            HttpMethod::Post,
+            headers,
+            Some(request_bytes),
+        )
+        .await?;
+
+    let json_response: Value =
+        serde_json::from_slice(&response_bytes).map_err(|_| RpcError::JsonError)?;
+
+    if let Some(error) = json_response.get("error") {
+        let error_payload: ErrorPayload =
+            serde_json::from_value(error.clone()).map_err(|_| RpcError::JsonError)?;
+
+        return Err(RpcError::RpcResponseError {
+            code: error_payload.code,
+            error_message: error_payload.message,
+        });
+    }
+
+    let result_value =
+        json_response
+            .get("result")
+            .ok_or(RpcError::InvalidResponse {
+                error_message: "Response missing both 'result' and 'error' fields"
+                    .to_string(),
+            })?;
+
+    let result: String = serde_json::from_value(result_value.clone())
+        .map_err(|_| RpcError::JsonError)?;
+
+    FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+        error_message: format!("Invalid userOpHash format: {e}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
