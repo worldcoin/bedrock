@@ -6,7 +6,7 @@ use alloy::{
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 pub use signer::SafeSmartAccountSigner;
-pub use transaction_4337::Is4337Encodable;
+pub use transaction_4337::{Is4337Encodable, USER_OPERATION_VALIDITY_DURATION_MINUTES};
 
 #[cfg(any(test, doc))]
 use crate::primitives::Network;

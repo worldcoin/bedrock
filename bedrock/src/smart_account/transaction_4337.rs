@@ -16,7 +16,7 @@ use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
 /// Operations are valid for this duration from the time they are signed.
-const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
+pub(crate) const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
 
 /// Identifies a transaction that can be encoded, signed and executed as a 4337 `UserOperation`.
 #[allow(async_fn_in_trait)]
