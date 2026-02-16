@@ -505,4 +505,20 @@ where
             }),
         }
     }
+
+    async fn fetch_from_url(
+        &self,
+        url: String,
+        method: HttpMethod,
+        headers: Vec<HttpHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError> {
+        // Anvil is a plain Ethereum node — it does not natively support
+        // bundler-specific JSON-RPC methods like `eth_sendUserOperation`.
+        // The `fetch_from_app_backend` handler already simulates bundler
+        // behaviour (parsing the user op, packing it, calling
+        // `EntryPoint.handleOps`), so we reuse it here.
+        self.fetch_from_app_backend(url, method, headers, body)
+            .await
+    }
 }
