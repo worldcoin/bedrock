@@ -11,7 +11,7 @@ pub use transaction_4337::Is4337Encodable;
 #[cfg(any(test, doc))]
 use crate::primitives::Network;
 use crate::{
-    bedrock_export, debug, error, primitives::HexEncodedData,
+    bedrock_export, debug, primitives::HexEncodedData,
     transactions::foreign::UnparsedUserOperation,
 };
 

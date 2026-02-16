@@ -16,7 +16,7 @@ use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
 /// Operations are valid for this duration from the time they are signed.
-pub(crate) const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
+pub const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
 
 impl SafeSmartAccount {
     /// Signs a `UserOperation` with fresh validity timestamps and sets the composed

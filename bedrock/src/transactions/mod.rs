@@ -7,7 +7,7 @@ use alloy::primitives::aliases::{U160, U48};
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
-    smart_account::{Is4337Encodable, Permit2Approve, SafeSmartAccount},
+    smart_account::{Is4337Encodable, Permit2Approve, SafeSmartAccount, ENTRYPOINT_4337},
     transactions::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
@@ -480,8 +480,6 @@ impl SafeSmartAccount {
         user_operation: UnparsedUserOperation,
         rpc_url: String,
     ) -> Result<HexEncodedData, TransactionError> {
-        use crate::smart_account::ENTRYPOINT_4337;
-
         // 1. Parse and convert to bundler-sponsored format
         let mut user_op: crate::smart_account::UserOperation =
             user_operation.try_into().map_err(|e: crate::primitives::PrimitiveError| {

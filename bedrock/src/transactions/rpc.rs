@@ -543,7 +543,7 @@ pub async fn send_user_operation_to_url(
     let result_value =
         json_response
             .get("result")
-            .ok_or(RpcError::InvalidResponse {
+            .ok_or_else(|| RpcError::InvalidResponse {
                 error_message: "Response missing both 'result' and 'error' fields"
                     .to_string(),
             })?;
