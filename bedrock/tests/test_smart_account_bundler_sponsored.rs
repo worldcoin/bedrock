@@ -77,7 +77,7 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
     let client = AnvilBackedHttpClient::new(provider.clone());
     set_http_client(Arc::new(client));
 
-    // 8) Craft the user operation manually (mimicking what a Mini App would provide)
+    // 8) Craft the user operation manually
     let transfer_amount = U256::from(10u128.pow(18)); // 1 WLD
     let erc20_transfer_call_data = IERC20::transferCall {
         to: recipient,
