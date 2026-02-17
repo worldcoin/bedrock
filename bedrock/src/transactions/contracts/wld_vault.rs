@@ -1,4 +1,4 @@
-//! This module introduces WLDVault contract interface.
+//! This module introduces `WLDVault` contract interface.
 
 use alloy::{
     primitives::{Address, Bytes, U256},
@@ -10,7 +10,7 @@ use crate::smart_account::{
     ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
     TransactionTypeId, UserOperation,
 };
-use crate::transactions::contracts::erc20::{Erc20, IErc20};
+use crate::transactions::contracts::erc20::{Erc20};
 use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
 use crate::transactions::rpc::{RpcClient, RpcError};
 use crate::{
@@ -38,7 +38,7 @@ sol! {
     }
 }
 
-/// Represents a WLDVault operation.
+/// Represents a `WLDVault` operation.
 #[derive(Debug)]
 pub struct WldVault {
     /// The encoded call data for the operation.
@@ -49,18 +49,22 @@ pub struct WldVault {
     to: Address,
     /// The Safe operation type for the operation.
     operation: SafeOperation,
-    /// Metadata for nonce generation (protocol-specific).
-    metadata: [u8; 10],
 }
 
 impl WldVault {
     /// Creates a new deposit operation (approve + deposit via `MultiSend`).
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an `RpcError` if:
+    /// - Token address fetching fails
+    /// - Balance fetching fails
+    /// - Any RPC call fails during transaction building
     pub async fn deposit(
         rpc_client: &RpcClient,
         network: Network,
         vault_address: Address,
         amount: U256,
-        metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
         let token_call_data = WLDVault::tokenCall {}.abi_encode();
         let token_address = Erc4626Vault::fetch_asset_address(
@@ -98,18 +102,24 @@ impl WldVault {
             action: TransactionTypeId::WLDVaultMigration,
             to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
             operation: SafeOperation::DelegateCall,
-            metadata,
         })
     }
 
     /// Creates a new migration operation (withdrawAll + approve + deposit via `MultiSend`).
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an `RpcError` if:
+    /// - Token address fetching fails
+    /// - Asset address validation fails
+    /// - Balance fetching fails
+    /// - Any RPC call fails during transaction building
     pub async fn migrate(
         rpc_client: &RpcClient,
         network: Network,
         wld_vault_address: Address,
         erc4626_vault_address: Address,
         user_address: Address,
-        metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
         let token_call_data = WLDVault::tokenCall {}.abi_encode();
         let token_address = Erc4626Vault::fetch_asset_address(
@@ -137,18 +147,9 @@ impl WldVault {
             });
         }
 
-        let balance_call_data = IErc20::balanceOfCall {
-            account: user_address,
-        }
-        .abi_encode();
-        let balance = Erc4626Vault::fetch_balance(
-            rpc_client,
-            network,
-            wld_vault_address,
-            balance_call_data,
-            "balanceOf",
-        )
-        .await?;
+        let balance =
+            Erc20::fetch_balance(rpc_client, network, wld_vault_address, user_address)
+                .await?;
 
         if balance.is_zero() {
             return Err(RpcError::InvalidResponse {
@@ -197,7 +198,6 @@ impl WldVault {
             action: TransactionTypeId::WLDVaultMigration,
             to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
             operation: SafeOperation::DelegateCall,
-            metadata,
         })
     }
 }
@@ -223,7 +223,7 @@ impl Is4337Encodable for WldVault {
     ) -> Result<UserOperation, PrimitiveError> {
         let call_data = self.as_execute_user_op_call_data();
 
-        let key = NonceKeyV1::new(self.action, InstructionFlag::Default, self.metadata);
+        let key = NonceKeyV1::new(self.action, InstructionFlag::Default, [0u8; 10]);
         let nonce = key.encode_with_sequence(0);
 
         Ok(UserOperation::new_with_defaults(

@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, U256};
 use bedrock_macros::bedrock_export;
 use chrono::Utc;
-use rand::RngCore;
+use rand::{Rng, RngCore};
 use std::sync::Arc;
 
 use alloy::primitives::aliases::{U160, U48};
@@ -15,6 +15,7 @@ use crate::{
     transactions::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
+            usd_vault::Permit2Data,
             world_campaign_manager::WorldCampaignManager,
             world_gift_manager::WorldGiftManager,
         },
@@ -461,11 +462,19 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Deposits WLD tokens into the WLDVault on World Chain.
+    /// Deposits WLD tokens into the `WLDVault` on World Chain.
+    ///
+    /// This method creates a deposit transaction for the `WLDVault` contract, allowing users
+    /// to stake their WLD tokens and earn rewards.
     ///
     /// # Arguments
-    /// - `wld_vault_address`: The address of the WLDVault contract.
-    /// - `amount`:  The amount of tokens to deposit as a stringified integer with the tokens's decimals.
+    /// - `wld_vault_address`: The address of the `WLDVault` contract.
+    /// - `amount`: The amount of WLD tokens to deposit as a stringified integer with 18 decimals.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
     pub async fn transaction_wld_vault_deposit(
         &self,
         wld_vault_address: &str,
@@ -483,7 +492,6 @@ impl SafeSmartAccount {
             Network::WorldChain,
             wld_vault_address,
             amount,
-            [0u8; 10], // metadata
         )
         .await
         .map_err(|e| TransactionError::Generic {
@@ -502,13 +510,24 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Migrates assets from a WLDVault to an ERC4626 vault on World Chain.
+    /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
     ///
-    /// After migration, the user will have some dust WLD tokens left.
+    /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
+    /// equivalent amount into a new ERC4626-compliant vault. The migration process is
+    /// atomic and executed as a single transaction bundle.
+    ///
+    /// Note: After migration, the user may have some dust WLD tokens left due to
+    /// rounding differences in the conversion process.
     ///
     /// # Arguments
-    /// - `wld_vault_address`: The address of the WLDVault contract.
-    /// - `erc4626_vault_address`: The address of the ERC4626 vault contract.
+    /// - `wld_vault_address`: The address of the `WLDVault` contract to migrate from.
+    /// - `erc4626_vault_address`: The address of the new ERC4626 vault contract to migrate to.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+    /// - Returns [`TransactionError::Generic`] if the migration transaction creation fails.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
     pub async fn transaction_wld_vault_migrate(
         &self,
         wld_vault_address: &str,
@@ -528,7 +547,6 @@ impl SafeSmartAccount {
             wld_vault_address,
             erc4626_vault_address,
             self.wallet_address,
-            [0u8; 10], // metadata
         )
         .await
         .map_err(|e| TransactionError::Generic {
@@ -547,7 +565,29 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Constructs and executes a USD Vault migration transaction bundle on World Chain.
+    /// Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
+    ///
+    /// This method performs a complex migration process that includes:
+    /// 1. Fetching the user's sDAI balance from the USD Vault
+    /// 2. Creating a Permit2 signature for secure token transfer
+    /// 3. Executing a multi-step transaction bundle:
+    ///    - Redeeming sDAI for USDC from the USD Vault
+    ///    - Approving the new vault to spend USDC
+    ///    - Depositing USDC into the new ERC4626 vault
+    ///
+    /// The entire process is executed atomically using a `MultiSend` transaction bundle.
+    ///
+    /// # Arguments
+    /// - `usd_vault_address`: The address of the USD Vault contract to migrate from.
+    /// - `erc4626_vault_address`: The address of the ERC4626 vault contract to migrate to.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+    /// - Returns [`TransactionError::Generic`] if fetching the sDAI balance fails.
+    /// - Returns [`TransactionError::Generic`] if the Permit2 signature creation fails.
+    /// - Returns [`TransactionError::Generic`] if the migration transaction bundle creation fails.
+    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+    /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
     pub async fn transaction_usd_vault_migrate(
         &self,
         usd_vault_address: &str,
@@ -580,7 +620,10 @@ impl SafeSmartAccount {
             amount: sdai_amount.to_string(),
         };
 
-        let nonce: u64 = Utc::now().timestamp_millis().try_into().unwrap();
+        let nonce = {
+            let mut rng = rand::thread_rng();
+            U256::from_be_bytes(rng.gen::<[u8; 32]>())
+        };
 
         let deadline = Utc::now().timestamp() + 180; // 3 minutes from now
 
@@ -597,6 +640,12 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to sign permit2 transfer: {e}"),
             })?;
 
+        let permit2_data = Permit2Data {
+            signature,
+            nonce,
+            deadline: U256::from(deadline),
+        };
+
         let transaction = crate::transactions::contracts::usd_vault::UsdVault::migrate(
             rpc_client,
             Network::WorldChain,
@@ -604,10 +653,7 @@ impl SafeSmartAccount {
             erc4626_vault_address,
             sdai_amount,
             self.wallet_address,
-            signature,
-            U256::from(nonce),
-            U256::from(deadline),
-            [0u8; 10], // metadata
+            permit2_data,
         )
         .await
         .map_err(|e| TransactionError::Generic {

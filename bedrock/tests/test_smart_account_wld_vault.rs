@@ -1,4 +1,4 @@
-///! E2E test for migrating from WLDVault to ERC4626 vault using Morpho as example.
+//! E2E test for migrating from WLDVault to ERC4626 vault using Morpho as example.
 use std::sync::Arc;
 
 mod common;
