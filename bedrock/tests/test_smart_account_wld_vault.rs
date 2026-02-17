@@ -15,9 +15,8 @@ use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 use std::str::FromStr;
 
 use bedrock::{
-    primitives::http_client::set_http_client,
-    smart_account::SafeSmartAccount,
-    test_utils::{AnvilBackedHttpClient},
+    primitives::http_client::set_http_client, smart_account::SafeSmartAccount,
+    test_utils::AnvilBackedHttpClient,
 };
 
 use crate::common::set_address_verified_until_for_account;

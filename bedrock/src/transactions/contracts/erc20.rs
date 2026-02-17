@@ -72,11 +72,7 @@ impl Erc20 {
         owner: Address,
         spender: Address,
     ) -> Result<U256, RpcError> {
-        let call_data = IErc20::allowanceCall {
-            owner,
-            spender,
-        }
-        .abi_encode();
+        let call_data = IErc20::allowanceCall { owner, spender }.abi_encode();
         let result = rpc_client
             .eth_call(network, token, call_data.into())
             .await?;

@@ -209,7 +209,7 @@ where
     let mut padded = [0u8; 64];
     padded[12..32].copy_from_slice(account.as_slice());
     padded[32..64].copy_from_slice(&slot.to_be_bytes::<32>());
-    
+
     let slot_hash = alloy::primitives::keccak256(padded);
     let slot = U256::from_be_bytes(slot_hash.into());
 
