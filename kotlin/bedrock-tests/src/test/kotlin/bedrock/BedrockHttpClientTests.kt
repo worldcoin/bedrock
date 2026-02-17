@@ -35,6 +35,18 @@ class BedrockHttpClientTests {
                 
             return response.getOrThrow()
         }
+
+        override suspend fun fetchFromUrl(url: String, method: HttpMethod, headers: List<HttpHeader>, body: ByteArray?): ByteArray {
+            requestHistory.add(url)
+            methodHistory.add(method)
+            headersHistory.add(headers)
+            bodyHistory.add(body)
+            
+            val response = responses[url] 
+                ?: throw HttpException.Generic("No response configured for URL: $url")
+                
+            return response.getOrThrow()
+        }
     }
     
     @Test
