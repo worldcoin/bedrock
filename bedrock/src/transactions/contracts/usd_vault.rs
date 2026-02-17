@@ -6,7 +6,6 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::transactions::contracts::erc20::{Erc20, IErc20};
 use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
 use crate::transactions::rpc::{RpcClient, RpcError};
 use crate::{
@@ -19,6 +18,10 @@ use crate::{
 use crate::{
     primitives::{Network, PrimitiveError},
     transactions::contracts::erc4626::Erc4626Vault,
+};
+use crate::{
+    smart_account::PERMIT2_ADDRESS,
+    transactions::contracts::erc20::{Erc20, IErc20},
 };
 
 sol! {
@@ -93,7 +96,7 @@ impl UsdVault {
         Ok((sdai_address, balance))
     }
 
-    /// Constructs a WLD Vault migration transaction bundle.
+    /// Creates a new migration operation (redeemSDAI + approve + deposit via `MultiSend`).
     pub async fn migrate(
         rpc_client: &RpcClient,
         network: Network,
@@ -112,6 +115,15 @@ impl UsdVault {
             network,
             usd_vault_address,
             usdc_call_data,
+        )
+        .await?;
+
+        let sdai_call_data = USDVault::SDAICall {}.abi_encode();
+        let sdai_address = Erc4626Vault::fetch_asset_address(
+            rpc_client,
+            network,
+            usd_vault_address,
+            sdai_call_data,
         )
         .await?;
 
@@ -162,7 +174,7 @@ impl UsdVault {
         let withdraw_all_data = USDVault::redeemSDAICall {
             recipient: user,
             amountIn: sdai_amount,
-            amountOutMin: U256::ZERO,
+            amountOutMin: usdc_amount,
             nonce: permit2_nonce,
             deadline: permit2_deadline,
             signature: permit2_signature
@@ -182,9 +194,7 @@ impl UsdVault {
         }
         .abi_encode();
 
-        // TODO: add permit2 approve call if needed
-
-        let entries = vec![
+        let mut entries = vec![
             MultiSendTx {
                 operation: SafeOperation::Call as u8,
                 to: usd_vault_address,
@@ -207,6 +217,30 @@ impl UsdVault {
                 data: deposit_data.into(),
             },
         ];
+
+        let permit2_allowance = Erc20::fetch_allowance(
+            rpc_client,
+            network,
+            usdc_address,
+            user,
+            PERMIT2_ADDRESS,
+        )
+        .await?;
+
+        if permit2_allowance < sdai_amount {
+            let approve_permit2_data =
+                Erc20::encode_approve(PERMIT2_ADDRESS, U256::MAX);
+            entries.insert(
+                0,
+                MultiSendTx {
+                    operation: SafeOperation::Call as u8,
+                    to: sdai_address,
+                    value: U256::ZERO,
+                    data_length: U256::from(approve_permit2_data.len()),
+                    data: approve_permit2_data.into(),
+                },
+            );
+        }
 
         let bundle = MultiSend::build_bundle(&entries);
 

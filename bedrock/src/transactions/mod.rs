@@ -548,7 +548,7 @@ impl SafeSmartAccount {
     }
 
     /// Constructs and executes a USD Vault migration transaction bundle on World Chain.
-    pub async fn transaction_usd_vault_migration(
+    pub async fn transaction_usd_vault_migrate(
         &self,
         usd_vault_address: &str,
         erc4626_vault_address: &str,

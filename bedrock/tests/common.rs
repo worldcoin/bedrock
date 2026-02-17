@@ -196,6 +196,29 @@ where
     Ok(())
 }
 
+pub async fn set_erc20_balance_with_slot<P>(
+    provider: &P,
+    token: Address,
+    account: Address,
+    balance: U256,
+    slot: U256,
+) -> anyhow::Result<()>
+where
+    P: Provider<Ethereum> + AnvilApi<Ethereum>,
+{
+    let mut padded = [0u8; 64];
+    padded[12..32].copy_from_slice(account.as_slice());
+    padded[32..64].copy_from_slice(&slot.to_be_bytes::<32>());
+    
+    let slot_hash = alloy::primitives::keccak256(padded);
+    let slot = U256::from_be_bytes(slot_hash.into());
+
+    provider
+        .anvil_set_storage_at(token, slot, balance.into())
+        .await?;
+    Ok(())
+}
+
 /// Returns the World ID Address Book contract address for the current Bedrock environment.
 /// Reference <https://github.com/worldcoin/worldcoin-vault/blob/main/src/WorldIDAddressBook.sol>
 fn address_book_address() -> Address {

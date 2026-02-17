@@ -6,10 +6,13 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::primitives::PrimitiveError;
 use crate::smart_account::{
     ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
     TransactionTypeId, UserOperation,
+};
+use crate::{
+    primitives::{Network, PrimitiveError},
+    transactions::{RpcClient, RpcError},
 };
 
 sol! {
@@ -22,6 +25,7 @@ sol! {
         function transfer(address to, uint256 value) external returns (bool);
         function approve(address spender, uint256 value) external returns (bool);
         function balanceOf(address account) external view returns (uint256);
+        function allowance(address owner, address spender) external view returns (uint256);
     }
 }
 
@@ -58,6 +62,36 @@ impl Erc20 {
     #[must_use]
     pub fn encode_approve(spender: Address, value: U256) -> Vec<u8> {
         IErc20::approveCall { spender, value }.abi_encode()
+    }
+
+    /// Fetches the current allowance for a given owner and spender.
+    pub async fn fetch_allowance(
+        rpc_client: &RpcClient,
+        network: Network,
+        token: Address,
+        owner: Address,
+        spender: Address,
+    ) -> Result<U256, RpcError> {
+        let call_data = IErc20::allowanceCall {
+            owner,
+            spender,
+        }
+        .abi_encode();
+        let result = rpc_client
+            .eth_call(network, token, call_data.into())
+            .await?;
+
+        if result.len() != 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid {}() response: expected exactly 32 bytes, got {} bytes",
+                    "allowance",
+                    result.len()
+                ),
+            });
+        }
+
+        Ok(U256::from_be_slice(&result[..32]))
     }
 }
 
