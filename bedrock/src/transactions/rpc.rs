@@ -504,10 +504,7 @@ pub async fn send_user_operation_to_url(
         serde_json::Value::String(format!("{entrypoint:?}")),
     ];
 
-    let id = Id::String(format!(
-        "tx_{}",
-        hex::encode(rand::random::<[u8; 16]>())
-    ));
+    let id = Id::String(format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())));
     let request = JsonRpcRequest::new(RpcMethod::SendUserOperation, id, params);
     let request_bytes =
         serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;

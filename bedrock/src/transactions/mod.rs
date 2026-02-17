@@ -7,7 +7,9 @@ use alloy::primitives::aliases::{U160, U48};
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
-    smart_account::{Is4337Encodable, Permit2Approve, SafeSmartAccount, ENTRYPOINT_4337},
+    smart_account::{
+        Is4337Encodable, Permit2Approve, SafeSmartAccount, ENTRYPOINT_4337,
+    },
     transactions::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
@@ -481,8 +483,9 @@ impl SafeSmartAccount {
         rpc_url: String,
     ) -> Result<HexEncodedData, TransactionError> {
         // 1. Parse and convert to bundler-sponsored format
-        let mut user_op: crate::smart_account::UserOperation =
-            user_operation.try_into().map_err(|e: crate::primitives::PrimitiveError| {
+        let mut user_op: crate::smart_account::UserOperation = user_operation
+            .try_into()
+            .map_err(|e: crate::primitives::PrimitiveError| {
                 TransactionError::PrimitiveError(e.to_string())
             })?;
         user_op = user_op.as_bundler_sponsored();
@@ -494,17 +497,14 @@ impl SafeSmartAccount {
             })?;
 
         // 3. Send to the bundler RPC URL
-        let user_op_hash = rpc::send_user_operation_to_url(
-            &rpc_url,
-            &user_op,
-            *ENTRYPOINT_4337,
-        )
-        .await
-        .map_err(|e| TransactionError::Generic {
-            error_message: format!(
-                "Failed to send bundler-sponsored user operation: {e}"
-            ),
-        })?;
+        let user_op_hash =
+            rpc::send_user_operation_to_url(&rpc_url, &user_op, *ENTRYPOINT_4337)
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to send bundler-sponsored user operation: {e}"
+                    ),
+                })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }

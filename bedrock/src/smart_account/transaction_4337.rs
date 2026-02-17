@@ -478,10 +478,7 @@ mod tests {
 
         // Paymaster fields should be cleared/zeroed
         assert_eq!(sponsored.paymaster, None);
-        assert_eq!(
-            sponsored.paymaster_verification_gas_limit,
-            Some(U128::ZERO)
-        );
+        assert_eq!(sponsored.paymaster_verification_gas_limit, Some(U128::ZERO));
         assert_eq!(sponsored.paymaster_post_op_gas_limit, Some(U128::ZERO));
         assert_eq!(sponsored.paymaster_data, None);
     }
@@ -515,8 +512,7 @@ mod tests {
         assert_ne!(valid_until_bytes, &[0u8; 6]);
 
         // The timestamps should be extractable from the signed operation
-        let (valid_after, valid_until) =
-            user_op.extract_validity_timestamps().unwrap();
+        let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
         assert_eq!(valid_after, U48::from(0u64));
         assert!(valid_until > U48::from(0u64));
     }
