@@ -99,9 +99,9 @@ impl UsdVault {
     }
 
     /// Fetches the user's sDAI balance from the USD Vault.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an `RpcError` if:
     /// - The RPC call to fetch the sDAI address fails
     /// - The RPC call to fetch the user's balance fails
@@ -127,9 +127,9 @@ impl UsdVault {
     }
 
     /// Calculates USDC amount from sDAI amount and conversion rate.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an `RpcError` if:
     /// - Decimal factor parsing fails
     /// - Multiplication overflow occurs
@@ -157,9 +157,9 @@ impl UsdVault {
     }
 
     /// Fetches USDC and sDAI addresses from the USD Vault.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an `RpcError` if:
     /// - The RPC call to fetch the USDC address fails
     /// - The RPC call to fetch the sDAI address fails
@@ -190,9 +190,9 @@ impl UsdVault {
     }
 
     /// Creates a new migration operation (redeemSDAI + approve + deposit via `MultiSend`).
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an `RpcError` if:
     /// - Any RPC call to fetch addresses fails
     /// - Asset addresses between USD Vault and ERC-4626 Vault don't match
@@ -209,7 +209,7 @@ impl UsdVault {
         user_address: Address,
         permit2_data: Permit2Data,
     ) -> Result<Self, RpcError> {
-        let (usdc_address, sdai_address) = 
+        let (usdc_address, sdai_address) =
             Self::fetch_vault_addresses(rpc_client, network, usd_vault_address).await?;
 
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
@@ -240,7 +240,8 @@ impl UsdVault {
             amountOutMin: usdc_amount,
             nonce: permit2_data.nonce,
             deadline: permit2_data.deadline,
-            signature: permit2_data.signature
+            signature: permit2_data
+                .signature
                 .to_vec()
                 .map_err(|e| RpcError::InvalidResponse {
                     error_message: format!("Invalid permit signature: {e}"),

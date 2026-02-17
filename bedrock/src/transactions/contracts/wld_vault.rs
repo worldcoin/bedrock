@@ -10,7 +10,7 @@ use crate::smart_account::{
     ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
     TransactionTypeId, UserOperation,
 };
-use crate::transactions::contracts::erc20::{Erc20};
+use crate::transactions::contracts::erc20::Erc20;
 use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
 use crate::transactions::rpc::{RpcClient, RpcError};
 use crate::{
@@ -53,9 +53,9 @@ pub struct WldVault {
 
 impl WldVault {
     /// Creates a new deposit operation (approve + deposit via `MultiSend`).
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an `RpcError` if:
     /// - Token address fetching fails
     /// - Balance fetching fails
@@ -106,9 +106,9 @@ impl WldVault {
     }
 
     /// Creates a new migration operation (withdrawAll + approve + deposit via `MultiSend`).
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an `RpcError` if:
     /// - Token address fetching fails
     /// - Asset address validation fails
