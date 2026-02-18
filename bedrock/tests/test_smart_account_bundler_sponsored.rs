@@ -11,7 +11,7 @@ use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
-    test_utils::{AnvilBackedHttpClient, IEntryPoint},
+    test_utils::{start_mock_bundler_server, AnvilBackedHttpClient, IEntryPoint},
     transactions::foreign::UnparsedUserOperation,
 };
 
@@ -73,9 +73,10 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
     let before_recipient = wld.balanceOf(recipient).call().await?;
     let before_safe = wld.balanceOf(safe_address).call().await?;
 
-    // 7) Install HTTP client that simulates bundler behaviour via Anvil
+    // 7) Install HTTP client for backend RPC calls + start mock bundler server
     let client = AnvilBackedHttpClient::new(provider.clone());
-    set_http_client(Arc::new(client));
+    set_http_client(Arc::new(client.clone()));
+    let bundler_url = start_mock_bundler_server(client).await;
 
     // 8) Craft the user operation manually
     let transfer_amount = U256::from(10u128.pow(18)); // 1 WLD
@@ -123,7 +124,7 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
     let _user_op_hash = safe_account
         .send_bundler_sponsored_user_operation(
             unparsed_user_op,
-            "https://bundler.example.com".to_string(), // URL is irrelevant, test infra intercepts
+            bundler_url.clone(),
         )
         .await
         .expect("send_bundler_sponsored_user_operation failed");

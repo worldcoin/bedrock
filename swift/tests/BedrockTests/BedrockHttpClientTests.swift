@@ -51,24 +51,6 @@ final class BedrockHttpClientTests: XCTestCase {
                 throw error
             }
         }
-
-        func fetchFromUrl(url: String, method: HttpMethod, headers: [HttpHeader], body: Data?) async throws -> Data {
-            requestHistory.append(url)
-            methodHistory.append(method)
-            headersHistory.append(headers)
-            bodyHistory.append(body)
-
-            guard let response = responses[url] else {
-                throw HttpError.Generic(errorMessage: "No response configured for URL: \(url)")
-            }
-
-            switch response {
-            case .success(let data):
-                return data
-            case .failure(let error):
-                throw error
-            }
-        }
     }
 
     func testSuccessfulGetRequest() async throws {

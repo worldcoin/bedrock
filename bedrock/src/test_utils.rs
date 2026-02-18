@@ -505,20 +505,84 @@ where
             }),
         }
     }
+}
 
-    async fn fetch_from_url(
-        &self,
-        url: String,
-        method: HttpMethod,
-        headers: Vec<HttpHeader>,
-        body: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, HttpError> {
-        // Anvil is a plain Ethereum node — it does not natively support
-        // bundler-specific JSON-RPC methods like `eth_sendUserOperation`.
-        // The `fetch_from_app_backend` handler already simulates bundler
-        // behaviour (parsing the user op, packing it, calling
-        // `EntryPoint.handleOps`), so we reuse it here.
-        self.fetch_from_app_backend(url, method, headers, body)
-            .await
-    }
+/// Starts a minimal HTTP server that simulates a 4337 bundler by routing
+/// incoming JSON-RPC requests through the given [`AnvilBackedHttpClient`].
+///
+/// Returns the base URL (e.g. `http://127.0.0.1:12345`) the server is
+/// listening on. The server runs in a background tokio task and handles
+/// one request per connection (`Connection: close`).
+pub async fn start_mock_bundler_server<P>(client: AnvilBackedHttpClient<P>) -> String
+where
+    P: Provider<Ethereum> + Clone + Send + Sync + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("failed to bind mock bundler server");
+    let url = format!("http://{}", listener.local_addr().unwrap());
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let client = client.clone();
+            tokio::spawn(async move {
+                let (reader, mut writer) = stream.into_split();
+                let mut reader = BufReader::new(reader);
+                let mut line = String::new();
+
+                // 1. Skip the request line (e.g. "POST / HTTP/1.1\r\n")
+                let _ = reader.read_line(&mut line).await;
+
+                // 2. Read headers line-by-line, extract Content-Length
+                let mut content_length: usize = 0;
+                loop {
+                    line.clear();
+                    let _ = reader.read_line(&mut line).await;
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(val) = lower.strip_prefix("content-length:") {
+                        content_length = val.trim().parse().unwrap_or(0);
+                    }
+                }
+
+                // 3. Read exactly `content_length` bytes of body
+                let mut body = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut body).await;
+
+                // 4. Delegate to the Anvil-backed bundler simulation
+                let (status, response_body) = match client
+                    .fetch_from_app_backend(
+                        String::new(),
+                        HttpMethod::Post,
+                        vec![],
+                        Some(body),
+                    )
+                    .await
+                {
+                    Ok(b) => ("200 OK", b),
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        format!("{e}").into_bytes(),
+                    ),
+                };
+
+                // 5. Write HTTP response
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                );
+                let _ = writer.write_all(header.as_bytes()).await;
+                let _ = writer.write_all(&response_body).await;
+            });
+        }
+    });
+
+    url
 }

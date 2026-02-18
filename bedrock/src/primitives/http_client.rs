@@ -49,34 +49,6 @@ pub trait AuthenticatedHttpClient: Send + Sync {
         headers: Vec<HttpHeader>,
         body: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, HttpError>;
-
-    /// Fetches data from an arbitrary absolute URL, bypassing the app backend.
-    ///
-    /// Unlike [`fetch_from_app_backend`], this method takes a fully-qualified URL
-    /// (e.g. `https://bundler.example.com/rpc`) and sends the request directly to
-    /// that endpoint without prepending any base URL.
-    ///
-    /// This is used for communicating with external services such as third-party
-    /// bundler RPC endpoints.
-    ///
-    /// # Arguments
-    /// * `url` - The absolute URL to send the request to
-    /// * `method` - The HTTP method to use for the request
-    /// * `headers` - Additional headers to include in the request
-    /// * `body` - Optional request body data for POST requests
-    ///
-    /// # Returns
-    /// * `Result<Vec<u8>, HttpError>` - The response body as bytes on success, or an error
-    ///
-    /// # Errors
-    /// Same error variants as [`fetch_from_app_backend`].
-    async fn fetch_from_url(
-        &self,
-        url: String,
-        method: HttpMethod,
-        headers: Vec<HttpHeader>,
-        body: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, HttpError>;
 }
 
 /// HTTP methods supported by the authenticated HTTP client.
@@ -237,16 +209,6 @@ mod tests {
     #[async_trait::async_trait]
     impl AuthenticatedHttpClient for MockHttpClient {
         async fn fetch_from_app_backend(
-            &self,
-            _url: String,
-            _method: HttpMethod,
-            _headers: Vec<HttpHeader>,
-            _body: Option<Vec<u8>>,
-        ) -> Result<Vec<u8>, HttpError> {
-            Ok(b"mock response".to_vec())
-        }
-
-        async fn fetch_from_url(
             &self,
             _url: String,
             _method: HttpMethod,

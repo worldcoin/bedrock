@@ -476,17 +476,41 @@ pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
         .ok_or(RpcError::HttpClientNotInitialized)
 }
 
+/// Makes a JSON-RPC POST request to an arbitrary URL using `reqwest`.
+async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+    let response = reqwest::Client::new()
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| RpcError::HttpError(e.to_string()))?;
+
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| RpcError::HttpError(e.to_string()))?;
+
+    if !status.is_success() {
+        return Err(RpcError::HttpError(format!(
+            "HTTP {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        )));
+    }
+
+    Ok(bytes.to_vec())
+}
+
 /// Submits a signed `UserOperation` via `eth_sendUserOperation` to an external RPC URL.
 ///
 /// This is a standalone function that sends directly to an arbitrary absolute URL
-/// (e.g. a third-party bundler endpoint) using the global HTTP client's
-/// [`fetch_from_url`](crate::primitives::AuthenticatedHttpClient::fetch_from_url) method.
+/// (e.g. a third-party bundler endpoint) using a Rust-native HTTP client (`reqwest`).
 /// It is intentionally separate from [`RpcClient`], which routes through the app backend.
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - The global HTTP client has not been initialized
 /// - The HTTP request fails
 /// - The request serialization fails
 /// - The response parsing fails
@@ -497,8 +521,6 @@ pub async fn send_user_operation_to_url(
     user_operation: &UserOperation,
     entrypoint: Address,
 ) -> Result<FixedBytes<32>, RpcError> {
-    let http_client = get_http_client().ok_or(RpcError::HttpClientNotInitialized)?;
-
     let params = vec![
         serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
         serde_json::Value::String(format!("{entrypoint:?}")),
@@ -509,20 +531,7 @@ pub async fn send_user_operation_to_url(
     let request_bytes =
         serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
 
-    let headers = vec![HttpHeader {
-        name: "Content-Type".to_string(),
-        value: "application/json".to_string(),
-    }];
-
-    let response_bytes = http_client
-        .as_ref()
-        .fetch_from_url(
-            rpc_url.to_string(),
-            HttpMethod::Post,
-            headers,
-            Some(request_bytes),
-        )
-        .await?;
+    let response_bytes = post_json_rpc_to_url(rpc_url, request_bytes).await?;
 
     let json_response: Value =
         serde_json::from_slice(&response_bytes).map_err(|_| RpcError::JsonError)?;
