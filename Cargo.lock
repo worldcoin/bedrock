@@ -1554,6 +1554,7 @@ dependencies = [
  "p256 0.13.2",
  "p384",
  "rand 0.8.5",
+ "reqwest",
  "ruint",
  "secrecy",
  "serde",
