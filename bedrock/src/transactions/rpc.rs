@@ -20,6 +20,9 @@ use std::sync::{Arc, OnceLock};
 /// Global RPC client instance for Bedrock operations
 static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
 
+/// Global reqwest client for direct HTTP requests (e.g. bundler endpoints).
+static REQWEST_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
 /// JSON-RPC request ID
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -478,7 +481,8 @@ pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
 
 /// Makes a JSON-RPC POST request to an arbitrary URL using `reqwest`.
 async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-    let response = reqwest::Client::new()
+    let client = REQWEST_CLIENT.get_or_init(reqwest::Client::new);
+    let response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body)
