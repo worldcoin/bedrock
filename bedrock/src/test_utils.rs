@@ -567,10 +567,9 @@ where
                     .await
                 {
                     Ok(b) => ("200 OK", b),
-                    Err(e) => (
-                        "500 Internal Server Error",
-                        format!("{e}").into_bytes(),
-                    ),
+                    Err(e) => {
+                        ("500 Internal Server Error", format!("{e}").into_bytes())
+                    }
                 };
 
                 // 5. Write HTTP response

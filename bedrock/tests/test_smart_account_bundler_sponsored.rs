@@ -122,10 +122,7 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
     // 9) Execute via send_bundler_sponsored_user_operation
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
     let _user_op_hash = safe_account
-        .send_bundler_sponsored_user_operation(
-            unparsed_user_op,
-            bundler_url.clone(),
-        )
+        .send_bundler_sponsored_user_operation(unparsed_user_op, bundler_url.clone())
         .await
         .expect("send_bundler_sponsored_user_operation failed");
 
