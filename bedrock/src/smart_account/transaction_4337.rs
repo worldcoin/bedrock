@@ -478,8 +478,8 @@ mod tests {
 
         // Paymaster fields should be cleared/zeroed
         assert_eq!(sponsored.paymaster, None);
-        assert_eq!(sponsored.paymaster_verification_gas_limit, Some(U128::ZERO));
-        assert_eq!(sponsored.paymaster_post_op_gas_limit, Some(U128::ZERO));
+        assert_eq!(sponsored.paymaster_verification_gas_limit, None);
+        assert_eq!(sponsored.paymaster_post_op_gas_limit, None);
         assert_eq!(sponsored.paymaster_data, None);
     }
 

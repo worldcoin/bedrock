@@ -245,8 +245,8 @@ impl UserOperation {
     #[must_use]
     pub fn as_bundler_sponsored(mut self) -> Self {
         self.paymaster = None;
-        self.paymaster_verification_gas_limit = Some(U128::ZERO);
-        self.paymaster_post_op_gas_limit = Some(U128::ZERO);
+        self.paymaster_verification_gas_limit = None;
+        self.paymaster_post_op_gas_limit = None;
         self.paymaster_data = None;
         self.max_fee_per_gas = U128::ZERO;
         self.max_priority_fee_per_gas = U128::ZERO;
