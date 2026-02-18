@@ -520,6 +520,7 @@ async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcEr
     let client = REQWEST_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default()
     });
