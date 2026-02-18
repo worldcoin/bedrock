@@ -152,6 +152,13 @@ pub enum RpcError {
     #[error("HTTP client not initialized. Call set_http_client() first.")]
     HttpClientNotInitialized,
 
+    /// The provided URL is invalid or uses a disallowed scheme
+    #[error("Invalid RPC URL: {error_message}")]
+    InvalidUrl {
+        /// Description of why the URL was rejected
+        error_message: String,
+    },
+
     /// Primitive operation error
     #[error("Primitive operation failed: {0}")]
     PrimitiveError(String),
@@ -480,6 +487,32 @@ pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
         .ok_or(RpcError::HttpClientNotInitialized)
 }
 
+/// Validates that the given URL is safe to use as an RPC endpoint.
+///
+/// Requires `https://` scheme for all hosts, with `http://` permitted only
+/// for loopback addresses.
+fn validate_rpc_url(url: &str) -> Result<(), RpcError> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| RpcError::InvalidUrl {
+        error_message: format!("Failed to parse URL: {e}"),
+    })?;
+
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" => match parsed.host_str() {
+            Some("127.0.0.1" | "localhost" | "::1" | "[::1]") => Ok(()),
+            _ => Err(RpcError::InvalidUrl {
+                error_message: "Only https:// URLs are allowed for non-loopback hosts"
+                    .to_string(),
+            }),
+        },
+        scheme => Err(RpcError::InvalidUrl {
+            error_message: format!(
+                "Unsupported URL scheme '{scheme}://', only https:// is allowed"
+            ),
+        }),
+    }
+}
+
 /// Makes a JSON-RPC POST request to an arbitrary URL using `reqwest`.
 ///
 /// The client is configured with a 15 s timeout to prevent indefinitely hanging requests.
@@ -533,6 +566,8 @@ pub async fn send_user_operation_to_url(
     user_operation: &UserOperation,
     entrypoint: Address,
 ) -> Result<FixedBytes<32>, RpcError> {
+    validate_rpc_url(rpc_url)?;
+
     let params = vec![
         serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
         serde_json::Value::String(format!("{entrypoint:?}")),
@@ -746,5 +781,38 @@ mod tests {
         assert_eq!(serialized["paymasterData"], "0x");
         assert_eq!(serialized["paymasterVerificationGasLimit"], "0xa");
         assert_eq!(serialized["paymasterPostOpGasLimit"], "0x0");
+    }
+
+    #[test]
+    fn test_validate_rpc_url_accepts_https() {
+        assert!(validate_rpc_url("https://bundler.example.com/rpc").is_ok());
+        assert!(validate_rpc_url("https://rpc.pimlico.io/v2/123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_rpc_url_accepts_http_loopback() {
+        assert!(validate_rpc_url("http://127.0.0.1:8545").is_ok());
+        assert!(validate_rpc_url("http://localhost:8080/rpc").is_ok());
+        assert!(validate_rpc_url("http://[::1]:8545").is_ok());
+    }
+
+    #[test]
+    fn test_validate_rpc_url_rejects_http_non_loopback() {
+        assert!(validate_rpc_url("http://bundler.example.com/rpc").is_err());
+        assert!(validate_rpc_url("http://169.254.169.254/metadata").is_err());
+        assert!(validate_rpc_url("http://10.0.0.1:8545").is_err());
+    }
+
+    #[test]
+    fn test_validate_rpc_url_rejects_dangerous_schemes() {
+        assert!(validate_rpc_url("file:///etc/passwd").is_err());
+        assert!(validate_rpc_url("ftp://example.com").is_err());
+        assert!(validate_rpc_url("data:text/html,<h1>hi</h1>").is_err());
+    }
+
+    #[test]
+    fn test_validate_rpc_url_rejects_invalid_urls() {
+        assert!(validate_rpc_url("not a url").is_err());
+        assert!(validate_rpc_url("").is_err());
     }
 }
