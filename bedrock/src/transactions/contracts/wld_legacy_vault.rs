@@ -28,9 +28,6 @@ sol! {
         function withdrawAll() external;
     }
 
-    /// The ERC-4626 vault contract interface.
-    /// Reference: <https://eips.ethereum.org/EIPS/eip-4626>
-    /// Reference: <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol>
     #[derive(serde::Serialize)]
     interface IERC4626 {
         function asset() public view returns (address assetTokenAddress);
@@ -40,7 +37,7 @@ sol! {
 
 /// Represents a `WLDVault` operation.
 #[derive(Debug)]
-pub struct WldVault {
+pub struct WldLegacyVault {
     /// The encoded call data for the operation.
     pub call_data: Vec<u8>,
     /// The action type.
@@ -51,7 +48,7 @@ pub struct WldVault {
     operation: SafeOperation,
 }
 
-impl WldVault {
+impl WldLegacyVault {
     /// Creates a new deposit operation (approve + deposit via `MultiSend`).
     ///
     /// # Errors
@@ -202,7 +199,7 @@ impl WldVault {
     }
 }
 
-impl Is4337Encodable for WldVault {
+impl Is4337Encodable for WldLegacyVault {
     type MetadataArg = ();
 
     fn as_execute_user_op_call_data(&self) -> Bytes {

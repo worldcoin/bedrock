@@ -100,7 +100,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     println!("MorphoVault balance before migration: {shares_before}");
 
     safe_account
-        .transaction_wld_vault_migrate(
+        .transaction_wld_legacy_vault_migrate(
             &wld_vault_address.to_string(),
             &morpho_vault_address.to_string(),
         )

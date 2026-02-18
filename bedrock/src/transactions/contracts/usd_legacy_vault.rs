@@ -33,6 +33,8 @@ pub struct Permit2Data {
 }
 
 sol! {
+    /// The USD Vault contract interface.
+    /// Reference: <https://worldchain-mainnet.explorer.alchemy.com/address/0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB?tab=contract>
     #[derive(serde::Serialize)]
     interface USDVault {
         function USDC() public view returns (address);
@@ -50,9 +52,6 @@ sol! {
         ) external;
     }
 
-    /// The ERC-4626 vault contract interface.
-    /// Reference: <https://eips.ethereum.org/EIPS/eip-4626>
-    /// Reference: <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol>
     #[derive(serde::Serialize)]
     interface IERC4626 {
         function asset() public view returns (address assetTokenAddress);
@@ -62,7 +61,7 @@ sol! {
 
 /// Represents a USD Vault migration transaction bundle.
 #[derive(Debug)]
-pub struct UsdVault {
+pub struct UsdLegacyVault {
     /// The encoded call data for the operation.
     pub call_data: Vec<u8>,
     /// The action type.
@@ -73,7 +72,7 @@ pub struct UsdVault {
     operation: SafeOperation,
 }
 
-impl UsdVault {
+impl UsdLegacyVault {
     async fn fetch_conversion_rate(
         rpc_client: &RpcClient,
         network: Network,
@@ -282,16 +281,16 @@ impl UsdVault {
             },
         ];
 
-        let permit2_allowance = Erc20::fetch_allowance(
+        let permit2_sdai_allowance = Erc20::fetch_allowance(
             rpc_client,
             network,
-            usdc_address,
+            sdai_address,
             user_address,
             PERMIT2_ADDRESS,
         )
         .await?;
 
-        if permit2_allowance < sdai_amount {
+        if permit2_sdai_allowance < sdai_amount {
             let approve_permit2_data =
                 Erc20::encode_approve(PERMIT2_ADDRESS, U256::MAX);
             entries.insert(
@@ -317,7 +316,7 @@ impl UsdVault {
     }
 }
 
-impl Is4337Encodable for UsdVault {
+impl Is4337Encodable for UsdLegacyVault {
     type MetadataArg = ();
 
     fn as_execute_user_op_call_data(&self) -> Bytes {

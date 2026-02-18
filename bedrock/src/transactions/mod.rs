@@ -15,7 +15,7 @@ use crate::{
     transactions::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
-            usd_vault::Permit2Data,
+            usd_legacy_vault::Permit2Data,
             world_campaign_manager::WorldCampaignManager,
             world_gift_manager::WorldGiftManager,
         },
@@ -487,16 +487,17 @@ impl SafeSmartAccount {
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
-        let transaction = crate::transactions::contracts::wld_vault::WldVault::deposit(
-            rpc_client,
-            Network::WorldChain,
-            wld_vault_address,
-            amount,
-        )
-        .await
-        .map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to create WLDVault deposit: {e}"),
-        })?;
+        let transaction =
+            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::deposit(
+                rpc_client,
+                Network::WorldChain,
+                wld_vault_address,
+                amount,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create WLDVault deposit: {e}"),
+            })?;
 
         let provider = RpcProviderName::Any;
 
@@ -528,30 +529,31 @@ impl SafeSmartAccount {
     /// - Returns [`TransactionError::Generic`] if the migration transaction creation fails.
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
-    pub async fn transaction_wld_vault_migrate(
+    pub async fn transaction_wld_legacy_vault_migrate(
         &self,
-        wld_vault_address: &str,
+        legacy_vault_address: &str,
         erc4626_vault_address: &str,
     ) -> Result<HexEncodedData, TransactionError> {
-        let wld_vault_address =
-            Address::parse_from_ffi(wld_vault_address, "wld_vault_address")?;
+        let legacy_vault_address =
+            Address::parse_from_ffi(legacy_vault_address, "legacy_vault_address")?;
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
-        let transaction = crate::transactions::contracts::wld_vault::WldVault::migrate(
-            rpc_client,
-            Network::WorldChain,
-            wld_vault_address,
-            erc4626_vault_address,
-            self.wallet_address,
-        )
-        .await
-        .map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to create WLDVault migration: {e}"),
-        })?;
+        let transaction =
+            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                self.wallet_address,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create WLDVault migration: {e}"),
+            })?;
 
         let provider = RpcProviderName::Any;
 
@@ -590,11 +592,11 @@ impl SafeSmartAccount {
     /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
     pub async fn transaction_usd_vault_migrate(
         &self,
-        usd_vault_address: &str,
+        legacy_vault_address: &str,
         erc4626_vault_address: &str,
     ) -> Result<HexEncodedData, TransactionError> {
-        let usd_vault_address =
-            Address::parse_from_ffi(usd_vault_address, "usd_vault_address")?;
+        let legacy_vault_address =
+            Address::parse_from_ffi(legacy_vault_address, "legacy_vault_address")?;
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
@@ -604,10 +606,10 @@ impl SafeSmartAccount {
         })?;
 
         let (sdai_address, sdai_amount) =
-            crate::transactions::contracts::usd_vault::UsdVault::fetch_sdai_balance(
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
                 rpc_client,
                 Network::WorldChain,
-                usd_vault_address,
+                legacy_vault_address,
                 self.wallet_address,
             )
             .await
@@ -629,7 +631,7 @@ impl SafeSmartAccount {
 
         let transfer = UnparsedPermitTransferFrom {
             permitted,
-            spender: usd_vault_address.to_string(),
+            spender: legacy_vault_address.to_string(),
             nonce: nonce.to_string(),
             deadline: deadline.to_string(),
         };
@@ -646,19 +648,20 @@ impl SafeSmartAccount {
             deadline: U256::from(deadline),
         };
 
-        let transaction = crate::transactions::contracts::usd_vault::UsdVault::migrate(
-            rpc_client,
-            Network::WorldChain,
-            usd_vault_address,
-            erc4626_vault_address,
-            sdai_amount,
-            self.wallet_address,
-            permit2_data,
-        )
-        .await
-        .map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to create USDVault migration: {e}"),
-        })?;
+        let transaction =
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                sdai_amount,
+                self.wallet_address,
+                permit2_data,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create USDVault migration: {e}"),
+            })?;
 
         let provider = RpcProviderName::Any;
 
