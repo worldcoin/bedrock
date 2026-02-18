@@ -16,6 +16,7 @@ use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// Global RPC client instance for Bedrock operations
 static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
@@ -480,8 +481,15 @@ pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
 }
 
 /// Makes a JSON-RPC POST request to an arbitrary URL using `reqwest`.
+///
+/// The client is configured with a 15 s timeout to prevent indefinitely hanging requests.
 async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-    let client = REQWEST_CLIENT.get_or_init(reqwest::Client::new);
+    let client = REQWEST_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .unwrap_or_default()
+    });
     let response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
