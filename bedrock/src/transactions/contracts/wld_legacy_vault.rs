@@ -1,9 +1,9 @@
-//! This module defines the interface for the legacy WLDVault contract.
+//! This module defines the interface for the legacy `WLDVault` contract.
 //!
 //! This is **not** an ERC-4626 compliant vault.
 //!
-//! WLDVault predates the ERC-4626 vault standard and does not implement
-//! ERC-4626 accounting mechanics. However, unlike USDVault, it behaves
+//! `WLDVault` predates the ERC-4626 vault standard and does not implement
+//! ERC-4626 accounting mechanics. However, unlike `USDVault`, it behaves
 //! closer to a traditional yield vault.
 //!
 //! Users deposit WLD into the contract, and their effective balance
