@@ -1,4 +1,15 @@
-//! This module introduces USD Vault contract interface.
+//! This module defines the interface for the legacy USDVault contract.
+//!
+//! This is **not** an ERC-4626 compliant vault.
+//!
+//! Historically, USDVault existed before the introduction of ERC-4626-based
+//! vault architecture. Despite its name, USDVault is technically not a vault.
+//! It is a simple conversion contract that allows swapping for verified users:
+//!
+//! - USDC → sDAI
+//! - sDAI → USDC
+//!
+//! The conversion rate is fetched from the IDSROracle contract.
 
 use alloy::{
     primitives::{Address, Bytes, U256},

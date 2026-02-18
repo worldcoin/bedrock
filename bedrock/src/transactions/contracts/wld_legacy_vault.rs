@@ -1,4 +1,13 @@
-//! This module introduces `WLDVault` contract interface.
+//! This module defines the interface for the legacy WLDVault contract.
+//!
+//! This is **not** an ERC-4626 compliant vault.
+//!
+//! WLDVault predates the ERC-4626 vault standard and does not implement
+//! ERC-4626 accounting mechanics. However, unlike USDVault, it behaves
+//! closer to a traditional yield vault.
+//!
+//! Users deposit WLD into the contract, and their effective balance
+//! increases monotonically over time as yield accrues block by block.
 
 use alloy::{
     primitives::{Address, Bytes, U256},
