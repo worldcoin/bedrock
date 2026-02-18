@@ -6,7 +6,10 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::transactions::contracts::{erc4626::IERC4626, multisend::{MultiSend, MultiSendTx}};
+use crate::transactions::contracts::{
+    erc4626::IERC4626,
+    multisend::{MultiSend, MultiSendTx},
+};
 use crate::transactions::rpc::{RpcClient, RpcError};
 use crate::{
     primitives::HexEncodedData,
