@@ -6,7 +6,7 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
+use crate::transactions::contracts::{erc4626::IERC4626, multisend::{MultiSend, MultiSendTx}};
 use crate::transactions::rpc::{RpcClient, RpcError};
 use crate::{
     primitives::HexEncodedData,
@@ -50,12 +50,6 @@ sol! {
             uint256 deadline,
             bytes signature
         ) external;
-    }
-
-    #[derive(serde::Serialize)]
-    interface IERC4626 {
-        function asset() public view returns (address assetTokenAddress);
-        function deposit(uint256 assets, address receiver) external returns (uint256 shares);
     }
 }
 

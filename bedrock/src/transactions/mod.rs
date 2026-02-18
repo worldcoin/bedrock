@@ -462,55 +462,6 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Deposits WLD tokens into the `WLDVault` on World Chain.
-    ///
-    /// This method creates a deposit transaction for the `WLDVault` contract, allowing users
-    /// to stake their WLD tokens and earn rewards.
-    ///
-    /// # Arguments
-    /// - `wld_vault_address`: The address of the `WLDVault` contract.
-    /// - `amount`: The amount of WLD tokens to deposit as a stringified integer with 18 decimals.
-    ///
-    /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if the vault address or amount is invalid.
-    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
-    /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
-    pub async fn transaction_wld_vault_deposit(
-        &self,
-        wld_vault_address: &str,
-        amount: &str,
-    ) -> Result<HexEncodedData, TransactionError> {
-        let wld_vault_address =
-            Address::parse_from_ffi(wld_vault_address, "wld_vault_address")?;
-        let amount = U256::parse_from_ffi(amount, "amount")?;
-
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-        let transaction =
-            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::deposit(
-                rpc_client,
-                Network::WorldChain,
-                wld_vault_address,
-                amount,
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create WLDVault deposit: {e}"),
-            })?;
-
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, None, provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute WLDVault deposit: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
-    }
-
     /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
     ///
     /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the

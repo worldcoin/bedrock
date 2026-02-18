@@ -9,6 +9,7 @@ use alloy::{
     },
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
+    sol,
 };
 use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
@@ -20,6 +21,14 @@ use bedrock::{
 };
 
 use crate::common::set_address_verified_until_for_account;
+
+sol! {
+   #[sol(rpc)]
+    interface WLDVault {
+        function balanceOf(address account) external view returns (uint256);
+        function deposit(uint256 amount) external;
+    }
+}
 
 #[tokio::test]
 async fn test_wld_vault_migration() -> anyhow::Result<()> {
@@ -40,7 +49,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
         .connect_http(anvil.endpoint_url());
 
     let wld = IERC20::new(wld_address, &provider);
-    let wld_vault = IERC20::new(wld_vault_address, &provider);
+    let wld_vault = WLDVault::new(wld_vault_address, &provider);
     let morpho_vault = IERC20::new(morpho_vault_address, &provider);
 
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
@@ -61,24 +70,39 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
 
     let amount: U256 = parse_units("1", 18).unwrap().into();
     set_erc20_balance_for_safe(&provider, wld_address, safe_address, amount).await?;
+
     let balance_before = wld.balanceOf(safe_address).call().await?;
     println!("WLD balance before deposit: {balance_before}");
-
-    let client = AnvilBackedHttpClient::new(provider.clone());
-    set_http_client(Arc::new(client));
-
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 
     let vault_before = wld_vault.balanceOf(safe_address).call().await?;
     println!("WLDVault balance before deposit: {vault_before}");
 
-    safe_account
-        .transaction_wld_vault_deposit(
-            &wld_vault_address.to_string(),
-            &amount.to_string(),
-        )
-        .await
-        .expect("WLDVault deposit failed");
+    provider.anvil_impersonate_account(safe_address).await?;
+
+    // Approve WLDVault to spend WLD from Safe
+    let request = wld
+        .approve(wld_vault_address, amount)
+        .into_transaction_request()
+        .from(safe_address);
+    provider
+        .anvil_send_impersonated_transaction(request)
+        .await?;
+    provider.anvil_mine(Some(1), None).await?;
+
+    // Deposit WLDVault
+    let request = wld_vault
+        .deposit(amount)
+        .into_transaction_request()
+        .from(safe_address)
+        .to(wld_vault_address);
+    provider
+        .anvil_send_impersonated_transaction(request)
+        .await?;
+    provider.anvil_mine(Some(1), None).await?;
+
+    provider
+        .anvil_stop_impersonating_account(safe_address)
+        .await?;
     println!("✓ Deposited WLD into WLDVault");
 
     let balance_after = wld.balanceOf(safe_address).call().await?;
@@ -99,6 +123,10 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     let shares_before = morpho_vault.balanceOf(safe_address).call().await?;
     println!("MorphoVault balance before migration: {shares_before}");
 
+    let client = AnvilBackedHttpClient::new(provider.clone());
+    set_http_client(Arc::new(client));
+
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
     safe_account
         .transaction_wld_legacy_vault_migrate(
             &wld_vault_address.to_string(),

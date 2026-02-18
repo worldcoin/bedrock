@@ -6,16 +6,19 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::smart_account::{
-    ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
-    TransactionTypeId, UserOperation,
-};
 use crate::transactions::contracts::erc20::Erc20;
 use crate::transactions::contracts::multisend::{MultiSend, MultiSendTx};
 use crate::transactions::rpc::{RpcClient, RpcError};
 use crate::{
     primitives::{Network, PrimitiveError},
     transactions::contracts::erc4626::Erc4626Vault,
+};
+use crate::{
+    smart_account::{
+        ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
+        TransactionTypeId, UserOperation,
+    },
+    transactions::contracts::erc4626::IERC4626,
 };
 
 sol! {
@@ -24,14 +27,7 @@ sol! {
     #[derive(serde::Serialize)]
     interface WLDVault {
         function token() public view returns (address);
-        function deposit(uint256 amount) external;
         function withdrawAll() external;
-    }
-
-    #[derive(serde::Serialize)]
-    interface IERC4626 {
-        function asset() public view returns (address assetTokenAddress);
-        function deposit(uint256 assets, address receiver) external returns (uint256 shares);
     }
 }
 
@@ -49,59 +45,6 @@ pub struct WldLegacyVault {
 }
 
 impl WldLegacyVault {
-    /// Creates a new deposit operation (approve + deposit via `MultiSend`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an `RpcError` if:
-    /// - Token address fetching fails
-    /// - Balance fetching fails
-    /// - Any RPC call fails during transaction building
-    pub async fn deposit(
-        rpc_client: &RpcClient,
-        network: Network,
-        vault_address: Address,
-        amount: U256,
-    ) -> Result<Self, RpcError> {
-        let token_call_data = WLDVault::tokenCall {}.abi_encode();
-        let token_address = Erc4626Vault::fetch_asset_address(
-            rpc_client,
-            network,
-            vault_address,
-            token_call_data,
-        )
-        .await?;
-
-        let approve_data = Erc20::encode_approve(vault_address, amount);
-        let deposit_data = WLDVault::depositCall { amount }.abi_encode();
-
-        let entries = vec![
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: token_address,
-                value: U256::ZERO,
-                data_length: U256::from(approve_data.len()),
-                data: approve_data.into(),
-            },
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: vault_address,
-                value: U256::ZERO,
-                data_length: U256::from(deposit_data.len()),
-                data: deposit_data.into(),
-            },
-        ];
-
-        let bundle = MultiSend::build_bundle(&entries);
-
-        Ok(Self {
-            call_data: bundle.data,
-            action: TransactionTypeId::WLDVaultMigration,
-            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
-            operation: SafeOperation::DelegateCall,
-        })
-    }
-
     /// Creates a new migration operation (withdrawAll + approve + deposit via `MultiSend`).
     ///
     /// # Errors
