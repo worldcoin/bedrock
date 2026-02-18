@@ -1,5 +1,6 @@
 {
     "workbench.colorCustomizations": {
         "titleBar.activeBackground": "#2a4660",
-    }
+    },
+    "rust-analyzer.cargo.features": ["test_utils"]
 }

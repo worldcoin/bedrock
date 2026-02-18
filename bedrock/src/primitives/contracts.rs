@@ -237,6 +237,23 @@ impl UserOperation {
         out.into()
     }
 
+    /// Converts this `UserOperation` into a bundler-sponsored format.
+    ///
+    /// A bundler-sponsored user operation has no paymaster and zeroed fee fields,
+    /// meaning the bundler itself covers all gas costs. The operation's core fields
+    /// (`sender`, `nonce`, `callData`, `callGasLimit`, `verificationGasLimit`) are preserved.
+    #[must_use]
+    pub fn as_bundler_sponsored(mut self) -> Self {
+        self.paymaster = None;
+        self.paymaster_verification_gas_limit = None;
+        self.paymaster_post_op_gas_limit = None;
+        self.paymaster_data = None;
+        self.max_fee_per_gas = U128::ZERO;
+        self.max_priority_fee_per_gas = U128::ZERO;
+        self.pre_verification_gas = U256::ZERO;
+        self
+    }
+
     /// Merges paymaster data from sponsorship response into the `UserOperation`
     #[must_use]
     pub fn with_paymaster_data(
