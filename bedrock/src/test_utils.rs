@@ -513,6 +513,10 @@ where
 /// Returns the base URL (e.g. `http://127.0.0.1:12345`) the server is
 /// listening on. The server runs in a background tokio task and handles
 /// one request per connection (`Connection: close`).
+///
+/// # Panics
+///
+/// Panics if the TCP listener fails to bind to a local address.
 pub async fn start_mock_bundler_server<P>(client: AnvilBackedHttpClient<P>) -> String
 where
     P: Provider<Ethereum> + Clone + Send + Sync + 'static,
