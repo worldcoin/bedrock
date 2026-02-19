@@ -530,7 +530,7 @@ async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcEr
         .body(body)
         .send()
         .await
-        // Strip the related url from this error to avoid leaking API keys!!!
+        // Strip the related url from this error to avoid leaking API keys
         .map_err(|e| RpcError::HttpError(e.without_url().to_string()))?;
 
     let status = response.status();
