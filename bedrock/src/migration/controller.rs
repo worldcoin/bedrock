@@ -2,7 +2,6 @@ use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
-use crate::primitives::logger::LogContext;
 use chrono::{Duration, Utc};
 use log::warn;
 use once_cell::sync::Lazy;
@@ -131,8 +130,6 @@ impl MigrationController {
     async fn run_migrations_async(
         &self,
     ) -> Result<MigrationRunSummary, MigrationError> {
-        let _ctx = LogContext::new("MigrationController");
-
         // Store start time for duration tracking
         let run_start_time = Utc::now();
 
