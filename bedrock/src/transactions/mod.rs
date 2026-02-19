@@ -498,14 +498,14 @@ impl SafeSmartAccount {
             .unwrap_or_else(|| "<unknown>".to_string());
 
         crate::info!(
-            "Sending bundler-sponsored user operation for sender {sender} to bundler {bundler_host}"
+            "bundler_sponsored_user_op.sending sender={sender} bundler_host={bundler_host}"
         );
 
         // 2. Sign with fresh validity timestamps
         self.sign_user_operation(&mut user_op, Network::WorldChain)
             .map_err(|e| {
                 crate::error!(
-                    "Failed to sign bundler-sponsored user operation for sender {sender}: {e}"
+                    "bundler_sponsored_user_op.sign_failed sender={sender} error={e}"
                 );
                 TransactionError::Generic {
                     error_message: format!("Failed to sign user operation: {e}"),
@@ -518,7 +518,7 @@ impl SafeSmartAccount {
                 .await
                 .map_err(|e| {
                     crate::error!(
-                        "Failed to send bundler-sponsored user operation for sender {sender} to bundler {bundler_host}: {e}"
+                        "bundler_sponsored_user_op.send_failed sender={sender} bundler_host={bundler_host} error={e}"
                     );
                     TransactionError::Generic {
                         error_message: format!(
@@ -528,7 +528,7 @@ impl SafeSmartAccount {
                 })?;
 
         crate::info!(
-            "Bundler-sponsored user operation submitted for sender {sender}: {user_op_hash}"
+            "bundler_sponsored_user_op.submitted sender={sender} user_op_hash={user_op_hash}"
         );
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
