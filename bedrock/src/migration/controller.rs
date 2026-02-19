@@ -297,11 +297,11 @@ impl MigrationController {
             // Save record before execution so we don't lose progress if the app crashes mid-migration
             self.save_record(&migration_id, &record)?;
 
+            let execute_start = Utc::now();
+
             match processor.execute().await {
                 Ok(ProcessorResult::Success) => {
-                    let duration_ms = record
-                        .started_at
-                        .map_or(0, |start| (Utc::now() - start).num_milliseconds());
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
 
                     crate::info!(
                         "migration.succeeded id={} attempts={} duration_ms={} timestamp={}",
@@ -331,10 +331,13 @@ impl MigrationController {
                     record.next_attempt_at =
                         Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+
                     crate::warn!(
-                        "migration.failed_retryable id={} attempt={} error_code={} error_message={} retry_delay_ms={} next_attempt={} timestamp={}",
+                        "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} retry_delay_ms={} next_attempt={} timestamp={}",
                         migration_id,
                         record.attempts,
+                        duration_ms,
                         error_code,
                         error_message,
                         retry_delay_ms,
@@ -351,10 +354,13 @@ impl MigrationController {
                     error_code,
                     error_message,
                 }) => {
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+
                     crate::error!(
-                        "migration.failed_terminal id={} attempt={} error_code={} error_message={} timestamp={}",
+                        "migration.failed_terminal id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
                         migration_id,
                         record.attempts,
+                        duration_ms,
                         error_code,
                         error_message,
                         Utc::now().to_rfc3339()
