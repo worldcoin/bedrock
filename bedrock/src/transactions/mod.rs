@@ -491,7 +491,7 @@ impl SafeSmartAccount {
         user_op = user_op.as_bundler_sponsored();
 
         let sender = user_op.sender;
-        // Extract host only to avoid logging API keys that may be embedded in the URL path.
+        // Extract host only to avoid logging API keys
         let bundler_host = reqwest::Url::parse(&rpc_url)
             .ok()
             .and_then(|u| u.host_str().map(String::from))
