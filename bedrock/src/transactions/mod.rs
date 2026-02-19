@@ -3,15 +3,20 @@ use bedrock_macros::bedrock_export;
 use rand::RngCore;
 use std::sync::Arc;
 
+use alloy::primitives::aliases::{U160, U48};
+
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
-    smart_account::{Is4337Encodable, SafeSmartAccount},
+    smart_account::{
+        Is4337Encodable, Permit2Approve, SafeSmartAccount, ENTRYPOINT_4337,
+    },
     transactions::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
             world_campaign_manager::WorldCampaignManager,
             world_gift_manager::WorldGiftManager,
         },
+        foreign::UnparsedUserOperation,
         rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
     },
 };
@@ -108,6 +113,52 @@ impl SafeSmartAccount {
             .await
             .map_err(|e| TransactionError::Generic {
                 error_message: format!("Failed to execute transaction: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Sets a Permit2 allowance for a spender on a specific token via the `IAllowanceTransfer.approve` method.
+    ///
+    /// This calls the Permit2 contract's `approve(token, spender, amount, expiration)` function,
+    /// granting the spender permission to transfer tokens via Permit2's allowance-based mechanism.
+    ///
+    /// Note: The Safe must have already approved the Permit2 contract on the ERC-20 token
+    /// (via a standard ERC-20 `approve`) before the spender can use the Permit2 allowance.
+    ///
+    /// # Arguments
+    /// - `token_address`: The ERC-20 token address to set the allowance for.
+    /// - `spender_address`: The address being granted permission to transfer tokens via Permit2.
+    /// - `amount`: The maximum amount of tokens the spender can transfer, as a stringified `uint160`.
+    /// - `expiration`: The timestamp after which the allowance expires, as a stringified `uint48`.
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    /// - Will throw an RPC error if the transaction submission fails.
+    /// - Will throw an error if the global HTTP client has not been initialized.
+    pub async fn transaction_permit2_approve(
+        &self,
+        token_address: &str,
+        spender_address: &str,
+        amount: &str,
+        expiration: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let token_address = Address::parse_from_ffi(token_address, "token_address")?;
+        let spender_address =
+            Address::parse_from_ffi(spender_address, "spender_address")?;
+        let amount = U160::parse_from_ffi(amount, "amount")?;
+        let expiration = U48::parse_from_ffi(expiration, "expiration")?;
+
+        let transaction =
+            Permit2Approve::new(token_address, spender_address, amount, expiration);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute Permit2 approve: {e}"),
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
@@ -405,6 +456,55 @@ impl SafeSmartAccount {
             .map_err(|e| TransactionError::Generic {
                 error_message: format!("Failed to execute ERC4626 redeem: {e}"),
             })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
+    ///
+    /// This method takes an existing `UserOperation`, converts it to a bundler-sponsored
+    /// format (zeroed paymaster and fee fields), signs it, and submits it directly to
+    /// the provided bundler RPC URL via `eth_sendUserOperation`.
+    ///
+    /// In a bundler-sponsored user operation, the bundler itself covers all gas costs.
+    /// The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
+    /// `verificationGasLimit`) are preserved from the original operation.
+    ///
+    /// # Arguments
+    /// - `user_operation`: The user operation to convert and send.
+    /// - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
+    /// - Returns [`TransactionError::Generic`] if signing or submission fails.
+    pub async fn send_bundler_sponsored_user_operation(
+        &self,
+        user_operation: UnparsedUserOperation,
+        rpc_url: String,
+    ) -> Result<HexEncodedData, TransactionError> {
+        // 1. Parse and convert to bundler-sponsored format
+        let mut user_op: crate::smart_account::UserOperation = user_operation
+            .try_into()
+            .map_err(|e: crate::primitives::PrimitiveError| {
+                TransactionError::PrimitiveError(e.to_string())
+            })?;
+        user_op = user_op.as_bundler_sponsored();
+
+        // 2. Sign with fresh validity timestamps
+        self.sign_user_operation(&mut user_op, Network::WorldChain)
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to sign user operation: {e}"),
+            })?;
+
+        // 3. Send to the bundler RPC URL
+        let user_op_hash =
+            rpc::send_user_operation_to_url(&rpc_url, &user_op, *ENTRYPOINT_4337)
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to send bundler-sponsored user operation: {e}"
+                    ),
+                })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }

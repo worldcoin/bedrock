@@ -1,5 +1,9 @@
 use alloy::{
-    primitives::{address, Address, U256},
+    primitives::{
+        address,
+        aliases::{U160, U48},
+        Address, U256,
+    },
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
@@ -44,6 +48,14 @@ sol!(
             address owner,
             bytes calldata signature
         ) external;
+    }
+
+    /// Reference: <https://github.com/Uniswap/permit2/blob/cc56ad0f3439c502c246fc5cfcc3db92bb8b7219/src/interfaces/IAllowanceTransfer.sol>
+    #[sol(rpc)]
+    interface IAllowanceTransfer {
+        function approve(address token, address spender, uint160 amount, uint48 expiration) external;
+        function allowance(address owner, address token, address spender) external view returns (uint160 amount, uint48 expiration, uint48 nonce);
+        function transferFrom(address from, address to, uint160 amount, address token) external;
     }
 );
 
@@ -199,6 +211,187 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
 
     assert_eq!(mini_app_balance, U256::from(1e18));
     assert_eq!(safe_balance_after, U256::from(9e18));
+
+    Ok(())
+}
+
+/// This integration test verifies the Permit2 `IAllowanceTransfer.approve` flow:
+///
+/// 1. General set-up
+/// 2. Deploy a Safe (World App User)
+/// 3. Give the Safe some simulated WLD balance
+/// 4. ERC-20 approve the Permit2 contract on the WLD token (prerequisite for any Permit2 operation)
+/// 5. Call Permit2's `approve(token, spender, amount, expiration)` via the Safe to grant a Mini App allowance
+/// 6. Verify the allowance was set on the Permit2 contract
+/// 7. Mini App uses the Permit2 allowance to `transferFrom` WLD from the Safe
+/// 8. Verify the tokens were transferred and the allowance was consumed
+#[tokio::test]
+async fn test_integration_permit2_approve_and_allowance_transfer() -> anyhow::Result<()>
+{
+    // Step 1: Initial setup
+    let anvil = setup_anvil();
+    let owner_signer = PrivateKeySigner::random();
+    let owner_key_hex = hex::encode(owner_signer.to_bytes());
+    let owner = owner_signer.address();
+
+    let provider = ProviderBuilder::new()
+        .wallet(owner_signer.clone())
+        .connect_http(anvil.endpoint_url());
+
+    provider.anvil_set_balance(owner, U256::from(1e18)).await?;
+
+    // Step 2: Deploy a Safe (World App User)
+    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let chain_id = Network::WorldChain as u32;
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+
+    // Step 3: Give the Safe some simulated WLD balance
+    let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
+    let wld_contract = IERC20::new(wld_token_address, &provider);
+    let balance = U256::from(10e18); // 10 WLD
+
+    set_erc20_balance_for_safe(&provider, wld_token_address, safe_address, balance)
+        .await?;
+
+    assert_eq!(wld_contract.balanceOf(safe_address).call().await?, balance);
+
+    // Step 4: ERC-20 approve the Permit2 contract on the WLD token (prerequisite)
+    let erc20_approve_calldata = IERC20::approveCall {
+        spender: PERMIT2_ADDRESS,
+        amount: U256::MAX,
+    }
+    .abi_encode();
+
+    let tx = SafeTransaction {
+        to: wld_token_address.to_string(),
+        value: "0".to_string(),
+        data: format!("0x{}", hex::encode(&erc20_approve_calldata)),
+        operation: SafeOperation::Call,
+        safe_tx_gas: "33000".to_string(),
+        base_gas: "30000".to_string(),
+        gas_price: "0".to_string(),
+        gas_token: "0x0000000000000000000000000000000000000000".to_string(),
+        refund_receiver: "0x0000000000000000000000000000000000000000".to_string(),
+        nonce: "0".to_string(),
+    };
+    let signature = safe_account.sign_transaction(chain_id, tx)?;
+
+    let safe_contract = ISafe::new(safe_address, &provider);
+    safe_contract
+        .execTransaction(
+            wld_token_address,
+            U256::ZERO,
+            erc20_approve_calldata.into(),
+            0u8,
+            U256::from(33_000u64),
+            U256::from(30_000u64),
+            U256::ZERO,
+            Address::ZERO,
+            Address::ZERO,
+            signature.to_vec()?.into(),
+        )
+        .from(owner)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    // Step 5: Call Permit2.approve(token, spender, amount, expiration) via the Safe
+    let mini_app_signer = PrivateKeySigner::random();
+    let mini_app_address = mini_app_signer.address();
+
+    let approve_amount = U160::from(1_000_000_000_000_000_000u128); // 1 WLD
+    let expiration = U48::from(4_102_444_800u64); // 2100-01-01 (far future)
+
+    let permit2_approve_calldata = IAllowanceTransfer::approveCall {
+        token: wld_token_address,
+        spender: mini_app_address,
+        amount: approve_amount,
+        expiration,
+    }
+    .abi_encode();
+
+    let tx = SafeTransaction {
+        to: PERMIT2_ADDRESS.to_string(),
+        value: "0".to_string(),
+        data: format!("0x{}", hex::encode(&permit2_approve_calldata)),
+        operation: SafeOperation::Call,
+        safe_tx_gas: "60000".to_string(),
+        base_gas: "30000".to_string(),
+        gas_price: "0".to_string(),
+        gas_token: "0x0000000000000000000000000000000000000000".to_string(),
+        refund_receiver: "0x0000000000000000000000000000000000000000".to_string(),
+        nonce: "1".to_string(),
+    };
+    let signature = safe_account.sign_transaction(chain_id, tx)?;
+
+    safe_contract
+        .execTransaction(
+            PERMIT2_ADDRESS,
+            U256::ZERO,
+            permit2_approve_calldata.into(),
+            0u8,
+            U256::from(60_000u64),
+            U256::from(30_000u64),
+            U256::ZERO,
+            Address::ZERO,
+            Address::ZERO,
+            signature.to_vec()?.into(),
+        )
+        .from(owner)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    // Step 6: Verify the Permit2 allowance was set
+    let permit2_contract = IAllowanceTransfer::new(PERMIT2_ADDRESS, &provider);
+    let allowance = permit2_contract
+        .allowance(safe_address, wld_token_address, mini_app_address)
+        .call()
+        .await?;
+
+    assert_eq!(allowance.amount, approve_amount);
+    assert_eq!(allowance.expiration, expiration);
+
+    // Step 7: Mini App uses the Permit2 allowance to transfer WLD from the Safe
+    let mini_app_provider = ProviderBuilder::new()
+        .wallet(mini_app_signer.clone())
+        .connect_http(anvil.endpoint_url());
+
+    mini_app_provider
+        .anvil_set_balance(mini_app_address, U256::from(1e18))
+        .await?;
+
+    let permit2_mini_app = IAllowanceTransfer::new(PERMIT2_ADDRESS, &mini_app_provider);
+    permit2_mini_app
+        .transferFrom(
+            safe_address,
+            mini_app_address,
+            approve_amount,
+            wld_token_address,
+        )
+        .from(mini_app_address)
+        .gas(500_000)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    // Step 8: Verify the tokens were transferred and the allowance was consumed
+    let mini_app_balance = wld_contract.balanceOf(mini_app_address).call().await?;
+    let safe_balance_after = wld_contract.balanceOf(safe_address).call().await?;
+
+    assert_eq!(mini_app_balance, U256::from(1e18));
+    assert_eq!(safe_balance_after, U256::from(9e18));
+
+    // Verify the Permit2 allowance was consumed (amount should be reduced)
+    let allowance_after = permit2_contract
+        .allowance(safe_address, wld_token_address, mini_app_address)
+        .call()
+        .await?;
+
+    assert_eq!(allowance_after.amount, U160::ZERO);
 
     Ok(())
 }
