@@ -265,7 +265,10 @@ impl MigrationController {
                 }
                 Err(e) => {
                     crate::error!(
-                        "Failed to check applicability for {migration_id}: {e:?}"
+                        "migration.applicability_error id={} error={:?} timestamp={}",
+                        migration_id,
+                        e,
+                        Utc::now().to_rfc3339()
                     );
                     summary.skipped += 1;
                     continue;
@@ -363,7 +366,16 @@ impl MigrationController {
                     summary.failed_terminal += 1;
                 }
                 Err(e) => {
-                    crate::error!("Migration {migration_id} threw error: {e:?}");
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+
+                    crate::error!(
+                        "migration.failed_unexpected id={} attempt={} duration_ms={} error={:?} timestamp={}",
+                        migration_id,
+                        record.attempts,
+                        duration_ms,
+                        e,
+                        Utc::now().to_rfc3339()
+                    );
                     record.status = MigrationStatus::FailedRetryable;
                     record.last_error_code = Some("UNEXPECTED_ERROR".to_string());
                     record.last_error_message = Some(format!("{e:?}"));
