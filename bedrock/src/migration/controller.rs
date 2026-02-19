@@ -505,15 +505,13 @@ mod tests {
         let controller_clone = controller.clone();
 
         // Start first migration on a separate thread (will hold lock for 100ms)
-        let handle1 =
-            std::thread::spawn(move || controller.run_migrations());
+        let handle1 = std::thread::spawn(move || controller.run_migrations());
 
         // Give first migration time to acquire lock
         std::thread::sleep(Duration::from_millis(10));
 
         // Try to start second migration while first is running
-        let handle2 =
-            std::thread::spawn(move || controller_clone.run_migrations());
+        let handle2 = std::thread::spawn(move || controller_clone.run_migrations());
 
         // Wait for both to complete
         let result1 = handle1.join().unwrap();
@@ -606,15 +604,13 @@ mod tests {
             MigrationController::with_processors(kv_store, vec![processor2.clone()]);
 
         // Start first controller's migration on a separate thread
-        let handle1 =
-            std::thread::spawn(move || controller1.run_migrations());
+        let handle1 = std::thread::spawn(move || controller1.run_migrations());
 
         // Give first migration time to acquire lock
         std::thread::sleep(Duration::from_millis(10));
 
         // Try second controller's migration while first is running
-        let handle2 =
-            std::thread::spawn(move || controller2.run_migrations());
+        let handle2 = std::thread::spawn(move || controller2.run_migrations());
 
         let result1 = handle1.join().unwrap();
         let result2 = handle2.join().unwrap();
