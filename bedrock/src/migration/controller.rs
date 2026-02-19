@@ -6,7 +6,7 @@ use chrono::{Duration, Utc};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 const MIGRATION_KEY_PREFIX: &str = "migration:";
 const DEFAULT_RETRY_DELAY_MS: i64 = 60_000; // 1 minute
@@ -68,7 +68,7 @@ pub struct MigrationController {
     processors: Vec<Arc<dyn MigrationProcessor>>,
 }
 
-#[uniffi::export(async_runtime = "tokio")]
+#[uniffi::export]
 impl MigrationController {
     /// Create a new [`MigrationController`]
     /// Processors are registered internally
@@ -82,10 +82,11 @@ impl MigrationController {
 
     /// Run all registered migrations
     ///
-    /// This is an async call that may take several seconds depending on network
-    /// conditions and the number of migrations to process.
+    /// This call may take several seconds depending on network conditions and the
+    /// number of migrations to process.
     ///
-    /// UniFFI handles the async runtime automatically via the `async_runtime = "tokio"` attribute.
+    /// **Caller requirement:** This method blocks the calling thread for the duration
+    /// of each migration. It must be called from a background thread/context.
     ///
     /// # Concurrency
     ///
@@ -99,7 +100,7 @@ impl MigrationController {
     ///
     /// Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
     /// Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
-    pub async fn run_migrations(&self) -> Result<MigrationRunSummary, MigrationError> {
+    pub fn run_migrations(&self) -> Result<MigrationRunSummary, MigrationError> {
         // Try to acquire the global lock. If another migration is running, fail immediately.
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
             MigrationError::InvalidOperation(
@@ -108,7 +109,7 @@ impl MigrationController {
         })?;
 
         // Lock acquired - we have exclusive access to run migrations
-        self.run_migrations_async().await
+        self.run_migrations_inner()
         // Lock automatically released when _guard is dropped
     }
 }
@@ -125,11 +126,9 @@ impl MigrationController {
         })
     }
 
-    /// Internal async implementation of `run_migrations`
+    /// Internal implementation of `run_migrations`
     #[allow(clippy::too_many_lines)]
-    async fn run_migrations_async(
-        &self,
-    ) -> Result<MigrationRunSummary, MigrationError> {
+    fn run_migrations_inner(&self) -> Result<MigrationRunSummary, MigrationError> {
         info!("Migration run started");
 
         // Summary of this migration run for analytics. Not stored.
@@ -224,7 +223,7 @@ impl MigrationController {
             // Check if migration is applicable and should run, based on processor defined logic.
             // This checks actual state (e.g., "does v4 credential exist?") to ensure idempotency
             // even if migration record is deleted (reinstall scenario).
-            match processor.is_applicable().await {
+            match processor.is_applicable() {
                 Ok(false) => {
                     info!("Migration {migration_id} not applicable, skipping");
                     summary.skipped += 1;
@@ -258,7 +257,8 @@ impl MigrationController {
             // Save record before execution so we don't lose progress if the app crashes mid-migration
             self.save_record(&migration_id, &record)?;
 
-            match processor.execute().await {
+            // Execute
+            match processor.execute() {
                 Ok(ProcessorResult::Success) => {
                     info!("Migration {migration_id} succeeded");
                     record.status = MigrationStatus::Succeeded;
@@ -395,10 +395,9 @@ mod tests {
 
     use super::*;
     use crate::primitives::key_value_store::InMemoryDeviceKeyValueStore;
-    use async_trait::async_trait;
     use serial_test::serial;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use tokio::time::{sleep, Duration};
+    use std::time::Duration;
 
     /// Test processor that can be controlled for timing tests
     struct TestProcessor {
@@ -428,20 +427,20 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl MigrationProcessor for TestProcessor {
         fn migration_id(&self) -> String {
             self.id.clone()
         }
 
-        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+        fn is_applicable(&self) -> Result<bool, MigrationError> {
             Ok(true)
         }
 
-        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+        fn execute(&self) -> Result<ProcessorResult, MigrationError> {
             self.execution_count.fetch_add(1, Ordering::SeqCst);
             if self.delay_ms > 0 {
-                sleep(Duration::from_millis(self.delay_ms)).await;
+                // Simulate a slow migration (e.g., foreign code blocking on async work)
+                std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
             }
             if self.should_fail {
                 Ok(ProcessorResult::Retryable {
@@ -472,15 +471,15 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_single_migration_run_succeeds() {
+    fn test_single_migration_run_succeeds() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
         let controller =
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -489,9 +488,9 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_concurrent_migrations_fail_fast() {
+    fn test_concurrent_migrations_fail_fast() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
 
         // Create a processor with a delay so the first migration holds the lock
@@ -503,19 +502,18 @@ mod tests {
         // Clone controller for concurrent access
         let controller_clone = controller.clone();
 
-        // Start first migration (will hold lock for 100ms)
-        let handle1 = tokio::spawn(async move { controller.run_migrations().await });
+        // Start first migration on a separate thread (will hold lock for 100ms)
+        let handle1 = std::thread::spawn(move || controller.run_migrations());
 
         // Give first migration time to acquire lock
-        sleep(Duration::from_millis(10)).await;
+        std::thread::sleep(Duration::from_millis(10));
 
         // Try to start second migration while first is running
-        let handle2 =
-            tokio::spawn(async move { controller_clone.run_migrations().await });
+        let handle2 = std::thread::spawn(move || controller_clone.run_migrations());
 
         // Wait for both to complete
-        let result1 = handle1.await.unwrap();
-        let result2 = handle2.await.unwrap();
+        let result1 = handle1.join().unwrap();
+        let result2 = handle2.join().unwrap();
 
         // First should succeed
         assert!(result1.is_ok());
@@ -534,20 +532,20 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_sequential_migrations_succeed() {
+    fn test_sequential_migrations_succeed() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
         let controller =
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // First migration
-        let result1 = controller.run_migrations().await;
+        let result1 = controller.run_migrations();
         assert!(result1.is_ok());
 
         // Second migration should succeed (first is complete)
-        let result2 = controller.run_migrations().await;
+        let result2 = controller.run_migrations();
         assert!(result2.is_ok());
 
         // Migration already succeeded, so second run should skip it
@@ -559,9 +557,9 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_lock_released_on_error() {
+    fn test_lock_released_on_error() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
 
         // Create a processor that will cause the migration to fail by using
@@ -569,10 +567,10 @@ mod tests {
         let failing_kv = Arc::new(FailingKvStore);
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
         let controller1 =
-            MigrationController::with_processors(failing_kv, vec![processor.clone()]);
+            MigrationController::with_processors(failing_kv, vec![processor]);
 
         // First migration fails
-        let result1 = controller1.run_migrations().await;
+        let result1 = controller1.run_migrations();
         assert!(result1.is_err());
 
         // Create another controller with working KV store
@@ -582,38 +580,36 @@ mod tests {
         );
 
         // Second migration should succeed (lock was released despite error)
-        let result2 = controller2.run_migrations().await;
+        let result2 = controller2.run_migrations();
         assert!(result2.is_ok());
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_multiple_controller_instances_share_lock() {
+    fn test_multiple_controller_instances_share_lock() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
 
         // Create two separate controller instances
         let processor1 =
             Arc::new(TestProcessor::new("test.migration1.v1").with_delay(100));
-        let controller1 = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor1.clone()],
-        );
+        let controller1 =
+            MigrationController::with_processors(kv_store.clone(), vec![processor1]);
 
         let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
         let controller2 =
-            MigrationController::with_processors(kv_store, vec![processor2.clone()]);
+            MigrationController::with_processors(kv_store, vec![processor2]);
 
-        // Start first controller's migration
-        let handle1 = tokio::spawn(async move { controller1.run_migrations().await });
+        // Start first controller's migration on a separate thread
+        let handle1 = std::thread::spawn(move || controller1.run_migrations());
 
         // Give first migration time to acquire lock
-        sleep(Duration::from_millis(10)).await;
+        std::thread::sleep(Duration::from_millis(10));
 
         // Try second controller's migration while first is running
-        let handle2 = tokio::spawn(async move { controller2.run_migrations().await });
+        let handle2 = std::thread::spawn(move || controller2.run_migrations());
 
-        let result1 = handle1.await.unwrap();
-        let result2 = handle2.await.unwrap();
+        let result1 = handle1.join().unwrap();
+        let result2 = handle2.join().unwrap();
 
         // First should succeed
         assert!(result1.is_ok());
@@ -628,9 +624,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_individual_key_storage() {
+    fn test_individual_key_storage() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor1 = Arc::new(TestProcessor::new("test.migration1.v1"));
         let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
@@ -641,7 +637,7 @@ mod tests {
         );
 
         // Run migrations
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
         assert_eq!(result.unwrap().succeeded, 2);
 
@@ -664,9 +660,9 @@ mod tests {
         assert!(matches!(record2.status, MigrationStatus::Succeeded));
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_corrupted_record_does_not_block_migrations() {
+    fn test_corrupted_record_does_not_block_migrations() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -676,13 +672,11 @@ mod tests {
             .set(key.clone(), "{invalid json!!!".to_string())
             .expect("Should store corrupted data");
 
-        let controller = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor.clone()],
-        );
+        let controller =
+            MigrationController::with_processors(kv_store.clone(), vec![processor]);
 
         // Migration should still run despite corrupted record
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -731,21 +725,21 @@ mod tests {
         assert!(matches!(record.status, MigrationStatus::NotStarted));
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_many_concurrent_attempts_only_one_succeeds() {
+    fn test_many_concurrent_attempts_only_one_succeeds() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor =
             Arc::new(TestProcessor::new("test.migration.v1").with_delay(50));
         let controller =
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
-        // Launch 10 concurrent attempts
+        // Launch 10 concurrent attempts on separate threads
         let mut handles = vec![];
         for _ in 0..10 {
             let controller_clone = controller.clone();
-            handles.push(tokio::spawn(async move {
-                controller_clone.run_migrations().await
+            handles.push(std::thread::spawn(move || {
+                controller_clone.run_migrations()
             }));
         }
 
@@ -754,7 +748,7 @@ mod tests {
         let mut failure_count = 0;
 
         for handle in handles {
-            let result = handle.await.unwrap();
+            let result = handle.join().unwrap();
             match result {
                 Ok(_) => success_count += 1,
                 Err(MigrationError::InvalidOperation(_)) => failure_count += 1,
@@ -770,9 +764,9 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_stale_in_progress_resets_and_retries() {
+    fn test_stale_in_progress_resets_and_retries() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -793,7 +787,7 @@ mod tests {
         );
 
         // Run migrations - should detect staleness and retry
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -813,9 +807,9 @@ mod tests {
         assert_eq!(updated_record.attempts, 2);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_fresh_in_progress_not_treated_as_stale() {
+    fn test_fresh_in_progress_not_treated_as_stale() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -828,15 +822,13 @@ mod tests {
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
-        kv_store.set(key.clone(), json).unwrap();
+        kv_store.set(key, json).unwrap();
 
-        let controller = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor.clone()],
-        );
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // Run migrations - should treat as normal InProgress and retry
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -847,9 +839,9 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_succeeded_state_is_terminal_and_skipped() {
+    fn test_succeeded_state_is_terminal_and_skipped() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -868,7 +860,7 @@ mod tests {
         );
 
         // Run migrations - should skip
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -886,9 +878,9 @@ mod tests {
         assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_failed_terminal_state_is_permanent_and_skipped() {
+    fn test_failed_terminal_state_is_permanent_and_skipped() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -909,7 +901,7 @@ mod tests {
 
         // Run migrations multiple times - should always skip
         for _ in 0..3 {
-            let result = controller.run_migrations().await;
+            let result = controller.run_migrations();
             assert!(result.is_ok());
 
             let summary = result.unwrap();
@@ -930,9 +922,9 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_not_started_state_checks_applicability_and_executes() {
+    fn test_not_started_state_checks_applicability_and_executes() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -942,7 +934,7 @@ mod tests {
         );
 
         // Run migrations - NotStarted should check is_applicable and execute
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -961,9 +953,9 @@ mod tests {
         assert_eq!(record.attempts, 1);
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_failed_retryable_respects_backoff_timing() {
+    fn test_failed_retryable_respects_backoff_timing() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -984,7 +976,7 @@ mod tests {
         );
 
         // Run migrations - should skip due to retry timing
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1006,9 +998,9 @@ mod tests {
         assert_eq!(updated_record.attempts, 1); // Attempts should not increment
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_failed_retryable_retries_when_backoff_expires() {
+    fn test_failed_retryable_retries_when_backoff_expires() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -1029,7 +1021,7 @@ mod tests {
         );
 
         // Run migrations - should retry and succeed
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1048,9 +1040,9 @@ mod tests {
         assert_eq!(updated_record.attempts, 2); // Should increment from 1 to 2
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_failed_retryable_without_retry_time_executes_immediately() {
+    fn test_failed_retryable_without_retry_time_executes_immediately() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -1070,7 +1062,7 @@ mod tests {
         );
 
         // Run migrations - should execute immediately
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1086,9 +1078,9 @@ mod tests {
         assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_in_progress_without_timestamp_treated_as_stale() {
+    fn test_in_progress_without_timestamp_treated_as_stale() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -1108,7 +1100,7 @@ mod tests {
         );
 
         // Run migrations - should treat as stale and retry
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1124,9 +1116,9 @@ mod tests {
         assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
     }
 
-    #[tokio::test]
+    #[test]
     #[serial]
-    async fn test_state_based_execution_order() {
+    fn test_state_based_execution_order() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
 
         // Create 5 processors with different states
@@ -1178,7 +1170,7 @@ mod tests {
         // NotStarted doesn't need setup - it's the default
 
         let controller = MigrationController::with_processors(
-            kv_store.clone(),
+            kv_store,
             vec![
                 processor1.clone(),
                 processor2.clone(),
@@ -1189,7 +1181,7 @@ mod tests {
         );
 
         // Run migrations
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations();
         assert!(result.is_ok());
 
         let summary = result.unwrap();

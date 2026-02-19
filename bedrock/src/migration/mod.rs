@@ -58,15 +58,24 @@
 //! first, not just migration records. Example:
 //!
 //! ```rust,ignore
-//! async fn is_applicable(&self, record: Option<&MigrationRecord>) -> OxideResult<bool> {
+//! fn is_applicable(&self) -> Result<bool, MigrationError> {
 //!     // 1. Check if migration outcome already exists (e.g., v4 credential restored from backup)
-//!     if self.credential_store.has_v4_credential().await? {
+//!     if self.credential_store.has_v4_credential()? {
 //!         return Ok(false);  // Skip - already have what this migration creates
 //!     }
 //!
 //!     Ok(true)  // Run migration
 //! }
 //! ```
+//!
+//! # Synchronous Processor Interface
+//!
+//! `is_applicable()` and `execute()` are intentionally **synchronous** to work around a
+//! known UniFFI bug with async foreign callbacks on Android/Kotlin
+//! ([uniffi-rs#2624](https://github.com/mozilla/uniffi-rs/issues/2624)).
+//!
+//! Foreign (Kotlin/Swift) implementations that need async operations should block
+//! internally (e.g., `runBlocking` in Kotlin, semaphore in Swift).
 
 mod controller;
 mod error;
