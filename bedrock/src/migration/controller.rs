@@ -304,7 +304,7 @@ impl MigrationController {
                     let duration_ms = (Utc::now() - execute_start).num_milliseconds();
 
                     crate::info!(
-                        "migration.succeeded id={} attempts={} duration_ms={} timestamp={}",
+                        "migration.succeeded id={} attempt={} duration_ms={} timestamp={}",
                         migration_id,
                         record.attempts,
                         duration_ms,
