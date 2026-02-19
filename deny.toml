@@ -51,4 +51,5 @@ license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 ignore = [
   "RUSTSEC-2024-0436", # Unmaintained `paste` (2025-04-04)
   "RUSTSEC-2021-0127", # serde_cbor is unmaintained. We use this in AWS NSM package but just for the AttestationDocument Type
+  "RUSTSEC-2025-0134", # rustls-pemfile is unmaintained; pulled in by reqwest 0.12 (pinned by alloy), no upgrade available yet
 ]

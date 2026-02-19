@@ -18,7 +18,7 @@ To build the Kotlin project run:
 
 ```bash
     # run from the root project directory
-    ./swift/test_kotlin.sh
+    ./kotlin/test_kotlin.sh
 ```
 
 

@@ -11,7 +11,7 @@ pub use transaction_4337::Is4337Encodable;
 #[cfg(any(test, doc))]
 use crate::primitives::Network;
 use crate::{
-    bedrock_export, debug, error, primitives::HexEncodedData,
+    bedrock_export, debug, primitives::HexEncodedData,
     transactions::foreign::UnparsedUserOperation,
 };
 
@@ -47,7 +47,8 @@ pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
 // Import the generated types from permit2 module
 pub use permit2::{
-    UnparsedPermitTransferFrom, UnparsedTokenPermissions, PERMIT2_ADDRESS,
+    Permit2Approve, UnparsedPermitTransferFrom, UnparsedTokenPermissions,
+    PERMIT2_ADDRESS,
 };
 
 const RESTRICTED_TYPED_DATA_CONTRACTS: &[Address] = &[

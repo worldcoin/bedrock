@@ -40,6 +40,8 @@ pub enum TransactionTypeId {
     MorphoDeposit = 136,
     /// Morpho-specific vault withdraw
     MorphoWithdraw = 137,
+    /// ERC-20 approve for Permit2 contract
+    Permit2Approve = 138,
 }
 
 impl TransactionTypeId {
