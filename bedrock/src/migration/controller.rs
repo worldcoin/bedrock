@@ -567,7 +567,7 @@ mod tests {
         let failing_kv = Arc::new(FailingKvStore);
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
         let controller1 =
-            MigrationController::with_processors(failing_kv, vec![processor.clone()]);
+            MigrationController::with_processors(failing_kv, vec![processor]);
 
         // First migration fails
         let result1 = controller1.run_migrations();
@@ -592,14 +592,12 @@ mod tests {
         // Create two separate controller instances
         let processor1 =
             Arc::new(TestProcessor::new("test.migration1.v1").with_delay(100));
-        let controller1 = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor1.clone()],
-        );
+        let controller1 =
+            MigrationController::with_processors(kv_store.clone(), vec![processor1]);
 
         let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
         let controller2 =
-            MigrationController::with_processors(kv_store, vec![processor2.clone()]);
+            MigrationController::with_processors(kv_store, vec![processor2]);
 
         // Start first controller's migration on a separate thread
         let handle1 = std::thread::spawn(move || controller1.run_migrations());
@@ -674,10 +672,8 @@ mod tests {
             .set(key.clone(), "{invalid json!!!".to_string())
             .expect("Should store corrupted data");
 
-        let controller = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor.clone()],
-        );
+        let controller =
+            MigrationController::with_processors(kv_store.clone(), vec![processor]);
 
         // Migration should still run despite corrupted record
         let result = controller.run_migrations();
@@ -826,12 +822,10 @@ mod tests {
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
-        kv_store.set(key.clone(), json).unwrap();
+        kv_store.set(key, json).unwrap();
 
-        let controller = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor.clone()],
-        );
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // Run migrations - should treat as normal InProgress and retry
         let result = controller.run_migrations();
@@ -1176,7 +1170,7 @@ mod tests {
         // NotStarted doesn't need setup - it's the default
 
         let controller = MigrationController::with_processors(
-            kv_store.clone(),
+            kv_store,
             vec![
                 processor1.clone(),
                 processor2.clone(),
