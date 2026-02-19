@@ -87,8 +87,6 @@ impl MigrationController {
     ///
     /// **Caller requirement:** This method blocks the calling thread for the duration
     /// of each migration. It must be called from a background thread/context.
-    /// On Kotlin, use `withContext(Dispatchers.IO) { controller.runMigrations() }`.
-    /// On Swift, dispatch to a background queue.
     ///
     /// # Concurrency
     ///
