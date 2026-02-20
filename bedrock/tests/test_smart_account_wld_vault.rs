@@ -38,6 +38,8 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
         Address::from_str("0x14a028cC500108307947dca4a1Aa35029FB66CE0").unwrap();
     let morpho_vault_address =
         Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+    let bad_morpho_vault_address =
+        Address::from_str("0xb1E80387EbE53Ff75a89736097D34dC8D9E9045B").unwrap();
 
     let owner_signer = PrivateKeySigner::random();
     let owner_key_hex = hex::encode(owner_signer.to_bytes());
@@ -48,12 +50,17 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
         .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());
 
+    let client = AnvilBackedHttpClient::new(provider.clone());
+    set_http_client(Arc::new(client));
+
     let wld = IERC20::new(wld_address, &provider);
     let wld_vault = WLDVault::new(wld_vault_address, &provider);
     let morpho_vault = IERC20::new(morpho_vault_address, &provider);
 
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     println!("✓ Deployed Safe at: {safe_address}");
+
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 
     provider
         .anvil_set_balance(safe_address, parse_ether("1").unwrap())
@@ -68,6 +75,27 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     .await?;
     println!("✓ Set Safe as verified until far future");
 
+    // Test migration with zero balance - should fail
+    let result = safe_account
+        .transaction_wld_legacy_vault_migrate(
+            &wld_vault_address.to_string(),
+            &morpho_vault_address.to_string(),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Expected migration to fail with zero balance"
+    );
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("Cannot migrate zero balance"),
+        "Expected error message to contain 'Cannot migrate zero balance', got: {}",
+        error_message
+    );
+    println!("✓ Migration correctly failed with zero balance error");
+
+    // Now set up WLD balance for actual migration test
     let amount: U256 = parse_units("1", 18).unwrap().into();
     set_erc20_balance_for_safe(&provider, wld_address, safe_address, amount).await?;
 
@@ -123,10 +151,27 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     let shares_before = morpho_vault.balanceOf(safe_address).call().await?;
     println!("MorphoVault balance before migration: {shares_before}");
 
-    let client = AnvilBackedHttpClient::new(provider.clone());
-    set_http_client(Arc::new(client));
+    // Test migration with bad vault address - should fail
+    let result = safe_account
+        .transaction_wld_legacy_vault_migrate(
+            &wld_vault_address.to_string(),
+            &bad_morpho_vault_address.to_string(),
+        )
+        .await;
 
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    assert!(
+        result.is_err(),
+        "Expected migration to fail with bad vault address"
+    );
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("Asset address mismatch between WLDVault and ERC-4626 Vault"),
+        "Expected error message to contain 'Asset address mismatch between WLDVault and ERC-4626 Vault', got: {}",
+        error_message
+    );
+    println!("✓ Migration correctly failed with asset address mismatch error");
+
+    // Now perform successful migration
     safe_account
         .transaction_wld_legacy_vault_migrate(
             &wld_vault_address.to_string(),
