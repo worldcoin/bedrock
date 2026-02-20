@@ -355,3 +355,22 @@ impl Is4337Encodable for UsdLegacyVault {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::utils::parse_units;
+
+    #[test]
+    fn test_calculate_usdc_amount() {
+        let sdai_amount = parse_units("10", 18).unwrap().into(); // 10 sDAI
+        let rate = U256::from_str_radix("1172270944672187612903813109", 10).unwrap();
+
+        let result = UsdLegacyVault::calculate_usdc_amount(sdai_amount, rate)
+            .expect("Should calculate successfully");
+
+        // Expected result: 11722709 (USDC with 6 decimals)
+        let expected = U256::from(11722709u64);
+        assert_eq!(result, expected);
+    }
+}
