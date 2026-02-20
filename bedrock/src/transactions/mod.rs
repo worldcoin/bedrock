@@ -490,21 +490,46 @@ impl SafeSmartAccount {
             })?;
         user_op = user_op.as_bundler_sponsored();
 
+        let sender = user_op.sender;
+        // Extract host only to avoid logging API keys
+        let bundler_host = reqwest::Url::parse(&rpc_url)
+            .ok()
+            .and_then(|u| u.host_str().map(String::from))
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        crate::info!(
+            "bundler_sponsored_user_op.sending sender={sender} bundler_host={bundler_host}"
+        );
+
         // 2. Sign with fresh validity timestamps
         self.sign_user_operation(&mut user_op, Network::WorldChain)
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to sign user operation: {e}"),
+            .map_err(|e| {
+                crate::error!(
+                    "bundler_sponsored_user_op.sign_failed sender={sender} error={e}"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to sign user operation: {e}"),
+                }
             })?;
 
         // 3. Send to the bundler RPC URL
         let user_op_hash =
             rpc::send_user_operation_to_url(&rpc_url, &user_op, *ENTRYPOINT_4337)
                 .await
-                .map_err(|e| TransactionError::Generic {
-                    error_message: format!(
-                        "Failed to send bundler-sponsored user operation: {e}"
-                    ),
+                .map_err(|e| {
+                    crate::error!(
+                        "bundler_sponsored_user_op.send_failed sender={sender} bundler_host={bundler_host} error={e}"
+                    );
+                    TransactionError::Generic {
+                        error_message: format!(
+                            "Failed to send bundler-sponsored user operation: {e}"
+                        ),
+                    }
                 })?;
+
+        crate::info!(
+            "bundler_sponsored_user_op.submitted sender={sender} user_op_hash={user_op_hash}"
+        );
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }

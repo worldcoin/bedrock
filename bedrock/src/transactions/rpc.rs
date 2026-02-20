@@ -530,13 +530,14 @@ async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcEr
         .body(body)
         .send()
         .await
-        .map_err(|e| RpcError::HttpError(e.to_string()))?;
+        // Strip the related url from this error to avoid leaking API keys
+        .map_err(|e| RpcError::HttpError(e.without_url().to_string()))?;
 
     let status = response.status();
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| RpcError::HttpError(e.to_string()))?;
+        .map_err(|e| RpcError::HttpError(e.without_url().to_string()))?;
 
     if !status.is_success() {
         return Err(RpcError::HttpError(format!(
