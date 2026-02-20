@@ -33,6 +33,8 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
         Address::from_str("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC").unwrap();
     let morpho_vault_address =
         Address::from_str("0xb1E80387EbE53Ff75a89736097D34dC8D9E9045B").unwrap();
+    let bad_morpho_vault_address =
+        Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
 
     let owner_signer = PrivateKeySigner::random();
     let owner_key_hex = hex::encode(owner_signer.to_bytes());
@@ -42,6 +44,8 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
     let provider = ProviderBuilder::new()
         .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());
+    let client = AnvilBackedHttpClient::new(provider.clone());
+    set_http_client(Arc::new(client));
 
     let usdc = IERC20::new(usdc_address, &provider);
     let sdai = IERC20::new(sdai_address, &provider);
@@ -49,6 +53,8 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
 
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     println!("✓ Deployed Safe at: {safe_address}");
+
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 
     provider
         .anvil_set_balance(safe_address, parse_ether("1").unwrap())
@@ -87,21 +93,60 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
     println!("USDVault sDAI balance: {vault_sdai_balance}");
 
     let sdai_amount: U256 = parse_units("10", 18).unwrap().into();
+
+    // Test migration with zero sDAI balance - should fail
+    let result = safe_account
+        .transaction_usd_legacy_vault_migrate(
+            &usd_vault_address.to_string(),
+            &morpho_vault_address.to_string(),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Expected migration to fail with zero sDAI balance"
+    );
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("Cannot migrate with zero sDAI balance"),
+        "Expected error message to contain 'Cannot migrate with zero sDAI balance', got: {}",
+        error_message
+    );
+    println!("✓ Migration correctly failed with zero sDAI balance error");
+
+    // Now set up sDAI balance for actual migration test
     set_erc20_balance_for_safe(&provider, sdai_address, safe_address, sdai_amount)
         .await?;
 
-    let client = AnvilBackedHttpClient::new(provider.clone());
-    set_http_client(Arc::new(client));
-
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
     let sdai_balance_before = sdai.balanceOf(safe_address).call().await?;
     println!("sDAI balance before migration: {sdai_balance_before}");
 
     let morpho_shares_before = morpho_vault.balanceOf(safe_address).call().await?;
     println!("MorphoVault shares before migration: {morpho_shares_before}");
 
+    // Test migration with bad vault address - should fail
+    let result = safe_account
+        .transaction_usd_legacy_vault_migrate(
+            &usd_vault_address.to_string(),
+            &bad_morpho_vault_address.to_string(),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Expected migration to fail with bad vault address"
+    );
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("Asset address mismatch between USDVault and ERC-4626 Vault"),
+        "Expected error message to contain 'Asset address mismatch between USDVault and ERC-4626 Vault', got: {}",
+        error_message
+    );
+    println!("✓ Migration correctly failed with asset address mismatch error");
+
+    // Now perform successful migration
     safe_account
-        .transaction_usd_vault_migrate(
+        .transaction_usd_legacy_vault_migrate(
             &usd_vault_address.to_string(),
             &morpho_vault_address.to_string(),
         )

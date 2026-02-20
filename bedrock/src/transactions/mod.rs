@@ -542,7 +542,7 @@ impl SafeSmartAccount {
     /// - Returns [`TransactionError::Generic`] if the migration transaction bundle creation fails.
     /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
     /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
-    pub async fn transaction_usd_vault_migrate(
+    pub async fn transaction_usd_legacy_vault_migrate(
         &self,
         legacy_vault_address: &str,
         erc4626_vault_address: &str,
@@ -568,6 +568,12 @@ impl SafeSmartAccount {
             .map_err(|e| TransactionError::Generic {
                 error_message: format!("Failed to fetch sDAI balance: {e}"),
             })?;
+
+        if sdai_amount.is_zero() {
+            return Err(TransactionError::Generic {
+                error_message: "Cannot migrate with zero sDAI balance".to_string(),
+            });
+        }
 
         let permitted = UnparsedTokenPermissions {
             token: sdai_address.to_string(),

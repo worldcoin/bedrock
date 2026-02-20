@@ -231,7 +231,7 @@ impl UsdLegacyVault {
         if usdc_address != asset_address {
             return Err(RpcError::InvalidResponse {
                 error_message:
-                    "Asset address mismatch between USD Vault and ERC-4626 Vault"
+                    "Asset address mismatch between USDVault and ERC-4626 Vault"
                         .to_string(),
             });
         }
