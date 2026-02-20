@@ -370,7 +370,7 @@ mod tests {
             .expect("Should calculate successfully");
 
         // Expected result: 11722709 (USDC with 6 decimals)
-        let expected = U256::from(11722709u64);
+        let expected = U256::from(11_722_709u64);
         assert_eq!(result, expected);
     }
 }
