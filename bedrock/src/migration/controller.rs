@@ -3,7 +3,7 @@ use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
 use chrono::{Duration, Utc};
-use log::{error, info, warn};
+use log::warn;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -130,7 +130,14 @@ impl MigrationController {
     async fn run_migrations_async(
         &self,
     ) -> Result<MigrationRunSummary, MigrationError> {
-        info!("Migration run started");
+        // Store start time for duration tracking
+        let run_start_time = Utc::now();
+
+        crate::info!(
+            "migration_run.started total_processors={} timestamp={}",
+            self.processors.len(),
+            run_start_time.to_rfc3339()
+        );
 
         // Summary of this migration run for analytics. Not stored.
         let mut summary = MigrationRunSummary {
@@ -152,14 +159,22 @@ impl MigrationController {
             let should_attempt = match record.status {
                 MigrationStatus::Succeeded => {
                     // Terminal state - migration completed successfully
-                    info!("Migration {migration_id} already succeeded, skipping");
+                    crate::info!(
+                        "migration.skipped id={} reason=already_succeeded timestamp={}",
+                        migration_id,
+                        Utc::now().to_rfc3339()
+                    );
                     summary.skipped += 1;
                     false
                 }
 
                 MigrationStatus::FailedTerminal => {
                     // Terminal state - migration failed permanently
-                    info!("Migration {migration_id} failed terminally, skipping");
+                    crate::info!(
+                        "migration.skipped id={} reason=terminal_failure timestamp={}",
+                        migration_id,
+                        Utc::now().to_rfc3339()
+                    );
                     summary.skipped += 1;
                     false
                 }
@@ -174,8 +189,12 @@ impl MigrationController {
                         });
 
                     if is_stale {
-                        warn!(
-                            "Migration {migration_id} stuck in InProgress, resetting to retryable"
+                        crate::warn!(
+                            "migration.stale_recovery id={} last_attempted={} elapsed_mins={} timestamp={}",
+                            migration_id,
+                            record.last_attempted_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                            STALE_IN_PROGRESS_MINS,
+                            Utc::now().to_rfc3339()
                         );
                         record.status = MigrationStatus::FailedRetryable;
                         record.last_error_code = Some("STALE_IN_PROGRESS".to_string());
@@ -189,8 +208,10 @@ impl MigrationController {
                         true // Proceed to retry
                     } else {
                         // Fresh InProgress - skip to avoid concurrent execution
-                        info!(
-                            "Migration {migration_id} currently in progress, skipping"
+                        crate::info!(
+                            "migration.skipped id={} reason=in_progress timestamp={}",
+                            migration_id,
+                            Utc::now().to_rfc3339()
                         );
                         summary.skipped += 1;
                         false
@@ -202,7 +223,12 @@ impl MigrationController {
                     // No retry time set = attempt immediately
                     record.next_attempt_at.is_none_or(|next_attempt| {
                         if Utc::now() < next_attempt {
-                            info!("Migration {migration_id} scheduled for retry at {next_attempt}, skipping");
+                            crate::info!(
+                                "migration.skipped id={} reason=retry_backoff next_attempt={} timestamp={}",
+                                migration_id,
+                                next_attempt.to_rfc3339(),
+                                Utc::now().to_rfc3339()
+                            );
                             summary.skipped += 1;
                             false
                         } else {
@@ -226,12 +252,21 @@ impl MigrationController {
             // even if migration record is deleted (reinstall scenario).
             match processor.is_applicable().await {
                 Ok(false) => {
-                    info!("Migration {migration_id} not applicable, skipping");
+                    crate::info!(
+                        "migration.skipped id={} reason=not_applicable timestamp={}",
+                        migration_id,
+                        Utc::now().to_rfc3339()
+                    );
                     summary.skipped += 1;
                     continue;
                 }
                 Err(e) => {
-                    error!("Failed to check applicability for {migration_id}: {e:?}");
+                    crate::error!(
+                        "migration.applicability_error id={} error={:?} timestamp={}",
+                        migration_id,
+                        e,
+                        Utc::now().to_rfc3339()
+                    );
                     summary.skipped += 1;
                     continue;
                 }
@@ -241,10 +276,11 @@ impl MigrationController {
             }
 
             // Execute the migration
-            info!(
-                "Starting migration: {} (attempt {})",
+            crate::info!(
+                "migration.started id={} attempt={} timestamp={}",
                 migration_id,
-                record.attempts + 1
+                record.attempts + 1,
+                Utc::now().to_rfc3339()
             );
 
             // Update record for execution
@@ -258,9 +294,19 @@ impl MigrationController {
             // Save record before execution so we don't lose progress if the app crashes mid-migration
             self.save_record(&migration_id, &record)?;
 
+            let execute_start = Utc::now();
+
             match processor.execute().await {
                 Ok(ProcessorResult::Success) => {
-                    info!("Migration {migration_id} succeeded");
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+
+                    crate::info!(
+                        "migration.succeeded id={} attempt={} duration_ms={} timestamp={}",
+                        migration_id,
+                        record.attempts,
+                        duration_ms,
+                        Utc::now().to_rfc3339()
+                    );
                     record.status = MigrationStatus::Succeeded;
                     record.completed_at = Some(Utc::now());
                     record.last_error_code = None;
@@ -273,11 +319,6 @@ impl MigrationController {
                     error_message,
                     retry_after_ms,
                 }) => {
-                    warn!("Migration {migration_id} failed (retryable): {error_code} - {error_message}");
-                    record.status = MigrationStatus::FailedRetryable;
-                    record.last_error_code = Some(error_code);
-                    record.last_error_message = Some(error_message);
-
                     // Retry time is calculated according to exponential backoff and set on the
                     // record.next_attempt_at field. When the app is next opened and the
                     // migration is run again; the controller will check whether to run the
@@ -287,13 +328,40 @@ impl MigrationController {
                     record.next_attempt_at =
                         Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
 
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+
+                    crate::warn!(
+                        "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} retry_delay_ms={} next_attempt={} timestamp={}",
+                        migration_id,
+                        record.attempts,
+                        duration_ms,
+                        error_code,
+                        error_message,
+                        retry_delay_ms,
+                        record.next_attempt_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                        Utc::now().to_rfc3339()
+                    );
+                    record.status = MigrationStatus::FailedRetryable;
+                    record.last_error_code = Some(error_code);
+                    record.last_error_message = Some(error_message);
+
                     summary.failed_retryable += 1;
                 }
                 Ok(ProcessorResult::Terminal {
                     error_code,
                     error_message,
                 }) => {
-                    error!("Migration {migration_id} failed (terminal): {error_code} - {error_message}");
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+
+                    crate::error!(
+                        "migration.failed_terminal id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
+                        migration_id,
+                        record.attempts,
+                        duration_ms,
+                        error_code,
+                        error_message,
+                        Utc::now().to_rfc3339()
+                    );
                     record.status = MigrationStatus::FailedTerminal;
                     record.last_error_code = Some(error_code);
                     record.last_error_message = Some(error_message);
@@ -301,7 +369,16 @@ impl MigrationController {
                     summary.failed_terminal += 1;
                 }
                 Err(e) => {
-                    error!("Migration {migration_id} threw error: {e:?}");
+                    let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+
+                    crate::error!(
+                        "migration.failed_unexpected id={} attempt={} duration_ms={} error={:?} timestamp={}",
+                        migration_id,
+                        record.attempts,
+                        duration_ms,
+                        e,
+                        Utc::now().to_rfc3339()
+                    );
                     record.status = MigrationStatus::FailedRetryable;
                     record.last_error_code = Some("UNEXPECTED_ERROR".to_string());
                     record.last_error_message = Some(format!("{e:?}"));
@@ -319,9 +396,17 @@ impl MigrationController {
             self.save_record(&migration_id, &record)?;
         }
 
-        info!(
-            "Migration run completed: {} succeeded, {} retryable, {} terminal, {} skipped",
-            summary.succeeded, summary.failed_retryable, summary.failed_terminal, summary.skipped
+        let run_duration_ms = (Utc::now() - run_start_time).num_milliseconds();
+
+        crate::info!(
+            "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={}",
+            summary.total,
+            summary.succeeded,
+            summary.failed_retryable,
+            summary.failed_terminal,
+            summary.skipped,
+            run_duration_ms,
+            Utc::now().to_rfc3339()
         );
 
         Ok(summary)
