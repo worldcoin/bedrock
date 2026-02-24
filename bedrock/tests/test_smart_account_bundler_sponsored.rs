@@ -40,7 +40,9 @@ fn start_mock_http_server(status: u16, body: String) -> String {
                     "HTTP/1.1 {status} -\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
-                let _ = stream.write_all(response.as_bytes());
+                if let Err(e) = stream.write_all(response.as_bytes()) {
+                    eprintln!("mock HTTP server: failed to write response: {e}");
+                }
             });
         }
     });
