@@ -198,6 +198,84 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Live integration test that sends a bundler-sponsored user operation
+/// transferring USDC to itself against a real RPC endpoint.
+/// Skipped by default; run explicitly with:
+///
+/// ```sh
+/// BUNDLER_RPC_URL="https://..." \
+/// E2E_TEST_PRIVATE_KEY="<hex-encoded-private-key>" \
+/// E2E_TEST_SAFE_ADDRESS="0x..." \
+/// cargo test test_send_bundler_sponsored_user_operation_live -- --ignored
+/// ```
+#[tokio::test]
+#[ignore]
+async fn test_send_bundler_sponsored_user_operation_live() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
+    let rpc_url =
+        std::env::var("BUNDLER_RPC_URL").expect("BUNDLER_RPC_URL must be set");
+    let owner_key = std::env::var("E2E_TEST_PRIVATE_KEY")
+        .expect("E2E_TEST_PRIVATE_KEY must be set");
+    let safe_address_str = std::env::var("E2E_TEST_SAFE_ADDRESS")
+        .expect("E2E_TEST_SAFE_ADDRESS must be set");
+
+    let safe_address: alloy::primitives::Address = safe_address_str.parse()?;
+
+    // USDC on World Chain (6 decimals)
+    let usdc_address = address!("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1");
+    let transfer_amount = U256::from(1u64);
+
+    let erc20_transfer_call_data = IERC20::transferCall {
+        to: safe_address,
+        amount: transfer_amount,
+    };
+    let execute_call_data = ISafe4337Module::executeUserOpCall {
+        to: usdc_address,
+        value: U256::ZERO,
+        data: alloy::sol_types::SolCall::abi_encode(&erc20_transfer_call_data).into(),
+        operation: SafeOperation::Call as u8,
+    };
+
+    let nonce_key = NonceKeyV1::new(
+        TransactionTypeId::Transfer,
+        InstructionFlag::Default,
+        [0u8; 10],
+    );
+    let nonce = nonce_key.encode_with_sequence(0);
+
+    let unparsed_user_op = UnparsedUserOperation {
+        sender: safe_address.to_string(),
+        nonce: format!("{nonce:#x}"),
+        call_data: format!(
+            "0x{}",
+            hex::encode(alloy::sol_types::SolCall::abi_encode(&execute_call_data))
+        ),
+        call_gas_limit: "0x200000".to_string(),
+        verification_gas_limit: "0x200000".to_string(),
+        pre_verification_gas: "0x200000".to_string(),
+        max_fee_per_gas: "0x12A05F200".to_string(),
+        max_priority_fee_per_gas: "0x12A05F200".to_string(),
+        paymaster: None,
+        paymaster_verification_gas_limit: None,
+        paymaster_post_op_gas_limit: None,
+        paymaster_data: None,
+        signature: format!("0x{}", hex::encode(vec![0xff; 77])),
+        factory: None,
+        factory_data: None,
+    };
+
+    let safe_account = SafeSmartAccount::new(owner_key, &safe_address.to_string())?;
+    let user_op_hash = safe_account
+        .send_bundler_sponsored_user_operation(unparsed_user_op, rpc_url)
+        .await
+        .expect("send_bundler_sponsored_user_operation failed against live RPC");
+
+    println!("user_op_hash: {user_op_hash}");
+
+    Ok(())
+}
+
 // ── Error-handling tests (no Anvil required) ──────────────────────────────────
 //
 // These tests verify the error-handling behaviour of
