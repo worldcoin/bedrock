@@ -52,7 +52,11 @@ fn start_mock_http_server(status: u16, body: String) -> String {
 /// The sender address is arbitrary because error tests never reach on-chain execution.
 fn minimal_unparsed_user_op(sender: &str) -> UnparsedUserOperation {
     use bedrock::smart_account::{InstructionFlag, NonceKeyV1, TransactionTypeId};
-    let nonce_key = NonceKeyV1::new(TransactionTypeId::Transfer, InstructionFlag::Default, [0u8; 10]);
+    let nonce_key = NonceKeyV1::new(
+        TransactionTypeId::Transfer,
+        InstructionFlag::Default,
+        [0u8; 10],
+    );
     let nonce = nonce_key.encode_with_sequence(0);
     UnparsedUserOperation {
         sender: sender.to_string(),
@@ -210,9 +214,18 @@ async fn test_send_bundler_sponsored_user_operation_bundler_rejected_cases() {
     }
 
     let cases = [
-        Case { code: -32500, message: "AA23 reverted (or OOG)" },
-        Case { code: -32507, message: "wallet signature check failed" },
-        Case { code: -32602, message: "invalid UserOperation struct/fields" },
+        Case {
+            code: -32500,
+            message: "AA23 reverted (or OOG)",
+        },
+        Case {
+            code: -32507,
+            message: "wallet signature check failed",
+        },
+        Case {
+            code: -32602,
+            message: "invalid UserOperation struct/fields",
+        },
     ];
 
     // The sender address doesn't need to be deployed for these error tests —
@@ -262,7 +275,8 @@ async fn test_send_bundler_sponsored_user_operation_bundler_rejected_cases() {
 async fn test_send_bundler_sponsored_user_operation_http_error_is_generic() {
     let bundler_url = start_mock_http_server(500, String::new());
 
-    let owner_key_hex = hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
+    let owner_key_hex =
+        hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
     let safe_address = "0x1234567890123456789012345678901234567890";
     let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)
         .expect("failed to create SafeSmartAccount");
