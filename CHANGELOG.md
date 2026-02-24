@@ -2,6 +2,17 @@
 
 
 
+## [0.1.4] - 2026-02-24
+
+## What's Changed
+* fix: rpc id by @aurel-fr in https://github.com/worldcoin/bedrock/pull/271
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.1.3...0.1.4
+
+
+
+
 ## [0.1.3] - 2026-02-23
 
 ## What's Changed
