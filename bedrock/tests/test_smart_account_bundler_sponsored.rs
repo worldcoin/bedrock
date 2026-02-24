@@ -251,10 +251,10 @@ async fn test_send_bundler_sponsored_user_operation_bundler_rejected_cases() {
             .unwrap_err();
 
         match err {
-            TransactionError::BundlerRejected { code, message } => {
+            TransactionError::BundlerRejected { code, error_message } => {
                 assert_eq!(code, case.code, "wrong code for '{}'", case.message);
                 assert_eq!(
-                    message, case.message,
+                    error_message, case.message,
                     "message not forwarded verbatim for code {}",
                     case.code
                 );

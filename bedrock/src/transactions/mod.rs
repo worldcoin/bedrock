@@ -39,12 +39,12 @@ pub enum TransactionError {
     /// the bundler, but it rejected the `UserOperation`).
     ///
     /// See [EIP-7769](https://eips.ethereum.org/EIPS/eip-7769) for error codes.
-    #[error("Bundler rejected user operation (code {code}): {message}")]
+    #[error("Bundler rejected user operation (code {code}): {error_message}")]
     BundlerRejected {
         /// The JSON-RPC error code from the bundler.
         code: i64,
         /// The human-readable error message from the bundler.
-        message: String,
+        error_message: String,
     },
 }
 
@@ -535,7 +535,7 @@ impl SafeSmartAccount {
                         RpcError::RpcResponseError { code, error_message } => {
                             TransactionError::BundlerRejected {
                                 code,
-                                message: error_message,
+                                error_message,
                             }
                         }
                         _ => TransactionError::Generic {
