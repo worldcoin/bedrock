@@ -206,76 +206,50 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
 // server instead of a real Anvil fork, so they complete in milliseconds.
 
 /// Bundler JSON-RPC rejections (HTTP 200, error body) must surface as
-/// `TransactionError::BundlerRejected` with the bundler's code and message
-/// forwarded verbatim. Covers the most common EIP-7769 rejection codes.
+/// `TransactionError::Generic` whose message includes both the bundler's error
+/// code and its human-readable message.
 #[tokio::test]
-async fn test_send_bundler_sponsored_user_operation_bundler_rejected_cases() {
-    struct Case {
-        code: i64,
-        message: &'static str,
-    }
-
-    let cases = [
-        Case {
-            code: -32500,
-            message: "AA23 reverted (or OOG)",
-        },
-        Case {
-            code: -32507,
-            message: "wallet signature check failed",
-        },
-        Case {
-            code: -32602,
-            message: "invalid UserOperation struct/fields",
-        },
-    ];
-
-    // The sender address doesn't need to be deployed for these error tests —
-    // the mock bundler rejects before any on-chain call.
+async fn test_send_bundler_sponsored_user_operation_bundler_rejected() {
     let safe_address = "0x1234567890123456789012345678901234567890";
+    let code = -32500i64;
+    let message = "AA23 reverted (or OOG)";
 
-    for case in &cases {
-        let bundler_url = start_mock_http_server(
-            200,
-            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "error": { "code": case.code, "message": case.message } }).to_string(),
-        );
-        let owner_key_hex =
-            hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
-        let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)
-            .expect("failed to create SafeSmartAccount");
+    let bundler_url = start_mock_http_server(
+        200,
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "error": { "code": code, "message": message } })
+            .to_string(),
+    );
+    let owner_key_hex =
+        hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
+    let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)
+        .expect("failed to create SafeSmartAccount");
 
-        let err = safe_account
-            .send_bundler_sponsored_user_operation(
-                minimal_unparsed_user_op(safe_address),
-                bundler_url,
-            )
-            .await
-            .unwrap_err();
+    let err = safe_account
+        .send_bundler_sponsored_user_operation(
+            minimal_unparsed_user_op(safe_address),
+            bundler_url,
+        )
+        .await
+        .unwrap_err();
 
-        match err {
-            TransactionError::BundlerRejected {
-                code,
-                error_message,
-            } => {
-                assert_eq!(code, case.code, "wrong code for '{}'", case.message);
-                assert_eq!(
-                    error_message, case.message,
-                    "message not forwarded verbatim for code {}",
-                    case.code
-                );
-            }
-            other => panic!("expected BundlerRejected({}), got {other:?}", case.code),
+    match err {
+        TransactionError::Generic { error_message } => {
+            assert!(
+                error_message.contains(&code.to_string()),
+                "error message should contain bundler code {code}; got: {error_message}"
+            );
+            assert!(
+                error_message.contains(message),
+                "error message should contain bundler message '{message}'; got: {error_message}"
+            );
         }
+        other => panic!("expected Generic, got {other:?}"),
     }
 }
 
-/// When the bundler endpoint itself returns a non-2xx HTTP response (transport
+/// When the bundler endpoint returns a non-2xx HTTP response (transport
 /// failure — the request never reached bundler logic), the error must be
-/// `TransactionError::Generic`, NOT `BundlerRejected`.
-///
-/// This exercises the key distinction: `BundlerRejected` means "bundler received
-/// the request and made a decision"; `Generic` means "we couldn't even reach the
-/// bundler".
+/// `TransactionError::Generic`.
 #[tokio::test]
 async fn test_send_bundler_sponsored_user_operation_http_error_is_generic() {
     let bundler_url = start_mock_http_server(500, String::new());

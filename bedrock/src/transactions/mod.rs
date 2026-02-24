@@ -34,18 +34,6 @@ pub enum TransactionError {
     /// An error occurred with a primitive type. See `PrimitiveError` for more details.
     #[error("Primitive error: {0}")]
     PrimitiveError(String),
-
-    /// The bundler returned a JSON-RPC error in a 200 response (the request reached
-    /// the bundler, but it rejected the `UserOperation`).
-    ///
-    /// See [EIP-7769](https://eips.ethereum.org/EIPS/eip-7769) for error codes.
-    #[error("Bundler rejected user operation (code {code}): {error_message}")]
-    BundlerRejected {
-        /// The JSON-RPC error code from the bundler.
-        code: i64,
-        /// The human-readable error message from the bundler.
-        error_message: String,
-    },
 }
 
 impl From<crate::primitives::PrimitiveError> for TransactionError {
@@ -527,22 +515,10 @@ impl SafeSmartAccount {
                     crate::error!(
                         "bundler_sponsored_user_op.send_failed bundler_host={bundler_host} error={e}"
                     );
-                    // Distinguish between a bundler rejection (HTTP 200 with JSON-RPC
-                    // error body) and a transport-level failure (non-2xx HTTP or network
-                    // error). `BundlerRejected` carries the bundler's code and message
-                    // verbatim; `Generic` signals the request never reached bundler logic.
-                    match e {
-                        RpcError::RpcResponseError { code, error_message } => {
-                            TransactionError::BundlerRejected {
-                                code,
-                                error_message,
-                            }
-                        }
-                        _ => TransactionError::Generic {
-                            error_message: format!(
-                                "Failed to send bundler-sponsored user operation: {e}"
-                            ),
-                        },
+                    TransactionError::Generic {
+                        error_message: format!(
+                            "Failed to send bundler-sponsored user operation: {e}"
+                        ),
                     }
                 })?;
 
