@@ -2,6 +2,29 @@
 
 
 
+## [0.1.3] - 2026-02-23
+
+## What's Changed
+* chore: Add dzejkop to codeowners by @paolodamico in https://github.com/worldcoin/bedrock/pull/263
+* refactor: Use explicit state-based pattern in migration controller by @thomas-waite in https://github.com/worldcoin/bedrock/pull/256
+* build(deps): bump syn from 2.0.106 to 2.0.114 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/252
+* build(deps): bump proc-macro2 from 1.0.103 to 1.0.106 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/253
+* feat: add IAllowanceTransfer.approve support by @jamierumbelow in https://github.com/worldcoin/bedrock/pull/262
+* feat: bundler sponsored user ops by @aurel-fr in https://github.com/worldcoin/bedrock/pull/265
+* chore: fix typo in kotlin/README.md by @crystalt in https://github.com/worldcoin/bedrock/pull/266
+* feat: add structured monitoring to migration controller by @thomas-waite in https://github.com/worldcoin/bedrock/pull/259
+* chore: add logging to send_bundler_sponsored_user_operation by @crystalt in https://github.com/worldcoin/bedrock/pull/267
+* chore: remove sender from logs by @crystalt in https://github.com/worldcoin/bedrock/pull/268
+
+## New Contributors
+* @jamierumbelow made their first contribution in https://github.com/worldcoin/bedrock/pull/262
+* @crystalt made their first contribution in https://github.com/worldcoin/bedrock/pull/266
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.1.2...0.1.3
+
+
+
+
 ## [0.1.2] - 2026-02-03
 
 ## What's Changed
