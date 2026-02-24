@@ -53,7 +53,6 @@ fn start_mock_http_server(status: u16, body: String) -> String {
 /// A minimal `UnparsedUserOperation` whose fields are valid hex strings.
 /// The sender address is arbitrary because error tests never reach on-chain execution.
 fn minimal_unparsed_user_op(sender: &str) -> UnparsedUserOperation {
-    use bedrock::smart_account::{InstructionFlag, NonceKeyV1, TransactionTypeId};
     let nonce_key = NonceKeyV1::new(
         TransactionTypeId::Transfer,
         InstructionFlag::Default,
