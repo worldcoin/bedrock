@@ -12,12 +12,66 @@ use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     test_utils::{start_mock_bundler_server, AnvilBackedHttpClient, IEntryPoint},
-    transactions::foreign::UnparsedUserOperation,
+    transactions::{foreign::UnparsedUserOperation, TransactionError},
 };
 
 use bedrock::smart_account::{
     ISafe4337Module, InstructionFlag, NonceKeyV1, SafeOperation, TransactionTypeId,
 };
+
+// ── Helpers for error-handling integration tests ──────────────────────────────
+
+/// Starts a loopback HTTP server that responds to every request with the given
+/// status code and body. Returns `http://127.0.0.1:<port>`.
+fn start_mock_http_server(status: u16, body: String) -> String {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let body = body.clone();
+            let Ok(mut stream) = stream else { break };
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 {status} -\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            });
+        }
+    });
+
+    url
+}
+
+/// A minimal `UnparsedUserOperation` whose fields are valid hex strings.
+/// The sender address is arbitrary because error tests never reach on-chain execution.
+fn minimal_unparsed_user_op(sender: &str) -> UnparsedUserOperation {
+    use bedrock::smart_account::{InstructionFlag, NonceKeyV1, TransactionTypeId};
+    let nonce_key = NonceKeyV1::new(TransactionTypeId::Transfer, InstructionFlag::Default, [0u8; 10]);
+    let nonce = nonce_key.encode_with_sequence(0);
+    UnparsedUserOperation {
+        sender: sender.to_string(),
+        nonce: format!("{nonce:#x}"),
+        call_data: "0x".to_string(),
+        call_gas_limit: "0x200000".to_string(),
+        verification_gas_limit: "0x200000".to_string(),
+        pre_verification_gas: "0x200000".to_string(),
+        max_fee_per_gas: "0x12A05F200".to_string(),
+        max_priority_fee_per_gas: "0x12A05F200".to_string(),
+        paymaster: None,
+        paymaster_verification_gas_limit: None,
+        paymaster_post_op_gas_limit: None,
+        paymaster_data: None,
+        signature: format!("0x{}", hex::encode(vec![0xff; 77])),
+        factory: None,
+        factory_data: None,
+    }
+}
 
 /// Integration test for the bundler-sponsored user operation flow.
 ///
@@ -137,4 +191,92 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
     assert_eq!(after_safe, before_safe - U256::from(10u128.pow(18)));
 
     Ok(())
+}
+
+// ── Error-handling tests (no Anvil required) ──────────────────────────────────
+//
+// These tests verify the error-handling behaviour of
+// `send_bundler_sponsored_user_operation`. They use a lightweight mock HTTP
+// server instead of a real Anvil fork, so they complete in milliseconds.
+
+/// Bundler JSON-RPC rejections (HTTP 200, error body) must surface as
+/// `TransactionError::BundlerRejected` with the bundler's code and message
+/// forwarded verbatim. Covers the most common EIP-7769 rejection codes.
+#[tokio::test]
+async fn test_send_bundler_sponsored_user_operation_bundler_rejected_cases() {
+    struct Case {
+        code: i64,
+        message: &'static str,
+    }
+
+    let cases = [
+        Case { code: -32500, message: "AA23 reverted (or OOG)" },
+        Case { code: -32507, message: "wallet signature check failed" },
+        Case { code: -32602, message: "invalid UserOperation struct/fields" },
+    ];
+
+    // The sender address doesn't need to be deployed for these error tests —
+    // the mock bundler rejects before any on-chain call.
+    let safe_address = "0x1234567890123456789012345678901234567890";
+
+    for case in &cases {
+        let bundler_url = start_mock_http_server(
+            200,
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "error": { "code": case.code, "message": case.message } }).to_string(),
+        );
+        let owner_key_hex =
+            hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
+        let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)
+            .expect("failed to create SafeSmartAccount");
+
+        let err = safe_account
+            .send_bundler_sponsored_user_operation(
+                minimal_unparsed_user_op(safe_address),
+                bundler_url,
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            TransactionError::BundlerRejected { code, message } => {
+                assert_eq!(code, case.code, "wrong code for '{}'", case.message);
+                assert_eq!(
+                    message, case.message,
+                    "message not forwarded verbatim for code {}",
+                    case.code
+                );
+            }
+            other => panic!("expected BundlerRejected({}), got {other:?}", case.code),
+        }
+    }
+}
+
+/// When the bundler endpoint itself returns a non-2xx HTTP response (transport
+/// failure — the request never reached bundler logic), the error must be
+/// `TransactionError::Generic`, NOT `BundlerRejected`.
+///
+/// This exercises the key distinction: `BundlerRejected` means "bundler received
+/// the request and made a decision"; `Generic` means "we couldn't even reach the
+/// bundler".
+#[tokio::test]
+async fn test_send_bundler_sponsored_user_operation_http_error_is_generic() {
+    let bundler_url = start_mock_http_server(500, String::new());
+
+    let owner_key_hex = hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
+    let safe_address = "0x1234567890123456789012345678901234567890";
+    let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)
+        .expect("failed to create SafeSmartAccount");
+
+    let err = safe_account
+        .send_bundler_sponsored_user_operation(
+            minimal_unparsed_user_op(safe_address),
+            bundler_url,
+        )
+        .await
+        .expect_err("expected an error for HTTP 500");
+
+    assert!(
+        matches!(err, TransactionError::Generic { .. }),
+        "HTTP 500 should produce Generic; got {err:?}"
+    );
 }
