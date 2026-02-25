@@ -660,5 +660,4 @@ mod tests {
         assert_eq!(serialized["paymasterVerificationGasLimit"], "0xa");
         assert_eq!(serialized["paymasterPostOpGasLimit"], "0x0");
     }
-
 }

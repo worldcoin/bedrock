@@ -159,10 +159,10 @@ pub async fn send_user_operation_to_url(
     })
 }
 
-/// Verifies that a bundler RPC endpoint supports the v0.7 EntryPoint used by World App.
+/// Verifies that a bundler RPC endpoint supports the v0.7 `EntryPoint` used by World App.
 ///
 /// Calls `eth_supportedEntryPoints` on the given URL and checks that the response
-/// contains the expected EntryPoint address.
+/// contains the expected `EntryPoint` address.
 ///
 /// # Errors
 ///
@@ -170,7 +170,7 @@ pub async fn send_user_operation_to_url(
 /// - The URL is invalid or uses a disallowed scheme
 /// - The HTTP request fails
 /// - The RPC returns an error response
-/// - The expected EntryPoint is not in the returned list
+/// - The expected `EntryPoint` is not in the returned list
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn verify_bundler_rpc_entrypoint(rpc_url: String) -> Result<(), RpcError> {
     validate_rpc_url(&rpc_url)?;
@@ -192,8 +192,10 @@ pub async fn verify_bundler_rpc_entrypoint(rpc_url: String) -> Result<(), RpcErr
         })?;
 
     let expected_str = crate::smart_account::entrypoint_address();
-    let expected = Address::from_str(&expected_str)
-        .expect("entrypoint_address() must return a valid address");
+    let expected =
+        Address::from_str(&expected_str).map_err(|_| RpcError::InvalidResponse {
+            error_message: format!("Invalid entrypoint address: {expected_str}"),
+        })?;
 
     let supported = entrypoints
         .iter()

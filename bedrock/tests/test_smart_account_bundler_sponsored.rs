@@ -13,10 +13,8 @@ use bedrock::{
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     test_utils::{start_mock_bundler_server, AnvilBackedHttpClient, IEntryPoint},
     transactions::{
-        custom_bundler::verify_bundler_rpc_entrypoint,
-        foreign::UnparsedUserOperation,
-        rpc::RpcError,
-        TransactionError,
+        custom_bundler::verify_bundler_rpc_entrypoint, foreign::UnparsedUserOperation,
+        rpc::RpcError, TransactionError,
     },
 };
 
