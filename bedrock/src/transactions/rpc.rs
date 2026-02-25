@@ -1,8 +1,10 @@
-//! RPC module for handling 4337 `UserOperation` requests through authenticated HTTP client.
+//! App-backend RPC client for handling 4337 `UserOperation` requests.
 //!
 //! This module provides functionality to:
 //! - Request sponsorship for `UserOperations` via `wa_sponsorUserOperation`
 //! - Submit signed `UserOperations` via `eth_sendUserOperation`
+//!
+//! For operations against client-provided external bundler URLs, see [`super::custom_bundler`].
 
 use crate::{
     primitives::http_client::{get_http_client, HttpHeader},
@@ -16,13 +18,9 @@ use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 /// Global RPC client instance for Bedrock operations
 static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
-
-/// Global reqwest client for direct HTTP requests (e.g. bundler endpoints).
-static REQWEST_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// JSON-RPC request ID
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +47,9 @@ pub enum RpcMethod {
     /// Make a read call to a smart contract
     #[serde(rename = "eth_call")]
     EthCall,
+    /// Query supported ERC-4337 entry points
+    #[serde(rename = "eth_supportedEntryPoints")]
+    SupportedEntryPoints,
 }
 
 /// 4337 provider selection to be passed by native apps
@@ -84,13 +85,14 @@ impl RpcMethod {
             Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
             Self::SendUserOperation => "eth_sendUserOperation",
             Self::EthCall => "eth_call",
+            Self::SupportedEntryPoints => "eth_supportedEntryPoints",
         }
     }
 }
 
-/// JSON-RPC request
+/// JSON-RPC request envelope, shared with [`super::custom_bundler`].
 #[derive(Debug, Serialize)]
-struct JsonRpcRequest<T> {
+pub(crate) struct JsonRpcRequest<T> {
     jsonrpc: &'static str,
     id: Id,
     method: RpcMethod,
@@ -98,8 +100,7 @@ struct JsonRpcRequest<T> {
 }
 
 impl<T> JsonRpcRequest<T> {
-    /// Create a new JSON-RPC request
-    const fn new(method: RpcMethod, id: Id, params: T) -> Self {
+    pub(crate) const fn new(method: RpcMethod, id: Id, params: T) -> Self {
         Self {
             jsonrpc: "2.0",
             id,
@@ -109,15 +110,14 @@ impl<T> JsonRpcRequest<T> {
     }
 }
 
-/// JSON-RPC error payload
+/// JSON-RPC error payload, shared with [`super::custom_bundler`].
 #[derive(Debug, Deserialize)]
-struct ErrorPayload {
-    code: i64,
-    message: String,
-    // This is currently unused, but we keep it here for future use + consistency
+pub(crate) struct ErrorPayload {
+    pub code: i64,
+    pub message: String,
     #[serde(default)]
     #[allow(dead_code)]
-    data: Option<Value>,
+    pub data: Option<Value>,
 }
 
 /// Errors that can occur when interacting with RPC operations.
@@ -487,130 +487,6 @@ pub fn get_rpc_client() -> Result<&'static RpcClient, RpcError> {
         .ok_or(RpcError::HttpClientNotInitialized)
 }
 
-/// Validates that the given URL is safe to use as an RPC endpoint.
-///
-/// Requires `https://` scheme for all hosts, with `http://` permitted only
-/// for loopback addresses.
-fn validate_rpc_url(url: &str) -> Result<(), RpcError> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| RpcError::InvalidUrl {
-        error_message: format!("Failed to parse URL: {e}"),
-    })?;
-
-    match parsed.scheme() {
-        "https" => Ok(()),
-        "http" => match parsed.host_str() {
-            Some("127.0.0.1" | "localhost" | "::1" | "[::1]") => Ok(()),
-            _ => Err(RpcError::InvalidUrl {
-                error_message: "Only https:// URLs are allowed for non-loopback hosts"
-                    .to_string(),
-            }),
-        },
-        scheme => Err(RpcError::InvalidUrl {
-            error_message: format!(
-                "Unsupported URL scheme '{scheme}://', only https:// is allowed"
-            ),
-        }),
-    }
-}
-
-/// Makes a JSON-RPC POST request to an arbitrary URL using `reqwest`.
-///
-/// The client is configured with a 15 s timeout to prevent indefinitely hanging requests.
-async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-    let client = REQWEST_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("failed to build reqwest client")
-    });
-    let response = client
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .send()
-        .await
-        // Strip the related url from this error to avoid leaking API keys
-        .map_err(|e| RpcError::HttpError(e.without_url().to_string()))?;
-
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| RpcError::HttpError(e.without_url().to_string()))?;
-
-    if !status.is_success() {
-        return Err(RpcError::HttpError(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&bytes)
-        )));
-    }
-
-    Ok(bytes.to_vec())
-}
-
-/// Submits a signed `UserOperation` via `eth_sendUserOperation` to an external RPC URL.
-///
-/// This is a standalone function that sends directly to an arbitrary absolute URL
-/// (e.g. a third-party bundler endpoint) using a Rust-native HTTP client (`reqwest`).
-/// It is intentionally separate from [`RpcClient`], which routes through the app backend.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The HTTP request fails
-/// - The request serialization fails
-/// - The response parsing fails
-/// - The RPC returns an error response
-/// - The returned user operation hash is invalid
-pub async fn send_user_operation_to_url(
-    rpc_url: &str,
-    user_operation: &UserOperation,
-    entrypoint: Address,
-) -> Result<FixedBytes<32>, RpcError> {
-    validate_rpc_url(rpc_url)?;
-
-    let params = vec![
-        serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
-        serde_json::Value::String(format!("{entrypoint:?}")),
-    ];
-
-    let id = Id::Number(u64::from(rand::random::<u32>()));
-    let request = JsonRpcRequest::new(RpcMethod::SendUserOperation, id, params);
-    let request_bytes =
-        serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
-
-    let response_bytes = post_json_rpc_to_url(rpc_url, request_bytes).await?;
-
-    let json_response: Value =
-        serde_json::from_slice(&response_bytes).map_err(|_| RpcError::JsonError)?;
-
-    if let Some(error) = json_response.get("error") {
-        let error_payload: ErrorPayload =
-            serde_json::from_value(error.clone()).map_err(|_| RpcError::JsonError)?;
-
-        return Err(RpcError::RpcResponseError {
-            code: error_payload.code,
-            error_message: error_payload.message,
-        });
-    }
-
-    let result_value =
-        json_response
-            .get("result")
-            .ok_or_else(|| RpcError::InvalidResponse {
-                error_message: "Response missing both 'result' and 'error' fields"
-                    .to_string(),
-            })?;
-
-    let result: String = serde_json::from_value(result_value.clone())
-        .map_err(|_| RpcError::JsonError)?;
-
-    FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
-        error_message: format!("Invalid userOpHash format: {e}"),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,36 +661,4 @@ mod tests {
         assert_eq!(serialized["paymasterPostOpGasLimit"], "0x0");
     }
 
-    #[test]
-    fn test_validate_rpc_url_accepts_https() {
-        assert!(validate_rpc_url("https://bundler.example.com/rpc").is_ok());
-        assert!(validate_rpc_url("https://rpc.pimlico.io/v2/123").is_ok());
-    }
-
-    #[test]
-    fn test_validate_rpc_url_accepts_http_loopback() {
-        assert!(validate_rpc_url("http://127.0.0.1:8545").is_ok());
-        assert!(validate_rpc_url("http://localhost:8080/rpc").is_ok());
-        assert!(validate_rpc_url("http://[::1]:8545").is_ok());
-    }
-
-    #[test]
-    fn test_validate_rpc_url_rejects_http_non_loopback() {
-        assert!(validate_rpc_url("http://bundler.example.com/rpc").is_err());
-        assert!(validate_rpc_url("http://169.254.169.254/metadata").is_err());
-        assert!(validate_rpc_url("http://10.0.0.1:8545").is_err());
-    }
-
-    #[test]
-    fn test_validate_rpc_url_rejects_dangerous_schemes() {
-        assert!(validate_rpc_url("file:///etc/passwd").is_err());
-        assert!(validate_rpc_url("ftp://example.com").is_err());
-        assert!(validate_rpc_url("data:text/html,<h1>hi</h1>").is_err());
-    }
-
-    #[test]
-    fn test_validate_rpc_url_rejects_invalid_urls() {
-        assert!(validate_rpc_url("not a url").is_err());
-        assert!(validate_rpc_url("").is_err());
-    }
 }

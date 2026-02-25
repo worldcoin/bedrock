@@ -7,21 +7,19 @@ use alloy::primitives::aliases::{U160, U48};
 
 use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
-    smart_account::{
-        Is4337Encodable, Permit2Approve, SafeSmartAccount, ENTRYPOINT_4337,
-    },
+    smart_account::{Is4337Encodable, Permit2Approve, SafeSmartAccount},
     transactions::{
         contracts::{
             erc20::{Erc20, TransferAssociation},
             world_campaign_manager::WorldCampaignManager,
             world_gift_manager::WorldGiftManager,
         },
-        foreign::UnparsedUserOperation,
         rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
     },
 };
 
 pub mod contracts;
+pub mod custom_bundler;
 pub use contracts::world_campaign_manager::world_campaign_manager_address;
 pub mod foreign;
 pub mod rpc;
@@ -456,73 +454,6 @@ impl SafeSmartAccount {
             .map_err(|e| TransactionError::Generic {
                 error_message: format!("Failed to execute ERC4626 redeem: {e}"),
             })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
-    }
-
-    /// Signs and sends a bundler-sponsored `UserOperation` to an external bundler RPC endpoint.
-    ///
-    /// This method takes an existing `UserOperation`, converts it to a bundler-sponsored
-    /// format (zeroed paymaster and fee fields), signs it, and submits it directly to
-    /// the provided bundler RPC URL via `eth_sendUserOperation`.
-    ///
-    /// In a bundler-sponsored user operation, the bundler itself covers all gas costs.
-    /// The operation's core fields (`sender`, `nonce`, `callData`, `callGasLimit`,
-    /// `verificationGasLimit`) are preserved from the original operation.
-    ///
-    /// # Arguments
-    /// - `user_operation`: The user operation to convert and send.
-    /// - `rpc_url`: The absolute URL of the bundler RPC endpoint (e.g. `https://bundler.example.com/rpc`).
-    ///
-    /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if the user operation is invalid.
-    /// - Returns [`TransactionError::Generic`] if signing or submission fails.
-    pub async fn send_bundler_sponsored_user_operation(
-        &self,
-        user_operation: UnparsedUserOperation,
-        rpc_url: String,
-    ) -> Result<HexEncodedData, TransactionError> {
-        // 1. Parse and convert to bundler-sponsored format
-        let mut user_op: crate::smart_account::UserOperation = user_operation
-            .try_into()
-            .map_err(|e: crate::primitives::PrimitiveError| {
-                TransactionError::PrimitiveError(e.to_string())
-            })?;
-        user_op = user_op.as_bundler_sponsored();
-
-        // Extract host only to avoid logging API keys
-        let bundler_host = reqwest::Url::parse(&rpc_url)
-            .ok()
-            .and_then(|u| u.host_str().map(String::from))
-            .unwrap_or_else(|| "<unknown>".to_string());
-
-        crate::info!("bundler_sponsored_user_op.sending bundler_host={bundler_host}");
-
-        // 2. Sign with fresh validity timestamps
-        self.sign_user_operation(&mut user_op, Network::WorldChain)
-            .map_err(|e| {
-                crate::error!("bundler_sponsored_user_op.sign_failed error={e}");
-                TransactionError::Generic {
-                    error_message: format!("Failed to sign user operation: {e}"),
-                }
-            })?;
-
-        // 3. Send to the bundler RPC URL
-        let user_op_hash =
-            rpc::send_user_operation_to_url(&rpc_url, &user_op, *ENTRYPOINT_4337)
-                .await
-                .map_err(|e| {
-                    crate::error!(
-                        "bundler_sponsored_user_op.send_failed bundler_host={bundler_host} error={e}"
-                    );
-                    TransactionError::Generic {
-                        error_message: format!(
-                            "Failed to send bundler-sponsored user operation: {e}"
-                        ),
-                    }
-                })?;
-
-        crate::info!("bundler_sponsored_user_op.submitted user_op_hash={user_op_hash}");
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
