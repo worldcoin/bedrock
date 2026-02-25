@@ -51,6 +51,8 @@ pub enum BackupReportEventKind {
     RemoveMainFactor,
     /// Triggered when a user performs a log in (prev. called restore) with the new system
     LogIn,
+    /// Triggered after verification of a login method (eensures user still has full access to their account)
+    MethodVerification,
 }
 
 /// Minimal representation of an OIDC factor for reporting
