@@ -18,8 +18,8 @@
 //! use oxide::migration::MigrationController;
 //! use std::sync::Arc;
 //!
-//! // Create controller (processors are registered internally)
-//! let controller = MigrationController::new(kv_store);
+//! // Create controller with default processors (and optional additional ones)
+//! let controller = MigrationController::new(kv_store, safe_account, vec![]);
 //!
 //! let summary = controller.run_migrations()?;
 //! ```
