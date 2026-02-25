@@ -12,7 +12,10 @@ use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     test_utils::{start_mock_bundler_server, AnvilBackedHttpClient, IEntryPoint},
-    transactions::{foreign::UnparsedUserOperation, TransactionError},
+    transactions::{
+        custom_bundler::verify_bundler_rpc_entrypoint, foreign::UnparsedUserOperation,
+        rpc::RpcError, TransactionError,
+    },
 };
 
 use bedrock::smart_account::{
@@ -349,4 +352,68 @@ async fn test_send_bundler_sponsored_user_operation_http_error_is_generic() {
         matches!(err, TransactionError::Generic { .. }),
         "HTTP 500 should produce Generic; got {err:?}"
     );
+}
+
+// ── verify_bundler_rpc_entrypoint tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn test_verify_bundler_rpc_entrypoint_success() {
+    let entrypoint = format!("{:#x}", *ENTRYPOINT_4337);
+    let url = start_mock_http_server(
+        200,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [entrypoint]
+        })
+        .to_string(),
+    );
+
+    verify_bundler_rpc_entrypoint(url)
+        .await
+        .expect("should succeed when entrypoint is in the list");
+}
+
+#[tokio::test]
+async fn test_verify_bundler_rpc_entrypoint_missing() {
+    let url = start_mock_http_server(
+        200,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": ["0x0000000000000000000000000000000000000001"]
+        })
+        .to_string(),
+    );
+
+    let err = verify_bundler_rpc_entrypoint(url)
+        .await
+        .expect_err("should fail when entrypoint is missing");
+
+    assert!(
+        matches!(err, RpcError::InvalidResponse { .. }),
+        "expected InvalidResponse; got {err:?}"
+    );
+}
+
+/// Live integration test that verifies a real bundler RPC supports the v0.7 EntryPoint.
+/// Skipped by default; run explicitly with:
+///
+/// ```sh
+/// BUNDLER_RPC_URL="https://..." \
+/// cargo test test_verify_bundler_rpc_entrypoint_live -- --ignored
+/// ```
+#[tokio::test]
+#[ignore]
+async fn test_verify_bundler_rpc_entrypoint_live() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
+    let rpc_url =
+        std::env::var("BUNDLER_RPC_URL").expect("BUNDLER_RPC_URL must be set");
+
+    verify_bundler_rpc_entrypoint(rpc_url)
+        .await
+        .expect("live bundler should support the v0.7 EntryPoint");
+
+    Ok(())
 }
