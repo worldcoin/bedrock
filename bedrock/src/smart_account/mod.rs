@@ -45,6 +45,15 @@ pub use crate::primitives::contracts::{
 
 pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
+/// Returns the ERC-4337 v0.7 `EntryPoint` contract address used by World App.
+///
+/// Contract reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol>
+#[uniffi::export]
+#[must_use]
+pub fn entrypoint_address() -> String {
+    format!("{:#x}", *ENTRYPOINT_4337)
+}
+
 // Import the generated types from permit2 module
 pub use permit2::{
     Permit2Approve, UnparsedPermitTransferFrom, UnparsedTokenPermissions,
@@ -413,6 +422,12 @@ mod tests {
     use crate::smart_account::permit2::{PermitTransferFrom, TokenPermissions};
 
     use super::*;
+
+    #[test]
+    fn test_entrypoint_address() {
+        let address = entrypoint_address();
+        assert_eq!(address, "0x0000000071727de22e5e9d8baf0edac6f37da032");
+    }
 
     #[test]
     fn test_cannot_initialize_with_invalid_hex_secret() {
