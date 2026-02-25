@@ -191,11 +191,7 @@ pub async fn verify_bundler_rpc_entrypoint(rpc_url: String) -> Result<(), RpcErr
             error_message: "Expected array of entrypoint addresses".to_string(),
         })?;
 
-    let expected_str = crate::smart_account::entrypoint_address();
-    let expected =
-        Address::from_str(&expected_str).map_err(|_| RpcError::InvalidResponse {
-            error_message: format!("Invalid entrypoint address: {expected_str}"),
-        })?;
+    let expected = *ENTRYPOINT_4337;
 
     let supported = entrypoints
         .iter()
@@ -206,7 +202,7 @@ pub async fn verify_bundler_rpc_entrypoint(rpc_url: String) -> Result<(), RpcErr
     } else {
         Err(RpcError::InvalidResponse {
             error_message: format!(
-                "Bundler does not support the expected EntryPoint ({expected_str}); supported: {entrypoints:?}"
+                "Bundler does not support the expected EntryPoint ({expected:?}); supported: {entrypoints:?}"
             ),
         })
     }
