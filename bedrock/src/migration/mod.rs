@@ -80,4 +80,5 @@ pub mod processors;
 pub use controller::{MigrationController, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
+pub use processors::Permit2ApprovalProcessor;
 pub use state::{MigrationRecord, MigrationStatus};
