@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "bedrock"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "bedrock-macros"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5747,7 +5747,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "uniffi",
 ]
