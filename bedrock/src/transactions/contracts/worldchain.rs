@@ -24,7 +24,7 @@ pub static WBTC_ADDRESS: Address =
 pub static WLD_ADDRESS: Address =
     address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
 
-/// Token addresses on WorldChain that should have max ERC20 approval to Permit2.
+/// Token addresses on Worldchain that should have max ERC20 approval to Permit2.
 pub const WORLDCHAIN_PERMIT2_TOKENS: [(Address, &str); 4] = [
     (USDC_ADDRESS, "usdc"),
     (WETH_ADDRESS, "weth"),

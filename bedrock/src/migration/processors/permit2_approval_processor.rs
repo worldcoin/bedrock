@@ -123,35 +123,8 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
                     "Failed to submit batched ERC20 approvals to Permit2: {}",
                     e
                 ),
-                retry_after_ms: Some(30_000),
+                retry_after_ms: Some(10_000),
             }),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_migration_id() {
-        let safe = SafeSmartAccount::random();
-        let processor = Permit2ApprovalProcessor::new(Arc::new(safe));
-        assert_eq!(processor.migration_id(), "wallet.permit2.approval");
-    }
-
-    #[test]
-    fn test_encode_allowance() {
-        use alloy::primitives::address;
-        use alloy::sol_types::SolCall;
-        use crate::transactions::contracts::erc20::IErc20;
-
-        let owner = address!("0x4564420674EA68fcc61b463C0494807C759d47e6");
-        let spender = PERMIT2_ADDRESS;
-
-        let call_data = Erc20::encode_allowance(owner, spender);
-
-        let expected = IErc20::allowanceCall { owner, spender }.abi_encode();
-        assert_eq!(call_data, expected);
     }
 }

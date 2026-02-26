@@ -5,6 +5,4 @@
 mod example_processor;
 
 /// Processor that ensures max ERC20 approval to Permit2 on WorldChain for supported tokens.
-mod permit2_approval_processor;
-
-pub use permit2_approval_processor::Permit2ApprovalProcessor;
+pub mod permit2_approval_processor;
