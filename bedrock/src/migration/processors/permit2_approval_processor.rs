@@ -7,9 +7,9 @@ use tokio::sync::Mutex;
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::primitives::Network;
-use crate::smart_account::{Is4337Encodable, SafeSmartAccount, PERMIT2_ADDRESS};
+use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
 use crate::transactions::contracts::erc20::Erc20;
-use crate::transactions::contracts::permit2::Permit2Erc20ApprovalBatch;
+use crate::transactions::contracts::permit2::{BatchPermit2Approval, PERMIT2_ADDRESS};
 use crate::transactions::contracts::worldchain::{
     USDC_ADDRESS, WBTC_ADDRESS, WETH_ADDRESS, WLD_ADDRESS,
 };
@@ -124,7 +124,7 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
 
         let addresses: Vec<Address> = tokens.iter().map(|(addr, _)| *addr).collect();
         let names: Vec<&str> = tokens.iter().map(|(_, name)| *name).collect();
-        let batch = Permit2Erc20ApprovalBatch::new(&addresses);
+        let batch = BatchPermit2Approval::new(&addresses);
 
         match batch
             .sign_and_execute(

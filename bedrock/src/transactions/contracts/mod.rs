@@ -5,7 +5,7 @@ pub mod erc20;
 pub mod erc4626;
 /// Utilities for batching multiple transactions via the Safe `MultiSend` contract.
 pub mod multisend;
-/// Permit2 contract helpers for batching ERC20 approvals.
+/// Permit2 contract types, helpers, and batched ERC20 approvals via `MultiSend`.
 pub mod permit2;
 pub mod world_campaign_manager;
 pub mod world_gift_manager;
