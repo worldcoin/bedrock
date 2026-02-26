@@ -14,7 +14,16 @@ use crate::{
     smart_account::{SafeSmartAccountError, UserOperation},
 };
 use alloy::hex::FromHex;
-use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
+use alloy::primitives::{address, Address, Bytes, FixedBytes, U128, U256};
+use alloy::sol_types::SolCall;
+
+pub use crate::primitives::contracts::IMulticall3;
+
+/// The canonical Multicall3 contract address (same across all EVM chains).
+///
+/// Reference: <https://www.multicall3.com/>
+const MULTICALL3_ADDRESS: Address =
+    address!("0xcA11bde05977b3631167028862bE2a173976CA11");
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
@@ -419,6 +428,48 @@ impl RpcClient {
             RpcProviderName::Any,
         )
         .await
+    }
+
+    /// Makes multiple read calls in a single `eth_call` via Multicall3 `aggregate3`.
+    ///
+    /// All calls are made with `allowFailure = true`. Callers should inspect
+    /// each `Result.success` field to determine if the individual call succeeded.
+    ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `calls`: slice of `(target_address, calldata)` pairs
+    ///
+    /// # Errors
+    /// - Will return an RPC error if the outer `eth_call` itself fails.
+    pub async fn eth_call_batched(
+        &self,
+        network: Network,
+        calls: &[(Address, Bytes)],
+    ) -> Result<Vec<IMulticall3::Result>, RpcError> {
+        let multicall3_calls: Vec<IMulticall3::Call3> = calls
+            .iter()
+            .map(|(target, data)| IMulticall3::Call3 {
+                target: *target,
+                allowFailure: false,
+                callData: data.clone(),
+            })
+            .collect();
+
+        let calldata = IMulticall3::aggregate3Call {
+            calls: multicall3_calls,
+        }
+        .abi_encode();
+
+        let result = self
+            .eth_call(network, MULTICALL3_ADDRESS, calldata.into())
+            .await?;
+
+        let decoded = IMulticall3::aggregate3Call::abi_decode_returns(&result)
+            .map_err(|e| RpcError::InvalidResponse {
+                error_message: format!("Failed to decode Multicall3 response: {e}"),
+            })?;
+
+        Ok(decoded)
     }
 
     /// Makes a read call to a smart contract via `eth_call` on latest block

@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, Bytes, U256};
 use async_trait::async_trait;
 use log::info;
 use std::sync::Arc;
@@ -56,34 +56,33 @@ impl Permit2ApprovalProcessor {
         }
     }
 
-    /// Queries on-chain allowance for a given token from the wallet to the Permit2 contract.
-    async fn get_allowance(&self, token: Address) -> Result<U256, MigrationError> {
+    /// Fetches on-chain allowances for all tokens concurrently and stores those that need approval.
+    async fn fetch_tokens_needing_approval(&self) -> Result<(), MigrationError> {
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
 
         let call_data =
             Erc20::encode_allowance(self.safe_account.wallet_address, PERMIT2_ADDRESS);
 
-        let result = rpc_client
-            .eth_call(Network::WorldChain, token, call_data.into())
+        let calls: Vec<_> = WORLDCHAIN_PERMIT2_TOKENS
+            .iter()
+            .map(|(token, _)| (*token, Bytes::from(call_data.clone())))
+            .collect();
+
+        let results = rpc_client
+            .eth_call_batched(Network::WorldChain, &calls)
             .await
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
 
-        if result.len() < 32 {
-            return Err(MigrationError::InvalidOperation(
-                "eth_call returned less than 32 bytes for allowance".to_string(),
-            ));
-        }
-
-        Ok(U256::from_be_slice(&result[..32]))
-    }
-
-    /// Fetches on-chain allowances and stores the tokens that need approval.
-    async fn fetch_tokens_needing_approval(&self) -> Result<(), MigrationError> {
         let mut needs_approval = Vec::new();
+        for ((token, name), result) in WORLDCHAIN_PERMIT2_TOKENS.iter().zip(results) {
+            if !result.success || result.returnData.len() < 32 {
+                return Err(MigrationError::InvalidOperation(format!(
+                    "Multicall3 allowance query failed for {name}"
+                )));
+            }
+            let allowance = U256::from_be_slice(&result.returnData[..32]);
 
-        for (token, name) in &WORLDCHAIN_PERMIT2_TOKENS {
-            let allowance = self.get_allowance(*token).await?;
             // USDC decrements allowance on every transfer (non-standard behavior),
             // so use a buffer to avoid re-approving after minor usage.
             // Standard ERC20 tokens skip decrement at uint256.max, so exact check is fine.
