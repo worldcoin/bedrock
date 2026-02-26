@@ -119,11 +119,15 @@ impl MigrationController {
     ///
     /// Records that don't exist yet are silently skipped.
     ///
+    /// # Errors
+    ///
+    /// Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
+    /// Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
+    ///
     /// # Concurrency
     ///
     /// Acquires the global migration lock to prevent deleting records while
-    /// migrations are in progress. Returns `InvalidOperation` if a migration
-    /// run is currently executing.
+    /// migrations are in progress.
     pub fn delete_all_records(&self) -> Result<i32, MigrationError> {
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
             MigrationError::InvalidOperation(
