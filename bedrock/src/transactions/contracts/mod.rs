@@ -9,3 +9,5 @@ pub mod multisend;
 pub mod permit2;
 pub mod world_campaign_manager;
 pub mod world_gift_manager;
+/// WorldChain contract addresses and token constants.
+pub mod worldchain;

@@ -6,7 +6,7 @@
 //!
 //! Reference: <https://docs.uniswap.org/contracts/permit2/overview>
 
-use alloy::primitives::{address, Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes, U256};
 use alloy::sol_types::SolCall;
 
 use crate::primitives::PrimitiveError;
@@ -17,32 +17,7 @@ use crate::smart_account::{
 
 use super::erc20::Erc20;
 use super::multisend::{MultiSend, MultiSendTx};
-
-/// The canonical Permit2 contract address (same across all EVM chains).
-///
-/// Reference: <https://docs.uniswap.org/contracts/v4/deployments#worldchain-480>
-pub static PERMIT2_ADDRESS: Address =
-    address!("0x000000000022d473030f116ddee9f6b43ac78ba3");
-
-/// Token addresses on WorldChain (chain ID 480) that should have max ERC20 approval to Permit2.
-pub const WORLDCHAIN_PERMIT2_TOKENS: [(Address, &str); 4] = [
-    (
-        address!("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1"),
-        "usdc",
-    ),
-    (
-        address!("0x4200000000000000000000000000000000000006"),
-        "weth",
-    ),
-    (
-        address!("0x03c7054bcb39f7b2e5b2c7acb37583e32d70cfa3"),
-        "wbtc",
-    ),
-    (
-        address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003"),
-        "wld",
-    ),
-];
+pub use super::worldchain::{PERMIT2_ADDRESS, WORLDCHAIN_PERMIT2_TOKENS};
 
 /// Batched ERC20 `approve(PERMIT2_ADDRESS, type(uint256).max)` calls via MultiSend.
 ///
@@ -123,25 +98,9 @@ impl Is4337Encodable for Permit2Erc20ApprovalBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::address;
     use crate::transactions::contracts::erc20::IErc20;
     use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
-
-    #[test]
-    fn test_worldchain_permit2_tokens_count() {
-        assert_eq!(WORLDCHAIN_PERMIT2_TOKENS.len(), 4);
-    }
-
-    #[test]
-    fn test_batch_targets_multisend_via_delegatecall() {
-        let tokens = vec![
-            address!("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1"),
-            address!("0x4200000000000000000000000000000000000006"),
-        ];
-        let batch = Permit2Erc20ApprovalBatch::new(&tokens);
-
-        assert_eq!(batch.to, MULTISEND_ADDRESS);
-        assert!(matches!(batch.operation, SafeOperation::DelegateCall));
-    }
 
     #[test]
     fn test_batch_execute_user_op_targets_multisend() {

@@ -1,7 +1,6 @@
 use alloy::{
     dyn_abi::{Eip712Domain, TypedData},
     primitives::{
-        address,
         aliases::{U160, U48},
         Address, Bytes, U256,
     },
@@ -17,9 +16,7 @@ use super::{
     TransactionTypeId, UserOperation,
 };
 
-/// Reference: <https://docs.uniswap.org/contracts/v4/deployments#worldchain-480>
-pub static PERMIT2_ADDRESS: Address =
-    address!("0x000000000022d473030f116ddee9f6b43ac78ba3");
+pub use crate::transactions::contracts::worldchain::PERMIT2_ADDRESS;
 
 bedrock_sol! {
     /// The token and amount details for a transfer signed in the permit transfer signature.
@@ -158,6 +155,7 @@ impl Is4337Encodable for Permit2Approve {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::address;
     use crate::primitives::{Network, BEDROCK_NONCE_PREFIX_CONST};
     use alloy::primitives::{fixed_bytes, uint};
     use std::str::FromStr;
