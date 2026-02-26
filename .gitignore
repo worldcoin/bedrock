@@ -38,3 +38,6 @@ kotlin/bedrock-tests/bin/
 
 # foundry
 out/
+
+# claude
+.claude/
