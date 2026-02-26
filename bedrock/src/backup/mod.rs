@@ -574,6 +574,8 @@ pub enum BackupFileDesignator {
     OrbPkg,
     /// Document (NFC) Personal Custody Package (PCP) or "Document Credential"
     DocumentPkg,
+    /// Walletkit credential vault export
+    CredentialVault,
 }
 
 impl Serialize for BackupFileDesignator {
