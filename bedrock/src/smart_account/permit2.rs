@@ -155,8 +155,8 @@ impl Is4337Encodable for Permit2Approve {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::address;
     use crate::primitives::{Network, BEDROCK_NONCE_PREFIX_CONST};
+    use alloy::primitives::address;
     use alloy::primitives::{fixed_bytes, uint};
     use std::str::FromStr;
 

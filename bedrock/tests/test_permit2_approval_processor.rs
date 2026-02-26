@@ -10,8 +10,8 @@ use common::{deploy_safe, setup_anvil, IERC20};
 
 use bedrock::{
     migration::{
-        processors::permit2_approval_processor::Permit2ApprovalProcessor, MigrationProcessor,
-        ProcessorResult,
+        processors::permit2_approval_processor::Permit2ApprovalProcessor,
+        MigrationProcessor, ProcessorResult,
     },
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337, PERMIT2_ADDRESS},
@@ -54,9 +54,10 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     set_http_client(Arc::new(client));
 
     // 6) Create the processor
-    let safe_account = Arc::new(
-        SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?,
-    );
+    let safe_account = Arc::new(SafeSmartAccount::new(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )?);
     let processor = Permit2ApprovalProcessor::new(safe_account.clone());
 
     // 7) Verify migration ID
@@ -84,7 +85,8 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
             .await?;
 
         assert_eq!(
-            allowance, U256::MAX,
+            allowance,
+            U256::MAX,
             "Token {} should have max allowance to Permit2 after migration",
             token_name
         );
@@ -95,7 +97,6 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
         !processor.is_applicable().await?,
         "Processor should not be applicable after approvals"
     );
-
 
     Ok(())
 }
