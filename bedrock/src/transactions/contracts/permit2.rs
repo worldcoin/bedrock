@@ -17,7 +17,7 @@ use crate::smart_account::{
 
 use super::erc20::Erc20;
 use super::multisend::{MultiSend, MultiSendTx};
-pub use super::worldchain::{PERMIT2_ADDRESS, WORLDCHAIN_PERMIT2_TOKENS};
+pub use super::worldchain::PERMIT2_ADDRESS;
 
 /// Batched ERC20 `approve(PERMIT2_ADDRESS, type(uint256).max)` calls via `MultiSend`.
 ///

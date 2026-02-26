@@ -9,11 +9,19 @@ use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::primitives::Network;
 use crate::smart_account::{Is4337Encodable, SafeSmartAccount, PERMIT2_ADDRESS};
 use crate::transactions::contracts::erc20::Erc20;
-use crate::transactions::contracts::permit2::{
-    Permit2Erc20ApprovalBatch, WORLDCHAIN_PERMIT2_TOKENS,
+use crate::transactions::contracts::permit2::Permit2Erc20ApprovalBatch;
+use crate::transactions::contracts::worldchain::{
+    USDC_ADDRESS, WBTC_ADDRESS, WETH_ADDRESS, WLD_ADDRESS,
 };
-use crate::transactions::contracts::worldchain::USDC_ADDRESS;
 use crate::transactions::rpc::{get_rpc_client, RpcProviderName};
+
+/// Token addresses on `WorldChain` that should have max ERC20 approval to Permit2.
+const WORLDCHAIN_PERMIT2_TOKENS: [(Address, &str); 4] = [
+    (USDC_ADDRESS, "USDC"),
+    (WETH_ADDRESS, "WETH"),
+    (WBTC_ADDRESS, "WBTC"),
+    (WLD_ADDRESS, "WLD"),
+];
 
 /// Minimum allowance threshold for USDC before re-approval is triggered.
 ///
@@ -35,7 +43,7 @@ const USDC_ALLOWANCE_BUFFER: U256 = U256::from_limbs([1_000_000_000_000u64, 0, 0
 /// Uses a single `MultiSend` transaction to batch all needed approvals.
 pub struct Permit2ApprovalProcessor {
     safe_account: Arc<SafeSmartAccount>,
-    tokens_needing_approval: Mutex<Vec<Address>>,
+    tokens_needing_approval: Mutex<Vec<(Address, &'static str)>>,
 }
 
 impl Permit2ApprovalProcessor {
@@ -86,7 +94,7 @@ impl Permit2ApprovalProcessor {
             };
             if allowance < threshold {
                 info!("Token {name} needs Permit2 approval");
-                needs_approval.push(*token);
+                needs_approval.push((*token, *name));
             }
         }
 
@@ -114,7 +122,9 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
             return Ok(ProcessorResult::Success);
         }
 
-        let batch = Permit2Erc20ApprovalBatch::new(&tokens);
+        let addresses: Vec<Address> = tokens.iter().map(|(addr, _)| *addr).collect();
+        let names: Vec<&str> = tokens.iter().map(|(_, name)| *name).collect();
+        let batch = Permit2Erc20ApprovalBatch::new(&addresses);
 
         match batch
             .sign_and_execute(
@@ -128,8 +138,7 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
         {
             Ok(user_op_hash) => {
                 info!(
-                    "Submitted batched ERC20 approvals for {} tokens to Permit2, userOpHash: {user_op_hash:?}",
-                    tokens.len(),
+                    "Submitted Permit2 approvals for {names:?}, userOpHash: {user_op_hash:?}"
                 );
                 Ok(ProcessorResult::Success)
             }

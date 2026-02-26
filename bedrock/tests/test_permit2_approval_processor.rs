@@ -16,7 +16,9 @@ use bedrock::{
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337, PERMIT2_ADDRESS},
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
-    transactions::contracts::permit2::WORLDCHAIN_PERMIT2_TOKENS,
+    transactions::contracts::worldchain::{
+        USDC_ADDRESS, WBTC_ADDRESS, WETH_ADDRESS, WLD_ADDRESS,
+    },
 };
 
 #[tokio::test]
@@ -77,7 +79,13 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     );
 
     // 10) Verify on-chain: all tokens should now have max allowance to Permit2
-    for (token_address, token_name) in &WORLDCHAIN_PERMIT2_TOKENS {
+    let tokens: [(alloy::primitives::Address, &str); 4] = [
+        (USDC_ADDRESS, "usdc"),
+        (WETH_ADDRESS, "weth"),
+        (WBTC_ADDRESS, "wbtc"),
+        (WLD_ADDRESS, "wld"),
+    ];
+    for (token_address, token_name) in &tokens {
         let token = IERC20::new(*token_address, &provider);
         let allowance = token
             .allowance(safe_address, PERMIT2_ADDRESS)
@@ -87,8 +95,7 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
         assert_eq!(
             allowance,
             U256::MAX,
-            "Token {} should have max allowance to Permit2 after migration",
-            token_name
+            "Token {token_name} should have max allowance to Permit2 after migration",
         );
     }
 
