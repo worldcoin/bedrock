@@ -12,10 +12,25 @@ use crate::transactions::contracts::erc20::Erc20;
 use crate::transactions::contracts::permit2::{
     Permit2Erc20ApprovalBatch, WORLDCHAIN_PERMIT2_TOKENS,
 };
+use crate::transactions::contracts::worldchain::USDC_ADDRESS;
 use crate::transactions::rpc::{get_rpc_client, RpcProviderName};
+
+/// Minimum allowance threshold for USDC before re-approval is triggered.
+///
+/// USDC is non-standard: it decrements allowance on every `transferFrom` even when set to
+/// `type(uint256).max`. Standard ERC20 tokens do not decrement allowance when it is set to
+/// `type(uint256).max`, so for those tokens a simple `< U256::MAX` check suffices.
+///
+/// This buffer of 1,000,000 USDC (1M * 10^6 decimals = 10^12) avoids re-approving on every
+/// migration run due to minor allowance decrements from normal usage.
+const USDC_ALLOWANCE_BUFFER: U256 = U256::from_limbs([1_000_000_000_000u64, 0, 0, 0]);
 
 /// Migration processor that ensures the user's smart account has granted max ERC20 approval
 /// to the Permit2 singleton on `WorldChain` for supported tokens (USDC, WETH, WBTC, WLD).
+///
+/// Standard ERC20 tokens do not decrement allowance when set to `type(uint256).max`, so once
+/// approved they remain approved indefinitely. USDC is an exception — it decrements allowance
+/// on every transfer, so a buffer threshold is used to avoid unnecessary re-approvals.
 ///
 /// Uses a single `MultiSend` transaction to batch all needed approvals.
 pub struct Permit2ApprovalProcessor {
@@ -61,9 +76,17 @@ impl Permit2ApprovalProcessor {
 
         for (token, name) in &WORLDCHAIN_PERMIT2_TOKENS {
             let allowance = self.get_allowance(*token).await?;
-            if allowance < U256::MAX {
+            // USDC decrements allowance on every transfer (non-standard behavior),
+            // so use a buffer to avoid re-approving after minor usage.
+            // Standard ERC20 tokens skip decrement at uint256.max, so exact check is fine.
+            let threshold = if *token == USDC_ADDRESS {
+                U256::MAX - USDC_ALLOWANCE_BUFFER
+            } else {
+                U256::MAX
+            };
+            if allowance < threshold {
                 info!(
-                    "Token {name} ({token}) has allowance {allowance} < MAX, needs approval"
+                    "Token {name} ({token}) has allowance {allowance} < threshold, needs approval"
                 );
                 needs_approval.push(*token);
             }
