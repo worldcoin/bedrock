@@ -103,20 +103,65 @@ mod tests {
     use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
 
     #[test]
-    fn test_batch_execute_user_op_targets_multisend() {
-        let tokens = vec![address!("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1")];
+    fn test_batch_execute_user_op_calldata() {
+        let usdc = address!("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1");
+        let weth = address!("0x4200000000000000000000000000000000000006");
+        let tokens = vec![usdc, weth];
         let batch = Permit2Erc20ApprovalBatch::new(&tokens);
 
         let call_data = batch.as_execute_user_op_call_data();
         let call_data_bytes: &[u8] = &call_data;
 
-        // executeUserOp selector is 0x7bb37428
-        assert_eq!(&call_data_bytes[0..4], &[0x7b, 0xb3, 0x74, 0x28]);
+        // Decode the outer executeUserOp(to, value, data, operation) call
+        // Skip the 4-byte selector
+        let decoded =
+            ISafe4337Module::executeUserOpCall::abi_decode_raw(&call_data_bytes[4..]).unwrap();
+        assert_eq!(decoded.to, MULTISEND_ADDRESS, "should target MultiSend");
+        assert_eq!(decoded.value, U256::ZERO, "should send no ETH");
+        assert_eq!(
+            decoded.operation,
+            SafeOperation::DelegateCall as u8,
+            "should use delegatecall"
+        );
 
-        // `to` param (bytes 4..36) should be the MultiSend address
-        let mut expected_to = [0u8; 32];
-        expected_to[12..32].copy_from_slice(MULTISEND_ADDRESS.as_slice());
-        assert_eq!(&call_data_bytes[4..36], &expected_to);
+        // Decode the inner multiSend(transactions) call
+        let multisend_call =
+            super::super::multisend::IMultiSend::multiSendCall::abi_decode_raw(
+                &decoded.data[4..],
+            )
+            .unwrap();
+        let packed = multisend_call.transactions;
+
+        // Each packed entry: 1 byte operation + 20 bytes to + 32 bytes value + 32 bytes data_length + N bytes data
+        // approve(address,uint256) calldata is 4 + 32 + 32 = 68 bytes
+        let approve_data = Erc20::encode_approve(PERMIT2_ADDRESS, U256::MAX);
+        assert_eq!(approve_data.len(), 68);
+        let entry_size = 1 + 20 + 32 + 32 + approve_data.len(); // 153
+
+        assert_eq!(
+            packed.len(),
+            entry_size * 2,
+            "should have 2 packed entries"
+        );
+
+        // Verify each packed entry
+        for (i, token) in [usdc, weth].iter().enumerate() {
+            let offset = i * entry_size;
+            let entry = &packed[offset..offset + entry_size];
+
+            // operation byte (0 = Call)
+            assert_eq!(entry[0], SafeOperation::Call as u8);
+            // to address (20 bytes)
+            assert_eq!(&entry[1..21], token.as_slice());
+            // value (32 bytes, should be zero)
+            assert_eq!(&entry[21..53], &[0u8; 32]);
+            // data length (32 bytes, should be 68)
+            let mut expected_len = [0u8; 32];
+            expected_len[31] = 68;
+            assert_eq!(&entry[53..85], &expected_len);
+            // data (approve calldata)
+            assert_eq!(&entry[85..85 + 68], &approve_data);
+        }
     }
 
     #[test]
