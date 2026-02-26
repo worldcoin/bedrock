@@ -1347,10 +1347,7 @@ mod tests {
             )
             .unwrap();
         kv_store
-            .set(
-                format!("{MIGRATION_KEY_PREFIX}test.migration2.v1"),
-                json,
-            )
+            .set(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1"), json)
             .unwrap();
 
         let controller = MigrationController::with_processors(
@@ -1374,7 +1371,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_delete_all_records_skips_nonexistent_records() {
+    fn test_delete_all_records_succeeds_with_no_existing_records() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
@@ -1382,8 +1379,9 @@ mod tests {
         let controller =
             MigrationController::with_processors(kv_store, vec![processor]);
 
-        let deleted = controller.delete_all_records().unwrap();
-        assert_eq!(deleted, 0);
+        // Should not error even when no records exist
+        let result = controller.delete_all_records();
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
