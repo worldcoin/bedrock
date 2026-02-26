@@ -85,9 +85,6 @@ impl Permit2ApprovalProcessor {
                 U256::MAX
             };
             if allowance < threshold {
-                info!(
-                    "Token {name} ({token}) has allowance {allowance} < threshold, needs approval"
-                );
                 needs_approval.push(*token);
             }
         }
@@ -107,10 +104,18 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
         self.fetch_tokens_needing_approval().await?;
         let tokens = self.tokens_needing_approval.lock().await;
         if !tokens.is_empty() {
+            let names: Vec<&str> = tokens
+                .iter()
+                .filter_map(|addr| {
+                    WORLDCHAIN_PERMIT2_TOKENS
+                        .iter()
+                        .find(|(a, _)| a == addr)
+                        .map(|(_, name)| *name)
+                })
+                .collect();
             info!(
-                "Permit2 approval needed for {} token(s): {:?}",
-                tokens.len(),
-                tokens
+                "Permit2 approval needed for {} token(s): {names:?}",
+                names.len()
             );
         }
         Ok(!tokens.is_empty())
