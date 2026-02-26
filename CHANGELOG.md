@@ -2,6 +2,17 @@
 
 
 
+## [0.2.0] - 2026-02-25
+
+## What's Changed
+* feat: verify bundler rpc entrypoint by @aurel-fr in https://github.com/worldcoin/bedrock/pull/275
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.1.5...0.2.0
+
+
+
+
 ## [0.1.5] - 2026-02-25
 
 ## What's Changed
