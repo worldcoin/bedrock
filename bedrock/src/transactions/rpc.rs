@@ -13,17 +13,12 @@ use crate::{
     },
     smart_account::{SafeSmartAccountError, UserOperation},
 };
-use alloy::hex::FromHex;
-use alloy::primitives::{address, Address, Bytes, FixedBytes, U128, U256};
+use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
 use alloy::sol_types::SolCall;
+use alloy::{hex::FromHex, providers::MULTICALL3_ADDRESS};
 
 pub use crate::primitives::contracts::IMulticall3;
 
-/// The canonical Multicall3 contract address (same across all EVM chains).
-///
-/// Reference: <https://www.multicall3.com/>
-const MULTICALL3_ADDRESS: Address =
-    address!("0xcA11bde05977b3631167028862bE2a173976CA11");
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
