@@ -35,8 +35,8 @@ impl Permit2ApprovalProcessor {
 
     /// Queries on-chain allowance for a given token from the wallet to the Permit2 contract.
     async fn get_allowance(&self, token: Address) -> Result<U256, MigrationError> {
-        let rpc_client =
-            get_rpc_client().map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
+        let rpc_client = get_rpc_client()
+            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
 
         let call_data =
             Erc20::encode_allowance(self.safe_account.wallet_address, PERMIT2_ADDRESS);
@@ -83,6 +83,13 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
     async fn is_applicable(&self) -> Result<bool, MigrationError> {
         self.fetch_tokens_needing_approval().await?;
         let tokens = self.tokens_needing_approval.lock().await;
+        if !tokens.is_empty() {
+            info!(
+                "Permit2 approval needed for {} token(s): {:?}",
+                tokens.len(),
+                tokens
+            );
+        }
         Ok(!tokens.is_empty())
     }
 

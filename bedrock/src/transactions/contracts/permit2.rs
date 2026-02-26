@@ -98,9 +98,9 @@ impl Is4337Encodable for Permit2Erc20ApprovalBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::address;
     use crate::transactions::contracts::erc20::IErc20;
     use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
+    use alloy::primitives::address;
 
     #[test]
     fn test_batch_execute_user_op_calldata() {
@@ -115,7 +115,8 @@ mod tests {
         // Decode the outer executeUserOp(to, value, data, operation) call
         // Skip the 4-byte selector
         let decoded =
-            ISafe4337Module::executeUserOpCall::abi_decode_raw(&call_data_bytes[4..]).unwrap();
+            ISafe4337Module::executeUserOpCall::abi_decode_raw(&call_data_bytes[4..])
+                .unwrap();
         assert_eq!(decoded.to, MULTISEND_ADDRESS, "should target MultiSend");
         assert_eq!(decoded.value, U256::ZERO, "should send no ETH");
         assert_eq!(
@@ -138,11 +139,7 @@ mod tests {
         assert_eq!(approve_data.len(), 68);
         let entry_size = 1 + 20 + 32 + 32 + approve_data.len(); // 153
 
-        assert_eq!(
-            packed.len(),
-            entry_size * 2,
-            "should have 2 packed entries"
-        );
+        assert_eq!(packed.len(), entry_size * 2, "should have 2 packed entries");
 
         // Verify each packed entry
         for (i, token) in [usdc, weth].iter().enumerate() {

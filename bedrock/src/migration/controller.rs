@@ -124,7 +124,9 @@ impl MigrationController {
 
 impl MigrationController {
     /// Returns the default set of migration processors.
-    fn default_processors(safe_account: Arc<SafeSmartAccount>) -> Vec<Arc<dyn MigrationProcessor>> {
+    fn default_processors(
+        safe_account: Arc<SafeSmartAccount>,
+    ) -> Vec<Arc<dyn MigrationProcessor>> {
         vec![Arc::new(Permit2ApprovalProcessor::new(safe_account))]
     }
 
