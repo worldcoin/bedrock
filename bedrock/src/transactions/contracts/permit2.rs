@@ -19,7 +19,7 @@ use super::erc20::Erc20;
 use super::multisend::{MultiSend, MultiSendTx};
 pub use super::worldchain::{PERMIT2_ADDRESS, WORLDCHAIN_PERMIT2_TOKENS};
 
-/// Batched ERC20 `approve(PERMIT2_ADDRESS, type(uint256).max)` calls via MultiSend.
+/// Batched ERC20 `approve(PERMIT2_ADDRESS, type(uint256).max)` calls via `MultiSend`.
 ///
 /// Builds a single 4337 `UserOperation` that grants the Permit2 contract max allowance
 /// on each of the given token contracts. This is a prerequisite for Permit2-based transfers.

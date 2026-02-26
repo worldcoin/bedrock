@@ -9,7 +9,10 @@ use alloy::{
 use common::{deploy_safe, setup_anvil, IERC20};
 
 use bedrock::{
-    migration::{MigrationProcessor, Permit2ApprovalProcessor, ProcessorResult},
+    migration::{
+        processors::permit2_approval_processor::Permit2ApprovalProcessor, MigrationProcessor,
+        ProcessorResult,
+    },
     primitives::http_client::set_http_client,
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337, PERMIT2_ADDRESS},
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
@@ -54,7 +57,7 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     let safe_account = Arc::new(
         SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?,
     );
-    let processor = Permit2ApprovalProcessor::new(safe_account);
+    let processor = Permit2ApprovalProcessor::new(safe_account.clone());
 
     // 7) Verify migration ID
     assert_eq!(processor.migration_id(), "wallet.permit2.approval");
@@ -86,6 +89,13 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
             token_name
         );
     }
+
+    // 11) Verify is_applicable returns false
+    assert!(
+        !processor.is_applicable().await?,
+        "Processor should not be applicable after approvals"
+    );
+
 
     Ok(())
 }

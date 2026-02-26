@@ -75,7 +75,7 @@ impl MigrationController {
     /// Create a new [`MigrationController`] with default processors and optional additional ones.
     ///
     /// Default processors (loaded automatically):
-    /// - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on WorldChain
+    /// - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on `WorldChain`
     ///
     /// Additional processors passed via `additional_processors` are appended after the defaults.
     #[uniffi::constructor]

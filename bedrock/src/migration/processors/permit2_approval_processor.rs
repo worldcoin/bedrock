@@ -2,7 +2,7 @@ use alloy::primitives::{Address, U256};
 use async_trait::async_trait;
 use log::info;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
+use tokio::sync::Mutex;
 
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
@@ -15,12 +15,12 @@ use crate::transactions::contracts::permit2::{
 use crate::transactions::rpc::{get_rpc_client, RpcProviderName};
 
 /// Migration processor that ensures the user's smart account has granted max ERC20 approval
-/// to the Permit2 singleton on WorldChain for supported tokens (USDC, WETH, WBTC, WLD).
+/// to the Permit2 singleton on `WorldChain` for supported tokens (USDC, WETH, WBTC, WLD).
 ///
-/// Uses a single MultiSend transaction to batch all needed approvals.
+/// Uses a single `MultiSend` transaction to batch all needed approvals.
 pub struct Permit2ApprovalProcessor {
     safe_account: Arc<SafeSmartAccount>,
-    tokens_needing_approval: OnceCell<Vec<Address>>,
+    tokens_needing_approval: Mutex<Vec<Address>>,
 }
 
 impl Permit2ApprovalProcessor {
@@ -29,7 +29,7 @@ impl Permit2ApprovalProcessor {
     pub fn new(safe_account: Arc<SafeSmartAccount>) -> Self {
         Self {
             safe_account,
-            tokens_needing_approval: OnceCell::new(),
+            tokens_needing_approval: Mutex::new(Vec::new()),
         }
     }
 
@@ -55,27 +55,22 @@ impl Permit2ApprovalProcessor {
         Ok(U256::from_be_slice(&result[..32]))
     }
 
-    /// Returns the cached list of tokens that need max approval to Permit2,
-    /// fetching from on-chain only on the first call.
-    async fn get_tokens_needing_approval(&self) -> Result<&Vec<Address>, MigrationError> {
-        self.tokens_needing_approval
-            .get_or_try_init(|| async {
-                let mut needs_approval = Vec::new();
+    /// Fetches on-chain allowances and stores the tokens that need approval.
+    async fn fetch_tokens_needing_approval(&self) -> Result<(), MigrationError> {
+        let mut needs_approval = Vec::new();
 
-                for (token, name) in &WORLDCHAIN_PERMIT2_TOKENS {
-                    let allowance = self.get_allowance(*token).await?;
-                    if allowance < U256::MAX {
-                        info!(
-                            "Token {} ({}) has allowance {} < MAX, needs approval",
-                            name, token, allowance
-                        );
-                        needs_approval.push(*token);
-                    }
-                }
+        for (token, name) in &WORLDCHAIN_PERMIT2_TOKENS {
+            let allowance = self.get_allowance(*token).await?;
+            if allowance < U256::MAX {
+                info!(
+                    "Token {name} ({token}) has allowance {allowance} < MAX, needs approval"
+                );
+                needs_approval.push(*token);
+            }
+        }
 
-                Ok(needs_approval)
-            })
-            .await
+        *self.tokens_needing_approval.lock().await = needs_approval;
+        Ok(())
     }
 }
 
@@ -86,18 +81,19 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
     }
 
     async fn is_applicable(&self) -> Result<bool, MigrationError> {
-        let tokens = self.get_tokens_needing_approval().await?;
+        self.fetch_tokens_needing_approval().await?;
+        let tokens = self.tokens_needing_approval.lock().await;
         Ok(!tokens.is_empty())
     }
 
     async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
-        let tokens = self.get_tokens_needing_approval().await?;
+        let tokens = self.tokens_needing_approval.lock().await.clone();
 
         if tokens.is_empty() {
             return Ok(ProcessorResult::Success);
         }
 
-        let batch = Permit2Erc20ApprovalBatch::new(tokens);
+        let batch = Permit2Erc20ApprovalBatch::new(&tokens);
 
         match batch
             .sign_and_execute(
@@ -111,17 +107,15 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
         {
             Ok(user_op_hash) => {
                 info!(
-                    "Submitted batched ERC20 approvals for {} tokens to Permit2, userOpHash: {:?}",
+                    "Submitted batched ERC20 approvals for {} tokens to Permit2, userOpHash: {user_op_hash:?}",
                     tokens.len(),
-                    user_op_hash
                 );
                 Ok(ProcessorResult::Success)
             }
             Err(e) => Ok(ProcessorResult::Retryable {
                 error_code: "RPC_ERROR".to_string(),
                 error_message: format!(
-                    "Failed to submit batched ERC20 approvals to Permit2: {}",
-                    e
+                    "Failed to submit batched ERC20 approvals to Permit2: {e}"
                 ),
                 retry_after_ms: Some(10_000),
             }),
