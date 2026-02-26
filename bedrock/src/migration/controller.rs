@@ -1329,4 +1329,105 @@ mod tests {
         assert_eq!(processor4.execution_count(), 1); // InProgress - treated as stale, executed
         assert_eq!(processor5.execution_count(), 1); // NotStarted - executed
     }
+
+    #[test]
+    #[serial]
+    fn test_delete_all_records_removes_existing_records() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor1 = Arc::new(TestProcessor::new("test.migration1.v1"));
+        let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
+
+        // Seed records into the store
+        let record = MigrationRecord::new();
+        let json = serde_json::to_string(&record).unwrap();
+        kv_store
+            .set(
+                format!("{MIGRATION_KEY_PREFIX}test.migration1.v1"),
+                json.clone(),
+            )
+            .unwrap();
+        kv_store
+            .set(
+                format!("{MIGRATION_KEY_PREFIX}test.migration2.v1"),
+                json,
+            )
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor1, processor2],
+        );
+
+        let deleted = controller.delete_all_records().unwrap();
+        assert_eq!(deleted, 2);
+
+        // Verify records are gone
+        assert!(matches!(
+            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration1.v1")),
+            Err(KeyValueStoreError::KeyNotFound)
+        ));
+        assert!(matches!(
+            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1")),
+            Err(KeyValueStoreError::KeyNotFound)
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_all_records_skips_nonexistent_records() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+
+        // No records seeded - store is empty
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor]);
+
+        let deleted = controller.delete_all_records().unwrap();
+        assert_eq!(deleted, 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_delete_all_records_allows_migrations_to_rerun() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        // Run migrations - should succeed
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().succeeded, 1);
+        assert_eq!(processor.execution_count(), 1);
+
+        // Second run - should skip (already succeeded)
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().skipped, 1);
+        assert_eq!(processor.execution_count(), 1);
+
+        // Delete all records
+        let deleted = controller.delete_all_records().unwrap();
+        assert_eq!(deleted, 1);
+
+        // Third run - should execute again (record was deleted)
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().succeeded, 1);
+        assert_eq!(processor.execution_count(), 2);
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_all_records_propagates_store_errors() {
+        let kv_store = Arc::new(FailingKvStore);
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor]);
+
+        let result = controller.delete_all_records();
+        assert!(result.is_err());
+    }
 }
