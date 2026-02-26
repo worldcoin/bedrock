@@ -111,6 +111,45 @@ impl MigrationController {
         self.run_migrations_async().await
         // Lock automatically released when _guard is dropped
     }
+
+    /// Delete all migration records from the key-value store.
+    ///
+    /// **Developer/testing use only.** This resets all migration state so that
+    /// migrations will run again from scratch on the next `run_migrations` call.
+    ///
+    /// Records that don't exist yet are silently skipped.
+    ///
+    /// # Concurrency
+    ///
+    /// Acquires the global migration lock to prevent deleting records while
+    /// migrations are in progress. Returns `InvalidOperation` if a migration
+    /// run is currently executing.
+    pub fn delete_all_records(&self) -> Result<i32, MigrationError> {
+        let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
+            MigrationError::InvalidOperation(
+                "Migration is already in progress. Please wait for the current migration to complete.".to_string(),
+            )
+        })?;
+
+        let mut deleted = 0;
+        for processor in &self.processors {
+            let key = format!("{MIGRATION_KEY_PREFIX}{}", processor.migration_id());
+            match self.kv_store.delete(key) {
+                Ok(()) => deleted += 1,
+                Err(KeyValueStoreError::KeyNotFound) => {} // No record to delete
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        crate::info!(
+            "migration_records.deleted count={} total_processors={} timestamp={}",
+            deleted,
+            self.processors.len(),
+            Utc::now().to_rfc3339()
+        );
+
+        Ok(deleted)
+    }
 }
 
 impl MigrationController {
