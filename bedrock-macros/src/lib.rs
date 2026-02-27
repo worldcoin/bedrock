@@ -348,9 +348,27 @@ fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &st
         let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new(#type_name);
     };
 
-    // Insert both at the beginning of the function body
-    method.block.stmts.insert(0, fs_stmt);
-    method.block.stmts.insert(1, context_stmt);
+    if method.sig.asyncness.is_some() {
+        // For async functions, wrap the entire body in LOG_CONTEXT.scope() so the logging
+        // context is stored in task-local storage and persists across .await points.
+        let original_stmts = std::mem::take(&mut method.block.stmts);
+        let scoped: Stmt = syn::parse_quote! {
+            return crate::primitives::logger::LOG_CONTEXT.scope(
+                ::std::cell::RefCell::new(None),
+                async move {
+                    #fs_stmt
+                    #context_stmt
+                    #(#original_stmts)*
+                }
+            ).await;
+        };
+        method.block.stmts = vec![scoped];
+    } else {
+        // For sync functions, inserting at the start of the function body is sufficient
+        // since there are no .await points where the thread could change.
+        method.block.stmts.insert(0, fs_stmt);
+        method.block.stmts.insert(1, context_stmt);
+    }
 }
 
 /// Procedural macro that wraps `alloy::sol!` and generates unparsed versions of structs

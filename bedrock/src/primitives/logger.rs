@@ -2,7 +2,12 @@ use std::cell::RefCell;
 use std::{sync::Arc, sync::OnceLock};
 
 thread_local! {
-    static LOG_CONTEXT: RefCell<Option<String>> = const { RefCell::new(None) };
+    static THREAD_LOG_CONTEXT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+tokio::task_local! {
+    /// Task-local logging context, set by the `bedrock_export` proc macro for async functions.
+    pub static LOG_CONTEXT: RefCell<Option<String>>;
 }
 
 /// Trait representing a logger that can log messages at various levels.
@@ -296,6 +301,12 @@ macro_rules! error {
     };
 }
 
+/// Tracks which backing storage a [`LogContext`] used, so `Drop` restores the correct one.
+enum LogContextStorage {
+    TaskLocal,
+    ThreadLocal,
+}
+
 /// A scope guard that sets a logging context and automatically clears it when dropped.
 ///
 /// # Examples
@@ -311,6 +322,7 @@ macro_rules! error {
 /// ```
 pub struct LogContext {
     previous: Option<String>,
+    storage: LogContextStorage,
 }
 
 impl LogContext {
@@ -319,29 +331,58 @@ impl LogContext {
     /// The context will be active until this `LogContext` is dropped.
     #[must_use]
     pub fn new(module: &str) -> Self {
-        let previous = LOG_CONTEXT.with(|ctx| {
+        let new_context = Some(format!("[Bedrock][{module}]"));
+
+        // Prefer task_local (persists across .await points); fall back to thread_local for sync code.
+        match LOG_CONTEXT.try_with(|ctx| {
             let mut ctx = ctx.borrow_mut();
             let prev = ctx.clone();
-            *ctx = Some(format!("[Bedrock][{module}]"));
+            *ctx = new_context.clone();
             prev
-        });
-
-        Self { previous }
+        }) {
+            Ok(previous) => Self {
+                previous,
+                storage: LogContextStorage::TaskLocal,
+            },
+            Err(_) => {
+                let previous = THREAD_LOG_CONTEXT.with(|ctx| {
+                    let mut ctx = ctx.borrow_mut();
+                    let prev = ctx.clone();
+                    *ctx = new_context;
+                    prev
+                });
+                Self {
+                    previous,
+                    storage: LogContextStorage::ThreadLocal,
+                }
+            }
+        }
     }
 }
 
 impl Drop for LogContext {
     fn drop(&mut self) {
-        LOG_CONTEXT.with(|ctx| {
-            (*ctx.borrow_mut()).clone_from(&self.previous);
-        });
+        match self.storage {
+            LogContextStorage::TaskLocal => {
+                let _ = LOG_CONTEXT.try_with(|ctx| {
+                    (*ctx.borrow_mut()).clone_from(&self.previous);
+                });
+            }
+            LogContextStorage::ThreadLocal => {
+                THREAD_LOG_CONTEXT.with(|ctx| {
+                    (*ctx.borrow_mut()).clone_from(&self.previous);
+                });
+            }
+        }
     }
 }
 
 /// Gets the current logging context, if any.
 #[must_use]
 pub fn get_context() -> Option<String> {
-    LOG_CONTEXT.with(|ctx| ctx.borrow().clone())
+    LOG_CONTEXT
+        .try_with(|ctx| ctx.borrow().clone())
+        .unwrap_or_else(|_| THREAD_LOG_CONTEXT.with(|ctx| ctx.borrow().clone()))
 }
 
 /// Macro to create a scoped logging context.
