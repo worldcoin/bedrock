@@ -23,10 +23,10 @@ The possible states are:
 - `NotStarted` - migration has not been performed
 - `InProgress` - migration started, but was interrupted
 - `Succeeded` - migration successfully completed (subject to TTL re-check after 30 days)
-- `FailedRetryable` - migration failed, but will be retried on the next app open (e.g. there was a network error). Uses exponential backoff via `next_attempt_at`.
+- `FailedRetryable` - migration failed, but will be retried on the next app open (e.g. there was a network error).
 - `FailedTerminal` - migration failed and represents a terminal state. It can not be retried.
 
-For `NotStarted`, `InProgress`, and `FailedRetryable` migrations, `is_applicable()` is called to detect when they become applicable. `FailedRetryable` and `InProgress` respect exponential backoff via `next_attempt_at`. `FailedTerminal` migrations are permanently skipped.
+For `NotStarted`, `InProgress`, and `FailedRetryable` migrations, `is_applicable()` is called to detect when they become applicable. `FailedRetryable` and `InProgress` are retried on every app open. `FailedTerminal` migrations are permanently skipped.
 
 ### TTL on Succeeded migrations
 `Succeeded` migrations are re-evaluated after 30 days (`MIGRATION_SUCCESS_TTL_DAYS`). When the TTL expires, `is_applicable()` is called again:
@@ -52,9 +52,7 @@ flowchart TD
     TTLApplicable -- "false / error" --> SkipTTLFalse["SKIP"]
     TTLApplicable -- true --> ResetRecord["Reset to NotStarted"] --> Execute
 
-    InProgressRetryable --> BackoffCheck{"Backoff<br/>expired?"}
-    BackoffCheck -- No --> SkipBackoff["SKIP"]
-    BackoffCheck -- Yes --> Applicable
+    InProgressRetryable --> Applicable
 
     NotStarted --> Applicable{"is_applicable()"}
     Applicable -- "false / error" --> SkipNA["SKIP"]
@@ -70,8 +68,7 @@ flowchart TD
    - If false, remains `NotStarted` (checked again on next app start).
 
 2. **`InProgress` / `FailedRetryable`**
-   - Checks `next_attempt_at` backoff. If not yet due, skipped.
-   - Otherwise calls `is_applicable()` and `execute()`.
+   - Retried on every app open. Calls `is_applicable()` and `execute()`.
    - `execute()` result determines next state: `Succeeded`, `FailedRetryable`, or `FailedTerminal`.
 
 3. **`Succeeded`**

@@ -12,8 +12,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 const MIGRATION_KEY_PREFIX: &str = "migration:";
-const DEFAULT_RETRY_DELAY_MS: i64 = 60_000; // 1 minute
-const MAX_RETRY_DELAY_MS: i64 = 86_400_000; // 1 day
 const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations after 30 days
 
 /// Global lock to prevent concurrent migration runs across all controller instances.
@@ -294,26 +292,11 @@ impl MigrationController {
                 false
             }
 
-            MigrationStatus::InProgress | MigrationStatus::FailedRetryable => {
-                // Check retry timing (exponential backoff)
-                // No retry time set = attempt immediately
-                record.next_attempt_at.is_none_or(|next_attempt| {
-                    if Utc::now() < next_attempt {
-                        crate::info!(
-                            "migration.skipped id={} reason=retry_backoff next_attempt={} timestamp={}",
-                            migration_id,
-                            next_attempt.to_rfc3339(),
-                            Utc::now().to_rfc3339()
-                        );
-                        false
-                    } else {
-                        true // Ready to retry
-                    }
-                })
-            }
-
-            MigrationStatus::NotStarted => {
-                // First time attempting this migration
+            MigrationStatus::NotStarted
+            | MigrationStatus::InProgress
+            | MigrationStatus::FailedRetryable => {
+                // NotStarted: first time attempting this migration
+                // InProgress/FailedRetryable: retry on every app open
                 true
             }
         };
@@ -335,7 +318,7 @@ impl MigrationController {
 
         // For TTL-expired succeeded migrations, reset record before re-executing
         if matches!(record.status, MigrationStatus::Succeeded) {
-            record = MigrationRecord::new();
+            record = MigrationRecord::default();
         }
 
         // Execute the migration
@@ -385,7 +368,6 @@ impl MigrationController {
                 record.completed_at = Some(Utc::now());
                 record.last_error_code = None;
                 record.last_error_message = None;
-                record.next_attempt_at = None;
                 MigrationRunSummary {
                     succeeded: 1,
                     ..MigrationRunSummary::default()
@@ -394,17 +376,12 @@ impl MigrationController {
             Ok(ProcessorResult::Retryable {
                 error_code,
                 error_message,
-                retry_after_ms,
+                ..
             }) => {
-                let retry_delay_ms = retry_after_ms
-                    .unwrap_or_else(|| calculate_backoff_delay(record.attempts));
-                record.next_attempt_at =
-                    Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
                 crate::warn!(
-                    "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} retry_delay_ms={} next_attempt={} timestamp={}",
-                    migration_id, record.attempts, duration_ms, error_code, error_message, retry_delay_ms,
-                    record.next_attempt_at.map(|t| t.to_rfc3339()).unwrap_or_default(), Utc::now().to_rfc3339()
+                    "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
+                    migration_id, record.attempts, duration_ms, error_code, error_message, Utc::now().to_rfc3339()
                 );
                 record.status = MigrationStatus::FailedRetryable;
                 record.last_error_code = Some(error_code);
@@ -426,7 +403,6 @@ impl MigrationController {
                 record.status = MigrationStatus::FailedTerminal;
                 record.last_error_code = Some(error_code);
                 record.last_error_message = Some(error_message);
-                record.next_attempt_at = None;
                 MigrationRunSummary {
                     failed_terminal: 1,
                     ..MigrationRunSummary::default()
@@ -441,9 +417,6 @@ impl MigrationController {
                 record.status = MigrationStatus::FailedRetryable;
                 record.last_error_code = Some("UNEXPECTED_ERROR".to_string());
                 record.last_error_message = Some(format!("{e:?}"));
-                let retry_delay_ms = calculate_backoff_delay(record.attempts);
-                record.next_attempt_at =
-                    Some(Utc::now() + Duration::milliseconds(retry_delay_ms));
                 MigrationRunSummary {
                     failed_retryable: 1,
                     ..MigrationRunSummary::default()
@@ -489,18 +462,18 @@ impl MigrationController {
                     Err(e) => {
                         // JSON is corrupted - treat as reset and let migration re-run
                         warn!("Migration {migration_id} has corrupted JSON data, resetting: {e:?}");
-                        Ok(MigrationRecord::new())
+                        Ok(MigrationRecord::default())
                     }
                 }
             }
             Err(KeyValueStoreError::KeyNotFound) => {
                 // First time running this migration, return new record
-                Ok(MigrationRecord::new())
+                Ok(MigrationRecord::default())
             }
             Err(KeyValueStoreError::ParsingFailure) => {
                 // Storage layer couldn't parse the value - treat as reset
                 warn!("Migration {migration_id} has corrupted storage data, resetting");
-                Ok(MigrationRecord::new())
+                Ok(MigrationRecord::default())
             }
             Err(e) => Err(e.into()),
         }
@@ -518,14 +491,6 @@ impl MigrationController {
         self.kv_store.set(key, json)?;
         Ok(())
     }
-}
-
-/// Calculate exponential backoff delay based on number of attempts
-fn calculate_backoff_delay(attempts: i32) -> i64 {
-    // attempts: 1 => base, 2 => 2x, 3 => 4x, ...
-    let exp = (attempts.saturating_sub(1)).clamp(0, 16).cast_unsigned(); // cap exponent
-    let factor = 1_i64.checked_shl(exp).unwrap_or(i64::MAX);
-    (DEFAULT_RETRY_DELAY_MS.saturating_mul(factor)).min(MAX_RETRY_DELAY_MS)
 }
 
 #[cfg(test)]
@@ -597,7 +562,7 @@ mod tests {
         }
     }
 
-    /// Test processor where is_applicable returns false
+    /// Test processor where `is_applicable` returns false
     struct NotApplicableProcessor {
         id: String,
         execution_count: Arc<AtomicU32>,
@@ -956,10 +921,12 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Create an InProgress record (e.g., app crashed mid-migration)
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::InProgress;
-        record.attempts = 1;
-        record.last_attempted_at = Some(Utc::now());
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 1,
+            last_attempted_at: Some(Utc::now()),
+            ..MigrationRecord::default()
+        };
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
@@ -994,9 +961,11 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Manually create a Succeeded record
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::Succeeded;
-        record.completed_at = Some(Utc::now());
+        let record = MigrationRecord {
+            status: MigrationStatus::Succeeded,
+            completed_at: Some(Utc::now()),
+            ..MigrationRecord::default()
+        };
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
@@ -1033,10 +1002,12 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Manually create a FailedTerminal record
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::FailedTerminal;
-        record.last_error_code = Some("TERMINAL_ERROR".to_string());
-        record.last_error_message = Some("Permanent failure".to_string());
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedTerminal,
+            last_error_code: Some("TERMINAL_ERROR".to_string()),
+            last_error_message: Some("Permanent failure".to_string()),
+            ..MigrationRecord::default()
+        };
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
@@ -1103,16 +1074,17 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_failed_retryable_respects_backoff_timing() {
+    async fn test_failed_retryable_retries_on_next_run() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
-        // Create FailedRetryable record with retry scheduled for future
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::FailedRetryable;
-        record.attempts = 1;
-        record.last_error_code = Some("NETWORK_ERROR".to_string());
-        record.next_attempt_at = Some(Utc::now() + chrono::Duration::hours(1)); // 1 hour in future
+        // Create FailedRetryable record
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 1,
+            last_error_code: Some("NETWORK_ERROR".to_string()),
+            ..MigrationRecord::default()
+        };
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
@@ -1123,107 +1095,23 @@ mod tests {
             vec![processor.clone()],
         );
 
-        // Run migrations - should skip due to retry timing
-        let result = controller.run_migrations().await;
-        assert!(result.is_ok());
-
-        let summary = result.unwrap();
-        assert_eq!(summary.total, 1);
-        assert_eq!(summary.skipped, 1);
-        assert_eq!(summary.succeeded, 0);
-
-        // Verify processor was NOT executed
-        assert_eq!(processor.execution_count(), 0);
-
-        // Verify status is still FailedRetryable
-        let record_json = kv_store.get(key).expect("Record should exist");
-        let updated_record: MigrationRecord =
-            serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(
-            updated_record.status,
-            MigrationStatus::FailedRetryable
-        ));
-        assert_eq!(updated_record.attempts, 1); // Attempts should not increment
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_failed_retryable_retries_when_backoff_expires() {
-        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
-        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
-
-        // Create FailedRetryable record with retry scheduled for past
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::FailedRetryable;
-        record.attempts = 1;
-        record.last_error_code = Some("NETWORK_ERROR".to_string());
-        record.next_attempt_at = Some(Utc::now() - chrono::Duration::minutes(5)); // 5 minutes ago
-
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
-        let json = serde_json::to_string(&record).unwrap();
-        kv_store.set(key.clone(), json).unwrap();
-
-        let controller = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor.clone()],
-        );
-
-        // Run migrations - should retry and succeed
+        // Run migrations - FailedRetryable should retry immediately on next app open
         let result = controller.run_migrations().await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
         assert_eq!(summary.total, 1);
         assert_eq!(summary.succeeded, 1);
-        assert_eq!(summary.skipped, 0);
 
         // Verify processor was executed
         assert_eq!(processor.execution_count(), 1);
 
-        // Verify status transitioned to Succeeded
+        // Verify status transitioned to Succeeded with incremented attempts
         let record_json = kv_store.get(key).expect("Record should exist");
         let updated_record: MigrationRecord =
             serde_json::from_str(&record_json).expect("Should deserialize");
         assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
-        assert_eq!(updated_record.attempts, 2); // Should increment from 1 to 2
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_failed_retryable_without_retry_time_executes_immediately() {
-        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
-        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
-
-        // Create FailedRetryable record without next_attempt_at
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::FailedRetryable;
-        record.attempts = 2;
-        record.next_attempt_at = None; // No retry time set
-
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
-        let json = serde_json::to_string(&record).unwrap();
-        kv_store.set(key.clone(), json).unwrap();
-
-        let controller = MigrationController::with_processors(
-            kv_store.clone(),
-            vec![processor.clone()],
-        );
-
-        // Run migrations - should execute immediately
-        let result = controller.run_migrations().await;
-        assert!(result.is_ok());
-
-        let summary = result.unwrap();
-        assert_eq!(summary.succeeded, 1);
-
-        // Verify processor was executed
-        assert_eq!(processor.execution_count(), 1);
-
-        // Verify status transitioned to Succeeded
-        let record_json = kv_store.get(key).expect("Record should exist");
-        let updated_record: MigrationRecord =
-            serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
+        assert_eq!(updated_record.attempts, 2);
     }
 
     #[tokio::test]
@@ -1233,10 +1121,11 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Create InProgress record without last_attempted_at timestamp
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::InProgress;
-        record.attempts = 1;
-        record.last_attempted_at = None;
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 1,
+            ..MigrationRecord::default()
+        };
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
@@ -1271,8 +1160,10 @@ mod tests {
         let processor5 = Arc::new(TestProcessor::new("test.not_started.v1"));
 
         // Set up initial states
-        let mut succeeded = MigrationRecord::new();
-        succeeded.status = MigrationStatus::Succeeded;
+        let succeeded = MigrationRecord {
+            status: MigrationStatus::Succeeded,
+            ..MigrationRecord::default()
+        };
         kv_store
             .set(
                 format!("{MIGRATION_KEY_PREFIX}test.succeeded.v1"),
@@ -1280,8 +1171,10 @@ mod tests {
             )
             .unwrap();
 
-        let mut terminal = MigrationRecord::new();
-        terminal.status = MigrationStatus::FailedTerminal;
+        let terminal = MigrationRecord {
+            status: MigrationStatus::FailedTerminal,
+            ..MigrationRecord::default()
+        };
         kv_store
             .set(
                 format!("{MIGRATION_KEY_PREFIX}test.terminal.v1"),
@@ -1289,9 +1182,11 @@ mod tests {
             )
             .unwrap();
 
-        let mut retryable = MigrationRecord::new();
-        retryable.status = MigrationStatus::FailedRetryable;
-        retryable.next_attempt_at = Some(Utc::now() - chrono::Duration::minutes(1)); // Ready to retry
+        let retryable = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            last_error_code: Some("NETWORK_ERROR".to_string()),
+            ..MigrationRecord::default()
+        };
         kv_store
             .set(
                 format!("{MIGRATION_KEY_PREFIX}test.retryable.v1"),
@@ -1299,9 +1194,11 @@ mod tests {
             )
             .unwrap();
 
-        let mut in_progress = MigrationRecord::new();
-        in_progress.status = MigrationStatus::InProgress;
-        in_progress.last_attempted_at = Some(Utc::now());
+        let in_progress = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            last_attempted_at: Some(Utc::now()),
+            ..MigrationRecord::default()
+        };
         kv_store
             .set(
                 format!("{MIGRATION_KEY_PREFIX}test.in_progress.v1"),
@@ -1346,10 +1243,13 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Set up a succeeded record with completed_at older than TTL
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::Succeeded;
-        record.completed_at =
-            Some(Utc::now() - chrono::Duration::days(MIGRATION_SUCCESS_TTL_DAYS + 1));
+        let record = MigrationRecord {
+            status: MigrationStatus::Succeeded,
+            completed_at: Some(
+                Utc::now() - chrono::Duration::days(MIGRATION_SUCCESS_TTL_DAYS + 1),
+            ),
+            ..MigrationRecord::default()
+        };
         kv_store
             .set(
                 format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
@@ -1375,9 +1275,11 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Set up a succeeded record with recent completed_at (within TTL)
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::Succeeded;
-        record.completed_at = Some(Utc::now() - chrono::Duration::days(1));
+        let record = MigrationRecord {
+            status: MigrationStatus::Succeeded,
+            completed_at: Some(Utc::now() - chrono::Duration::days(1)),
+            ..MigrationRecord::default()
+        };
         kv_store
             .set(
                 format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
@@ -1404,7 +1306,7 @@ mod tests {
         let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
 
         // Seed records into the store
-        let record = MigrationRecord::new();
+        let record = MigrationRecord::default();
         let json = serde_json::to_string(&record).unwrap();
         kv_store
             .set(
@@ -1537,10 +1439,13 @@ mod tests {
         let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
 
         // Set up a succeeded record with expired TTL
-        let mut record = MigrationRecord::new();
-        record.status = MigrationStatus::Succeeded;
-        record.completed_at =
-            Some(Utc::now() - chrono::Duration::days(MIGRATION_SUCCESS_TTL_DAYS + 1));
+        let record = MigrationRecord {
+            status: MigrationStatus::Succeeded,
+            completed_at: Some(
+                Utc::now() - chrono::Duration::days(MIGRATION_SUCCESS_TTL_DAYS + 1),
+            ),
+            ..MigrationRecord::default()
+        };
 
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
         kv_store
