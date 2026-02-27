@@ -6,10 +6,13 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::primitives::PrimitiveError;
 use crate::smart_account::{
     ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
     TransactionTypeId, UserOperation,
+};
+use crate::{
+    primitives::{Network, PrimitiveError},
+    transactions::{RpcClient, RpcError},
 };
 
 sol! {
@@ -59,6 +62,69 @@ impl Erc20 {
     #[must_use]
     pub fn encode_approve(spender: Address, value: U256) -> Vec<u8> {
         IErc20::approveCall { spender, value }.abi_encode()
+    }
+
+    /// Fetches the current ERC-20 allowance for a given `owner` → `spender` pair.
+    ///
+    /// # Returns
+    /// The current allowance as a `U256` value.
+    ///
+    /// # Errors
+    /// Returns an `RpcError` if the RPC call fails or if the response is invalid.
+    pub async fn fetch_allowance(
+        rpc_client: &RpcClient,
+        network: Network,
+        token: Address,
+        owner: Address,
+        spender: Address,
+    ) -> Result<U256, RpcError> {
+        let call_data = IErc20::allowanceCall { owner, spender }.abi_encode();
+        let result = rpc_client
+            .eth_call(network, token, call_data.into())
+            .await?;
+
+        if result.len() != 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid {}() response: expected exactly 32 bytes, got {} bytes",
+                    "allowance",
+                    result.len()
+                ),
+            });
+        }
+
+        Ok(U256::from_be_slice(&result[..32]))
+    }
+
+    /// Fetches the current ERC-20 balance for a given `account`.
+    ///
+    /// # Returns
+    /// The current balance as a `U256` value.
+    ///
+    /// # Errors
+    /// Returns an `RpcError` if the RPC call fails or if the response is invalid.
+    pub async fn fetch_balance(
+        rpc_client: &RpcClient,
+        network: Network,
+        token: Address,
+        account: Address,
+    ) -> Result<U256, RpcError> {
+        let call_data = IErc20::balanceOfCall { account }.abi_encode();
+        let result = rpc_client
+            .eth_call(network, token, call_data.into())
+            .await?;
+
+        if result.len() != 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid {}() response: expected exactly 32 bytes, got {} bytes",
+                    "balanceOf",
+                    result.len()
+                ),
+            });
+        }
+
+        Ok(U256::from_be_slice(&result[..32]))
     }
 
     /// Encodes an ERC-20 allowance call.
