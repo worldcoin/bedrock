@@ -22,6 +22,7 @@ sol! {
         function transfer(address to, uint256 value) external returns (bool);
         function approve(address spender, uint256 value) external returns (bool);
         function balanceOf(address account) external view returns (uint256);
+        function allowance(address owner, address spender) external view returns (uint256);
     }
 }
 
@@ -58,6 +59,16 @@ impl Erc20 {
     #[must_use]
     pub fn encode_approve(spender: Address, value: U256) -> Vec<u8> {
         IErc20::approveCall { spender, value }.abi_encode()
+    }
+
+    /// Encodes an ERC-20 allowance call.
+    ///
+    /// # Arguments
+    /// * `owner` - The token owner address.
+    /// * `spender` - The spender address.
+    #[must_use]
+    pub fn encode_allowance(owner: Address, spender: Address) -> Vec<u8> {
+        IErc20::allowanceCall { owner, spender }.abi_encode()
     }
 }
 

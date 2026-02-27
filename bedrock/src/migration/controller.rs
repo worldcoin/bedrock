@@ -1,7 +1,9 @@
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
+use crate::smart_account::SafeSmartAccount;
 use chrono::{Duration, Utc};
 use log::warn;
 use once_cell::sync::Lazy;
@@ -70,13 +72,20 @@ pub struct MigrationController {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl MigrationController {
-    /// Create a new [`MigrationController`]
-    /// Processors are registered internally
+    /// Create a new [`MigrationController`] with default processors and optional additional ones.
+    ///
+    /// Default processors (loaded automatically):
+    /// - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on `WorldChain`
+    ///
+    /// Additional processors passed via `additional_processors` are appended after the defaults.
     #[uniffi::constructor]
     pub fn new(
         kv_store: Arc<dyn DeviceKeyValueStore>,
-        processors: Vec<Arc<dyn MigrationProcessor>>,
+        safe_account: Arc<SafeSmartAccount>,
+        additional_processors: Vec<Arc<dyn MigrationProcessor>>,
     ) -> Arc<Self> {
+        let mut processors = Self::default_processors(safe_account);
+        processors.extend(additional_processors);
         Self::with_processors(kv_store, processors)
     }
 
@@ -157,6 +166,13 @@ impl MigrationController {
 }
 
 impl MigrationController {
+    /// Returns the default set of migration processors.
+    fn default_processors(
+        safe_account: Arc<SafeSmartAccount>,
+    ) -> Vec<Arc<dyn MigrationProcessor>> {
+        vec![Arc::new(Permit2ApprovalProcessor::new(safe_account))]
+    }
+
     /// Create a controller with processors injected in
     pub fn with_processors(
         kv_store: Arc<dyn DeviceKeyValueStore>,

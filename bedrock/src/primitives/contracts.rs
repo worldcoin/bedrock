@@ -331,6 +331,13 @@ sol! {
             bool allowFailure;
             bytes callData;
         }
+
+        struct Result {
+            bool success;
+            bytes returnData;
+        }
+
+        function aggregate3(Call3[] calldata calls) external payable returns (Result[] memory returnData);
     }
 
     contract IEntryPoint {
