@@ -2,6 +2,30 @@
 
 
 
+## [0.2.0] - 2026-02-25
+
+## What's Changed
+* feat: verify bundler rpc entrypoint by @aurel-fr in https://github.com/worldcoin/bedrock/pull/275
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.1.5...0.2.0
+
+
+
+
+## [0.1.5] - 2026-02-25
+
+## What's Changed
+* test: add bundler rejected tests by @crystalt in https://github.com/worldcoin/bedrock/pull/270
+* build(deps): bump uniffi from 0.29.4 to 0.31.0 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/249
+* feat: method verification event by @paolodamico in https://github.com/worldcoin/bedrock/pull/273
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.1.4...0.1.5
+
+
+
+
 ## [0.1.4] - 2026-02-24
 
 ## What's Changed

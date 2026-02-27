@@ -28,10 +28,6 @@ mod nonce;
 /// Reference: <https://docs.safe.global/reference-smart-account/transactions/execTransaction>
 mod transaction;
 
-/// Enables crafting and signing of Permit2 allowances.
-/// Reference: <https://docs.uniswap.org/contracts/permit2/overview>
-mod permit2;
-
 /// Simple helper to compute the expected new wallet address for a Safe Smart Account.
 ///
 /// This is explicitly exposed as a separate module instead of part of `SafeSmartAccount` because this
@@ -45,8 +41,17 @@ pub use crate::primitives::contracts::{
 
 pub use nonce::{InstructionFlag, NonceKeyV1, TransactionTypeId};
 
-// Import the generated types from permit2 module
-pub use permit2::{
+/// Returns the ERC-4337 v0.7 `EntryPoint` contract address used by World App.
+///
+/// Contract reference: <https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/contracts/core/EntryPoint.sol>
+#[uniffi::export]
+#[must_use]
+pub fn entrypoint_address() -> String {
+    format!("{:#x}", *ENTRYPOINT_4337)
+}
+
+// Re-export Permit2 types from their canonical location in transactions::contracts::permit2.
+pub use crate::transactions::contracts::permit2::{
     Permit2Approve, UnparsedPermitTransferFrom, UnparsedTokenPermissions,
     PERMIT2_ADDRESS,
 };
@@ -319,7 +324,8 @@ impl SafeSmartAccount {
         chain_id: u32,
         transfer: UnparsedPermitTransferFrom,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
-        let transfer_from: permit2::PermitTransferFrom = transfer.try_into()?;
+        let transfer_from: crate::transactions::contracts::permit2::PermitTransferFrom =
+            transfer.try_into()?;
 
         let signing_hash = transfer_from
             .as_typed_data(chain_id)
@@ -410,9 +416,17 @@ mod tests {
     use ruint::uint;
     use serde_json::json;
 
-    use crate::smart_account::permit2::{PermitTransferFrom, TokenPermissions};
+    use crate::transactions::contracts::permit2::{
+        PermitTransferFrom, TokenPermissions,
+    };
 
     use super::*;
+
+    #[test]
+    fn test_entrypoint_address() {
+        let address = entrypoint_address();
+        assert_eq!(address, "0x0000000071727de22e5e9d8baf0edac6f37da032");
+    }
 
     #[test]
     fn test_cannot_initialize_with_invalid_hex_secret() {

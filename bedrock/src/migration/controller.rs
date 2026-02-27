@@ -1,7 +1,9 @@
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
+use crate::smart_account::SafeSmartAccount;
 use chrono::{Duration, Utc};
 use log::warn;
 use once_cell::sync::Lazy;
@@ -70,13 +72,20 @@ pub struct MigrationController {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl MigrationController {
-    /// Create a new [`MigrationController`]
-    /// Processors are registered internally
+    /// Create a new [`MigrationController`] with default processors and optional additional ones.
+    ///
+    /// Default processors (loaded automatically):
+    /// - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on `WorldChain`
+    ///
+    /// Additional processors passed via `additional_processors` are appended after the defaults.
     #[uniffi::constructor]
     pub fn new(
         kv_store: Arc<dyn DeviceKeyValueStore>,
-        processors: Vec<Arc<dyn MigrationProcessor>>,
+        safe_account: Arc<SafeSmartAccount>,
+        additional_processors: Vec<Arc<dyn MigrationProcessor>>,
     ) -> Arc<Self> {
+        let mut processors = Self::default_processors(safe_account);
+        processors.extend(additional_processors);
         Self::with_processors(kv_store, processors)
     }
 
@@ -111,9 +120,59 @@ impl MigrationController {
         self.run_migrations_async().await
         // Lock automatically released when _guard is dropped
     }
+
+    /// Delete all migration records from the key-value store.
+    ///
+    /// **Developer/testing use only.** This resets all migration state so that
+    /// migrations will run again from scratch on the next `run_migrations` call.
+    ///
+    /// Records that don't exist yet are silently skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
+    /// Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
+    ///
+    /// # Concurrency
+    ///
+    /// Acquires the global migration lock to prevent deleting records while
+    /// migrations are in progress.
+    pub fn delete_all_records(&self) -> Result<i32, MigrationError> {
+        let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
+            MigrationError::InvalidOperation(
+                "Migration is already in progress. Please wait for the current migration to complete.".to_string(),
+            )
+        })?;
+
+        let mut deleted = 0;
+        for processor in &self.processors {
+            let key = format!("{MIGRATION_KEY_PREFIX}{}", processor.migration_id());
+            match self.kv_store.delete(key) {
+                Ok(()) => deleted += 1,
+                Err(KeyValueStoreError::KeyNotFound) => {} // No record to delete
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        crate::info!(
+            "migration_records.deleted count={} total_processors={} timestamp={}",
+            deleted,
+            self.processors.len(),
+            Utc::now().to_rfc3339()
+        );
+
+        Ok(deleted)
+    }
 }
 
 impl MigrationController {
+    /// Returns the default set of migration processors.
+    fn default_processors(
+        safe_account: Arc<SafeSmartAccount>,
+    ) -> Vec<Arc<dyn MigrationProcessor>> {
+        vec![Arc::new(Permit2ApprovalProcessor::new(safe_account))]
+    }
+
     /// Create a controller with processors injected in
     pub fn with_processors(
         kv_store: Arc<dyn DeviceKeyValueStore>,
@@ -1289,5 +1348,104 @@ mod tests {
         assert_eq!(processor3.execution_count(), 1); // Retryable - executed
         assert_eq!(processor4.execution_count(), 1); // InProgress - treated as stale, executed
         assert_eq!(processor5.execution_count(), 1); // NotStarted - executed
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_all_records_removes_existing_records() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor1 = Arc::new(TestProcessor::new("test.migration1.v1"));
+        let processor2 = Arc::new(TestProcessor::new("test.migration2.v1"));
+
+        // Seed records into the store
+        let record = MigrationRecord::new();
+        let json = serde_json::to_string(&record).unwrap();
+        kv_store
+            .set(
+                format!("{MIGRATION_KEY_PREFIX}test.migration1.v1"),
+                json.clone(),
+            )
+            .unwrap();
+        kv_store
+            .set(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1"), json)
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor1, processor2],
+        );
+
+        let deleted = controller.delete_all_records().unwrap();
+        assert_eq!(deleted, 2);
+
+        // Verify records are gone
+        assert!(matches!(
+            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration1.v1")),
+            Err(KeyValueStoreError::KeyNotFound)
+        ));
+        assert!(matches!(
+            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1")),
+            Err(KeyValueStoreError::KeyNotFound)
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_all_records_succeeds_with_no_existing_records() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+
+        // No records seeded - store is empty
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor]);
+
+        // Should not error even when no records exist
+        let result = controller.delete_all_records();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_delete_all_records_allows_migrations_to_rerun() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        // Run migrations - should succeed
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().succeeded, 1);
+        assert_eq!(processor.execution_count(), 1);
+
+        // Second run - should skip (already succeeded)
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().skipped, 1);
+        assert_eq!(processor.execution_count(), 1);
+
+        // Delete all records
+        let deleted = controller.delete_all_records().unwrap();
+        assert_eq!(deleted, 1);
+
+        // Third run - should execute again (record was deleted)
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().succeeded, 1);
+        assert_eq!(processor.execution_count(), 2);
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_all_records_propagates_store_errors() {
+        let kv_store = Arc::new(FailingKvStore);
+        let processor = Arc::new(TestProcessor::new("test.migration.v1"));
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor]);
+
+        let result = controller.delete_all_records();
+        assert!(result.is_err());
     }
 }

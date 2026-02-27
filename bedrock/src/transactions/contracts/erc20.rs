@@ -126,6 +126,16 @@ impl Erc20 {
 
         Ok(U256::from_be_slice(&result[..32]))
     }
+
+    /// Encodes an ERC-20 allowance call.
+    ///
+    /// # Arguments
+    /// * `owner` - The token owner address.
+    /// * `spender` - The spender address.
+    #[must_use]
+    pub fn encode_allowance(owner: Address, spender: Address) -> Vec<u8> {
+        IErc20::allowanceCall { owner, spender }.abi_encode()
+    }
 }
 
 /// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set".

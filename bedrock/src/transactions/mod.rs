@@ -19,12 +19,12 @@ use crate::{
             world_campaign_manager::WorldCampaignManager,
             world_gift_manager::WorldGiftManager,
         },
-        foreign::UnparsedUserOperation,
         rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
     },
 };
 
 pub mod contracts;
+pub mod custom_bundler;
 pub use contracts::world_campaign_manager::world_campaign_manager_address;
 pub mod foreign;
 pub mod rpc;
