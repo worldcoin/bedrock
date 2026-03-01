@@ -39,7 +39,7 @@ async-trait = "0.1.89"
 aws-nitro-enclaves-nsm-api = "0.4.0"
 base64 = "0.22.1"
 bedrock-macros = { path = "../bedrock-macros" }
-blake3 = "1.5.5"
+blake3 = "1.8.3"
 chrono = { version = "0.4.42", default-features = false, features = [
   "now",
   "std",
