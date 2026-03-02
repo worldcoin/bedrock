@@ -42,6 +42,10 @@ pub enum TransactionTypeId {
     MorphoWithdraw = 137,
     /// ERC-20 approve for Permit2 contract
     Permit2Approve = 138,
+    /// WLD Vault migration to ERC-4626 vault
+    WLDVaultMigration = 139,
+    /// USD Vault migration to ERC-4626 vault
+    USDVaultMigration = 140,
 }
 
 impl TransactionTypeId {

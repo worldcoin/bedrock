@@ -39,14 +39,14 @@ async-trait = "0.1.89"
 aws-nitro-enclaves-nsm-api = "0.4.0"
 base64 = "0.22.1"
 bedrock-macros = { path = "../bedrock-macros" }
-blake3 = "1.5.5"
+blake3 = "1.8.3"
 chrono = { version = "0.4.42", default-features = false, features = [
   "now",
   "std",
   "serde",
 ] }
 ciborium = "0.2.2"
-coset = "0.3.8"
+coset = "0.4.1"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 dryoc = "0.7.0"
 flate2 = "1.1.5"
@@ -80,7 +80,7 @@ thiserror = "2.0.18"
 tokio = { version = "1.47.1", features = ["time"] }
 turnkey_enclave_encrypt = "0.3.0"
 uniffi = { workspace = true, features = ["build", "tokio"] }
-uuid = { version = "1.18.1", features = ["v4"], default-features = false }
+uuid = { version = "1.21.0", features = ["v4"], default-features = false }
 webpki = "0.22"
 x509-cert = { version = "0.2.5", features = ["pem"] }
 zeroize = "1.8"

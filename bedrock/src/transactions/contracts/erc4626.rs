@@ -58,7 +58,9 @@ pub struct Erc4626Vault {
 impl Erc4626Vault {
     /// Helper function to fetch and decode an asset address from an RPC call.
     /// Validates that the response is at least 32 bytes before extracting the address.
-    async fn fetch_asset_address(
+    /// # Errors
+    /// Returns an error if the RPC call fails or if the response is not at least 32 bytes.
+    pub async fn fetch_asset_address(
         rpc_client: &RpcClient,
         network: Network,
         contract_address: Address,
