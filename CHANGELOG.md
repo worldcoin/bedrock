@@ -2,6 +2,25 @@
 
 
 
+## [0.2.1] - 2026-03-02
+
+## What's Changed
+* chore: add @karankurbur to CODEOWNERS by @karankurbur in https://github.com/worldcoin/bedrock/pull/276
+* feat: method to wipe migration records, to help in testing by @thomas-waite in https://github.com/worldcoin/bedrock/pull/279
+* feat: add Permit2 ERC20 approval migration processor by @karankurbur in https://github.com/worldcoin/bedrock/pull/278
+* feat: legacy vaults migration by @bergusman in https://github.com/worldcoin/bedrock/pull/261
+* build(deps): bump blake3 from 1.8.2 to 1.8.3 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/285
+* build(deps): bump uuid from 1.18.1 to 1.21.0 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/281
+* build(deps): bump coset from 0.3.8 to 0.4.1 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/283
+
+## New Contributors
+* @bergusman made their first contribution in https://github.com/worldcoin/bedrock/pull/261
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.0...0.2.1
+
+
+
+
 ## [0.2.0] - 2026-02-25
 
 ## What's Changed
