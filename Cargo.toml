@@ -26,4 +26,4 @@ uniffi = { version = "0.31.0", features = ["build", "tokio"] }
 debug = false
 lto = true       # Enable Link Time Optimization.
 opt-level = 'z'  # Optimize for size.
-panic = "unwind"
+panic = "abort"
