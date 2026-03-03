@@ -25,9 +25,11 @@ pub enum TransactionTypeId {
     /// `WorldGiftManager` cancel
     WorldGiftManagerCancel = 129,
     /// `WorldCampaignManager` sponsor
-    WorldCampaignManagerSponsor = 130,
+    #[deprecated(note = "This transaction type is no longer in use.")]
+    DeprecatedWorldCampaignManagerSponsor = 130,
     /// `WorldCampaignManager` claim
-    WorldCampaignManagerClaim = 131,
+    #[deprecated(note = "This transaction type is no longer in use.")]
+    DeprecatedWorldCampaignManagerClaim = 131,
     /// Generic ERC-4626 deposit
     ERC4626Deposit = 132,
     /// Generic ERC-4626 mint

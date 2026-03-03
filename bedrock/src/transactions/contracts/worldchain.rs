@@ -1,4 +1,4 @@
-//! WorldChain (chain ID 480) contract addresses and token constants.
+//! World Chain (chain ID 480) contract addresses and token constants.
 
 use alloy::primitives::{address, Address};
 
