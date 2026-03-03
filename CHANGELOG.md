@@ -2,6 +2,17 @@
 
 
 
+## [0.2.2] - 2026-03-03
+
+## What's Changed
+* fix: reqwest panic by @aurel-fr in https://github.com/worldcoin/bedrock/pull/288
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.1...0.2.2
+
+
+
+
 ## [0.2.1] - 2026-03-02
 
 ## What's Changed
