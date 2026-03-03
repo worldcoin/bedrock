@@ -10,9 +10,9 @@
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, FixedBytes};
 use bedrock_macros::bedrock_export;
+use once_cell::sync::OnceCell;
 use serde_json::Value;
 use std::str::FromStr;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::{
@@ -26,7 +26,7 @@ use crate::{
 };
 
 /// Global reqwest client for direct HTTP requests to bundler endpoints.
-static REQWEST_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static REQWEST_CLIENT: OnceCell<reqwest::Client> = OnceCell::new();
 
 // ── URL validation ────────────────────────────────────────────────────────────
 
@@ -62,13 +62,18 @@ fn validate_rpc_url(url: &str) -> Result<(), RpcError> {
 ///
 /// The client is configured with a 15 s timeout to prevent indefinitely hanging requests.
 async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-    let client = REQWEST_CLIENT.get_or_init(|| {
+    let client = REQWEST_CLIENT.get_or_try_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("failed to build reqwest client")
-    });
+            .map_err(|e| {
+                RpcError::HttpError(format!(
+                    "Failed to build HTTP client: {}",
+                    e.without_url()
+                ))
+            })
+    })?;
     let response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
