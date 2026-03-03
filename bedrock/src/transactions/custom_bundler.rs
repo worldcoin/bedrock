@@ -68,7 +68,10 @@ async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcEr
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| {
-                RpcError::HttpError(format!("Failed to build HTTP client: {}", e.without_url()))
+                RpcError::HttpError(format!(
+                    "Failed to build HTTP client: {}",
+                    e.without_url()
+                ))
             })
     })?;
     let response = client
