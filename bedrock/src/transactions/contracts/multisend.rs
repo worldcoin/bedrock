@@ -1,3 +1,4 @@
+//! Utilities for batching multiple transactions via the Safe `MultiSend` contract.
 use alloy::{
     primitives::{address, Address, U256},
     sol,
