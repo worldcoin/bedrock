@@ -43,6 +43,6 @@ pub struct MigrationRecord {
     pub completed_at: Option<DateTime<Utc>>,
 
     /// Next time to recheck a succeeded migration's applicability.
-    /// Set to `now + TTL` on success and renewed on each recheck skip.
+    /// Set to `now + TTL` on success/re-check.
     pub recheck_at: Option<DateTime<Utc>>,
 }
