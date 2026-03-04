@@ -13,8 +13,6 @@ pub enum ProcessorResult {
         error_code: String,
         /// Human-readable error message
         error_message: String,
-        /// Optional delay in milliseconds before retrying
-        retry_after_ms: Option<i64>,
     },
 
     /// Migration failed with terminal error (won't retry)

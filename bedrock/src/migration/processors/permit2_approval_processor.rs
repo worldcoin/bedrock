@@ -147,7 +147,6 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
                     error_message: format!(
                         "Failed to submit batched ERC20 approvals to Permit2: {e}"
                     ),
-                    retry_after_ms: Some(10_000),
                 });
             }
         };
@@ -180,8 +179,7 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
                             "Permit2 approval transaction failed for {names:?}, txHash: {:?}",
                             response.transaction_hash
                         ),
-                        retry_after_ms: Some(10_000),
-                    });
+                        });
                 }
                 _ => {
                     // Still pending — keep polling unless this is the last attempt
@@ -201,7 +199,6 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
             error_message: format!(
                 "Permit2 approval for {names:?} still pending after polling, will retry"
             ),
-            retry_after_ms: Some(10_000),
         })
     }
 }

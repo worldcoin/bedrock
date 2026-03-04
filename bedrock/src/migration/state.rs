@@ -41,4 +41,8 @@ pub struct MigrationRecord {
 
     /// Timestamp when migration completed successfully
     pub completed_at: Option<DateTime<Utc>>,
+
+    /// Next time to recheck a succeeded migration's applicability.
+    /// When set, takes precedence over `completed_at` + TTL for scheduling rechecks.
+    pub recheck_at: Option<DateTime<Utc>>,
 }

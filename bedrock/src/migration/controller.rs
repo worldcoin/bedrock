@@ -232,7 +232,7 @@ impl MigrationController {
     }
 
     /// Run a single migration processor through its full lifecycle.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     async fn run_single_processor(
         &self,
         processor: &dyn MigrationProcessor,
@@ -260,22 +260,21 @@ impl MigrationController {
         // Determine if this migration should be attempted based on its current status
         let should_attempt = match record.status {
             MigrationStatus::Succeeded => {
-                // Check TTL: if completed_at + TTL has elapsed, re-check applicability
-                let ttl_expired = record.completed_at.is_some_and(|completed| {
-                    Utc::now() - completed > Duration::days(MIGRATION_SUCCESS_TTL_DAYS)
-                });
+                // Check if it's time to recheck applicability via recheck_at.
+                let recheck_due = record
+                    .recheck_at
+                    .is_some_and(|recheck_at| Utc::now() >= recheck_at);
 
-                if ttl_expired {
+                if recheck_due {
                     crate::info!(
-                        "migration.ttl_expired id={} completed_at={} timestamp={}",
+                        "migration.recheck_due id={} recheck_at={} timestamp={}",
                         migration_id,
                         record
-                            .completed_at
+                            .recheck_at
                             .map(|t| t.to_rfc3339())
                             .unwrap_or_default(),
                         Utc::now().to_rfc3339()
                     );
-                    // Re-check applicability below
                     true
                 } else {
                     false
@@ -309,7 +308,27 @@ impl MigrationController {
         }
 
         // Check if migration is applicable based on actual state (e.g., on-chain allowances).
-        if !matches!(processor.is_applicable().await, Ok(true)) {
+        let is_applicable = match processor.is_applicable().await {
+            Ok(applicable) => applicable,
+            Err(e) => {
+                crate::error!(
+                    "migration.is_applicable_error id={} error={:?} timestamp={}",
+                    migration_id,
+                    e,
+                    Utc::now().to_rfc3339()
+                );
+                false
+            }
+        };
+
+        if !is_applicable {
+            // For TTL-expired succeeded migrations, renew recheck_at to avoid
+            // calling is_applicable on every app open.
+            if matches!(record.status, MigrationStatus::Succeeded) {
+                record.recheck_at =
+                    Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+                let _ = self.save_record(&migration_id, &record);
+            }
             return MigrationRunSummary {
                 skipped: 1,
                 ..MigrationRunSummary::default()
@@ -366,6 +385,8 @@ impl MigrationController {
                 );
                 record.status = MigrationStatus::Succeeded;
                 record.completed_at = Some(Utc::now());
+                record.recheck_at =
+                    Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
                 record.last_error_code = None;
                 record.last_error_message = None;
                 MigrationRunSummary {
@@ -554,7 +575,6 @@ mod tests {
                 Ok(ProcessorResult::Retryable {
                     error_code: "TEST_ERROR".to_string(),
                     error_message: "Test error".to_string(),
-                    retry_after_ms: None,
                 })
             } else {
                 Ok(ProcessorResult::Success)
@@ -1242,12 +1262,13 @@ mod tests {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
-        // Set up a succeeded record with completed_at older than TTL
+        // Set up a succeeded record with recheck_at in the past (TTL expired)
         let record = MigrationRecord {
             status: MigrationStatus::Succeeded,
             completed_at: Some(
                 Utc::now() - chrono::Duration::days(MIGRATION_SUCCESS_TTL_DAYS + 1),
             ),
+            recheck_at: Some(Utc::now() - chrono::Duration::days(1)),
             ..MigrationRecord::default()
         };
         kv_store
@@ -1438,12 +1459,13 @@ mod tests {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
 
-        // Set up a succeeded record with expired TTL
+        // Set up a succeeded record with recheck_at in the past (TTL expired)
         let record = MigrationRecord {
             status: MigrationStatus::Succeeded,
             completed_at: Some(
                 Utc::now() - chrono::Duration::days(MIGRATION_SUCCESS_TTL_DAYS + 1),
             ),
+            recheck_at: Some(Utc::now() - chrono::Duration::days(1)),
             ..MigrationRecord::default()
         };
 
@@ -1463,6 +1485,22 @@ mod tests {
         let summary = result.unwrap();
         assert_eq!(summary.skipped, 1);
         assert_eq!(processor.execution_count(), 0);
+
+        // Verify recheck_at was set to prevent repeated is_applicable calls
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(
+            updated_record.recheck_at.is_some(),
+            "recheck_at should be set after skipping a TTL-expired migration"
+        );
+        let recheck_at = updated_record.recheck_at.unwrap();
+        let expected_min =
+            Utc::now() + chrono::Duration::days(MIGRATION_SUCCESS_TTL_DAYS - 1);
+        assert!(
+            recheck_at > expected_min,
+            "recheck_at should be ~{MIGRATION_SUCCESS_TTL_DAYS} days in the future"
+        );
     }
 
     #[tokio::test]
