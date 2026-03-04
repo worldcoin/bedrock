@@ -335,11 +335,6 @@ impl MigrationController {
             };
         }
 
-        // For TTL-expired succeeded migrations, reset record before re-executing
-        if matches!(record.status, MigrationStatus::Succeeded) {
-            record = MigrationRecord::default();
-        }
-
         // Execute the migration
         crate::info!(
             "migration.started id={} attempt={} timestamp={}",
