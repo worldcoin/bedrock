@@ -95,7 +95,6 @@ impl MigrationProcessor for ExampleProcessor {
         //     return Ok(ProcessorResult::Retryable {
         //         error_code: "NETWORK_ERROR".to_string(),
         //         error_message: format!("Failed to connect: {}", e),
-        //         retry_after_ms: Some(30_000), // Optional: suggest retry delay
         //     });
         // }
 

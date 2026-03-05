@@ -1545,6 +1545,7 @@ dependencies = [
  "dotenvy",
  "dryoc",
  "flate2",
+ "futures",
  "hex",
  "hex-literal",
  "hpke",
