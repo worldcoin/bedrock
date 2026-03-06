@@ -51,6 +51,9 @@ pub enum RpcMethod {
     /// Make a read call to a smart contract
     #[serde(rename = "eth_call")]
     EthCall,
+    /// Read a storage slot from a contract
+    #[serde(rename = "eth_getStorageAt")]
+    EthGetStorageAt,
     /// Query supported ERC-4337 entry points
     #[serde(rename = "eth_supportedEntryPoints")]
     SupportedEntryPoints,
@@ -89,6 +92,7 @@ impl RpcMethod {
             Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
             Self::SendUserOperation => "eth_sendUserOperation",
             Self::EthCall => "eth_call",
+            Self::EthGetStorageAt => "eth_getStorageAt",
             Self::SupportedEntryPoints => "eth_supportedEntryPoints",
         }
     }
@@ -501,6 +505,36 @@ impl RpcClient {
 
         Bytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
             error_message: format!("Invalid eth_call result format: {e}"),
+        })
+    }
+
+    /// Reads a raw storage slot from a contract via `eth_getStorageAt`.
+    ///
+    /// # Errors
+    /// Returns an error if the RPC call fails or the response cannot be parsed.
+    pub async fn eth_get_storage_at(
+        &self,
+        network: Network,
+        address: Address,
+        slot: U256,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let params = vec![
+            serde_json::Value::String(format!("{address:?}")),
+            serde_json::Value::String(format!("{slot:#066x}")),
+            serde_json::Value::String("latest".to_string()),
+        ];
+
+        let result: String = self
+            .rpc_call(
+                network,
+                RpcMethod::EthGetStorageAt,
+                params,
+                RpcProviderName::Any,
+            )
+            .await?;
+
+        FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            error_message: format!("Invalid eth_getStorageAt result format: {e}"),
         })
     }
 }

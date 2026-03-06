@@ -76,6 +76,9 @@ mod state;
 /// Example processors showing how to implement migrations
 pub mod processors;
 
+/// Shared utilities for migration processors
+pub mod utils;
+
 // Public API exports
 pub use controller::{MigrationController, MigrationRunSummary};
 pub use error::MigrationError;

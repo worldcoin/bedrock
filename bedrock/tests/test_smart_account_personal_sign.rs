@@ -6,7 +6,7 @@ use alloy::{
 use bedrock::{primitives::Network, smart_account::SafeSmartAccount};
 
 mod common;
-use common::{deploy_safe, setup_anvil, ISafe};
+use common::{deploy_safe_v141, setup_anvil, ISafe};
 
 #[tokio::test]
 async fn test_integration_personal_sign() {
@@ -29,7 +29,7 @@ async fn test_integration_personal_sign() {
     println!("✓ Using owner address: {owner}");
 
     // Deploy a Safe
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO)
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO)
         .await
         .expect("Failed to deploy Safe");
 
@@ -110,7 +110,7 @@ async fn test_integration_personal_sign_failure_on_incorrect_chain_id() {
         .await
         .unwrap();
 
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO)
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO)
         .await
         .expect("Failed to deploy Safe");
 
@@ -171,7 +171,7 @@ async fn test_integration_personal_sign_failure_on_incorrect_eip_191_prefix() {
         .await
         .expect("Failed to set balance");
 
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO)
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO)
         .await
         .expect("Failed to deploy Safe");
 
