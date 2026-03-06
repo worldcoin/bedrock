@@ -17,7 +17,7 @@ use bedrock::smart_account::{
 use chrono::Utc;
 
 mod common;
-use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, ISafe, IERC20};
+use common::{deploy_safe_v141, set_erc20_balance_for_safe, setup_anvil, ISafe, IERC20};
 
 sol!(
     // NOTE: This is defined in the `permit2` module, but it cannot be easily re-used here.
@@ -85,7 +85,7 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
     provider.anvil_set_balance(owner, U256::from(1e18)).await?;
 
     // Step 2: Deploy a Safe (World App User)
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO).await?;
     let chain_id = Network::WorldChain as u32;
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 
@@ -241,7 +241,7 @@ async fn test_integration_permit2_approve_and_allowance_transfer() -> anyhow::Re
     provider.anvil_set_balance(owner, U256::from(1e18)).await?;
 
     // Step 2: Deploy a Safe (World App User)
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO).await?;
     let chain_id = Network::WorldChain as u32;
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
 

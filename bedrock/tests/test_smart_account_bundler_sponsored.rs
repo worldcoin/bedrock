@@ -6,7 +6,7 @@ use alloy::{
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
-use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
+use common::{deploy_safe_v141, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use bedrock::{
     primitives::http_client::set_http_client,
@@ -105,7 +105,7 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
         .await?;
 
     // 3) Deploy Safe with 4337 module enabled
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO).await?;
 
     // 4) Fund EntryPoint deposit for Safe (needs enough to cover gas at zero fee)
     let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);

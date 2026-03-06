@@ -9,7 +9,7 @@ use alloy::{
     signers::local::PrivateKeySigner,
     sol,
 };
-use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
+use common::{deploy_safe_v141, set_erc20_balance_for_safe, setup_anvil, IERC20};
 use std::str::FromStr;
 
 use bedrock::{
@@ -52,7 +52,7 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
         .await?;
 
     // 3) Deploy Safe with 4337 module enabled
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO).await?;
     println!("✓ Deployed Safe at: {safe_address}");
 
     // 4) Fund EntryPoint deposit for Safe (for gas)
