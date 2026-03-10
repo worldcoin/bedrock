@@ -25,6 +25,32 @@ const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations aft
 /// injection, etc.) to prevent multiple controller instances as an additional safeguard.
 static MIGRATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+/// A single migration record entry returned by [`MigrationController::list_all_records`].
+///
+/// FFI-facing view of a migration's persisted execution state, combining the
+/// processor's migration ID with the fields from [`MigrationRecord`] that are
+/// relevant to external consumers.
+///
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MigrationRecordEntry {
+    /// The migration identifier (e.g. `"worldId.credentials.nfc.refresh.v2"`).
+    pub migration_id: String,
+    /// Current execution status.
+    pub status: MigrationStatus,
+    /// Number of execution attempts so far.
+    pub attempts: i32,
+    /// ISO 8601 timestamp when the migration was first started, if any.
+    pub started_at: Option<String>,
+    /// ISO 8601 timestamp of the most recent attempt, if any.
+    pub last_attempted_at: Option<String>,
+    /// Error code from the most recent failed attempt, if any.
+    pub last_error_code: Option<String>,
+    /// Error message from the most recent failed attempt, if any.
+    pub last_error_message: Option<String>,
+    /// ISO 8601 timestamp when the migration completed successfully, if any.
+    pub completed_at: Option<String>,
+}
+
 /// Summary of a migration run
 #[derive(Debug, Default, uniffi::Record)]
 pub struct MigrationRunSummary {
@@ -156,6 +182,51 @@ impl MigrationController {
         );
 
         Ok(deleted)
+    }
+
+    /// List the current record for every registered processor.
+    ///
+    /// Returns one [`MigrationRecordEntry`] per registered processor. Processors
+    /// that have never been attempted are included with status
+    /// [`MigrationStatus::NotStarted`] and zero attempts. Corrupted or missing
+    /// store entries are treated as a reset rather than an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
+    /// Returns `MigrationError::DeviceKeyValueStoreError` only for unexpected store failures;
+    /// missing keys and parse errors are treated as resets and do not propagate.
+    ///
+    /// # Concurrency
+    ///
+    /// Acquires the global migration lock to ensure a consistent snapshot is
+    /// returned while no migration is actively modifying the records.
+    pub fn list_all_records(
+        &self,
+    ) -> Result<Vec<MigrationRecordEntry>, MigrationError> {
+        let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
+            MigrationError::InvalidOperation(
+                "Migration is already in progress. Please wait for the current migration to complete.".to_string(),
+            )
+        })?;
+
+        let mut entries = Vec::new();
+        for processor in &self.processors {
+            let migration_id = processor.migration_id();
+            let record = self.load_record(&migration_id)?;
+            entries.push(MigrationRecordEntry {
+                migration_id,
+                status: record.status,
+                attempts: record.attempts,
+                started_at: record.started_at.map(|t| t.to_rfc3339()),
+                last_attempted_at: record.last_attempted_at.map(|t| t.to_rfc3339()),
+                last_error_code: record.last_error_code,
+                last_error_message: record.last_error_message,
+                completed_at: record.completed_at.map(|t| t.to_rfc3339()),
+            });
+        }
+
+        Ok(entries)
     }
 }
 

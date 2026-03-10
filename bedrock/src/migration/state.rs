@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Status of a single migration
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, uniffi::Enum)]
 pub enum MigrationStatus {
     /// Migration has not been started yet
     #[default]
