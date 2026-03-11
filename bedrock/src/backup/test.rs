@@ -14,6 +14,8 @@ use crate::primitives::filesystem::{
 use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use crypto_box::{PublicKey, SecretKey};
+use k256::ecdsa::signature::Verifier;
+use k256::ecdsa::{Signature, VerifyingKey};
 use serial_test::serial;
 use std::str::FromStr;
 use std::sync::Mutex;
@@ -1252,4 +1254,55 @@ fn test_re_encrypt_backup() {
         decryption_error.to_string(),
         "Failed to decrypt backup keypair"
     );
+}
+
+#[test]
+fn test_sign_with_backup_account_key_returns_valid_signature() {
+    let manager = BackupManager::new();
+    let root_secret = format!("{{\"version\":\"V1\",\"key\":\"{}\"}}", "1".repeat(64));
+    let challenge = b"test challenge";
+
+    let sig_b64 = manager
+        .sign_with_backup_account_key(&root_secret, challenge)
+        .expect("signing should succeed");
+
+    // Decode the base64 DER signature and parse it
+    let sig_der =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &sig_b64)
+            .expect("signature should be valid base64");
+    let sig = Signature::from_der(&sig_der).expect("should be valid DER signature");
+
+    // Derive the public key from the same root secret and verify
+    let root_key = RootKey::from_json(&root_secret).unwrap();
+    let secret_key = root_key.derive_backup_account_key().unwrap();
+    let verifying_key = VerifyingKey::from(&k256::ecdsa::SigningKey::from(secret_key));
+    verifying_key
+        .verify(challenge, &sig)
+        .expect("signature should verify against the derived public key");
+}
+
+#[test]
+fn test_sign_with_backup_account_key_is_deterministic() {
+    let manager = BackupManager::new();
+    let root_secret = format!("{{\"version\":\"V1\",\"key\":\"{}\"}}", "1".repeat(64));
+    let challenge = b"deterministic check";
+
+    let sig1 = manager
+        .sign_with_backup_account_key(&root_secret, challenge)
+        .expect("first sign");
+    let sig2 = manager
+        .sign_with_backup_account_key(&root_secret, challenge)
+        .expect("second sign");
+
+    assert_eq!(sig1, sig2);
+}
+
+#[test]
+fn test_sign_with_backup_account_key_invalid_root_secret() {
+    let manager = BackupManager::new();
+    let err = manager
+        .sign_with_backup_account_key("not json", b"challenge")
+        .expect_err("should fail with invalid root secret");
+
+    assert!(err.to_string().contains("Invalid root secret"));
 }
