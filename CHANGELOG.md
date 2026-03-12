@@ -2,6 +2,23 @@
 
 
 
+## [0.2.3] - 2026-03-11
+
+## What's Changed
+* chore: remove gift campaign manager by @paolodamico in https://github.com/worldcoin/bedrock/pull/290
+* feat: optimize migration processors with parallel execution, mining c… by @karankurbur in https://github.com/worldcoin/bedrock/pull/280
+* feat: add credential vault to backup designator by @thomas-waite in https://github.com/worldcoin/bedrock/pull/292
+* feat: logger sanitization by @paolodamico in https://github.com/worldcoin/bedrock/pull/293
+* feat: add method to list all migration records by @forceunwrap in https://github.com/worldcoin/bedrock/pull/294
+
+## New Contributors
+* @forceunwrap made their first contribution in https://github.com/worldcoin/bedrock/pull/294
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.2...0.2.3
+
+
+
+
 ## [0.2.2] - 2026-03-03
 
 ## What's Changed
