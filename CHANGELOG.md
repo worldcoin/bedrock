@@ -2,6 +2,17 @@
 
 
 
+## [0.2.4] - 2026-03-12
+
+## What's Changed
+* feat: signing with backup account key by @paolodamico in https://github.com/worldcoin/bedrock/pull/295
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.3...0.2.4
+
+
+
+
 ## [0.2.3] - 2026-03-11
 
 ## What's Changed
