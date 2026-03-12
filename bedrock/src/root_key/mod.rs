@@ -207,7 +207,9 @@ impl RootKey {
     ///
     /// # Errors
     /// No errors are generally expected, but key derivation may unexpectedly fail.
-    fn derive_backup_account_key(&self) -> Result<k256::SecretKey, RootKeyError> {
+    pub(crate) fn derive_backup_account_key(
+        &self,
+    ) -> Result<k256::SecretKey, RootKeyError> {
         let mut subkey: SecretBox<[u8; 32]> =
             Self::derive_subkey(self, BACKUP_SUBKEY_ID)?;
         let backup_key =

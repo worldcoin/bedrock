@@ -7,11 +7,13 @@ mod turnkey;
 #[cfg(test)]
 mod test;
 
+use base64::Engine;
 use bedrock_macros::bedrock_export;
 pub use client_events::{
     BackupReportEncryptionKeyKind, BackupReportEventKind, BackupReportMainFactor,
     BaseReport, ClientEventsError, ClientEventsReporter,
 };
+use k256::ecdsa::{signature::Signer, Signature, SigningKey};
 pub use manifest::ManifestManager;
 
 use crate::backup::backup_format::v0::{
@@ -22,6 +24,7 @@ use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
 use crate::root_key::RootKey;
+use base64::engine::general_purpose::STANDARD;
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -329,6 +332,40 @@ impl BackupManager {
         };
 
         Ok(result)
+    }
+
+    /// Signs the given challenge with the backup account key.
+    ///
+    /// This is used for the `/v1/reset` endpoint for when the user has lost access
+    /// to all their factors but they still have access to their account. This allows
+    /// for a remote reset of their backup.
+    ///
+    /// Returns the signature as a base64-encoded DER string.
+    ///
+    /// # Errors
+    /// - `BackupError::InvalidRootSecretError` if the root secret is
+    ///   malformed.
+    /// - `BackupError::Generic` if key derivation fails.
+    pub fn sign_with_backup_account_key(
+        &self,
+        root_secret: &str,
+        challenge: &[u8],
+    ) -> Result<String, BackupError> {
+        let root_key = RootKey::from_json(root_secret).map_err(|_| {
+            BackupError::InvalidRootSecretError(format!(
+                "attempting to parse an invalid secret for `sign_with_backup_account_key`: {}",
+                root_secret.chars().next().unwrap_or_default() == '{'
+            ))
+        })?;
+        let key =
+            root_key
+                .derive_backup_account_key()
+                .map_err(|_| BackupError::Generic {
+                    error_message: "unexpected kdf failure".to_string(),
+                })?;
+        let signing_key = SigningKey::from(key);
+        let sig: Signature = signing_key.sign(challenge);
+        Ok(STANDARD.encode(sig.to_der()))
     }
 
     /// Should be called after the backup is disabled/deleted.
