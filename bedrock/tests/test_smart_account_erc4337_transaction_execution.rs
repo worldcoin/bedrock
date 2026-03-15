@@ -15,7 +15,7 @@ use bedrock::{
     transactions::foreign::UnparsedUserOperation,
 };
 mod common;
-use common::{deploy_safe, setup_anvil, ISafe4337Module};
+use common::{deploy_safe_v141, setup_anvil, ISafe4337Module};
 
 /// Integration test for the encoding, signing and execution of a 4337 transaction.
 ///
@@ -35,8 +35,8 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         .connect_http(anvil.endpoint_url());
 
     // Deploy Safes
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
-    let safe_address2 = deploy_safe(&provider, owner, U256::from(1)).await?;
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO).await?;
+    let safe_address2 = deploy_safe_v141(&provider, owner, U256::from(1)).await?;
 
     // Fund the Safe, to be able to test the balance transfer
     provider

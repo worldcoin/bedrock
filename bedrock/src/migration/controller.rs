@@ -1,6 +1,8 @@
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::processors::enable_4337_module_processor::Enable4337ModuleProcessor;
 use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
+use crate::migration::processors::safe_upgrade_processor::SafeUpgradeProcessor;
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
 use crate::smart_account::SafeSmartAccount;
@@ -95,6 +97,8 @@ impl MigrationController {
     /// Create a new [`MigrationController`] with default processors and optional additional ones.
     ///
     /// Default processors (loaded automatically):
+    /// - [`SafeUpgradeProcessor`]: Upgrades Safe wallets from v1.3.0 to v1.4.1
+    /// - [`Enable4337ModuleProcessor`]: Enables the Safe4337Module if not already enabled
     /// - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on `WorldChain`
     ///
     /// Additional processors passed via `additional_processors` are appended after the defaults.
@@ -235,7 +239,11 @@ impl MigrationController {
     fn default_processors(
         safe_account: Arc<SafeSmartAccount>,
     ) -> Vec<Arc<dyn MigrationProcessor>> {
-        vec![Arc::new(Permit2ApprovalProcessor::new(safe_account))]
+        vec![
+            Arc::new(SafeUpgradeProcessor::new(Arc::clone(&safe_account))),
+            Arc::new(Enable4337ModuleProcessor::new(Arc::clone(&safe_account))),
+            Arc::new(Permit2ApprovalProcessor::new(safe_account)),
+        ]
     }
 
     /// Create a controller with processors injected in
