@@ -35,6 +35,7 @@ alloy = { version = "1.1.2", default-features = false, features = [
   "contract",
 ] }
 anyhow = "1.0"
+bedrock-core = { path = "../bedrock-core" }
 async-trait = "0.1.89"
 aws-nitro-enclaves-nsm-api = "0.4.0"
 base64 = "0.22.1"

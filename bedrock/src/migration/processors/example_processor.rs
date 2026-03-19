@@ -1,5 +1,4 @@
-use crate::migration::error::MigrationError;
-use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::{MigrationError, MigrationProcessor, ProcessorResult};
 use async_trait::async_trait;
 use log::info;
 

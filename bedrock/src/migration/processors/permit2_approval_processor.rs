@@ -4,8 +4,7 @@ use log::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::migration::error::MigrationError;
-use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::{MigrationError, MigrationProcessor, ProcessorResult};
 use crate::primitives::Network;
 use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
 use crate::transactions::contracts::erc20::Erc20;
