@@ -1536,6 +1536,7 @@ dependencies = [
  "async-trait",
  "aws-nitro-enclaves-nsm-api",
  "base64",
+ "bedrock-core",
  "bedrock-macros",
  "blake3",
  "chrono",
@@ -1573,6 +1574,42 @@ dependencies = [
  "uuid",
  "webpki",
  "x509-cert",
+ "zeroize",
+]
+
+[[package]]
+name = "bedrock-core"
+version = "0.2.4"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "bedrock-macros",
+ "blake3",
+ "chrono",
+ "ciborium",
+ "crypto_box",
+ "dryoc",
+ "flate2",
+ "futures",
+ "hex",
+ "hpke",
+ "k256",
+ "log",
+ "once_cell",
+ "p256 0.13.2",
+ "rand 0.8.5",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "strum",
+ "subtle",
+ "tar",
+ "thiserror 2.0.18",
+ "tokio",
+ "uniffi",
+ "uuid",
  "zeroize",
 ]
 

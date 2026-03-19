@@ -373,7 +373,7 @@ mod tests {
         ///
         /// # Examples
         /// ```rust
-        /// use bedrock::primitives::filesystem::InMemoryFileSystem;
+        /// use bedrock_core::primitives::filesystem::InMemoryFileSystem;
         ///
         /// let fs = InMemoryFileSystem::with_files(&[
         ///     ("config.json", r#"{"test": true}"#),

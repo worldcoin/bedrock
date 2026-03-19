@@ -16,7 +16,7 @@ thread_local! {
 ///
 /// ```rust
 ///
-/// use bedrock::primitives::logger::{Logger, LogLevel};
+/// use bedrock_core::primitives::logger::{Logger, LogLevel};
 ///
 /// struct MyLogger;
 ///
@@ -229,8 +229,8 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::{trace, debug, info, warn, error};
-/// use bedrock::primitives::logger::LogContext;
+/// use bedrock_core::{trace, debug, info, warn, error};
+/// use bedrock_core::primitives::logger::LogContext;
 ///
 /// let _bedrock_logger_ctx = LogContext::new("SmartAccount");
 /// info!("This is an info message");
@@ -301,7 +301,7 @@ macro_rules! error {
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::primitives::logger::LogContext;
+/// use bedrock_core::primitives::logger::LogContext;
 ///
 /// {
 ///     let _bedrock_logger_ctx = LogContext::new("SmartAccount");
@@ -349,7 +349,7 @@ pub fn get_context() -> Option<String> {
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::with_log_context;
+/// use bedrock_core::with_log_context;
 ///
 /// with_log_context!("SmartAccount" => {
 ///     log::info!("This will be prefixed with [Bedrock][SmartAccount]");
@@ -372,7 +372,7 @@ macro_rules! with_log_context {
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::set_log_context;
+/// use bedrock_core::set_log_context;
 ///
 /// let _bedrock_logger_ctx = set_log_context!("SmartAccount");
 /// log::info!("This will be prefixed with [Bedrock][SmartAccount]");
