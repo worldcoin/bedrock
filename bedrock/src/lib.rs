@@ -14,6 +14,10 @@
 // Import and re-export the macros globally
 pub use bedrock_macros::{bedrock_error, bedrock_export, bedrock_sol};
 
+// Re-export log macros from bedrock-core so `crate::info!` etc. keep working
+// throughout this crate's wallet-specific modules.
+pub use bedrock_core::{debug, error, info, set_log_context, trace, warn, with_log_context};
+
 /// Introduces low level operations with the [Safe Smart Account](https://safe.global/), including
 /// signing user operations (ERC-4337), messages (ERC-191) and typed data (EIP-712).
 ///
@@ -40,8 +44,6 @@ pub mod nitro_enclave;
 // Re-export commonly used primitives at the crate root for convenience
 pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
 
-/// Key management for World App.
-mod root_key;
 
 /// Migration system for handling data migrations
 pub mod migration;
