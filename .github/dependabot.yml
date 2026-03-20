@@ -7,3 +7,5 @@ updates:
     assignees:
       - "paolodamico"
       - "aurel-fr"
+    ignore:
+      - dependency-name: "uniffi"
