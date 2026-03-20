@@ -2,6 +2,25 @@
 
 
 
+## [0.2.5] - 2026-03-20
+
+## What's Changed
+* ci: implement UniFFI version parity enforcement by @eldenpark in https://github.com/worldcoin/bedrock/pull/300
+* build(deps): bump futures from 0.3.31 to 0.3.32 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/304
+* build(deps): bump reqwest from 0.12.15 to 0.12.28 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/303
+* build(deps): bump coset from 0.4.1 to 0.4.2 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/301
+* fix: address RUSTSEC-2026-0049 by @paolodamico in https://github.com/worldcoin/bedrock/pull/307
+* build(deps): bump quote from 1.0.41 to 1.0.45 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/305
+* feat: sign in with ethereum support (ERC-4361) by @paolodamico in https://github.com/worldcoin/bedrock/pull/306
+
+## New Contributors
+* @eldenpark made their first contribution in https://github.com/worldcoin/bedrock/pull/300
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.4...0.2.5
+
+
+
+
 ## [0.2.4] - 2026-03-12
 
 ## What's Changed
