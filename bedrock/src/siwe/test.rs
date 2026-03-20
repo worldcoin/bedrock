@@ -536,3 +536,106 @@ fn sign_is_deterministic() {
     let sig2 = msg.sign(&account).unwrap();
     assert_eq!(sig1, sig2);
 }
+
+#[test]
+fn parse_rejects_non_alphanumeric_nonce() {
+    let datetime = now_rfc3339();
+    let raw = format!(
+        "example.com{PREAMBLE}\n\
+         0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
+         URI: https://example.com\n\
+         Version: 1\n\
+         Chain ID: 480\n\
+         Nonce: abcdefg!\n\
+         Issued At: {datetime}"
+    );
+    let err = Message::from_str(&raw).unwrap_err();
+    assert!(
+        matches!(err, ParseError::Field(ref msg) if msg.contains("alphanumeric")),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn parse_accepts_alphanumeric_nonce() {
+    let datetime = now_rfc3339();
+    let raw = format!(
+        "example.com{PREAMBLE}\n\
+         0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
+         URI: https://example.com\n\
+         Version: 1\n\
+         Chain ID: 480\n\
+         Nonce: aBcD1234\n\
+         Issued At: {datetime}"
+    );
+    let msg = Message::from_str(&raw).unwrap();
+    assert_eq!(msg.nonce, "aBcD1234");
+}
+
+#[test]
+fn parse_rejects_trailing_garbage() {
+    let datetime = now_rfc3339();
+    let raw = format!(
+        "example.com{PREAMBLE}\n\
+         0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
+         URI: https://example.com\n\
+         Version: 1\n\
+         Chain ID: 480\n\
+         Nonce: 12345678\n\
+         Issued At: {datetime}\n\
+         some unexpected line"
+    );
+    let err = Message::from_str(&raw).unwrap_err();
+    assert!(
+        matches!(err, ParseError::Field(ref msg) if msg.contains("unexpected trailing")),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn parse_rejects_typo_tag_after_iat() {
+    let datetime = now_rfc3339();
+    let raw = format!(
+        "example.com{PREAMBLE}\n\
+         0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
+         URI: https://example.com\n\
+         Version: 1\n\
+         Chain ID: 480\n\
+         Nonce: 12345678\n\
+         Issued At: {datetime}\n\
+         Expiratoin Time: 2030-01-01T00:00:00Z"
+    );
+    let err = Message::from_str(&raw).unwrap_err();
+    assert!(
+        matches!(err, ParseError::Field(ref msg) if msg.contains("unexpected trailing")),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn world_app_auth_trailing_slash_base_url() {
+    let account = test_smart_account();
+    let msg = Message::from_world_app_auth_request(
+        WorldAppAuthFlow::Refresh,
+        "https://app-backend.example.com/".into(),
+        &account,
+    )
+    .unwrap();
+    assert_eq!(msg.domain.as_str(), "app-backend.example.com");
+}
+
+#[test]
+fn parse_domain_trailing_slash_stripped() {
+    let datetime = now_rfc3339();
+    let raw = format!(
+        "https://example.com/{PREAMBLE}\n\
+         0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
+         URI: https://example.com\n\
+         Version: 1\n\
+         Chain ID: 480\n\
+         Nonce: 12345678\n\
+         Issued At: {datetime}"
+    );
+    let msg = Message::from_str(&raw).unwrap();
+    assert_eq!(msg.domain.as_str(), "example.com");
+}

@@ -178,22 +178,30 @@ fn parse_datetime(s: &str, label: &str) -> Result<DateTime<Utc>, ParseError> {
         .map_err(|_| ParseError::Field(format!("invalid {label} datetime")))
 }
 
-/// Strips `https://` or `http://` from a URL, returning just the authority.
-fn strip_scheme(s: &str) -> &str {
-    s.strip_prefix("https://")
+/// Sanitizes raw input: strips `<>` brackets, trims whitespace, enforces max length.
+fn sanitize(s: &str) -> Result<String, ParseError> {
+    let cleaned = s.replace(['<', '>'], "");
+    let cleaned = cleaned.trim();
+    if cleaned.len() > MAX_MESSAGE_LEN {
+        return Err(ParseError::Field("message too long".into()));
+    }
+    Ok(cleaned.to_owned())
+}
+
+/// Strips scheme prefix and trailing slash from a URL, returning just the authority.
+fn strip_to_authority(s: &str) -> &str {
+    let without_scheme = s
+        .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
-        .unwrap_or(s)
+        .unwrap_or(s);
+    without_scheme.strip_suffix('/').unwrap_or(without_scheme)
 }
 
 impl FromStr for Message {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let sanitized = s.replace(['<', '>'], "");
-        let sanitized = sanitized.trim();
-        if sanitized.len() > MAX_MESSAGE_LEN {
-            return Err(ParseError::Field("message too long".into()));
-        }
+        let sanitized = sanitize(s)?;
         let mut lines = sanitized.split('\n');
 
         let preamble = lines.next().ok_or(ParseError::Missing("preamble"))?;
@@ -201,7 +209,7 @@ impl FromStr for Message {
             .strip_suffix(PREAMBLE)
             .ok_or(ParseError::Missing("preamble"))?;
 
-        let domain: Authority = strip_scheme(domain_str)
+        let domain: Authority = strip_to_authority(domain_str)
             .parse()
             .map_err(|_| ParseError::Field("invalid domain".into()))?;
 
@@ -238,6 +246,9 @@ impl FromStr for Message {
                 "nonce must be at least {MIN_NONCE_LEN} characters"
             )));
         }
+        if !nonce.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(ParseError::Field("nonce must be alphanumeric".into()));
+        }
 
         let issued_at = parse_datetime(tagged(IAT_TAG, lines.next())?, "issued-at")?;
 
@@ -263,15 +274,23 @@ impl FromStr for Message {
         });
 
         let mut resources = Vec::new();
-        if next == Some(RES_TAG) {
-            for line in lines.by_ref() {
-                let res_str = line.strip_prefix("- ").ok_or_else(|| {
-                    ParseError::Field("resource line must start with '- '".into())
-                })?;
-                let res_uri: Uri = res_str
-                    .parse()
-                    .map_err(|_| ParseError::Field("invalid resource URI".into()))?;
-                resources.push(res_uri);
+        match next {
+            None => {}
+            Some(RES_TAG) => {
+                for line in lines.by_ref() {
+                    let res_str = line.strip_prefix("- ").ok_or_else(|| {
+                        ParseError::Field("resource line must start with '- '".into())
+                    })?;
+                    let res_uri: Uri = res_str.parse().map_err(|_| {
+                        ParseError::Field("invalid resource URI".into())
+                    })?;
+                    resources.push(res_uri);
+                }
+            }
+            Some(unexpected) => {
+                return Err(ParseError::Field(format!(
+                    "unexpected trailing content: {unexpected}"
+                )));
             }
         }
 
@@ -349,12 +368,9 @@ impl Message {
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
         )?;
 
-        let domain: Authority =
-            strip_scheme(&base_url)
-                .parse()
-                .map_err(|e: http::uri::InvalidUri| {
-                    SiweError::InvalidBaseUrl(e.to_string())
-                })?;
+        let domain: Authority = strip_to_authority(&base_url).parse().map_err(
+            |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
+        )?;
 
         let expiration = now + Duration::minutes(5);
 
