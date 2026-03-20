@@ -286,16 +286,8 @@ fn world_app_auth_message_creation() {
         "got: {uri_str}"
     );
 
-    assert!(
-        msg.nonce.len() >= MIN_NONCE_LEN,
-        "nonce too short: {}",
-        msg.nonce
-    );
-    assert!(
-        msg.nonce.chars().all(|c| c.is_ascii_digit()),
-        "nonce not numeric: {}",
-        msg.nonce
-    );
+    assert_eq!(msg.nonce.len(), 16);
+    assert!(msg.nonce.chars().all(|c| c.is_ascii_alphanumeric()));
 
     assert!(msg.issued_at >= before && msg.issued_at <= after);
     let nbf = msg.not_before.expect("not_before should be set");
