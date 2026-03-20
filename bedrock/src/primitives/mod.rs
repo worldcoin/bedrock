@@ -69,6 +69,9 @@ pub mod tooling_tests;
 /// Contract interfaces and data structures for ERC-4337 account abstraction
 pub mod contracts;
 
+/// Network Time Provider for sensitive operations that require a clock with no skew
+pub mod ntp;
+
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 #[repr(u32)]
