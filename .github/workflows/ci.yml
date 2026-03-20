@@ -14,6 +14,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check-uniffi-version:
+    name: Check Uniffi Version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check uniffi version matches CI variable
+        env:
+          UNIFFI_VERSION: ${{ vars.UNIFFI_VERSION }}
+        run: python3 .github/scripts/check_uniffi_version.py
+
   lint:
     name: Format, Clippy & Build
     runs-on: ubuntu-latest
