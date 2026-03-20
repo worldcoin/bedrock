@@ -32,6 +32,11 @@ const RES_TAG: &str = "Resources:";
 /// Minimum nonce length per EIP-4361 (8 alphanumeric characters).
 const MIN_NONCE_LEN: usize = 8;
 
+/// Maximum raw message length accepted by the parser.
+const MAX_MESSAGE_LEN: usize = 4096;
+
+const DEFAULT_CHAIN_ID: u32 = 480;
+
 /// EIP-4361 version.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Version {
@@ -75,15 +80,9 @@ pub enum SiweError {
     /// The SIWE message could not be parsed from the input string.
     #[error("failed to parse SIWE message: {0}")]
     Parse(String),
-    /// The wallet address is not a valid Ethereum address.
-    #[error("invalid wallet address: {0}")]
-    InvalidAddress(String),
     /// The base URL could not be parsed into a valid URI or authority.
     #[error("invalid base URL: {0}")]
     InvalidBaseUrl(String),
-    /// The chain ID exceeds the u32 range required for signing.
-    #[error("chain ID out of range: {0}")]
-    ChainIdOutOfRange(String),
     /// Signing the message failed.
     #[error("signing failed: {0}")]
     Signing(String),
@@ -109,7 +108,7 @@ pub struct Message {
     /// Current version of the SIWE message (must be 1).
     pub version: Version,
     /// EIP-155 Chain ID to which the session is bound.
-    pub chain_id: u64,
+    pub chain_id: u32,
     /// Randomized token for replay protection (>= 8 alphanumeric chars).
     pub nonce: String,
     /// ISO 8601 datetime string of the current time.
@@ -190,7 +189,12 @@ impl FromStr for Message {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut lines = s.split('\n');
+        let sanitized = s.replace(['<', '>'], "");
+        let sanitized = sanitized.trim();
+        if sanitized.len() > MAX_MESSAGE_LEN {
+            return Err(ParseError::Field("message too long".into()));
+        }
+        let mut lines = sanitized.split('\n');
 
         let preamble = lines.next().ok_or(ParseError::Missing("preamble"))?;
         let domain_str = preamble
@@ -224,7 +228,7 @@ impl FromStr for Message {
 
         let version = Version::from_str(tagged(VERSION_TAG, lines.next())?)?;
 
-        let chain_id: u64 = tagged(CHAIN_TAG, lines.next())?
+        let chain_id: u32 = tagged(CHAIN_TAG, lines.next())?
             .parse()
             .map_err(|_| ParseError::Field("invalid chain ID".into()))?;
 
@@ -298,7 +302,7 @@ impl Default for Message {
             statement: None,
             uri: Uri::from_static("https://localhost"),
             version: Version::V1,
-            chain_id: 480,
+            chain_id: DEFAULT_CHAIN_ID,
             nonce,
             issued_at: now,
             expiration_time: Some(now + Duration::minutes(10)),
@@ -322,7 +326,7 @@ impl Message {
         s: String,
         smart_account: &SafeSmartAccount,
     ) -> Result<Self, SiweError> {
-        let s = s.replace("{address}", &Address::ZERO.to_checksum(None));
+        let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
         Ok(msg)
@@ -331,20 +335,15 @@ impl Message {
     /// Creates a SIWE message for World App authentication flows.
     ///
     /// # Errors
-    /// - [`SiweError::InvalidAddress`] if the wallet address is not valid.
     /// - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
     #[uniffi::constructor]
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned str")]
     pub fn from_world_app_auth_request(
         flow: WorldAppAuthFlow,
         base_url: String,
-        wallet_address: String,
+        smart_account: &SafeSmartAccount,
     ) -> Result<Self, SiweError> {
         let now = now_with_ntp();
-        let nonce = OsRng.next_u64().to_string();
-
-        let address = Address::from_str(&wallet_address)
-            .map_err(|e| SiweError::InvalidAddress(e.to_string()))?;
 
         let uri: Uri = flow.as_siwe_uri(&base_url).parse().map_err(
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
@@ -361,21 +360,19 @@ impl Message {
 
         Ok(Self {
             domain,
-            address,
-            statement: None,
+            address: smart_account.wallet_address,
             uri,
-            version: Version::V1,
-            chain_id: 480,
-            nonce,
             issued_at: now,
             expiration_time: Some(expiration),
             not_before: Some(now),
-            request_id: None,
-            resources: Vec::new(),
+            ..Default::default()
         })
     }
 
-    /// Computes a keccak256 cache hash of `scheme://domain + address + statement`.
+    /// Computes a hash of the key attributes of the message for caching purposes.
+    ///
+    /// This is used for the "login automatically" feature where the client auto-signs
+    /// for subsequent Mini Apps if the user approved it.
     ///
     /// # Panics
     /// Should never panic
@@ -396,17 +393,14 @@ impl Message {
     /// Signs this SIWE message with the given Safe smart account (EIP-191).
     ///
     /// # Errors
-    /// - [`SiweError::ChainIdOutOfRange`] if the chain ID exceeds u32.
     /// - [`SiweError::Signing`] if the signing operation fails.
     pub fn sign(
         &self,
         smart_account: &SafeSmartAccount,
     ) -> Result<HexEncodedData, SiweError> {
         let message_str = self.to_string();
-        let chain_id = u32::try_from(self.chain_id)
-            .map_err(|e| SiweError::ChainIdOutOfRange(e.to_string()))?;
         let signature = smart_account
-            .sign_message_eip_191_prefixed(message_str, chain_id)
+            .sign_message_eip_191_prefixed(message_str, self.chain_id)
             .map_err(|e| SiweError::Signing(e.to_string()))?;
         Ok(signature.into())
     }
