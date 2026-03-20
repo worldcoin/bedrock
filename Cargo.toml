@@ -20,6 +20,7 @@ repository = "https://github.com/worldcoin/bedrock"
 version = "0.2.4"
 
 [workspace.dependencies]
+# CRITICAL: Maintain parity with org-wide UNIFFI_VERSION
 uniffi = { version = "0.31.0", features = ["build", "tokio"] }
 
 [profile.release]
