@@ -20,6 +20,6 @@ impl WorldAppAuthFlow {
             Self::Restore => "/public/v1/auth/restore",
             Self::SignUp => "/public/v1/auth/sign-up",
         };
-        format!("{base_url}{path}")
+        format!("{}{path}", base_url.trim_end_matches('/'))
     }
 }

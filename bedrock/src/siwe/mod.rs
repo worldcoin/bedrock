@@ -314,7 +314,11 @@ impl FromStr for Message {
 impl Default for Message {
     fn default() -> Self {
         let now = now_with_ntp();
-        let nonce = OsRng.next_u64().to_string();
+        // the minimum length according to spec is 8 alphanumeric chars; so 4 bytes hex-encoded would be enough,
+        // but we deliberately use 8 to reduce collision risk
+        let mut nonce = [0u8; 8];
+        OsRng.fill_bytes(&mut nonce);
+        let nonce = hex::encode(nonce);
         Self {
             domain: Authority::from_static("localhost"),
             address: Address::ZERO,
@@ -335,7 +339,7 @@ impl Default for Message {
 #[uniffi::export]
 impl Message {
     /// Parses a SIWE message string, substituting the smart account's
-    /// checksummed wallet address for any `{address}` placeholder.
+    /// checksummed wallet address for the first `{address}` placeholder.
     ///
     /// # Errors
     /// - [`SiweError::Parse`] if the message string is not valid EIP-4361.
