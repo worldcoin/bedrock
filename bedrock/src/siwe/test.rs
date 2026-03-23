@@ -725,7 +725,7 @@ fn rejects_message_uri_not_matching_authorized_host() {
 }
 
 #[test]
-fn domain_with_port_matches_authorized_host() {
+fn domain_with_port_matches_authorized_authority() {
     let account = test_smart_account();
     let raw = make_siwe_raw(
         "app.example.com:8080",
@@ -739,5 +739,41 @@ fn domain_with_port_matches_authorized_host() {
         "https://app.example.com:8080".into(),
     )
     .unwrap();
-    assert_eq!(msg.domain.host(), "app.example.com");
+    assert_eq!(msg.domain.as_str(), "app.example.com:8080");
+}
+
+#[test]
+fn rejects_different_port_on_same_host() {
+    let account = test_smart_account();
+    let raw = make_siwe_raw(
+        "app.example.com:9090",
+        "https://app.example.com:9090",
+        &now_rfc3339(),
+    );
+    let err = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com:8080".into(),
+        "https://app.example.com:8080".into(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+#[test]
+fn rejects_querying_url_with_different_port() {
+    let account = test_smart_account();
+    let raw = make_siwe_raw(
+        "app.example.com:8080",
+        "https://app.example.com:8080",
+        &now_rfc3339(),
+    );
+    let err = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com:8080".into(),
+        "https://app.example.com:9090".into(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
 }

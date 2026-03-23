@@ -9,7 +9,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::{HexEncodedData, ParseFromForeignBinding, PrimitiveError};
+use crate::primitives::{HexEncodedData, PrimitiveError};
 use crate::smart_account::SafeSmartAccount;
 use crate::smart_account::SafeSmartAccountSigner;
 
@@ -218,24 +218,15 @@ fn sanitize(s: &str) -> Result<String, ParseError> {
     Ok(cleaned.to_owned())
 }
 
-/// Strips scheme prefix and trailing slash from a URL, returning just the authority.
-fn strip_to_authority(s: &str) -> &str {
-    let without_scheme = s
+/// Parses an `Authority` (host + port) from a full URL or bare authority
+/// string, preserving origin semantics where different ports are distinct.
+fn to_authority(s: &str) -> Result<Authority, http::uri::InvalidUri> {
+    let after_scheme = s
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
         .unwrap_or(s);
-    without_scheme.strip_suffix('/').unwrap_or(without_scheme)
-}
-
-/// Parses a URL and extracts its host, returning an owned `String`.
-fn extract_host(url: &str, attr: &'static str) -> Result<String, PrimitiveError> {
-    let uri = Uri::parse_from_ffi(url, attr)?;
-    uri.host()
-        .map(str::to_owned)
-        .ok_or_else(|| PrimitiveError::InvalidInput {
-            attribute: attr.to_string(),
-            error_message: "URL has no host".to_string(),
-        })
+    let authority_str = after_scheme.split('/').next().unwrap_or(after_scheme);
+    authority_str.parse()
 }
 
 impl FromStr for SiweMessage {
@@ -250,8 +241,7 @@ impl FromStr for SiweMessage {
             .strip_suffix(PREAMBLE)
             .ok_or(ParseError::Missing("preamble"))?;
 
-        let domain: Authority = strip_to_authority(domain_str)
-            .parse()
+        let domain: Authority = to_authority(domain_str)
             .map_err(|_| ParseError::Field("invalid domain".into()))?;
 
         let address_str = lines.next().ok_or(ParseError::Missing("address"))?;
@@ -404,22 +394,32 @@ impl SiweMessage {
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
 
-        let expected_host = extract_host(&authorized_url, "authorized_url")?;
-        let actual_host = extract_host(&querying_url, "querying_url")?;
+        let expected_authority = to_authority(&authorized_url).map_err(|e| {
+            PrimitiveError::InvalidInput {
+                attribute: "authorized_url".to_string(),
+                error_message: e.to_string(),
+            }
+        })?;
+        let current_authority = to_authority(&querying_url).map_err(|e| {
+            PrimitiveError::InvalidInput {
+                attribute: "querying_url".to_string(),
+                error_message: e.to_string(),
+            }
+        })?;
 
-        if expected_host != actual_host {
+        if expected_authority != current_authority {
             return Err(SiweError::UnauthorizedHost);
         }
 
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
 
-        if msg.domain.host() != expected_host {
+        if msg.domain != expected_authority {
             return Err(SiweError::UnauthorizedHost);
         }
 
-        let uri_host = msg.uri.host().ok_or(SiweError::UnauthorizedHost)?;
-        if uri_host != expected_host {
+        let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
+        if *uri_authority != expected_authority {
             return Err(SiweError::UnauthorizedHost);
         }
 
@@ -443,9 +443,8 @@ impl SiweMessage {
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
         )?;
 
-        let domain: Authority = strip_to_authority(&base_url).parse().map_err(
-            |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
-        )?;
+        let domain: Authority = to_authority(&base_url)
+            .map_err(|e| SiweError::InvalidBaseUrl(e.to_string()))?;
 
         let expiration = now + Duration::minutes(5);
 
