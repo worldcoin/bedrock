@@ -400,12 +400,11 @@ impl SiweMessage {
                 error_message: e.to_string(),
             }
         })?;
-        let current_authority = to_authority(&querying_url).map_err(|e| {
-            PrimitiveError::InvalidInput {
+        let current_authority =
+            to_authority(&querying_url).map_err(|e| PrimitiveError::InvalidInput {
                 attribute: "querying_url".to_string(),
                 error_message: e.to_string(),
-            }
-        })?;
+            })?;
 
         if expected_authority != current_authority {
             return Err(SiweError::UnauthorizedHost);
