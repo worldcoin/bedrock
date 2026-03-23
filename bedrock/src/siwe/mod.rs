@@ -9,7 +9,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::HexEncodedData;
+use crate::primitives::{HexEncodedData, ParseFromForeignBinding, PrimitiveError};
 use crate::smart_account::SafeSmartAccount;
 use crate::smart_account::SafeSmartAccountSigner;
 
@@ -86,6 +86,14 @@ pub enum SiweError {
     /// Signing the message failed.
     #[error("signing failed: {0}")]
     Signing(String),
+    /// The requested messaged is not authorized. This could me a mismatched with the
+    /// pre-authorized URL, the current integration URL or the requested resource in
+    /// the message.
+    #[error("unauthorized_host")]
+    UnauthorizedHost,
+    /// Bedrock Primitive Error
+    #[error(transparent)]
+    PrimitiveError(#[from] PrimitiveError),
 }
 
 impl From<ParseError> for SiweError {
@@ -96,7 +104,7 @@ impl From<ParseError> for SiweError {
 
 /// An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
-pub struct Message {
+pub struct SiweMessage {
     /// RFC 3986 authority that is requesting the signing.
     pub domain: Authority,
     /// EIP-55 checksummed Ethereum address performing the signing.
@@ -123,7 +131,7 @@ pub struct Message {
     pub resources: Vec<Uri>,
 }
 
-impl Display for Message {
+impl Display for SiweMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{PREAMBLE}", self.domain)?;
         write!(f, "\n{}", self.address.to_checksum(None))?;
@@ -197,7 +205,7 @@ fn strip_to_authority(s: &str) -> &str {
     without_scheme.strip_suffix('/').unwrap_or(without_scheme)
 }
 
-impl FromStr for Message {
+impl FromStr for SiweMessage {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -311,7 +319,7 @@ impl FromStr for Message {
     }
 }
 
-impl Default for Message {
+impl Default for SiweMessage {
     fn default() -> Self {
         let now = now_with_ntp();
         // the minimum length according to spec is 8 alphanumeric chars; so 4 bytes hex-encoded would be enough,
@@ -337,21 +345,61 @@ impl Default for Message {
 }
 
 #[uniffi::export]
-impl Message {
+impl SiweMessage {
     /// Parses a SIWE message string, substituting the smart account's
     /// checksummed wallet address for the first `{address}` placeholder.
     ///
+    /// # Arguments
+    /// - `s`: The SIWE Message string.
+    /// - `smart_account`: The user's smart account which is used to authenticate.
+    /// - `authorized_url`: The expected pre-registered and authorized URL for SIWE
+    ///   messages. In practical terms this is the URL registered in the Developer Portal
+    ///   for the specific Mini App requesting authentication.
+    /// - `querying_url`: The current URL from which the request is being made. In practical
+    ///   terms this is the current URL to which the webview is pointing.
+    ///
     /// # Errors
     /// - [`SiweError::Parse`] if the message string is not valid EIP-4361.
+    /// - [`SiweError::UnauthorizedHost`] if the different host validations don't match expected values.
     #[uniffi::constructor]
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned str")]
     pub fn from_str_with_account(
         s: String,
         smart_account: &SafeSmartAccount,
+        authorized_url: String,
+        querying_url: String,
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
+
+        let authorized_host = Uri::parse_from_ffi(&authorized_url, "authorized_url")?;
+        let authorized_host =
+            authorized_host
+                .host()
+                .ok_or_else(|| PrimitiveError::InvalidInput {
+                    attribute: "querying_url".to_string(),
+                    error_message: "invalid URL".to_string(),
+                })?;
+
+        let querying_host = Uri::parse_from_ffi(&querying_url, "querying_url")?;
+        let querying_host =
+            querying_host
+                .host()
+                .ok_or_else(|| PrimitiveError::InvalidInput {
+                    attribute: "querying_url".to_string(),
+                    error_message: "invalid URL".to_string(),
+                })?;
+
+        if authorized_host != querying_host {
+            return Err(SiweError::UnauthorizedHost);
+        }
+
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
+
+        if msg.domain != authorized_host {
+            return Err(SiweError::UnauthorizedHost);
+        }
+
         Ok(msg)
     }
 
