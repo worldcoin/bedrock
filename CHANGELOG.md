@@ -2,6 +2,18 @@
 
 
 
+## [0.2.6] - 2026-03-23
+
+## What's Changed
+* build(deps): bump quinn-proto from 0.11.12 to 0.11.14 by @dependabot[bot] in https://github.com/worldcoin/bedrock/pull/309
+* feat: verify hosts in SIWE message by @paolodamico in https://github.com/worldcoin/bedrock/pull/311
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.5...0.2.6
+
+
+
+
 ## [0.2.5] - 2026-03-20
 
 ## What's Changed
