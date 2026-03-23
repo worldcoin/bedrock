@@ -91,14 +91,36 @@ pub enum SiweError {
     /// the message.
     #[error("unauthorized_host")]
     UnauthorizedHost,
-    /// Bedrock Primitive Error
-    #[error(transparent)]
-    PrimitiveError(#[from] PrimitiveError),
+    /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
+    #[error("invalid input on {attribute}: {error_message}")]
+    InvalidInput {
+        /// The name of the attribute that was invalid.
+        attribute: String,
+        /// Explicit failure message for the attribute validation.
+        error_message: String,
+    },
 }
 
 impl From<ParseError> for SiweError {
     fn from(err: ParseError) -> Self {
         Self::Parse(err.to_string())
+    }
+}
+
+impl From<PrimitiveError> for SiweError {
+    fn from(err: PrimitiveError) -> Self {
+        match err {
+            PrimitiveError::InvalidInput {
+                attribute,
+                error_message,
+            } => Self::InvalidInput {
+                attribute,
+                error_message,
+            },
+            _ => Self::Generic {
+                error_message: err.to_string(),
+            },
+        }
     }
 }
 
