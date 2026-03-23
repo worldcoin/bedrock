@@ -39,7 +39,7 @@ fn make_valid_message(datetime: &str) -> String {
 #[test]
 fn roundtrip_minimal() {
     let now = Utc::now();
-    let msg = Message {
+    let msg = SiweMessage {
         domain: "example.com".parse().unwrap(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: None,
@@ -54,7 +54,7 @@ fn roundtrip_minimal() {
         resources: vec![],
     };
     let serialized = msg.to_string();
-    let parsed = Message::from_str(&serialized).unwrap();
+    let parsed = SiweMessage::from_str(&serialized).unwrap();
     assert_eq!(parsed.domain, msg.domain);
     assert_eq!(parsed.address, msg.address);
     assert_eq!(parsed.statement, msg.statement);
@@ -70,7 +70,7 @@ fn roundtrip_minimal() {
 #[test]
 fn roundtrip_all_optional_fields() {
     let now = Utc::now();
-    let msg = Message {
+    let msg = SiweMessage {
         domain: "example.com".parse().unwrap(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("I accept the Terms of Service".into()),
@@ -88,7 +88,7 @@ fn roundtrip_all_optional_fields() {
         ],
     };
     let serialized = msg.to_string();
-    let parsed = Message::from_str(&serialized).unwrap();
+    let parsed = SiweMessage::from_str(&serialized).unwrap();
     assert_eq!(
         parsed.statement.as_deref(),
         Some("I accept the Terms of Service")
@@ -99,7 +99,7 @@ fn roundtrip_all_optional_fields() {
 
 #[test]
 fn parse_missing_preamble() {
-    let err = Message::from_str("garbage line\n0xabc").unwrap_err();
+    let err = SiweMessage::from_str("garbage line\n0xabc").unwrap_err();
     assert!(matches!(err, ParseError::Missing("preamble")), "got: {err}");
 }
 
@@ -115,7 +115,7 @@ fn parse_invalid_version() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let err = Message::from_str(&raw).unwrap_err();
+    let err = SiweMessage::from_str(&raw).unwrap_err();
     assert!(
         matches!(err, ParseError::Field(ref msg) if msg.contains("version")),
         "got: {err}"
@@ -134,7 +134,7 @@ fn parse_short_nonce() {
          Nonce: abc\n\
          Issued At: {datetime}"
     );
-    let err = Message::from_str(&raw).unwrap_err();
+    let err = SiweMessage::from_str(&raw).unwrap_err();
     assert!(
         matches!(err, ParseError::Field(ref msg) if msg.contains("nonce")),
         "got: {err}"
@@ -154,13 +154,13 @@ fn parse_with_statement() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.statement.as_deref(), Some("Sign in to the app"));
 }
 
 #[test]
 fn parse_without_statement() {
-    let msg = Message::from_str(&make_valid_message(&now_rfc3339())).unwrap();
+    let msg = SiweMessage::from_str(&make_valid_message(&now_rfc3339())).unwrap();
     assert_eq!(msg.statement, None);
 }
 
@@ -179,7 +179,7 @@ fn parse_with_resources() {
          - https://example.com/tos\n\
          - https://example.com/privacy"
     );
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.resources.len(), 2);
 }
 
@@ -195,7 +195,7 @@ fn parse_with_scheme_prefix() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.domain.as_str(), "example.com");
 }
 
@@ -203,7 +203,7 @@ fn parse_with_scheme_prefix() {
 fn display_format_matches_spec() {
     let now = Utc::now();
     let exp = now + Duration::hours(1);
-    let msg = Message {
+    let msg = SiweMessage {
         domain: "example.com".parse().unwrap(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("hello".into()),
@@ -229,11 +229,11 @@ fn display_format_matches_spec() {
 
 #[test]
 fn cache_hash_deterministic() {
-    let msg = Message {
+    let msg = SiweMessage {
         domain: "test.com".parse().unwrap(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("statement".into()),
-        ..Message::default()
+        ..SiweMessage::default()
     };
     let h1 = msg.to_cache_hash("https", "test.com");
     let h2 = msg.to_cache_hash("https", "test.com");
@@ -243,7 +243,7 @@ fn cache_hash_deterministic() {
 
 #[test]
 fn default_produces_valid_message() {
-    let msg = Message::default();
+    let msg = SiweMessage::default();
     assert_eq!(msg.version, Version::V1);
     assert_eq!(msg.chain_id, DEFAULT_CHAIN_ID);
     assert!(msg.nonce.len() >= MIN_NONCE_LEN);
@@ -251,7 +251,7 @@ fn default_produces_valid_message() {
     assert!(msg.not_before.is_some());
 
     let serialized = msg.to_string();
-    let parsed = Message::from_str(&serialized).unwrap();
+    let parsed = SiweMessage::from_str(&serialized).unwrap();
     assert_eq!(parsed.chain_id, DEFAULT_CHAIN_ID);
 }
 
@@ -266,7 +266,7 @@ fn version_display_and_parse() {
 fn world_app_auth_message_creation() {
     let before = Utc::now();
     let account = test_smart_account();
-    let msg = Message::from_world_app_auth_request(
+    let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::SignUp,
         "https://app-backend.toolsforhumanity.com".into(),
         &account,
@@ -298,7 +298,7 @@ fn world_app_auth_message_creation() {
     assert_eq!(delta, Duration::minutes(5));
 
     let serialized = msg.to_string();
-    let parsed = Message::from_str(&serialized).unwrap();
+    let parsed = SiweMessage::from_str(&serialized).unwrap();
     assert_eq!(parsed.chain_id, msg.chain_id);
     assert_eq!(parsed.address, msg.address);
 }
@@ -331,7 +331,13 @@ fn address_placeholder_replaced_in_address_line() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let msg = Message::from_str_with_account(raw, &account).unwrap();
+    let msg = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://example.com".into(),
+        "https://example.com".into(),
+    )
+    .unwrap();
 
     // Address line is the smart account's wallet address
     assert_eq!(msg.address, account.wallet_address);
@@ -358,7 +364,13 @@ fn address_placeholder_only_first_occurrence() {
          Issued At: {datetime}\n\
          Request ID: {{address}}"
     );
-    let msg = Message::from_str_with_account(raw, &account).unwrap();
+    let msg = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://example.com".into(),
+        "https://example.com".into(),
+    )
+    .unwrap();
     assert_eq!(msg.address, account.wallet_address);
     // request_id should still have the literal {address}
     assert_eq!(msg.request_id.as_deref(), Some("{address}"));
@@ -377,7 +389,13 @@ fn no_placeholder_still_parses() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let msg = Message::from_str_with_account(raw, &account).unwrap();
+    let msg = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://example.com".into(),
+        "https://example.com".into(),
+    )
+    .unwrap();
     // Address is overwritten to the smart account's wallet address regardless
     assert_eq!(msg.address, account.wallet_address);
 }
@@ -394,7 +412,7 @@ fn parse_strips_angle_brackets() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.domain.as_str(), "example.com");
 }
 
@@ -410,14 +428,14 @@ fn parse_trims_whitespace() {
          Nonce: 12345678\n\
          Issued At: {datetime}\n  "
     );
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.domain.as_str(), "example.com");
 }
 
 #[test]
 fn parse_rejects_oversized_message() {
     let huge = "x".repeat(MAX_MESSAGE_LEN + 1);
-    let err = Message::from_str(&huge).unwrap_err();
+    let err = SiweMessage::from_str(&huge).unwrap_err();
     assert!(
         matches!(err, ParseError::Field(ref msg) if msg.contains("too long")),
         "got: {err}"
@@ -442,19 +460,19 @@ fn parse_accepts_message_at_max_length() {
     let nonce = "a".repeat(nonce_len);
     let raw = format!("{prefix}{nonce}{suffix}");
     assert_eq!(raw.len(), MAX_MESSAGE_LEN);
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.nonce.len(), nonce_len);
 }
 
-/// Recomputes the Safe `getMessageHashForSafe` digest to verify the signature
-/// produced by `Message::sign`.
+/// Recomputes the Safe `getSiweMessageHashForSafe` digest to verify the signature
+/// produced by `SiweMessage::sign`.
 #[test]
 fn sign_produces_verifiable_signature() {
     let signer = PrivateKeySigner::from_str(TEST_KEY).unwrap();
     let eoa_address = signer.address();
     let account = SafeSmartAccount::new(TEST_KEY.into(), TEST_WALLET).unwrap();
 
-    let msg = Message {
+    let msg = SiweMessage {
         domain: "example.com".parse().unwrap(),
         address: account.wallet_address,
         statement: Some("hello".into()),
@@ -519,10 +537,10 @@ fn sign_produces_verifiable_signature() {
 #[test]
 fn sign_is_deterministic() {
     let account = test_smart_account();
-    let msg = Message {
+    let msg = SiweMessage {
         domain: "example.com".parse().unwrap(),
         address: account.wallet_address,
-        ..Message::default()
+        ..SiweMessage::default()
     };
     let sig1 = msg.sign(&account).unwrap();
     let sig2 = msg.sign(&account).unwrap();
@@ -541,7 +559,7 @@ fn parse_rejects_non_alphanumeric_nonce() {
          Nonce: abcdefg!\n\
          Issued At: {datetime}"
     );
-    let err = Message::from_str(&raw).unwrap_err();
+    let err = SiweMessage::from_str(&raw).unwrap_err();
     assert!(
         matches!(err, ParseError::Field(ref msg) if msg.contains("alphanumeric")),
         "got: {err}"
@@ -560,7 +578,7 @@ fn parse_accepts_alphanumeric_nonce() {
          Nonce: aBcD1234\n\
          Issued At: {datetime}"
     );
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.nonce, "aBcD1234");
 }
 
@@ -577,7 +595,7 @@ fn parse_rejects_trailing_garbage() {
          Issued At: {datetime}\n\
          some unexpected line"
     );
-    let err = Message::from_str(&raw).unwrap_err();
+    let err = SiweMessage::from_str(&raw).unwrap_err();
     assert!(
         matches!(err, ParseError::Field(ref msg) if msg.contains("unexpected trailing")),
         "got: {err}"
@@ -597,7 +615,7 @@ fn parse_rejects_typo_tag_after_iat() {
          Issued At: {datetime}\n\
          Expiratoin Time: 2030-01-01T00:00:00Z"
     );
-    let err = Message::from_str(&raw).unwrap_err();
+    let err = SiweMessage::from_str(&raw).unwrap_err();
     assert!(
         matches!(err, ParseError::Field(ref msg) if msg.contains("unexpected trailing")),
         "got: {err}"
@@ -607,7 +625,7 @@ fn parse_rejects_typo_tag_after_iat() {
 #[test]
 fn world_app_auth_trailing_slash_base_url() {
     let account = test_smart_account();
-    let msg = Message::from_world_app_auth_request(
+    let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::Refresh,
         "https://app-backend.example.com/".into(),
         &account,
@@ -628,6 +646,134 @@ fn parse_domain_trailing_slash_stripped() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let msg = Message::from_str(&raw).unwrap();
+    let msg = SiweMessage::from_str(&raw).unwrap();
     assert_eq!(msg.domain.as_str(), "example.com");
+}
+
+fn make_siwe_raw(domain: &str, uri: &str, datetime: &str) -> String {
+    format!(
+        "{domain}{PREAMBLE}\n\
+         {{address}}\n\n\n\
+         URI: {uri}\n\
+         Version: 1\n\
+         Chain ID: 480\n\
+         Nonce: 12345678\n\
+         Issued At: {datetime}"
+    )
+}
+
+#[test]
+fn authorized_host_matches_domain_and_uri() {
+    let account = test_smart_account();
+    let raw = make_siwe_raw(
+        "app.example.com",
+        "https://app.example.com/callback",
+        &now_rfc3339(),
+    );
+    let msg = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com/registered".into(),
+        "https://app.example.com/current".into(),
+    )
+    .unwrap();
+    assert_eq!(msg.domain.host(), "app.example.com");
+}
+
+#[test]
+fn rejects_mismatched_authorized_and_querying_hosts() {
+    let account = test_smart_account();
+    let raw =
+        make_siwe_raw("app.example.com", "https://app.example.com", &now_rfc3339());
+    let err = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com".into(),
+        "https://evil.com".into(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+#[test]
+fn rejects_message_domain_not_matching_authorized_host() {
+    let account = test_smart_account();
+    let raw = make_siwe_raw("evil.com", "https://evil.com", &now_rfc3339());
+    let err = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com".into(),
+        "https://app.example.com".into(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+#[test]
+fn rejects_message_uri_not_matching_authorized_host() {
+    let account = test_smart_account();
+    let raw =
+        make_siwe_raw("app.example.com", "https://evil.com/steal", &now_rfc3339());
+    let err = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com".into(),
+        "https://app.example.com".into(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+#[test]
+fn domain_with_port_matches_authorized_authority() {
+    let account = test_smart_account();
+    let raw = make_siwe_raw(
+        "app.example.com:8080",
+        "https://app.example.com:8080/cb",
+        &now_rfc3339(),
+    );
+    let msg = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com:8080".into(),
+        "https://app.example.com:8080".into(),
+    )
+    .unwrap();
+    assert_eq!(msg.domain.as_str(), "app.example.com:8080");
+}
+
+#[test]
+fn rejects_different_port_on_same_host() {
+    let account = test_smart_account();
+    let raw = make_siwe_raw(
+        "app.example.com:9090",
+        "https://app.example.com:9090",
+        &now_rfc3339(),
+    );
+    let err = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com:8080".into(),
+        "https://app.example.com:8080".into(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+#[test]
+fn rejects_querying_url_with_different_port() {
+    let account = test_smart_account();
+    let raw = make_siwe_raw(
+        "app.example.com:8080",
+        "https://app.example.com:8080",
+        &now_rfc3339(),
+    );
+    let err = SiweMessage::from_str_with_account(
+        raw,
+        &account,
+        "https://app.example.com:8080".into(),
+        "https://app.example.com:9090".into(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
 }

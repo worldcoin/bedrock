@@ -9,7 +9,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::HexEncodedData;
+use crate::primitives::{HexEncodedData, PrimitiveError};
 use crate::smart_account::SafeSmartAccount;
 use crate::smart_account::SafeSmartAccountSigner;
 
@@ -86,6 +86,19 @@ pub enum SiweError {
     /// Signing the message failed.
     #[error("signing failed: {0}")]
     Signing(String),
+    /// The requested messaged is not authorized. This could me a mismatched with the
+    /// pre-authorized URL, the current integration URL or the requested resource in
+    /// the message.
+    #[error("unauthorized_host")]
+    UnauthorizedHost,
+    /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
+    #[error("invalid input on {attribute}: {error_message}")]
+    InvalidInput {
+        /// The name of the attribute that was invalid.
+        attribute: String,
+        /// Explicit failure message for the attribute validation.
+        error_message: String,
+    },
 }
 
 impl From<ParseError> for SiweError {
@@ -94,9 +107,26 @@ impl From<ParseError> for SiweError {
     }
 }
 
+impl From<PrimitiveError> for SiweError {
+    fn from(err: PrimitiveError) -> Self {
+        match err {
+            PrimitiveError::InvalidInput {
+                attribute,
+                error_message,
+            } => Self::InvalidInput {
+                attribute,
+                error_message,
+            },
+            _ => Self::Generic {
+                error_message: err.to_string(),
+            },
+        }
+    }
+}
+
 /// An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
-pub struct Message {
+pub struct SiweMessage {
     /// RFC 3986 authority that is requesting the signing.
     pub domain: Authority,
     /// EIP-55 checksummed Ethereum address performing the signing.
@@ -123,7 +153,7 @@ pub struct Message {
     pub resources: Vec<Uri>,
 }
 
-impl Display for Message {
+impl Display for SiweMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{PREAMBLE}", self.domain)?;
         write!(f, "\n{}", self.address.to_checksum(None))?;
@@ -188,16 +218,18 @@ fn sanitize(s: &str) -> Result<String, ParseError> {
     Ok(cleaned.to_owned())
 }
 
-/// Strips scheme prefix and trailing slash from a URL, returning just the authority.
-fn strip_to_authority(s: &str) -> &str {
-    let without_scheme = s
+/// Parses an `Authority` (host + port) from a full URL or bare authority
+/// string, preserving origin semantics where different ports are distinct.
+fn to_authority(s: &str) -> Result<Authority, http::uri::InvalidUri> {
+    let after_scheme = s
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
         .unwrap_or(s);
-    without_scheme.strip_suffix('/').unwrap_or(without_scheme)
+    let authority_str = after_scheme.split('/').next().unwrap_or(after_scheme);
+    authority_str.parse()
 }
 
-impl FromStr for Message {
+impl FromStr for SiweMessage {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -209,8 +241,7 @@ impl FromStr for Message {
             .strip_suffix(PREAMBLE)
             .ok_or(ParseError::Missing("preamble"))?;
 
-        let domain: Authority = strip_to_authority(domain_str)
-            .parse()
+        let domain: Authority = to_authority(domain_str)
             .map_err(|_| ParseError::Field("invalid domain".into()))?;
 
         let address_str = lines.next().ok_or(ParseError::Missing("address"))?;
@@ -311,7 +342,7 @@ impl FromStr for Message {
     }
 }
 
-impl Default for Message {
+impl Default for SiweMessage {
     fn default() -> Self {
         let now = now_with_ntp();
         // the minimum length according to spec is 8 alphanumeric chars; so 4 bytes hex-encoded would be enough,
@@ -337,21 +368,60 @@ impl Default for Message {
 }
 
 #[uniffi::export]
-impl Message {
+impl SiweMessage {
     /// Parses a SIWE message string, substituting the smart account's
     /// checksummed wallet address for the first `{address}` placeholder.
     ///
+    /// # Arguments
+    /// - `s`: The SIWE Message string.
+    /// - `smart_account`: The user's smart account which is used to authenticate.
+    /// - `authorized_url`: The expected pre-registered and authorized URL for SIWE
+    ///   messages. In practical terms this is the URL registered in the Developer Portal
+    ///   for the specific Mini App requesting authentication.
+    /// - `querying_url`: The current URL from which the request is being made. In practical
+    ///   terms this is the current URL to which the webview is pointing.
+    ///
     /// # Errors
     /// - [`SiweError::Parse`] if the message string is not valid EIP-4361.
+    /// - [`SiweError::UnauthorizedHost`] if the different host validations don't match expected values.
     #[uniffi::constructor]
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned str")]
     pub fn from_str_with_account(
         s: String,
         smart_account: &SafeSmartAccount,
+        authorized_url: String,
+        querying_url: String,
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
+
+        let expected_authority = to_authority(&authorized_url).map_err(|e| {
+            PrimitiveError::InvalidInput {
+                attribute: "authorized_url".to_string(),
+                error_message: e.to_string(),
+            }
+        })?;
+        let current_authority =
+            to_authority(&querying_url).map_err(|e| PrimitiveError::InvalidInput {
+                attribute: "querying_url".to_string(),
+                error_message: e.to_string(),
+            })?;
+
+        if expected_authority != current_authority {
+            return Err(SiweError::UnauthorizedHost);
+        }
+
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
+
+        if msg.domain != expected_authority {
+            return Err(SiweError::UnauthorizedHost);
+        }
+
+        let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
+        if *uri_authority != expected_authority {
+            return Err(SiweError::UnauthorizedHost);
+        }
+
         Ok(msg)
     }
 
@@ -372,9 +442,8 @@ impl Message {
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
         )?;
 
-        let domain: Authority = strip_to_authority(&base_url).parse().map_err(
-            |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
-        )?;
+        let domain: Authority = to_authority(&base_url)
+            .map_err(|e| SiweError::InvalidBaseUrl(e.to_string()))?;
 
         let expiration = now + Duration::minutes(5);
 

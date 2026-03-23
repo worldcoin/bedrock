@@ -1,6 +1,7 @@
 use alloy::primitives::aliases::{U160, U48};
 use alloy::primitives::Bytes;
 use alloy::{primitives::Address, signers::Signature};
+use http::Uri;
 use ruint::aliases::{U128, U256};
 
 use crate::bedrock_export;
@@ -303,6 +304,15 @@ impl ParseFromForeignBinding for Bytes {
                 attribute: attr.to_string(),
                 error_message: e.to_string(),
             })
+    }
+}
+
+impl ParseFromForeignBinding for Uri {
+    fn parse_from_ffi(s: &str, attr: &'static str) -> Result<Self, PrimitiveError> {
+        Self::from_str(s).map_err(|e| PrimitiveError::InvalidInput {
+            attribute: attr.to_string(),
+            error_message: e.to_string(),
+        })
     }
 }
 
