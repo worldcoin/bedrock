@@ -205,6 +205,17 @@ fn strip_to_authority(s: &str) -> &str {
     without_scheme.strip_suffix('/').unwrap_or(without_scheme)
 }
 
+/// Parses a URL and extracts its host, returning an owned `String`.
+fn extract_host(url: &str, attr: &'static str) -> Result<String, PrimitiveError> {
+    let uri = Uri::parse_from_ffi(url, attr)?;
+    uri.host()
+        .map(str::to_owned)
+        .ok_or_else(|| PrimitiveError::InvalidInput {
+            attribute: attr.to_string(),
+            error_message: "URL has no host".to_string(),
+        })
+}
+
 impl FromStr for SiweMessage {
     type Err = ParseError;
 
@@ -371,32 +382,22 @@ impl SiweMessage {
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
 
-        let authorized_host = Uri::parse_from_ffi(&authorized_url, "authorized_url")?;
-        let authorized_host =
-            authorized_host
-                .host()
-                .ok_or_else(|| PrimitiveError::InvalidInput {
-                    attribute: "querying_url".to_string(),
-                    error_message: "invalid URL".to_string(),
-                })?;
+        let expected_host = extract_host(&authorized_url, "authorized_url")?;
+        let actual_host = extract_host(&querying_url, "querying_url")?;
 
-        let querying_host = Uri::parse_from_ffi(&querying_url, "querying_url")?;
-        let querying_host =
-            querying_host
-                .host()
-                .ok_or_else(|| PrimitiveError::InvalidInput {
-                    attribute: "querying_url".to_string(),
-                    error_message: "invalid URL".to_string(),
-                })?;
-
-        if authorized_host != querying_host {
+        if expected_host != actual_host {
             return Err(SiweError::UnauthorizedHost);
         }
 
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
 
-        if msg.domain != authorized_host {
+        if msg.domain.host() != expected_host {
+            return Err(SiweError::UnauthorizedHost);
+        }
+
+        let uri_host = msg.uri.host().ok_or(SiweError::UnauthorizedHost)?;
+        if uri_host != expected_host {
             return Err(SiweError::UnauthorizedHost);
         }
 
