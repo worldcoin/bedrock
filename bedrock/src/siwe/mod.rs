@@ -9,7 +9,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::{HexEncodedData, PrimitiveError};
+use crate::primitives::{HexEncodedData, ParseFromForeignBinding, PrimitiveError};
 use crate::smart_account::SafeSmartAccount;
 use crate::smart_account::SafeSmartAccountSigner;
 
@@ -385,23 +385,21 @@ impl SiweMessage {
     /// - [`SiweError::Parse`] if the message string is not valid EIP-4361.
     /// - [`SiweError::UnauthorizedHost`] if the different host validations don't match expected values.
     #[uniffi::constructor]
-    #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned str")]
     pub fn from_str_with_account(
-        s: String,
+        s: &str,
         smart_account: &SafeSmartAccount,
-        authorized_url: String,
-        querying_url: String,
+        authorized_url: &str,
+        querying_url: &str,
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
 
-        let expected_authority = to_authority(&authorized_url).map_err(|e| {
-            PrimitiveError::InvalidInput {
+        let expected_authority =
+            to_authority(authorized_url).map_err(|e| PrimitiveError::InvalidInput {
                 attribute: "authorized_url".to_string(),
                 error_message: e.to_string(),
-            }
-        })?;
+            })?;
         let current_authority =
-            to_authority(&querying_url).map_err(|e| PrimitiveError::InvalidInput {
+            to_authority(querying_url).map_err(|e| PrimitiveError::InvalidInput {
                 attribute: "querying_url".to_string(),
                 error_message: e.to_string(),
             })?;
@@ -430,19 +428,18 @@ impl SiweMessage {
     /// # Errors
     /// - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
     #[uniffi::constructor]
-    #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned str")]
     pub fn from_world_app_auth_request(
         flow: WorldAppAuthFlow,
-        base_url: String,
+        base_url: &str,
         smart_account: &SafeSmartAccount,
     ) -> Result<Self, SiweError> {
         let now = now_with_ntp();
 
-        let uri: Uri = flow.as_siwe_uri(&base_url).parse().map_err(
+        let uri: Uri = flow.as_siwe_uri(base_url).parse().map_err(
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
         )?;
 
-        let domain: Authority = to_authority(&base_url)
+        let domain: Authority = to_authority(base_url)
             .map_err(|e| SiweError::InvalidBaseUrl(e.to_string()))?;
 
         let expiration = now + Duration::minutes(5);
@@ -463,20 +460,30 @@ impl SiweMessage {
     /// This is used for the "login automatically" feature where the client auto-signs
     /// for subsequent Mini Apps if the user approved it.
     ///
-    /// # Panics
-    /// Should never panic
-    #[must_use]
+    /// # Errors
+    /// - If the provided `current_url` is not valid
     pub fn to_cache_hash(
         &self,
-        scheme: &str,
-        current_url_domain: &str,
-    ) -> HexEncodedData {
+        current_url: &str,
+    ) -> Result<HexEncodedData, SiweError> {
+        let current_url = Uri::parse_from_ffi(current_url, "current_url")?;
+
+        let scheme = current_url
+            .scheme()
+            .ok_or_else(|| SiweError::InvalidInput {
+                attribute: "current_url".to_string(),
+                error_message: "does not have a valid scheme".to_string(),
+            })?;
+
+        let host = current_url.host().ok_or_else(|| SiweError::InvalidInput {
+            attribute: "current_url".to_string(),
+            error_message: "does not have a valid host".to_string(),
+        })?;
+
         let address = self.address.to_checksum(None);
         let statement = self.statement.as_deref().unwrap_or("");
-        let input = format!("{scheme}://{current_url_domain}{address}{statement}");
-        hex::encode(keccak256(input.as_bytes()))
-            .try_into()
-            .expect("always works, we just encoded")
+        let input = format!("{scheme}://{host}{address}{statement}");
+        Ok(hex::encode(keccak256(input.as_bytes())).try_into()?)
     }
 
     /// Signs this SIWE message with the given Safe smart account (EIP-191).

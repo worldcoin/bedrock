@@ -235,8 +235,8 @@ fn cache_hash_deterministic() {
         statement: Some("statement".into()),
         ..SiweMessage::default()
     };
-    let h1 = msg.to_cache_hash("https", "test.com");
-    let h2 = msg.to_cache_hash("https", "test.com");
+    let h1 = msg.to_cache_hash("https://test.com").unwrap();
+    let h2 = msg.to_cache_hash("https://test.com").unwrap();
     assert_eq!(h1, h2);
     assert_eq!(h1.to_hex_string().len(), 66); // "0x" + 64 hex chars
 }
@@ -268,7 +268,7 @@ fn world_app_auth_message_creation() {
     let account = test_smart_account();
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::SignUp,
-        "https://app-backend.toolsforhumanity.com".into(),
+        "https://app-backend.toolsforhumanity.com",
         &account,
     )
     .unwrap();
@@ -321,7 +321,7 @@ fn world_app_auth_flow_uris() {
 fn address_placeholder_replaced_in_address_line() {
     let account = test_smart_account();
     let datetime = now_rfc3339();
-    let raw = format!(
+    let raw_msg = format!(
         "example.com{PREAMBLE}\n\
          {{address}}\n\n\
          statement mentioning {{address}} literally\n\n\
@@ -332,10 +332,10 @@ fn address_placeholder_replaced_in_address_line() {
          Issued At: {datetime}"
     );
     let msg = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://example.com".into(),
-        "https://example.com".into(),
+        "https://example.com",
+        "https://example.com",
     )
     .unwrap();
 
@@ -354,7 +354,7 @@ fn address_placeholder_only_first_occurrence() {
     let account = test_smart_account();
     let datetime = now_rfc3339();
     // Two {address} in the raw string: one in the address line, one in request_id
-    let raw = format!(
+    let raw_msg = format!(
         "example.com{PREAMBLE}\n\
          {{address}}\n\n\n\
          URI: https://example.com\n\
@@ -365,10 +365,10 @@ fn address_placeholder_only_first_occurrence() {
          Request ID: {{address}}"
     );
     let msg = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://example.com".into(),
-        "https://example.com".into(),
+        "https://example.com",
+        "https://example.com",
     )
     .unwrap();
     assert_eq!(msg.address, account.wallet_address);
@@ -380,7 +380,7 @@ fn address_placeholder_only_first_occurrence() {
 fn no_placeholder_still_parses() {
     let account = test_smart_account();
     let datetime = now_rfc3339();
-    let raw = format!(
+    let raw_msg = format!(
         "example.com{PREAMBLE}\n\
          0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
          URI: https://example.com\n\
@@ -390,10 +390,10 @@ fn no_placeholder_still_parses() {
          Issued At: {datetime}"
     );
     let msg = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://example.com".into(),
-        "https://example.com".into(),
+        "https://example.com",
+        "https://example.com",
     )
     .unwrap();
     // Address is overwritten to the smart account's wallet address regardless
@@ -627,7 +627,7 @@ fn world_app_auth_trailing_slash_base_url() {
     let account = test_smart_account();
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::Refresh,
-        "https://app-backend.example.com/".into(),
+        "https://app-backend.example.com/",
         &account,
     )
     .unwrap();
@@ -665,16 +665,16 @@ fn make_siwe_raw(domain: &str, uri: &str, datetime: &str) -> String {
 #[test]
 fn authorized_host_matches_domain_and_uri() {
     let account = test_smart_account();
-    let raw = make_siwe_raw(
+    let raw_msg = make_siwe_raw(
         "app.example.com",
         "https://app.example.com/callback",
         &now_rfc3339(),
     );
     let msg = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://app.example.com/registered".into(),
-        "https://app.example.com/current".into(),
+        "https://app.example.com/registered",
+        "https://app.example.com/current",
     )
     .unwrap();
     assert_eq!(msg.domain.host(), "app.example.com");
@@ -683,13 +683,13 @@ fn authorized_host_matches_domain_and_uri() {
 #[test]
 fn rejects_mismatched_authorized_and_querying_hosts() {
     let account = test_smart_account();
-    let raw =
+    let raw_msg =
         make_siwe_raw("app.example.com", "https://app.example.com", &now_rfc3339());
     let err = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://app.example.com".into(),
-        "https://evil.com".into(),
+        "https://app.example.com",
+        "https://evil.com",
     )
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
@@ -698,12 +698,12 @@ fn rejects_mismatched_authorized_and_querying_hosts() {
 #[test]
 fn rejects_message_domain_not_matching_authorized_host() {
     let account = test_smart_account();
-    let raw = make_siwe_raw("evil.com", "https://evil.com", &now_rfc3339());
+    let raw_msg = make_siwe_raw("evil.com", "https://evil.com", &now_rfc3339());
     let err = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://app.example.com".into(),
-        "https://app.example.com".into(),
+        "https://app.example.com",
+        "https://app.example.com",
     )
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
@@ -712,13 +712,13 @@ fn rejects_message_domain_not_matching_authorized_host() {
 #[test]
 fn rejects_message_uri_not_matching_authorized_host() {
     let account = test_smart_account();
-    let raw =
+    let raw_msg =
         make_siwe_raw("app.example.com", "https://evil.com/steal", &now_rfc3339());
     let err = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://app.example.com".into(),
-        "https://app.example.com".into(),
+        "https://app.example.com",
+        "https://app.example.com",
     )
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
@@ -727,16 +727,16 @@ fn rejects_message_uri_not_matching_authorized_host() {
 #[test]
 fn domain_with_port_matches_authorized_authority() {
     let account = test_smart_account();
-    let raw = make_siwe_raw(
+    let raw_msg = make_siwe_raw(
         "app.example.com:8080",
         "https://app.example.com:8080/cb",
         &now_rfc3339(),
     );
     let msg = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://app.example.com:8080".into(),
-        "https://app.example.com:8080".into(),
+        "https://app.example.com:8080",
+        "https://app.example.com:8080",
     )
     .unwrap();
     assert_eq!(msg.domain.as_str(), "app.example.com:8080");
@@ -745,16 +745,16 @@ fn domain_with_port_matches_authorized_authority() {
 #[test]
 fn rejects_different_port_on_same_host() {
     let account = test_smart_account();
-    let raw = make_siwe_raw(
+    let raw_msg = make_siwe_raw(
         "app.example.com:9090",
         "https://app.example.com:9090",
         &now_rfc3339(),
     );
     let err = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://app.example.com:8080".into(),
-        "https://app.example.com:8080".into(),
+        "https://app.example.com:8080",
+        "https://app.example.com:8080",
     )
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
@@ -763,16 +763,16 @@ fn rejects_different_port_on_same_host() {
 #[test]
 fn rejects_querying_url_with_different_port() {
     let account = test_smart_account();
-    let raw = make_siwe_raw(
+    let raw_msg = make_siwe_raw(
         "app.example.com:8080",
         "https://app.example.com:8080",
         &now_rfc3339(),
     );
     let err = SiweMessage::from_str_with_account(
-        raw,
+        &raw_msg,
         &account,
-        "https://app.example.com:8080".into(),
-        "https://app.example.com:9090".into(),
+        "https://app.example.com:8080",
+        "https://app.example.com:9090",
     )
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
