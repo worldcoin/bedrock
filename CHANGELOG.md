@@ -2,6 +2,17 @@
 
 
 
+## [0.2.7] - 2026-03-24
+
+## What's Changed
+* fix: parse url on the rust side by @paolodamico in https://github.com/worldcoin/bedrock/pull/313
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.6...0.2.7
+
+
+
+
 ## [0.2.6] - 2026-03-23
 
 ## What's Changed
