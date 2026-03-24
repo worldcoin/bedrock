@@ -277,7 +277,7 @@ fn world_app_auth_message_creation() {
     assert_eq!(msg.chain_id, DEFAULT_CHAIN_ID);
     assert_eq!(msg.version, Version::V1);
     assert_eq!(msg.domain.as_str(), "app-backend.toolsforhumanity.com");
-    assert_eq!(msg.address, account.wallet_address);
+    assert_eq!(msg.address, account.eoa_address()); // important: ensure world app auth uses EOA
     assert!(msg.statement.is_none());
 
     let uri_str = msg.uri.to_string();

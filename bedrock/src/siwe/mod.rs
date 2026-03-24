@@ -425,6 +425,9 @@ impl SiweMessage {
 
     /// Creates a SIWE message for World App authentication flows.
     ///
+    /// Importantly, SIWE messages for World App auth uses the EOA address,
+    /// not the wallet address for authentication.
+    ///
     /// # Errors
     /// - [`SiweError::InvalidBaseUrl`] if the base URL cannot be parsed.
     #[uniffi::constructor]
@@ -446,7 +449,7 @@ impl SiweMessage {
 
         Ok(Self {
             domain,
-            address: smart_account.wallet_address,
+            address: smart_account.eoa_address(),
             uri,
             issued_at: now,
             expiration_time: Some(expiration),
