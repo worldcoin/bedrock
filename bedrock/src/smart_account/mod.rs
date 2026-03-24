@@ -339,6 +339,16 @@ impl SafeSmartAccount {
     }
 }
 
+/// Implementations not exposed to foreign bindings
+impl SafeSmartAccount {
+    /// Returns the underlying externally owned address (EOA) for the Safe.
+    #[must_use]
+    #[expect(clippy::missing_const_for_fn, reason = "cannot be constructed const")]
+    pub fn eoa_address(&self) -> Address {
+        self.signer.address()
+    }
+}
+
 /// The type of operation to perform on behalf of the Safe Smart Account.
 ///
 /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/libraries/Enum.sol#L9>
