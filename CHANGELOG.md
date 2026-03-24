@@ -2,6 +2,17 @@
 
 
 
+## [0.2.8] - 2026-03-24
+
+## What's Changed
+* fix: use eoa for app backend siwe by @paolodamico in https://github.com/worldcoin/bedrock/pull/315
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.7...0.2.8
+
+
+
+
 ## [0.2.7] - 2026-03-24
 
 ## What's Changed
