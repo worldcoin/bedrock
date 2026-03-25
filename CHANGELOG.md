@@ -2,6 +2,22 @@
 
 
 
+## [0.2.9] - 2026-03-25
+
+## What's Changed
+* fix: use eoa for app backend siwe by @paolodamico in https://github.com/worldcoin/bedrock/pull/315
+* Bedrock Release 0.2.8 by @github-actions[bot] in https://github.com/worldcoin/bedrock/pull/316
+* chore: remove otto-review-gate workflow by @agentotto[bot] in https://github.com/worldcoin/bedrock/pull/317
+* fix: preserve siwe scheme & implement explicit EOA signer by @paolodamico in https://github.com/worldcoin/bedrock/pull/318
+
+## New Contributors
+* @agentotto[bot] made their first contribution in https://github.com/worldcoin/bedrock/pull/317
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.7...0.2.9
+
+
+
+
 ## [0.2.8] - 2026-03-24
 
 ## What's Changed
