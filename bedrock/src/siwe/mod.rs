@@ -3,7 +3,6 @@ use std::str::FromStr;
 
 use alloy::primitives::{keccak256, Address};
 use chrono::{DateTime, Duration, Utc};
-use http::uri::Authority;
 use http::Uri;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -228,14 +227,11 @@ fn authority_of(s: &str) -> &str {
 /// scheme if present and stripping any path.
 ///
 /// Per ERC-4361, the scheme is optional; World App preserves it if provided.
-fn to_authority(s: &str) -> Result<String, http::uri::InvalidUri> {
-    let scheme_end = s.len() - authority_of(s).len();
-    let scheme = &s[..scheme_end];
-    let after_scheme = authority_of(s);
-    let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
-    // Validate it parses as a valid authority
-    host_port.parse::<Authority>()?;
-    Ok(format!("{scheme}{host_port}"))
+fn to_authority(s: &str) -> Result<String, &str> {
+    let uri: Uri = s.parse().map_err(|_| "invalid uri")?;
+    let scheme = uri.scheme().map(|s| format!("{s}://")).unwrap_or_default();
+    let authority = uri.authority().ok_or("invalid authority")?;
+    Ok(format!("{scheme}{authority}"))
 }
 
 impl FromStr for SiweMessage {
