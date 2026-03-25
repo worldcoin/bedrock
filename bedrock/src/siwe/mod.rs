@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use alloy::primitives::{keccak256, Address};
 use chrono::{DateTime, Duration, Utc};
-use http::uri::Authority;
+use http::uri::{Authority, Scheme};
 use http::Uri;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -127,6 +127,8 @@ impl From<PrimitiveError> for SiweError {
 /// An [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) Sign-In with Ethereum message.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
 pub struct SiweMessage {
+    /// RFC 3986 scheme for the authority which is requesting the signing.
+    pub scheme: Option<Scheme>,
     /// RFC 3986 authority that is requesting the signing.
     pub domain: Authority,
     /// EIP-55 checksummed Ethereum address performing the signing.
@@ -241,8 +243,15 @@ impl FromStr for SiweMessage {
             .strip_suffix(PREAMBLE)
             .ok_or(ParseError::Missing("preamble"))?;
 
-        let domain: Authority = to_authority(domain_str)
+        let uri: Uri = Uri::from_str(domain_str)
             .map_err(|_| ParseError::Field("invalid domain".into()))?;
+
+        let scheme = uri.scheme().cloned();
+
+        let domain = uri
+            .authority()
+            .cloned()
+            .ok_or_else(|| ParseError::Field("invalid domain".into()))?;
 
         let address_str = lines.next().ok_or(ParseError::Missing("address"))?;
         let address = Address::from_str(address_str)
@@ -326,6 +335,7 @@ impl FromStr for SiweMessage {
         }
 
         Ok(Self {
+            scheme,
             domain,
             address,
             statement,
@@ -351,6 +361,7 @@ impl Default for SiweMessage {
         OsRng.fill_bytes(&mut nonce);
         let nonce = hex::encode(nonce);
         Self {
+            scheme: None,
             domain: Authority::from_static("localhost"),
             address: Address::ZERO,
             statement: None,
