@@ -296,7 +296,7 @@ fn world_app_auth_message_creation() {
     assert_eq!(parsed.address, msg.address);
 
     // important: app backend enforces the scheme
-    assert!(serialized.starts_with("https://app-backend.toolsforhumanity.com"))
+    assert!(serialized.starts_with("https://app-backend.toolsforhumanity.com"));
 }
 
 #[test]
