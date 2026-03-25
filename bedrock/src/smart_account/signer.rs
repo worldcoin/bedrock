@@ -209,11 +209,13 @@ pub struct EoaSigner {
     signer: LocalSigner<SigningKey>,
 }
 
+#[uniffi::export]
 impl EoaSigner {
     /// Creates a new EOA signer from a hex-encoded private key.
     ///
     /// # Errors
     /// - `SafeSmartAccountError::KeyDecoding` if the key is invalid.
+    #[uniffi::constructor]
     pub fn new(private_key: String) -> Result<Self, SafeSmartAccountError> {
         let signer = LocalSigner::from_slice(
             &hex::decode(private_key)
