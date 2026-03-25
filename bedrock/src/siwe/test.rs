@@ -190,22 +190,6 @@ fn parse_with_resources() {
 }
 
 #[test]
-fn parse_with_scheme_prefix() {
-    let datetime = now_rfc3339();
-    let raw = format!(
-        "https://example.com{PREAMBLE}\n\
-         0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
-         URI: https://example.com\n\
-         Version: 1\n\
-         Chain ID: 480\n\
-         Nonce: 12345678\n\
-         Issued At: {datetime}"
-    );
-    let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain, "https://example.com");
-}
-
-#[test]
 fn display_format_matches_spec() {
     let now = Utc::now();
     let exp = now + Duration::hours(1);
@@ -285,7 +269,7 @@ fn world_app_auth_message_creation() {
 
     assert_eq!(msg.chain_id, DEFAULT_CHAIN_ID);
     assert_eq!(msg.version, Version::V1);
-    assert_eq!(msg.domain, "https://app-backend.toolsforhumanity.com"); // important: app backend enforces the scheme
+    assert_eq!(msg.domain, "app-backend.toolsforhumanity.com");
     assert_eq!(msg.address, account.eoa_address()); // important: ensure world app auth uses EOA
     assert!(msg.statement.is_none());
 
@@ -310,6 +294,9 @@ fn world_app_auth_message_creation() {
     let parsed = SiweMessage::from_str(&serialized).unwrap();
     assert_eq!(parsed.chain_id, msg.chain_id);
     assert_eq!(parsed.address, msg.address);
+
+    // important: app backend enforces the scheme
+    assert!(serialized.starts_with("https://app-backend.toolsforhumanity.com"))
 }
 
 #[test]
@@ -422,7 +409,7 @@ fn parse_strips_angle_brackets() {
          Issued At: {datetime}"
     );
     let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain, "https://example.com");
+    assert_eq!(msg.domain, "example.com");
 }
 
 #[test]
@@ -642,7 +629,12 @@ fn world_app_auth_trailing_slash_base_url() {
         &account,
     )
     .unwrap();
-    assert_eq!(msg.domain, "https://app-backend.example.com");
+    assert_eq!(msg.domain, "app-backend.example.com");
+    assert_eq!(msg.scheme.clone().unwrap().to_string(), "https");
+
+    assert!(msg
+        .to_string()
+        .starts_with("https://app-backend.example.com wants"));
 }
 
 #[test]
@@ -658,7 +650,8 @@ fn parse_domain_trailing_slash_stripped() {
          Issued At: {datetime}"
     );
     let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain, "https://example.com");
+    assert_eq!(msg.domain, "example.com");
+    assert_eq!(msg.scheme.unwrap().to_string(), "https");
 }
 
 fn make_siwe_raw(domain: &str, uri: &str, datetime: &str) -> String {

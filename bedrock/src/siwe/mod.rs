@@ -445,9 +445,18 @@ impl SiweMessage {
         let uri: Uri = flow.as_siwe_uri(base_url).parse().map_err(
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
         )?;
+        let scheme = uri.scheme().cloned();
 
-        let (authority, scheme) = parse_authority(&uri.to_string())
-            .map_err(|_| SiweError::Parse("unable to parse authority".to_string()))?;
+        let authority = uri
+            .authority()
+            .cloned()
+            .ok_or_else(|| SiweError::Parse("unable to parse authority".to_string()))?;
+
+        if scheme.is_none() {
+            return Err(SiweError::InvalidBaseUrl(
+                "app backend requires scheme".to_string(),
+            ));
+        }
 
         let expiration = now + Duration::minutes(5);
 
