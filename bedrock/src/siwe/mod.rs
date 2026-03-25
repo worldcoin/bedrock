@@ -156,6 +156,9 @@ pub struct SiweMessage {
 
 impl Display for SiweMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(scheme) = &self.scheme {
+            write!(f, "{scheme}://")?;
+        }
         write!(f, "{}{PREAMBLE}", self.domain)?;
         write!(f, "\n{}", self.address.to_checksum(None))?;
         f.write_str("\n")?;
@@ -217,24 +220,6 @@ fn sanitize(s: &str) -> Result<String, ParseError> {
         return Err(ParseError::Field("message too long".into()));
     }
     Ok(cleaned.to_owned())
-}
-
-/// Strips the scheme prefix, returning just the authority portion (`host[:port]`).
-fn authority_of(s: &str) -> &str {
-    s.strip_prefix("https://")
-        .or_else(|| s.strip_prefix("http://"))
-        .unwrap_or(s)
-}
-
-/// Parses a domain from a full URL or bare authority string, preserving the
-/// scheme if present and stripping any path.
-///
-/// Per ERC-4361, the scheme is optional; World App preserves it if provided.
-fn to_authority(s: &str) -> Result<String, &str> {
-    let uri: Uri = s.parse().map_err(|_| "invalid uri")?;
-    let scheme = uri.scheme().map(|s| format!("{s}://")).unwrap_or_default();
-    let authority = uri.authority().ok_or("invalid authority")?;
-    Ok(format!("{scheme}{authority}"))
 }
 
 impl FromStr for SiweMessage {
@@ -410,30 +395,32 @@ impl SiweMessage {
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
 
-        let expected_authority =
-            to_authority(authorized_url).map_err(|e| PrimitiveError::InvalidInput {
+        let (expected_authority, _) = parse_authority(authorized_url).map_err(|e| {
+            PrimitiveError::InvalidInput {
                 attribute: "authorized_url".to_string(),
                 error_message: e.to_string(),
-            })?;
-        let current_authority =
-            to_authority(querying_url).map_err(|e| PrimitiveError::InvalidInput {
+            }
+        })?;
+        let (current_authority, _) = parse_authority(querying_url).map_err(|e| {
+            PrimitiveError::InvalidInput {
                 attribute: "querying_url".to_string(),
                 error_message: e.to_string(),
-            })?;
+            }
+        })?;
 
-        if authority_of(&expected_authority) != authority_of(&current_authority) {
+        if expected_authority != current_authority {
             return Err(SiweError::UnauthorizedHost);
         }
 
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
 
-        if authority_of(&msg.domain) != authority_of(&expected_authority) {
+        if msg.domain != expected_authority {
             return Err(SiweError::UnauthorizedHost);
         }
 
         let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
-        if uri_authority.as_str() != authority_of(&expected_authority) {
+        if uri_authority != &expected_authority {
             return Err(SiweError::UnauthorizedHost);
         }
 
@@ -459,13 +446,14 @@ impl SiweMessage {
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
         )?;
 
-        let domain = to_authority(base_url)
-            .map_err(|e| SiweError::InvalidBaseUrl(e.to_string()))?;
+        let (authority, scheme) = parse_authority(&uri.to_string())
+            .map_err(|_| SiweError::Parse("unable to parse authority".to_string()))?;
 
         let expiration = now + Duration::minutes(5);
 
         Ok(Self {
-            domain,
+            scheme,
+            domain: authority,
             address: smart_account.eoa_address(),
             uri,
             issued_at: now,
@@ -523,6 +511,17 @@ impl SiweMessage {
     pub fn to_message_string(&self) -> String {
         self.to_string()
     }
+}
+
+/// Parses an authority and scheme (per [RFC-3986](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.1)) from
+/// a full URL or bare authority string.
+///
+/// Per ERC-4361, the `scheme` is optional for SIWE messages.
+fn parse_authority(s: &str) -> Result<(Authority, Option<Scheme>), &str> {
+    let uri: Uri = s.parse().map_err(|_| "invalid uri")?;
+    let scheme = uri.scheme().cloned();
+    let authority = uri.authority().ok_or("invalid authority")?.clone();
+    Ok((authority, scheme))
 }
 
 #[cfg(test)]

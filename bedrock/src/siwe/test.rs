@@ -40,7 +40,8 @@ fn make_valid_message(datetime: &str) -> String {
 fn roundtrip_minimal() {
     let now = Utc::now();
     let msg = SiweMessage {
-        domain: "example.com".to_owned(),
+        scheme: Some(Scheme::from_str("https").unwrap()),
+        domain: Authority::from_static("example.com"),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: None,
         uri: "https://example.com".parse().unwrap(),
@@ -71,7 +72,8 @@ fn roundtrip_minimal() {
 fn roundtrip_all_optional_fields() {
     let now = Utc::now();
     let msg = SiweMessage {
-        domain: "example.com".to_owned(),
+        scheme: None,
+        domain: Authority::from_static("example.com"),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("I accept the Terms of Service".into()),
         uri: "https://example.com/login".parse().unwrap(),
@@ -96,6 +98,9 @@ fn roundtrip_all_optional_fields() {
     assert_eq!(parsed.request_id.as_deref(), Some("req-123"));
     assert_eq!(parsed.resources.len(), 2);
     assert_eq!(&parsed.domain, "example.com");
+
+    // IMPORTANT: note the lack of schema; schema is OPTIONAL per ERC-4361
+    assert!(serialized.starts_with("example.com wants you to sign in"));
 }
 
 #[test]
@@ -205,7 +210,8 @@ fn display_format_matches_spec() {
     let now = Utc::now();
     let exp = now + Duration::hours(1);
     let msg = SiweMessage {
-        domain: "example.com".to_owned(),
+        scheme: Some(Scheme::HTTPS),
+        domain: Authority::from_static("example.com"),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("hello".into()),
         uri: "https://example.com".parse().unwrap(),
@@ -219,8 +225,8 @@ fn display_format_matches_spec() {
         resources: vec![],
     };
     let s = msg.to_string();
-    // note the schema is preserved but not enforced (it's OPTIONAL in the spec)
-    assert!(s.starts_with("example.com wants you to sign in"));
+    // note the schema is preserved
+    assert!(s.starts_with("https://example.com wants you to sign in"));
     assert!(s.contains("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"));
     assert!(s.contains("hello"));
     assert!(s.contains("URI: https://example.com"));
@@ -232,7 +238,8 @@ fn display_format_matches_spec() {
 #[test]
 fn cache_hash_deterministic() {
     let msg = SiweMessage {
-        domain: "test.com".to_owned(),
+        scheme: Some(Scheme::HTTPS),
+        domain: Authority::from_static("test.com"),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("statement".into()),
         ..SiweMessage::default()
@@ -475,7 +482,8 @@ fn sign_produces_verifiable_signature() {
     let account = SafeSmartAccount::new(TEST_KEY.into(), TEST_WALLET).unwrap();
 
     let msg = SiweMessage {
-        domain: "example.com".to_owned(),
+        scheme: Some(Scheme::HTTPS),
+        domain: Authority::from_static("example.com"),
         address: account.wallet_address,
         statement: Some("hello".into()),
         uri: "https://example.com".parse().unwrap(),
@@ -540,7 +548,8 @@ fn sign_produces_verifiable_signature() {
 fn sign_is_deterministic() {
     let account = test_smart_account();
     let msg = SiweMessage {
-        domain: "example.com".to_owned(),
+        scheme: Some(Scheme::HTTP),
+        domain: Authority::from_static("example.com"),
         address: account.wallet_address,
         ..SiweMessage::default()
     };
