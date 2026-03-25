@@ -1,9 +1,12 @@
 use alloy::{
     dyn_abi::DynSolValue,
     primitives::{eip191_hash_message, fixed_bytes, keccak256, Address, FixedBytes},
-    signers::{Signature, SignerSync},
+    signers::{local::LocalSigner, Signature, SignerSync},
 };
+use k256::ecdsa::SigningKey;
 use ruint::aliases::U256;
+
+use crate::primitives::HexEncodedData;
 
 use super::{SafeSmartAccount, SafeSmartAccountError};
 
@@ -14,6 +17,27 @@ static DOMAIN_SEPARATOR_TYPEHASH: FixedBytes<32> =
 /// Reference: <https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/handler/CompatibilityFallbackHandler.sol#L15C50-L15C116>
 static SAFE_MSG_TYPEHASH: FixedBytes<32> =
     fixed_bytes!("0x60b3cbf8b4a223d68d641b3b6ddf9a298e7f33710cf3d3a9d1146b5a6150fbca");
+
+/// Trait to allow EIP-191 signing for structs that cross foreign boundaries.
+///
+/// This is used to support both [`SafeSmartAccount`] and [`EoaSigner`]. Generally,
+/// the [`EoaSigner`] is only used for signing SIWE messages to authenticate against
+/// the app backend.
+#[uniffi::export]
+pub trait EIP191Signer: Send + Sync {
+    /// Signs an EIP-191 message (`personal_sign` Message; version: `0x45`).
+    /// Reference: <https://eips.ethereum.org/EIPS/eip-191#version-0x45-e>
+    ///
+    /// The message will be prefixed with the EIP-191 prefix `"\x19Ethereum Signed Message:\n"`.
+    ///
+    /// # Errors
+    /// - Will throw an error if the signature process fails.
+    fn sign_eip_191(
+        &self,
+        message: Vec<u8>,
+        chain_id: u32,
+    ) -> Result<HexEncodedData, SafeSmartAccountError>;
+}
 
 /// Implements a custom `Signer` explicitly for a Safe Smart Account (previously Gnosis Safe) (works on v1.4.1 and v1.3.0).
 ///
@@ -51,7 +75,6 @@ pub trait SafeSmartAccountSigner {
     ///
     /// # Errors
     /// - Will throw an error if the signature process fails.
-    #[allow(dead_code)] // FIXME: not yet in use
     fn sign_digest(
         &self,
         digest: FixedBytes<32>,
@@ -166,6 +189,52 @@ impl SafeSmartAccount {
         ]);
         let encoded = domain_separator.abi_encode();
         keccak256(encoded)
+    }
+}
+
+impl EIP191Signer for SafeSmartAccount {
+    fn sign_eip_191(
+        &self,
+        message: Vec<u8>,
+        chain_id: u32,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
+        Ok(signature.into())
+    }
+}
+
+/// Plain EOA signer for EIP-191 `personal_sign` (no Safe wrapping).
+#[derive(Debug, uniffi::Object)]
+pub struct EoaSigner {
+    signer: LocalSigner<SigningKey>,
+}
+
+impl EoaSigner {
+    /// Creates a new EOA signer from a hex-encoded private key.
+    ///
+    /// # Errors
+    /// - `SafeSmartAccountError::KeyDecoding` if the key is invalid.
+    pub fn new(private_key: String) -> Result<Self, SafeSmartAccountError> {
+        let signer = LocalSigner::from_slice(
+            &hex::decode(private_key)
+                .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
+        )
+        .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
+        Ok(Self { signer })
+    }
+}
+
+impl EIP191Signer for EoaSigner {
+    fn sign_eip_191(
+        &self,
+        message: Vec<u8>,
+        _chain_id: u32,
+    ) -> Result<HexEncodedData, SafeSmartAccountError> {
+        let signature = self
+            .signer
+            .sign_message_sync(&message)
+            .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))?;
+        Ok(signature.into())
     }
 }
 

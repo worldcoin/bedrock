@@ -779,3 +779,31 @@ fn rejects_querying_url_with_different_port() {
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
 }
+
+/// Verifies that the World App backend auth flow produces a valid EIP-191
+/// signature recoverable to the EOA address (no Safe wrapping).
+#[test]
+fn world_app_auth_eoa_signature_is_verifiable() {
+    let signer = PrivateKeySigner::from_str(TEST_KEY).unwrap();
+    let eoa_address = signer.address();
+    let account = test_smart_account();
+    let eoa_signer = crate::smart_account::EoaSigner::new(TEST_KEY.into()).unwrap();
+
+    let msg = SiweMessage::from_world_app_auth_request(
+        WorldAppAuthFlow::SignUp,
+        "https://app-backend.toolsforhumanity.com",
+        &account,
+    )
+    .unwrap();
+
+    assert_eq!(msg.address, eoa_address);
+
+    let sig_hex = msg.sign(&eoa_signer).unwrap();
+    let sig = Signature::from_str(sig_hex.as_str()).unwrap();
+
+    // EoaSigner does plain EIP-191: recover from personal_sign hash
+    let message_str = msg.to_string();
+    let digest = eip191_hash_message(message_str);
+    let recovered = sig.recover_address_from_prehash(&digest).unwrap();
+    assert_eq!(recovered, eoa_address);
+}
