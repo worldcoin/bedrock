@@ -1,24 +1,21 @@
-name: Publish Release
+name: Release FFI Bindings (Swift & Kotlin)
 
 on:
-  pull_request:
-    types: [closed]
-    branches:
-      - main
+  release:
+    types: [published]
 
 jobs:
   pre-release-checks:
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
+      commit_sha: ${{ github.sha }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get new version
         id: version
@@ -26,37 +23,21 @@ jobs:
           NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.workspace_members[0]' | cut -d '#' -f2)
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
-      - name: Check latest published version
-        id: latest_version
-        run: |
-          LATEST_RELEASE=$(curl -s -H "Authorization: token ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
-            jq -r .tag_name | sed 's/^v//')
-
-          NEW_VERSION="${{ steps.version.outputs.new_version }}"
-
-          # Ensure the new version is greater than the latest published version
-          if ! { [ "$(printf '%s\n' "$LATEST_RELEASE" "$NEW_VERSION" | sort -V | tail -n1)" = "$NEW_VERSION" ] && \
-                 [ "$NEW_VERSION" != "$LATEST_RELEASE" ]; }; then
-            echo "Error: New version ($NEW_VERSION) is not greater than latest release ($LATEST_RELEASE)"
-            exit 1
-          fi
-
-  publish-swift:
+  build-swift:
     name: Publish Swift
     runs-on: macos-latest
-    needs: [pre-release-checks]
+    needs: pre-release-checks
     permissions:
       contents: write
-    outputs:
-      release_id: ${{ steps.release.outputs.id }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.pre-release-checks.outputs.commit_sha }}
 
       - name: Checkout swift mirror repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: worldcoin/bedrock-swift
           path: target-repo
@@ -65,7 +46,8 @@ jobs:
       - name: Setup Swift
         uses: swift-actions/setup-swift@v2
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
@@ -107,36 +89,38 @@ jobs:
           CHECKSUM: ${{ steps.meta.outputs.checksum }}
           NEW_VERSION: ${{ needs.pre-release-checks.outputs.new_version }}
         run: |
-
-          # Copy non-binary source files
           cp -r swift/Sources/ target-repo/Sources
 
-          # Prepare Package.swift
           brew install swiftlint
           ./swift/archive_swift.sh --asset-url "$ASSET_URL" --checksum "$CHECKSUM" --release-version "$NEW_VERSION"
           cp Package.swift target-repo/
 
-          # Commit changes
           cd target-repo
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
           git add .
           git commit -m "Release $NEW_VERSION"
 
-          # Tag the release
           git tag $NEW_VERSION
           git push
           git push origin $NEW_VERSION
+
+      - name: Mark release as latest
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_BOT_TOKEN }}
+        run: |
+          gh release edit ${{ needs.pre-release-checks.outputs.new_version }} \
+            --repo worldcoin/bedrock-swift \
+            --draft=false \
+            --latest
 
   prepare-kotlin:
     name: Prepare Kotlin
     runs-on: ubuntu-22.04-32core
     needs: [pre-release-checks]
     permissions:
-      contents: read
+      contents: write
 
-    # Each target is built separately to run in parallel. Running sequentially takes vastly more time.
-    # The jobs prepare-kotlin and publish-kotlin replace the kotlin/build_kotlin.sh script.
     strategy:
       fail-fast: true
       matrix:
@@ -148,9 +132,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.pre-release-checks.outputs.commit_sha }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: ${{ matrix.settings.target }}
@@ -180,9 +167,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.pre-release-checks.outputs.commit_sha }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
@@ -216,36 +206,11 @@ jobs:
           curl -s "https://get.sdkman.io" | bash
           source "$HOME/.sdkman/bin/sdkman-init.sh"
           sdk install gradle 8.7
-          gradle wrapper --gradle-version 8.7 # same as `test_kotlin.sh`
+          gradle wrapper --gradle-version 8.7
 
       - name: Publish
         working-directory: kotlin
-        # Gradle will pick up the right version from Cargo.toml
         run: ./gradlew bedrock-android:publish
         env:
           GITHUB_ACTOR: wc-cicd
           GITHUB_TOKEN: ${{ github.token }}
-
-  create-github-release:
-    needs: [pre-release-checks, publish-kotlin, publish-swift]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ needs.pre-release-checks.outputs.new_version }}
-          tag_name: ${{ needs.pre-release-checks.outputs.new_version }}
-          generate_release_notes: true
-          make_latest: true
-
-      - name: Update GitHub release in Swift repo
-        env:
-          GH_TOKEN: ${{ secrets.DEPLOY_BOT_TOKEN }}
-        run: |
-          gh release edit ${{ needs.pre-release-checks.outputs.new_version }} \
-            --repo worldcoin/bedrock-swift \
-            --draft=false \
-            --latest
