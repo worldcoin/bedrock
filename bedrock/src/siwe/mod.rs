@@ -10,8 +10,7 @@ use rand::RngCore;
 
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{HexEncodedData, ParseFromForeignBinding, PrimitiveError};
-use crate::smart_account::SafeSmartAccount;
-use crate::smart_account::SafeSmartAccountSigner;
+use crate::smart_account::{EIP191Signer, SafeSmartAccount};
 
 /// Contains World App-specific logic for Sign in with Ethereum
 mod world_app;
@@ -220,15 +219,22 @@ fn sanitize(s: &str) -> Result<String, ParseError> {
     Ok(cleaned.to_owned())
 }
 
-/// Parses an `Authority` (host + port) from a full URL or bare authority
-/// string, preserving origin semantics where different ports are distinct.
-fn to_authority(s: &str) -> Result<Authority, http::uri::InvalidUri> {
-    let after_scheme = s
-        .strip_prefix("https://")
+/// Strips the scheme prefix, returning just the authority portion (`host[:port]`).
+fn authority_of(s: &str) -> &str {
+    s.strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
-        .unwrap_or(s);
-    let authority_str = after_scheme.split('/').next().unwrap_or(after_scheme);
-    authority_str.parse()
+        .unwrap_or(s)
+}
+
+/// Parses a domain from a full URL or bare authority string, preserving the
+/// scheme if present and stripping any path.
+///
+/// Per ERC-4361, the scheme is optional; World App preserves it if provided.
+fn to_authority(s: &str) -> Result<String, &str> {
+    let uri: Uri = s.parse().map_err(|_| "invalid uri")?;
+    let scheme = uri.scheme().map(|s| format!("{s}://")).unwrap_or_default();
+    let authority = uri.authority().ok_or("invalid authority")?;
+    Ok(format!("{scheme}{authority}"))
 }
 
 impl FromStr for SiweMessage {
@@ -415,19 +421,19 @@ impl SiweMessage {
                 error_message: e.to_string(),
             })?;
 
-        if expected_authority != current_authority {
+        if authority_of(&expected_authority) != authority_of(&current_authority) {
             return Err(SiweError::UnauthorizedHost);
         }
 
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
 
-        if msg.domain != expected_authority {
+        if authority_of(&msg.domain) != authority_of(&expected_authority) {
             return Err(SiweError::UnauthorizedHost);
         }
 
         let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
-        if *uri_authority != expected_authority {
+        if uri_authority.as_str() != authority_of(&expected_authority) {
             return Err(SiweError::UnauthorizedHost);
         }
 
@@ -453,7 +459,7 @@ impl SiweMessage {
             |e: http::uri::InvalidUri| SiweError::InvalidBaseUrl(e.to_string()),
         )?;
 
-        let domain: Authority = to_authority(base_url)
+        let domain = to_authority(base_url)
             .map_err(|e| SiweError::InvalidBaseUrl(e.to_string()))?;
 
         let expiration = now + Duration::minutes(5);
@@ -504,15 +510,12 @@ impl SiweMessage {
     ///
     /// # Errors
     /// - [`SiweError::Signing`] if the signing operation fails.
-    pub fn sign(
-        &self,
-        smart_account: &SafeSmartAccount,
-    ) -> Result<HexEncodedData, SiweError> {
+    pub fn sign(&self, signer: &dyn EIP191Signer) -> Result<HexEncodedData, SiweError> {
         let message_str = self.to_string();
-        let signature = smart_account
-            .sign_message_eip_191_prefixed(message_str, self.chain_id)
+        let signature = signer
+            .sign_eip_191(message_str.as_bytes().to_vec(), self.chain_id)
             .map_err(|e| SiweError::Signing(e.to_string()))?;
-        Ok(signature.into())
+        Ok(signature)
     }
 
     /// Returns the serialized EIP-4361 message string.
