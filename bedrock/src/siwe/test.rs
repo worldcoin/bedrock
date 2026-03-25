@@ -40,7 +40,7 @@ fn make_valid_message(datetime: &str) -> String {
 fn roundtrip_minimal() {
     let now = Utc::now();
     let msg = SiweMessage {
-        domain: "example.com".parse().unwrap(),
+        domain: "example.com".to_owned(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: None,
         uri: "https://example.com".parse().unwrap(),
@@ -71,7 +71,7 @@ fn roundtrip_minimal() {
 fn roundtrip_all_optional_fields() {
     let now = Utc::now();
     let msg = SiweMessage {
-        domain: "example.com".parse().unwrap(),
+        domain: "example.com".to_owned(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("I accept the Terms of Service".into()),
         uri: "https://example.com/login".parse().unwrap(),
@@ -95,6 +95,7 @@ fn roundtrip_all_optional_fields() {
     );
     assert_eq!(parsed.request_id.as_deref(), Some("req-123"));
     assert_eq!(parsed.resources.len(), 2);
+    assert_eq!(&parsed.domain, "example.com");
 }
 
 #[test]
@@ -196,7 +197,7 @@ fn parse_with_scheme_prefix() {
          Issued At: {datetime}"
     );
     let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain.as_str(), "example.com");
+    assert_eq!(msg.domain, "https://example.com");
 }
 
 #[test]
@@ -204,7 +205,7 @@ fn display_format_matches_spec() {
     let now = Utc::now();
     let exp = now + Duration::hours(1);
     let msg = SiweMessage {
-        domain: "example.com".parse().unwrap(),
+        domain: "example.com".to_owned(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("hello".into()),
         uri: "https://example.com".parse().unwrap(),
@@ -218,6 +219,7 @@ fn display_format_matches_spec() {
         resources: vec![],
     };
     let s = msg.to_string();
+    // note the schema is preserved but not enforced (it's OPTIONAL in the spec)
     assert!(s.starts_with("example.com wants you to sign in"));
     assert!(s.contains("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"));
     assert!(s.contains("hello"));
@@ -230,7 +232,7 @@ fn display_format_matches_spec() {
 #[test]
 fn cache_hash_deterministic() {
     let msg = SiweMessage {
-        domain: "test.com".parse().unwrap(),
+        domain: "test.com".to_owned(),
         address: Address::from_str(TEST_WALLET).unwrap(),
         statement: Some("statement".into()),
         ..SiweMessage::default()
@@ -276,7 +278,7 @@ fn world_app_auth_message_creation() {
 
     assert_eq!(msg.chain_id, DEFAULT_CHAIN_ID);
     assert_eq!(msg.version, Version::V1);
-    assert_eq!(msg.domain.as_str(), "app-backend.toolsforhumanity.com");
+    assert_eq!(msg.domain, "https://app-backend.toolsforhumanity.com"); // important: app backend enforces the scheme
     assert_eq!(msg.address, account.eoa_address()); // important: ensure world app auth uses EOA
     assert!(msg.statement.is_none());
 
@@ -413,7 +415,7 @@ fn parse_strips_angle_brackets() {
          Issued At: {datetime}"
     );
     let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain.as_str(), "example.com");
+    assert_eq!(msg.domain, "https://example.com");
 }
 
 #[test]
@@ -429,7 +431,7 @@ fn parse_trims_whitespace() {
          Issued At: {datetime}\n  "
     );
     let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain.as_str(), "example.com");
+    assert_eq!(msg.domain, "example.com");
 }
 
 #[test]
@@ -473,7 +475,7 @@ fn sign_produces_verifiable_signature() {
     let account = SafeSmartAccount::new(TEST_KEY.into(), TEST_WALLET).unwrap();
 
     let msg = SiweMessage {
-        domain: "example.com".parse().unwrap(),
+        domain: "example.com".to_owned(),
         address: account.wallet_address,
         statement: Some("hello".into()),
         uri: "https://example.com".parse().unwrap(),
@@ -538,7 +540,7 @@ fn sign_produces_verifiable_signature() {
 fn sign_is_deterministic() {
     let account = test_smart_account();
     let msg = SiweMessage {
-        domain: "example.com".parse().unwrap(),
+        domain: "example.com".to_owned(),
         address: account.wallet_address,
         ..SiweMessage::default()
     };
@@ -631,7 +633,7 @@ fn world_app_auth_trailing_slash_base_url() {
         &account,
     )
     .unwrap();
-    assert_eq!(msg.domain.as_str(), "app-backend.example.com");
+    assert_eq!(msg.domain, "https://app-backend.example.com");
 }
 
 #[test]
@@ -647,7 +649,7 @@ fn parse_domain_trailing_slash_stripped() {
          Issued At: {datetime}"
     );
     let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain.as_str(), "example.com");
+    assert_eq!(msg.domain, "https://example.com");
 }
 
 fn make_siwe_raw(domain: &str, uri: &str, datetime: &str) -> String {
@@ -677,7 +679,7 @@ fn authorized_host_matches_domain_and_uri() {
         "https://app.example.com/current",
     )
     .unwrap();
-    assert_eq!(msg.domain.host(), "app.example.com");
+    assert_eq!(msg.domain, "app.example.com");
 }
 
 #[test]
@@ -739,7 +741,7 @@ fn domain_with_port_matches_authorized_authority() {
         "https://app.example.com:8080",
     )
     .unwrap();
-    assert_eq!(msg.domain.as_str(), "app.example.com:8080");
+    assert_eq!(msg.domain, "app.example.com:8080");
 }
 
 #[test]
