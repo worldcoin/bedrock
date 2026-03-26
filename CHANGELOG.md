@@ -2,6 +2,18 @@
 
 
 
+## [0.2.10] - 2026-03-26
+
+## What's Changed
+* feat: improved handling for the scheme by @paolodamico in https://github.com/worldcoin/bedrock/pull/319
+* feat: explicit output as eip-191 signer trait by @paolodamico in https://github.com/worldcoin/bedrock/pull/322
+
+
+**Full Changelog**: https://github.com/worldcoin/bedrock/compare/0.2.9...0.2.10
+
+
+
+
 ## [0.2.9] - 2026-03-25
 
 ## What's Changed
