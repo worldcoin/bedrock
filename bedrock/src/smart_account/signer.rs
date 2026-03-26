@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy::{
     dyn_abi::DynSolValue,
     primitives::{eip191_hash_message, fixed_bytes, keccak256, Address, FixedBytes},
@@ -24,7 +26,7 @@ static SAFE_MSG_TYPEHASH: FixedBytes<32> =
 /// the [`EoaSigner`] is only used for signing SIWE messages to authenticate against
 /// the app backend.
 #[uniffi::export]
-pub trait EIP191Signer: Send + Sync {
+pub trait Eip191Signer: Send + Sync {
     /// Signs an EIP-191 message (`personal_sign` Message; version: `0x45`).
     /// Reference: <https://eips.ethereum.org/EIPS/eip-191#version-0x45-e>
     ///
@@ -192,7 +194,7 @@ impl SafeSmartAccount {
     }
 }
 
-impl EIP191Signer for SafeSmartAccount {
+impl Eip191Signer for SafeSmartAccount {
     fn sign_eip_191(
         &self,
         message: Vec<u8>,
@@ -200,6 +202,15 @@ impl EIP191Signer for SafeSmartAccount {
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let signature = self.sign_message_eip_191_prefixed(message, chain_id)?;
         Ok(signature.into())
+    }
+}
+
+#[uniffi::export]
+impl SafeSmartAccount {
+    /// Explicit declaration to comply with [`Eip191Signer`] trait.
+    #[must_use]
+    pub fn as_eip191_signer(self: Arc<Self>) -> Arc<dyn Eip191Signer> {
+        self
     }
 }
 
@@ -224,9 +235,15 @@ impl EoaSigner {
         .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
         Ok(Self { signer })
     }
+
+    /// Explicit declaration to comply with [`Eip191Signer`] trait.
+    #[must_use]
+    pub fn as_eip191_signer(self: Arc<Self>) -> Arc<dyn Eip191Signer> {
+        self
+    }
 }
 
-impl EIP191Signer for EoaSigner {
+impl Eip191Signer for EoaSigner {
     fn sign_eip_191(
         &self,
         message: Vec<u8>,

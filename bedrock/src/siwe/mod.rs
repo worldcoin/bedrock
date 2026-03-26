@@ -10,7 +10,7 @@ use rand::RngCore;
 
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{HexEncodedData, ParseFromForeignBinding, PrimitiveError};
-use crate::smart_account::{EIP191Signer, SafeSmartAccount};
+use crate::smart_account::{Eip191Signer, SafeSmartAccount};
 
 /// Contains World App-specific logic for Sign in with Ethereum
 mod world_app;
@@ -507,7 +507,7 @@ impl SiweMessage {
     ///
     /// # Errors
     /// - [`SiweError::Signing`] if the signing operation fails.
-    pub fn sign(&self, signer: &dyn EIP191Signer) -> Result<HexEncodedData, SiweError> {
+    pub fn sign(&self, signer: &dyn Eip191Signer) -> Result<HexEncodedData, SiweError> {
         let message_str = self.to_string();
         let signature = signer
             .sign_eip_191(message_str.as_bytes().to_vec(), self.chain_id)
