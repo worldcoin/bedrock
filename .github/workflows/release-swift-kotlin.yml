@@ -119,7 +119,7 @@ jobs:
     runs-on: ubuntu-22.04-32core
     needs: [pre-release-checks]
     permissions:
-      contents: write
+      contents: read
 
     strategy:
       fail-fast: true
