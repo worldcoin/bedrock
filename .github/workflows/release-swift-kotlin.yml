@@ -11,7 +11,7 @@ jobs:
       contents: read
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
-      commit_sha: ${{ github.sha }}
+      commit_sha: ${{ github.ref }}
 
     steps:
       - name: Checkout code
