@@ -5,7 +5,7 @@ use alloy::{
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
-pub use signer::{EIP191Signer, EoaSigner, SafeSmartAccountSigner};
+pub use signer::{Eip191Signer, EoaSigner, SafeSmartAccountSigner};
 pub use transaction_4337::Is4337Encodable;
 
 #[cfg(any(test, doc))]
