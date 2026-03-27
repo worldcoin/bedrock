@@ -258,11 +258,11 @@ fn version_display_and_parse() {
 #[test]
 fn world_app_auth_message_creation() {
     let before = Utc::now();
-    let account = test_smart_account();
+    let signer = EoaSigner::new(hex::encode([1u8; 32])).unwrap();
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::SignUp,
         "https://app-backend.toolsforhumanity.com",
-        &account,
+        &signer,
     )
     .unwrap();
     let after = Utc::now();
@@ -270,7 +270,7 @@ fn world_app_auth_message_creation() {
     assert_eq!(msg.chain_id, DEFAULT_CHAIN_ID);
     assert_eq!(msg.version, Version::V1);
     assert_eq!(msg.domain, "app-backend.toolsforhumanity.com");
-    assert_eq!(msg.address, account.eoa_address()); // important: ensure world app auth uses EOA
+    assert_eq!(msg.address, *signer.address()); // important: ensure world app auth uses EOA
     assert!(msg.statement.is_none());
 
     let uri_str = msg.uri.to_string();
@@ -622,11 +622,11 @@ fn parse_rejects_typo_tag_after_iat() {
 
 #[test]
 fn world_app_auth_trailing_slash_base_url() {
-    let account = test_smart_account();
+    let signer = EoaSigner::new(hex::encode([2u8; 32])).unwrap();
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::Refresh,
         "https://app-backend.example.com/",
-        &account,
+        &signer,
     )
     .unwrap();
     assert_eq!(msg.domain, "app-backend.example.com");
@@ -788,13 +788,12 @@ fn rejects_querying_url_with_different_port() {
 fn world_app_auth_eoa_signature_is_verifiable() {
     let signer = PrivateKeySigner::from_str(TEST_KEY).unwrap();
     let eoa_address = signer.address();
-    let account = test_smart_account();
-    let eoa_signer = crate::smart_account::EoaSigner::new(TEST_KEY.into()).unwrap();
+    let eoa_signer = EoaSigner::new(TEST_KEY.into()).unwrap();
 
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::SignUp,
         "https://app-backend.toolsforhumanity.com",
-        &account,
+        &eoa_signer,
     )
     .unwrap();
 

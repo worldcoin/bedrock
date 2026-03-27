@@ -8,7 +8,7 @@ use alloy::{
 use k256::ecdsa::SigningKey;
 use ruint::aliases::U256;
 
-use crate::primitives::HexEncodedData;
+use crate::primitives::{address::BedrockAddress, HexEncodedData};
 
 use super::{SafeSmartAccount, SafeSmartAccountError};
 
@@ -240,6 +240,12 @@ impl EoaSigner {
     #[must_use]
     pub fn as_eip191_signer(self: Arc<Self>) -> Arc<dyn Eip191Signer> {
         self
+    }
+
+    /// Returns the ETH address associated with this signer.
+    #[must_use]
+    pub fn address(&self) -> BedrockAddress {
+        self.signer.address().into()
     }
 }
 
