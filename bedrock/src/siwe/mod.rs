@@ -11,7 +11,7 @@ use rand::RngCore;
 use crate::primitives::address::BedrockAddress;
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{HexEncodedData, ParseFromForeignBinding, PrimitiveError};
-use crate::smart_account::{EIP191Signer, EoaSigner, SafeSmartAccount};
+use crate::smart_account::{Eip191Signer, EoaSigner, SafeSmartAccount};
 
 /// Contains World App-specific logic for Sign in with Ethereum
 mod world_app;
