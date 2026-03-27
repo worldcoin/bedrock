@@ -8,9 +8,10 @@ use http::Uri;
 use rand::rngs::OsRng;
 use rand::RngCore;
 
+use crate::primitives::address::BedrockAddress;
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{HexEncodedData, ParseFromForeignBinding, PrimitiveError};
-use crate::smart_account::{Eip191Signer, SafeSmartAccount};
+use crate::smart_account::{EIP191Signer, EoaSigner, SafeSmartAccount};
 
 /// Contains World App-specific logic for Sign in with Ethereum
 mod world_app;
@@ -438,7 +439,7 @@ impl SiweMessage {
     pub fn from_world_app_auth_request(
         flow: WorldAppAuthFlow,
         base_url: &str,
-        smart_account: &SafeSmartAccount,
+        eoa_signer: &EoaSigner,
     ) -> Result<Self, SiweError> {
         let now = now_with_ntp();
 
@@ -463,7 +464,7 @@ impl SiweMessage {
         Ok(Self {
             scheme,
             domain: authority,
-            address: smart_account.eoa_address(),
+            address: *eoa_signer.address(),
             uri,
             issued_at: now,
             expiration_time: Some(expiration),
@@ -519,6 +520,12 @@ impl SiweMessage {
     #[must_use]
     pub fn to_message_string(&self) -> String {
         self.to_string()
+    }
+
+    /// The Ethereum address performing the SIWE signing.
+    #[must_use]
+    pub fn address(&self) -> BedrockAddress {
+        self.address.into()
     }
 }
 
