@@ -1,3 +1,4 @@
+use crate::bedrock_export;
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
@@ -6,7 +7,6 @@ use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError
 use crate::smart_account::SafeSmartAccount;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
-use crate::bedrock_export;
 use log::warn;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
