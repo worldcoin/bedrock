@@ -6,6 +6,7 @@ use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError
 use crate::smart_account::SafeSmartAccount;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
+use crate::bedrock_export;
 use log::warn;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
@@ -90,7 +91,7 @@ pub struct MigrationController {
     processors: Vec<Arc<dyn MigrationProcessor>>,
 }
 
-#[uniffi::export(async_runtime = "tokio")]
+#[bedrock_export]
 impl MigrationController {
     /// Create a new [`MigrationController`] with default processors and optional additional ones.
     ///
