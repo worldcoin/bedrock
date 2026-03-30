@@ -1,3 +1,4 @@
+use crate::bedrock_export;
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
@@ -90,7 +91,7 @@ pub struct MigrationController {
     processors: Vec<Arc<dyn MigrationProcessor>>,
 }
 
-#[uniffi::export(async_runtime = "tokio")]
+#[bedrock_export]
 impl MigrationController {
     /// Create a new [`MigrationController`] with default processors and optional additional ones.
     ///
