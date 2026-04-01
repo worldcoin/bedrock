@@ -1,0 +1,17 @@
+name: Version Alignment
+description: Checks uniffi and Rust toolchain channel against org CI variables
+
+runs:
+  using: composite
+  steps:
+    - name: Check uniffi version matches CI variable
+      env:
+        UNIFFI_VERSION: ${{ vars.UNIFFI_VERSION }}
+      run: python3 ${{ github.action_path }}/check_uniffi_version.py
+      shell: bash
+
+    - name: Check Rust toolchain channel matches CI variable
+      env:
+        RUST_TOOLCHAIN_CHANNEL: ${{ vars.RUST_TOOLCHAIN_CHANNEL }}
+      run: python3 ${{ github.action_path }}/check_rust_toolchain.py
+      shell: bash

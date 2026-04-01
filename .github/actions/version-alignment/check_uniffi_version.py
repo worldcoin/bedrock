@@ -59,9 +59,12 @@ def main():
         print("::error::UNIFFI_VERSION environment variable is not set")
         sys.exit(1)
 
-    curr_file_path = os.path.dirname(__file__)
+    workspace = os.environ.get(
+        "GITHUB_WORKSPACE",
+        os.path.join(os.path.dirname(__file__), "..", "..", ".."),
+    )
 
-    cargo_toml = os.path.join(curr_file_path, "..", "..", "Cargo.toml")
+    cargo_toml = os.path.join(workspace, "Cargo.toml")
     actual_version = get_cargo_uniffi_version(cargo_toml)
 
     if actual_version != expected_version:
@@ -103,7 +106,7 @@ uniffi = { version = "0.31.0", features = ["tokio"] }
 
 if __name__ == "__main__":
     # To test, run the following at the project root
-    # python3 .github/scripts/check_uniffi_version.py test
+    # python3 .github/actions/version-alignment/check_uniffi_version.py test
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         print("test mode")
 
