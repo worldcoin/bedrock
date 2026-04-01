@@ -20,16 +20,12 @@ def find_uniffi_version(content: str):
     return re.search(r'uniffi\s*=\s*\{[^}]*version\s*=\s*"([^"]+)"', content)
 
 
-def get_cargo_uniffi_version(cargo_toml_path: str) -> str:
+def get_cargo_uniffi_version(cargo_toml_path: str) -> Optional[str]:
     with open(cargo_toml_path) as f:
         content = f.read()
 
     match = find_uniffi_version(content)
-    if not match:
-        print("::error::Could not find uniffi version in Cargo.toml")
-        sys.exit(1)
-
-    return match.group(1)
+    return match.group(1) if match else None
 
 
 def get_extern_lib_uniffi_version() -> Optional[str]:
@@ -54,11 +50,6 @@ def get_extern_lib_uniffi_version() -> Optional[str]:
 
 
 def main():
-    expected_version = os.environ.get("UNIFFI_VERSION")
-    if not expected_version:
-        print("::error::UNIFFI_VERSION environment variable is not set")
-        sys.exit(1)
-
     workspace = os.environ.get(
         "GITHUB_WORKSPACE",
         os.path.join(os.path.dirname(__file__), "..", "..", ".."),
@@ -66,6 +57,15 @@ def main():
 
     cargo_toml = os.path.join(workspace, "Cargo.toml")
     actual_version = get_cargo_uniffi_version(cargo_toml)
+
+    if actual_version is None:
+        print("::notice::uniffi is not a dependency in Cargo.toml, skipping version check")
+        return
+
+    expected_version = os.environ.get("UNIFFI_VERSION")
+    if not expected_version:
+        print("::error::UNIFFI_VERSION environment variable is not set")
+        sys.exit(1)
 
     if actual_version != expected_version:
         print(
