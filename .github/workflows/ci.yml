@@ -25,6 +25,9 @@ jobs:
         uses: actions/checkout@v4
 
       - uses: ./.github/actions/version-alignment
+        with:
+          uniffi_version: ${{ vars.UNIFFI_VERSION }}
+          rust_toolchain_channel: ${{ vars.RUST_TOOLCHAIN_CHANNEL }}
 
   lint:
     name: Format, Clippy & Build
