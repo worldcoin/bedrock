@@ -48,6 +48,10 @@ pub enum TransactionTypeId {
     WLDVaultMigration = 139,
     /// USD Vault migration to ERC-4626 vault
     USDVaultMigration = 140,
+    /// Safe `enableModule for 4337` call
+    SafeEnable4337Module = 141,
+    /// Safe implementation upgrade (v1.3.0 → v1.4.1)
+    SafeWalletVersionUpgrade = 142,
 }
 
 impl TransactionTypeId {

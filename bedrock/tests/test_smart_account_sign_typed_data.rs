@@ -8,7 +8,7 @@ use bedrock::{primitives::Network, smart_account::SafeSmartAccount};
 use serde_json::json;
 
 mod common;
-use common::{deploy_safe, setup_anvil, ISafe};
+use common::{deploy_safe_v141, setup_anvil, ISafe};
 
 #[tokio::test]
 async fn test_integration_sign_typed_data() {
@@ -31,7 +31,7 @@ async fn test_integration_sign_typed_data() {
     println!("✓ Using owner address: {owner}");
 
     // Deploy a Safe
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO)
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO)
         .await
         .expect("Failed to deploy Safe");
 

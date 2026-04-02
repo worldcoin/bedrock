@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::utils::poll_for_receipt;
 use crate::primitives::Network;
 use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
 use crate::transactions::contracts::erc20::Erc20;
@@ -151,54 +152,6 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
             }
         };
 
-        // Wait for the user operation to be mined before marking as success.
-        let rpc_client = get_rpc_client()
-            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-
-        let user_op_hash_hex = format!("{user_op_hash:#x}");
-        let delay_ms = 4000u64;
-
-        for attempt in 0..5 {
-            let response = rpc_client
-                .wa_get_user_operation_receipt(Network::WorldChain, &user_op_hash_hex)
-                .await
-                .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-
-            match response.status.as_str() {
-                "mined_success" => {
-                    info!(
-                        "Permit2 approvals mined successfully for {names:?}, txHash: {:?}",
-                        response.transaction_hash
-                    );
-                    return Ok(ProcessorResult::Success);
-                }
-                "mined_revert" | "error" => {
-                    return Ok(ProcessorResult::Retryable {
-                        error_code: "MINED_REVERT".to_string(),
-                        error_message: format!(
-                            "Permit2 approval transaction failed for {names:?}, txHash: {:?}",
-                            response.transaction_hash
-                        ),
-                        });
-                }
-                _ => {
-                    // Still pending — keep polling unless this is the last attempt
-                    if attempt < 4 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(
-                            delay_ms,
-                        ))
-                        .await;
-                    }
-                }
-            }
-        }
-
-        // Still pending after all polling attempts — retry the whole migration later
-        Ok(ProcessorResult::Retryable {
-            error_code: "PENDING_TIMEOUT".to_string(),
-            error_message: format!(
-                "Permit2 approval for {names:?} still pending after polling, will retry"
-            ),
-        })
+        poll_for_receipt(user_op_hash, &format!("Permit2 approval for {names:?}")).await
     }
 }
