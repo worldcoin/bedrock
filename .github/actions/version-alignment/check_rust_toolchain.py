@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Checks that the Rust toolchain channel in rust-toolchain.toml matches the
-expected channel defined in the RUST_TOOLCHAIN_CHANNEL CI variable.
+expected channel passed as a CLI argument.
 """
 
+import argparse
 import os
 import re
 import sys
@@ -27,10 +28,14 @@ def get_rust_toolchain_channel(toolchain_toml_path: str) -> str:
 
 
 def main():
-    expected_channel = os.environ.get("RUST_TOOLCHAIN_CHANNEL")
-    if not expected_channel:
-        print("::error::RUST_TOOLCHAIN_CHANNEL environment variable is not set")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--expected-channel",
+        required=True,
+        help="Expected Rust toolchain channel (from RUST_TOOLCHAIN_CHANNEL CI \
+variable)",
+    )
+    args = parser.parse_args()
 
     workspace = os.environ.get(
         "GITHUB_WORKSPACE",
@@ -40,15 +45,18 @@ def main():
     toolchain_toml = os.path.join(workspace, "rust-toolchain.toml")
     actual_channel = get_rust_toolchain_channel(toolchain_toml)
 
-    if actual_channel != expected_channel:
+    if actual_channel != args.expected_channel:
         print(
             f"::error::Rust toolchain channel mismatch!\n"
             f"  rust-toolchain.toml: {actual_channel}\n"
-            f"  CI variable:         {expected_channel}"
+            f"  CI variable:         {args.expected_channel}"
         )
         sys.exit(1)
 
-    print(f"::notice::Rust toolchain channel '{actual_channel}' matches CI variable")
+    print(
+        f"::notice::Rust toolchain channel '{actual_channel}' \
+matches CI variable"
+    )
 
 
 # Tests
@@ -76,6 +84,10 @@ channel = "nightly-2024-01-01"
 if __name__ == "__main__":
     # To test, run the following at the project root
     # python3 .github/actions/version-alignment/check_rust_toolchain.py test
+
+    # To run normally:
+    # python3 .github/actions/version-alignment/check_rust_toolchain.py \
+    #    --expected-channel <channel>
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         print("test mode")
 

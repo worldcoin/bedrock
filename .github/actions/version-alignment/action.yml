@@ -13,13 +13,13 @@ runs:
   using: composite
   steps:
     - name: Check uniffi version matches CI variable
-      env:
-        UNIFFI_VERSION: ${{ inputs.uniffi_version }}
-      run: python3 ${{ github.action_path }}/check_uniffi_version.py
+      run: |
+        python3 ${{ github.action_path }}/check_uniffi_version.py \
+          --expected-version ${{ inputs.uniffi_version }}
       shell: bash
 
     - name: Check Rust toolchain channel matches CI variable
-      env:
-        RUST_TOOLCHAIN_CHANNEL: ${{ inputs.rust_toolchain_channel }}
-      run: python3 ${{ github.action_path }}/check_rust_toolchain.py
+      run: |
+        python3 ${{ github.action_path }}/check_rust_toolchain.py \
+          --expected-channel ${{ inputs.rust_toolchain_channel }}
       shell: bash
