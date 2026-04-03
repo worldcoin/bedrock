@@ -14,8 +14,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check-uniffi-version:
-    name: Check Uniffi Version
+  version-alignment:
+    name: Version Alignment
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,10 +24,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check uniffi version matches CI variable
-        env:
-          UNIFFI_VERSION: ${{ vars.UNIFFI_VERSION }}
-        run: python3 .github/scripts/check_uniffi_version.py
+      - uses: ./.github/actions/version-alignment
+        with:
+          uniffi_version: ${{ vars.UNIFFI_VERSION }}
+          rust_toolchain_channel: ${{ vars.RUST_TOOLCHAIN_CHANNEL }}
 
   lint:
     name: Format, Clippy & Build

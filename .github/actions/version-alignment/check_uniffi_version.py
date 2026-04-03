@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Checks that the uniffi version in Cargo.toml matches the expected version
-defined in the UNIFFI_VERSION CI variable.
+passed as a CLI argument.
 """
 
+import argparse
 import os
 import re
 import sys
@@ -20,16 +21,12 @@ def find_uniffi_version(content: str):
     return re.search(r'uniffi\s*=\s*\{[^}]*version\s*=\s*"([^"]+)"', content)
 
 
-def get_cargo_uniffi_version(cargo_toml_path: str) -> str:
+def get_cargo_uniffi_version(cargo_toml_path: str) -> Optional[str]:
     with open(cargo_toml_path) as f:
         content = f.read()
 
     match = find_uniffi_version(content)
-    if not match:
-        print("::error::Could not find uniffi version in Cargo.toml")
-        sys.exit(1)
-
-    return match.group(1)
+    return match.group(1) if match else None
 
 
 def get_extern_lib_uniffi_version() -> Optional[str]:
@@ -54,21 +51,33 @@ def get_extern_lib_uniffi_version() -> Optional[str]:
 
 
 def main():
-    expected_version = os.environ.get("UNIFFI_VERSION")
-    if not expected_version:
-        print("::error::UNIFFI_VERSION environment variable is not set")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--expected-version",
+        required=True,
+        help="Expected uniffi version (from UNIFFI_VERSION CI variable)",
+    )
+    args = parser.parse_args()
 
-    curr_file_path = os.path.dirname(__file__)
+    workspace = os.environ.get(
+        "GITHUB_WORKSPACE",
+        os.path.join(os.path.dirname(__file__), "..", "..", ".."),
+    )
 
-    cargo_toml = os.path.join(curr_file_path, "..", "..", "Cargo.toml")
+    cargo_toml = os.path.join(workspace, "Cargo.toml")
     actual_version = get_cargo_uniffi_version(cargo_toml)
 
-    if actual_version != expected_version:
+    if actual_version is None:
+        print(
+            "::notice::uniffi is not a dependency in Cargo.toml, skipping version check"
+        )
+        return
+
+    if actual_version != args.expected_version:
         print(
             f"::error::uniffi version mismatch!\n"
             f"  Cargo.toml:       {actual_version}\n"
-            f"  CI variable:      {expected_version}"
+            f"  CI variable:      {args.expected_version}"
         )
         sys.exit(1)
 
@@ -76,10 +85,10 @@ def main():
 
     # External lib check failure doesn't fail the test but it raises warning
     xmtp_version = get_extern_lib_uniffi_version()
-    if xmtp_version is not None and xmtp_version != expected_version:
+    if xmtp_version is not None and xmtp_version != args.expected_version:
         print(
             f"::warning::uniffi version mismatch with libxmtp, "
-            f"expected version={expected_version}, libxmtp={xmtp_version}"
+            f"expected version={args.expected_version}, libxmtp={xmtp_version}"
         )
 
 
@@ -103,7 +112,11 @@ uniffi = { version = "0.31.0", features = ["tokio"] }
 
 if __name__ == "__main__":
     # To test, run the following at the project root
-    # python3 .github/scripts/check_uniffi_version.py test
+    # python3 .github/actions/version-alignment/check_uniffi_version.py test
+
+    # To run normally:
+    # python3 .github/actions/version-alignment/check_uniffi_version.py \
+    #   --expected-version <version>
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         print("test mode")
 

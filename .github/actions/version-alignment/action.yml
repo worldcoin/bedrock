@@ -1,0 +1,29 @@
+name: Version Alignment
+description: Checks uniffi and Rust toolchain channel against org CI variables
+
+inputs:
+  uniffi_version:
+    description: Expected uniffi version (from UNIFFI_VERSION CI variable)
+    required: true
+  rust_toolchain_channel:
+    description: Expected Rust toolchain channel (from RUST_TOOLCHAIN_CHANNEL CI variable)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check uniffi version matches CI variable
+      env:
+        EXPECTED_VERSION: ${{ inputs.uniffi_version }}
+      run: |
+        python3 ${{ github.action_path }}/check_uniffi_version.py \
+          --expected-version "$EXPECTED_VERSION"
+      shell: bash
+
+    - name: Check Rust toolchain channel matches CI variable
+      env:
+        EXPECTED_CHANNEL: ${{ inputs.rust_toolchain_channel }}
+      run: |
+        python3 ${{ github.action_path }}/check_rust_toolchain.py \
+          --expected-channel "$EXPECTED_CHANNEL"
+      shell: bash
