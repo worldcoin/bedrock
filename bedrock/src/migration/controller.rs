@@ -102,7 +102,7 @@ impl MigrationController {
     #[uniffi::constructor]
     pub fn new(
         kv_store: Arc<dyn DeviceKeyValueStore>,
-        safe_account: Arc<SafeSmartAccount>,
+        safe_account: Option<Arc<SafeSmartAccount>>,
         additional_processors: Vec<Arc<dyn MigrationProcessor>>,
     ) -> Arc<Self> {
         let mut processors = Self::default_processors(safe_account);
@@ -233,10 +233,17 @@ impl MigrationController {
 
 impl MigrationController {
     /// Returns the default set of migration processors.
+    ///
+    /// When `safe_account` is `None`, processors that depend on it
+    /// (e.g. [`Permit2ApprovalProcessor`]) are omitted.
     fn default_processors(
-        safe_account: Arc<SafeSmartAccount>,
+        safe_account: Option<Arc<SafeSmartAccount>>,
     ) -> Vec<Arc<dyn MigrationProcessor>> {
-        vec![Arc::new(Permit2ApprovalProcessor::new(safe_account))]
+        let mut processors: Vec<Arc<dyn MigrationProcessor>> = Vec::new();
+        if let Some(account) = safe_account {
+            processors.push(Arc::new(Permit2ApprovalProcessor::new(account)));
+        }
+        processors
     }
 
     /// Create a controller with processors injected in
