@@ -17,19 +17,25 @@ XMTP_CARGO_TOML_URL = (
 )
 
 
-def find_uniffi_version(content: str):
-    # Matches both forms:
+def find_uniffi_version(content: str) -> Optional[str]:
+    # Use alternation to keep the two forms mutually exclusive, avoiding
+    # false matches on other quoted values inside an inline table (e.g. git = "…"):
     #   plain string:   uniffi = "0.31.0"
     #   inline table:   uniffi = { version = "0.31.0", ... }
-    return re.search(r'uniffi\s*=\s*(?:\{[^}]*version\s*=\s*)?"([^"]+)"', content)
+    match = re.search(
+        r'uniffi\s*=\s*(?:"([^"]+)"|\{[^}]*version\s*=\s*"([^"]+)")',
+        content,
+    )
+    if not match:
+        return None
+    return match.group(1) or match.group(2)
 
 
 def get_cargo_uniffi_version(cargo_toml_path: str) -> Optional[str]:
     with open(cargo_toml_path) as f:
         content = f.read()
 
-    match = find_uniffi_version(content)
-    return match.group(1) if match else None
+    return find_uniffi_version(content)
 
 
 def get_extern_lib_uniffi_version() -> Optional[str]:
@@ -40,12 +46,12 @@ def get_extern_lib_uniffi_version() -> Optional[str]:
         with urllib.request.urlopen(XMTP_CARGO_TOML_URL, timeout=60) as response:
             content = response.read().decode("utf-8")
 
-        match = find_uniffi_version(content)
-        if not match:
+        version = find_uniffi_version(content)
+        if not version:
             print("::warning::Could not find uniffi version in libxmtp")
             return None
 
-        return match.group(1)
+        return version
     except Exception as err:
         print(
             f"::warning::Couldn't retrieve version from remote repository, error: {err}"
@@ -102,18 +108,21 @@ class TestFindUniffiVersion(unittest.TestCase):
 [workspace.dependencies]
 uniffi = { version = "0.31.0", features = ["tokio"] }
 """
-        match = find_uniffi_version(cargo_toml)
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group(1), "0.31.0")
+        self.assertEqual(find_uniffi_version(cargo_toml), "0.31.0")
 
     def test_finds_version_plain_string(self):
         cargo_toml = """
 [workspace.dependencies]
 uniffi = "0.31.0"
 """
-        match = find_uniffi_version(cargo_toml)
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group(1), "0.31.0")
+        self.assertEqual(find_uniffi_version(cargo_toml), "0.31.0")
+
+    def test_ignores_inline_table_without_version(self):
+        cargo_toml = """
+[workspace.dependencies]
+uniffi = { git = "https://github.com/mozilla/uniffi-rs" }
+"""
+        self.assertIsNone(find_uniffi_version(cargo_toml))
 
     def test_get_extern_lib(self):
         xmtp_version = get_extern_lib_uniffi_version()
