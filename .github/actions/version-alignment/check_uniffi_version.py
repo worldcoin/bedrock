@@ -18,7 +18,10 @@ XMTP_CARGO_TOML_URL = (
 
 
 def find_uniffi_version(content: str):
-    return re.search(r'uniffi\s*=\s*\{[^}]*version\s*=\s*"([^"]+)"', content)
+    # Matches both forms:
+    #   plain string:   uniffi = "0.31.0"
+    #   inline table:   uniffi = { version = "0.31.0", ... }
+    return re.search(r'uniffi\s*=\s*(?:\{[^}]*version\s*=\s*)?"([^"]+)"', content)
 
 
 def get_cargo_uniffi_version(cargo_toml_path: str) -> Optional[str]:
@@ -94,10 +97,19 @@ def main():
 
 # Tests
 class TestFindUniffiVersion(unittest.TestCase):
-    def test_finds_version(self):
+    def test_finds_version_inline_table(self):
         cargo_toml = """
 [workspace.dependencies]
 uniffi = { version = "0.31.0", features = ["tokio"] }
+"""
+        match = find_uniffi_version(cargo_toml)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "0.31.0")
+
+    def test_finds_version_plain_string(self):
+        cargo_toml = """
+[workspace.dependencies]
+uniffi = "0.31.0"
 """
         match = find_uniffi_version(cargo_toml)
         self.assertIsNotNone(match)
