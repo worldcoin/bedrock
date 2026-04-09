@@ -613,6 +613,8 @@ pub enum BackupFileDesignator {
     DocumentPkg,
     /// Credential storage vault (plaintext export of account.vault.sqlite)
     CredentialVault,
+    /// Face Personal Custody Package (PCP) or "Face Credential"
+    FacePkg,
 }
 
 impl Serialize for BackupFileDesignator {
