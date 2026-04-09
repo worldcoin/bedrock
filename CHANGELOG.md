@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12](https://github.com/worldcoin/bedrock/compare/0.2.11...0.2.12) - 2026-04-09
+
+### Added
+
+- make safe_account optional in MigrationController ([#332](https://github.com/worldcoin/bedrock/pull/332))
+- expose domain and statement on SiweMessage ([#334](https://github.com/worldcoin/bedrock/pull/334))
+
+### Fixed
+
+- single changelog ([#338](https://github.com/worldcoin/bedrock/pull/338))
+
+### Other
+
+- *(deps)* bump uuid from 1.21.0 to 1.23.0 ([#330](https://github.com/worldcoin/bedrock/pull/330))
+- *(deps)* bump dryoc from 0.7.0 to 0.7.2 ([#331](https://github.com/worldcoin/bedrock/pull/331))
+
 ## [0.2.11](https://github.com/worldcoin/bedrock/compare/0.2.10...0.2.11) - 2026-04-09
 
 ### Added
