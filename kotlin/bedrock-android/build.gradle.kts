@@ -1,5 +1,3 @@
-import java.io.ByteArrayOutputStream
-
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -43,12 +41,15 @@ afterEvaluate {
                 groupId = "com.toolsforhumanity"
                 artifactId = "bedrock"
 
-                // Read version from Cargo.toml
-                val cargoToml = file("../../Cargo.toml")
-                val versionRegex = """version\s*=\s*"([^"]+)"""".toRegex()
-                val cargoContent = cargoToml.readText()
-                version = versionRegex.find(cargoContent)?.groupValues?.get(1)
-                    ?: throw GradleException("Could not find version in Cargo.toml")
+                version = if (project.hasProperty("versionName")) {
+                    project.property("versionName") as String
+                } else {
+                    val cargoToml = file("../../Cargo.toml")
+                    val versionRegex = """version\s*=\s*"([^"]+)"""".toRegex()
+                    val cargoContent = cargoToml.readText()
+                    versionRegex.find(cargoContent)?.groupValues?.get(1)
+                        ?: throw GradleException("Could not find version in Cargo.toml")
+                }
 
                 afterEvaluate {
                     from(components["release"])

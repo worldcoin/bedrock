@@ -780,6 +780,10 @@ fn test_backup_module_enum() {
         BackupFileDesignator::DocumentPkg.to_string(),
         "document_pkg".to_string()
     );
+    assert_eq!(
+        BackupFileDesignator::FacePkg.to_string(),
+        "face_pkg".to_string()
+    );
 
     assert_eq!(
         BackupFileDesignator::from_str("orb_pkg").unwrap(),
@@ -789,6 +793,10 @@ fn test_backup_module_enum() {
         BackupFileDesignator::from_str("document_pkg").unwrap(),
         BackupFileDesignator::DocumentPkg
     );
+    assert_eq!(
+        BackupFileDesignator::from_str("face_pkg").unwrap(),
+        BackupFileDesignator::FacePkg
+    );
 
     assert_eq!(
         serde_json::to_string(&BackupFileDesignator::OrbPkg).unwrap(),
@@ -797,6 +805,10 @@ fn test_backup_module_enum() {
     assert_eq!(
         serde_json::to_string(&BackupFileDesignator::DocumentPkg).unwrap(),
         "\"document_pkg\""
+    );
+    assert_eq!(
+        serde_json::to_string(&BackupFileDesignator::FacePkg).unwrap(),
+        "\"face_pkg\""
     );
 }
 
