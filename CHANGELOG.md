@@ -8,10 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0](https://github.com/worldcoin/bedrock/compare/0.2.12...0.3.0) - 2026-04-09
-
-No changes.
-
 ## [0.2.12](https://github.com/worldcoin/bedrock/compare/0.2.11...0.2.12) - 2026-04-09
 
 ### Added
