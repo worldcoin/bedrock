@@ -522,10 +522,20 @@ impl SiweMessage {
         self.to_string()
     }
 
-    /// The Ethereum address performing the SIWE signing.
+    /// Returns the `address` of the message.
     #[must_use]
     pub fn address(&self) -> BedrockAddress {
         self.address.into()
+    }
+
+    /// Returns the `statement` of the message.
+    pub fn statement(&self) -> Option<String> {
+        self.statement.clone()
+    }
+
+    /// Returns the `domain` of the message.
+    pub fn domain(&self) -> String {
+        self.domain.to_string()
     }
 }
 

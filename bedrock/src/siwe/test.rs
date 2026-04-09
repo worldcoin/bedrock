@@ -43,7 +43,7 @@ fn roundtrip_minimal() {
         scheme: Some(Scheme::from_str("https").unwrap()),
         domain: Authority::from_static("example.com"),
         address: Address::from_str(TEST_WALLET).unwrap(),
-        statement: None,
+        statement: Some("wants to sign you in".to_string()),
         uri: "https://example.com".parse().unwrap(),
         version: Version::V1,
         chain_id: 480,
@@ -66,6 +66,10 @@ fn roundtrip_minimal() {
     assert_eq!(parsed.not_before, msg.not_before);
     assert_eq!(parsed.request_id, msg.request_id);
     assert!(parsed.resources.is_empty());
+
+    // Getter methods for foreign bindings
+    assert_eq!(parsed.statement(), msg.statement);
+    assert_eq!(parsed.domain(), "example.com".to_string());
 }
 
 #[test]
