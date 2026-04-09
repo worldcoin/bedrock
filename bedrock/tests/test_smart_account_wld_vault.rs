@@ -11,7 +11,7 @@ use alloy::{
     signers::local::PrivateKeySigner,
     sol,
 };
-use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
+use common::{deploy_safe_v141, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use std::str::FromStr;
 
@@ -57,7 +57,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     let wld_vault = WLDVault::new(wld_vault_address, &provider);
     let morpho_vault = IERC20::new(morpho_vault_address, &provider);
 
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO).await?;
     println!("✓ Deployed Safe at: {safe_address}");
 
     let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;

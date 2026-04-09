@@ -6,7 +6,7 @@ use alloy::{
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
-use common::{deploy_safe, setup_anvil, IERC20};
+use common::{deploy_safe_v141, setup_anvil, IERC20};
 
 use bedrock::{
     migration::{
@@ -40,7 +40,7 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
         .await?;
 
     // 3) Deploy Safe with 4337 module enabled
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+    let safe_address = deploy_safe_v141(&provider, owner, U256::ZERO).await?;
 
     // 4) Fund EntryPoint deposit for Safe
     let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
