@@ -8,6 +8,10 @@ Foundational library which powers World App's crypto wallet.
 
 Review our [CONTRIBUTING](CONTRIBUTING.md) guide. Including details on how to run this project locally.
 
+## 🚀 Releasing
+
+Releases are managed through [release-plz](https://release-plz.dev/docs). To trigger a release go to the open PR with the release tag, review the changes and merge. This will trigger the process to bump the release and generate all foreign bindings.
+
 ## 🐦‍🔥 Swift Bindings
 
 Bedrock ships with foreign bindings for native Swift. All details can be found in the [/swift](./swift/README.md) folder.
