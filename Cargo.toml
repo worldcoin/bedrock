@@ -17,7 +17,7 @@ keywords = ["Ethereum", "WorldChain", "World"]
 license = "MIT"
 readme = "./README.md"
 repository = "https://github.com/worldcoin/bedrock"
-version = "0.2.11"
+version = "0.2.12"
 
 [workspace.dependencies]
 # NOTE: Maintain parity with org-wide UNIFFI_VERSION
