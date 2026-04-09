@@ -11,3 +11,4 @@ name = "bedrock"
 git_tag_name = "{{ version }}"
 git_release_name = "{{ version }}"
 release = true
+changelog_path = "CHANGELOG.md"
