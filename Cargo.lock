@@ -2376,9 +2376,9 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "dryoc"
-version = "0.7.0"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9b2e835070826e9781c69975f68c6258e0501cd0bb30c9ed704cdac77021bbc"
+checksum = "4684d84cc4dc1a8705dcbe8be0e258581dfdbb308477ed604f52797c336bb3d2"
 dependencies = [
  "bitflags 2.9.1",
  "chacha20",
