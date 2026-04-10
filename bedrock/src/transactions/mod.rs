@@ -119,6 +119,44 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
+    /// Sets a standard ERC-20 allowance for a spender on a specific token.
+    ///
+    /// This calls the token contract's `approve(spender, amount)` function.
+    ///
+    /// # Arguments
+    /// - `token_address`: The ERC-20 token address to set the allowance for.
+    /// - `spender_address`: The address being granted permission to spend the token.
+    /// - `amount`: The maximum amount of tokens the spender can transfer, as a stringified `uint256`.
+    ///
+    /// # Errors
+    /// - Will throw a parsing error if any of the provided attributes are invalid.
+    /// - Will throw an RPC error if the transaction submission fails.
+    /// - Will throw an error if the global HTTP client has not been initialized.
+    pub async fn transaction_erc20_approve(
+        &self,
+        token_address: &str,
+        spender_address: &str,
+        amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let token_address = Address::parse_from_ffi(token_address, "token_address")?;
+        let spender_address =
+            Address::parse_from_ffi(spender_address, "spender_address")?;
+        let amount = U256::parse_from_ffi(amount, "amount")?;
+
+        let transaction = Erc20::approve(token_address, spender_address, amount);
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute ERC-20 approve: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
     /// Sets a Permit2 allowance for a spender on a specific token via the `IAllowanceTransfer.approve` method.
     ///
     /// This calls the Permit2 contract's `approve(token, spender, amount, expiration)` function,
