@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy::{
     primitives::{
         address,
@@ -9,10 +11,15 @@ use alloy::{
     sol,
     sol_types::SolCall,
 };
-use bedrock::primitives::Network;
+use bedrock::{
+    primitives::{http_client::set_http_client, Network},
+    test_utils::{
+        AnvilBackedHttpClient, IEntryPoint, SponsorUserOperationResponseOverride,
+    },
+};
 use bedrock::smart_account::{
-    SafeOperation, SafeSmartAccount, SafeTransaction, UnparsedPermitTransferFrom,
-    UnparsedTokenPermissions, PERMIT2_ADDRESS,
+    SafeOperation, SafeSmartAccount, SafeTransaction, ENTRYPOINT_4337,
+    UnparsedPermitTransferFrom, UnparsedTokenPermissions, PERMIT2_ADDRESS,
 };
 use chrono::Utc;
 
@@ -392,6 +399,170 @@ async fn test_integration_permit2_approve_and_allowance_transfer() -> anyhow::Re
         .await?;
 
     assert_eq!(allowance_after.amount, U160::ZERO);
+
+    Ok(())
+}
+
+/// This integration test exercises the high-level 4337 transaction helpers used by native apps:
+/// 1. Spin up forked Anvil and deploy a Safe with the 4337 module enabled
+/// 2. Route Bedrock RPC calls through the Anvil-backed mock HTTP client
+/// 3. Submit an ERC-20 `approve(PERMIT2, type(uint256).max)` via `transaction_erc20_approve`
+/// 4. Submit a Permit2 `approve(token, spender, amount, expiration)` via `transaction_permit2_approve`
+/// 5. Verify both allowances were updated on-chain
+#[tokio::test]
+async fn test_transaction_permit2_approve_full_flow_executes_user_operation(
+) -> anyhow::Result<()> {
+    let anvil = setup_anvil();
+    let owner_signer = PrivateKeySigner::random();
+    let owner_key_hex = hex::encode(owner_signer.to_bytes());
+    let owner = owner_signer.address();
+
+    let provider = ProviderBuilder::new()
+        .wallet(owner_signer.clone())
+        .connect_http(anvil.endpoint_url());
+
+    provider.anvil_set_balance(owner, U256::from(1e18)).await?;
+
+    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+
+    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    entry_point
+        .depositTo(safe_address)
+        .value(U256::from(1e18))
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    let client = AnvilBackedHttpClient::new(provider.clone());
+    set_http_client(Arc::new(client));
+
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
+    let token_contract = IERC20::new(token_address, &provider);
+
+    safe_account
+        .transaction_erc20_approve(
+            &token_address.to_string(),
+            &PERMIT2_ADDRESS.to_string(),
+            &U256::MAX.to_string(),
+        )
+        .await?;
+
+    let erc20_allowance = token_contract
+        .allowance(safe_address, PERMIT2_ADDRESS)
+        .call()
+        .await?;
+    assert_eq!(erc20_allowance, U256::MAX);
+
+    let spender = PrivateKeySigner::random().address();
+    let approve_amount = U160::from(1_000_000_000_000_000_000u128);
+    let expiration = U48::from(4_102_444_800u64);
+
+    safe_account
+        .transaction_permit2_approve(
+            &token_address.to_string(),
+            &spender.to_string(),
+            &approve_amount.to_string(),
+            &expiration.to_string(),
+        )
+        .await?;
+
+    let permit2_contract = IAllowanceTransfer::new(PERMIT2_ADDRESS, &provider);
+    let allowance = permit2_contract
+        .allowance(safe_address, token_address, spender)
+        .call()
+        .await?;
+
+    assert_eq!(allowance.amount, approve_amount);
+    assert_eq!(allowance.expiration, expiration);
+
+    Ok(())
+}
+
+/// Replays the sponsor response shape seen from app-backend in production logs:
+/// zero fee fields, zero preVerificationGas, no paymaster, and the gas limits
+/// returned by sponsorship. This helps isolate whether the failure is caused by
+/// Bedrock's Permit2 4337 encoding or by production sponsorship semantics.
+#[tokio::test]
+async fn test_transaction_permit2_approve_with_logged_sponsor_shape(
+) -> anyhow::Result<()> {
+    let anvil = setup_anvil();
+    let owner_signer = PrivateKeySigner::random();
+    let owner_key_hex = hex::encode(owner_signer.to_bytes());
+    let owner = owner_signer.address();
+
+    let provider = ProviderBuilder::new()
+        .wallet(owner_signer.clone())
+        .connect_http(anvil.endpoint_url());
+
+    provider.anvil_set_balance(owner, U256::from(1e18)).await?;
+
+    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
+
+    let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
+    entry_point
+        .depositTo(safe_address)
+        .value(U256::from(1e18))
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    let mut client = AnvilBackedHttpClient::new(provider.clone());
+    client.set_sponsor_response_override(SponsorUserOperationResponseOverride {
+        paymaster: None,
+        paymaster_data: None,
+        pre_verification_gas: "0x0".into(),
+        verification_gas_limit: "0x1333a".into(),
+        call_gas_limit: "0xe988".into(),
+        paymaster_verification_gas_limit: "0x0".into(),
+        paymaster_post_op_gas_limit: "0x0".into(),
+        max_priority_fee_per_gas: "0x0".into(),
+        max_fee_per_gas: "0x0".into(),
+        provider_name: "alchemy".into(),
+    });
+    set_http_client(Arc::new(client));
+
+    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let token_address = address!("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1");
+    let token_contract = IERC20::new(token_address, &provider);
+
+    safe_account
+        .transaction_erc20_approve(
+            &token_address.to_string(),
+            &PERMIT2_ADDRESS.to_string(),
+            &U256::MAX.to_string(),
+        )
+        .await?;
+
+    let erc20_allowance = token_contract
+        .allowance(safe_address, PERMIT2_ADDRESS)
+        .call()
+        .await?;
+    assert_eq!(erc20_allowance, U256::MAX);
+
+    let spender = address!("0x056e1c872ee9f9379588f8064175d48333c34663");
+    let approve_amount = U160::from(500_000_000u64);
+    let expiration = U48::from(1_778_446_135u64);
+
+    safe_account
+        .transaction_permit2_approve(
+            &token_address.to_string(),
+            &spender.to_string(),
+            &approve_amount.to_string(),
+            &expiration.to_string(),
+        )
+        .await?;
+
+    let permit2_contract = IAllowanceTransfer::new(PERMIT2_ADDRESS, &provider);
+    let allowance = permit2_contract
+        .allowance(safe_address, token_address, spender)
+        .call()
+        .await?;
+
+    assert_eq!(allowance.amount, approve_amount);
+    assert_eq!(allowance.expiration, expiration);
 
     Ok(())
 }

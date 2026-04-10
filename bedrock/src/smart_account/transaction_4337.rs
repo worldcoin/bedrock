@@ -14,6 +14,12 @@ use chrono::{Duration, Utc};
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
+fn log_user_operation(stage: &str, user_operation: &UserOperation) {
+    if let Ok(json) = serde_json::to_string(user_operation) {
+        crate::debug!("4337 {stage} userOp={json}");
+    }
+}
+
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
 /// Operations are valid for this duration from the time they are signed.
@@ -176,6 +182,7 @@ pub trait Is4337Encodable {
         placeholder_signature.extend_from_slice(&valid_until_bytes);
         placeholder_signature.extend_from_slice(&[0xff; 65]);
         user_operation.signature = placeholder_signature.into();
+        log_user_operation("pre_sponsor", &user_operation);
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client
@@ -190,6 +197,7 @@ pub trait Is4337Encodable {
 
         // 3. Merge paymaster data
         user_operation = user_operation.with_paymaster_data(&sponsor_response);
+        log_user_operation("post_sponsor", &user_operation);
 
         // 4. Sign the UserOperation with fresh validity timestamps
         safe_account.sign_user_operation(
@@ -198,6 +206,7 @@ pub trait Is4337Encodable {
             valid_after_seconds,
             valid_until_seconds,
         )?;
+        log_user_operation("final_signed", &user_operation);
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client

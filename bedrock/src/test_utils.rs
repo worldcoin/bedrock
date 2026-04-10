@@ -35,6 +35,31 @@ struct SponsorUserOperationResponseLite<'a> {
     provider_name: String,
 }
 
+/// Override payload for mocking `wa_sponsorUserOperation` responses in tests.
+#[derive(Clone, Debug)]
+pub struct SponsorUserOperationResponseOverride {
+    /// Paymaster address returned by sponsorship.
+    pub paymaster: Option<String>,
+    /// Paymaster data returned by sponsorship.
+    pub paymaster_data: Option<String>,
+    /// Pre-verification gas returned by sponsorship.
+    pub pre_verification_gas: String,
+    /// Verification gas limit returned by sponsorship.
+    pub verification_gas_limit: String,
+    /// Call gas limit returned by sponsorship.
+    pub call_gas_limit: String,
+    /// Paymaster verification gas limit returned by sponsorship.
+    pub paymaster_verification_gas_limit: String,
+    /// Paymaster post-op gas limit returned by sponsorship.
+    pub paymaster_post_op_gas_limit: String,
+    /// Max priority fee per gas returned by sponsorship.
+    pub max_priority_fee_per_gas: String,
+    /// Max fee per gas returned by sponsorship.
+    pub max_fee_per_gas: String,
+    /// Provider selected by sponsorship.
+    pub provider_name: String,
+}
+
 sol! {
     /// Packed user operation for `EntryPoint`
     #[sol(rename_all = "camelCase")]
@@ -122,6 +147,8 @@ where
     pub address_responses: HashMap<Address, String>,
     /// Custom responses for `eth_call` based on contract address AND call data
     pub address_data_responses: HashMap<(Address, String), String>,
+    /// Optional custom sponsorship payload returned from `wa_sponsorUserOperation`
+    pub sponsor_response_override: Option<SponsorUserOperationResponseOverride>,
 }
 
 impl<P> AnvilBackedHttpClient<P>
@@ -134,6 +161,7 @@ where
             provider,
             address_responses: HashMap::new(),
             address_data_responses: HashMap::new(),
+            sponsor_response_override: None,
         }
     }
 
@@ -155,6 +183,14 @@ where
     ) {
         self.address_data_responses
             .insert((to_address, call_data), response_hex);
+    }
+
+    /// Sets a custom response for `wa_sponsorUserOperation`.
+    pub fn set_sponsor_response_override(
+        &mut self,
+        response: SponsorUserOperationResponseOverride,
+    ) {
+        self.sponsor_response_override = Some(response);
     }
 }
 
@@ -201,17 +237,46 @@ where
         match method {
             // Respond with minimal, sane gas values and no paymaster
             "wa_sponsorUserOperation" => {
-                let result = SponsorUserOperationResponseLite {
-                    paymaster: None,
-                    paymaster_data: None,
-                    pre_verification_gas: "0x200000".into(), // 2M
-                    verification_gas_limit: "0x200000".into(), // 2M
-                    call_gas_limit: "0x200000".into(),       // 2M
-                    paymaster_verification_gas_limit: "0x0".into(),
-                    paymaster_post_op_gas_limit: "0x0".into(),
-                    max_priority_fee_per_gas: "0x12A05F200".into(), // 5 gwei
-                    max_fee_per_gas: "0x12A05F200".into(),          // 5 gwei
-                    provider_name: "pimlico".into(),
+                println!(
+                    "wa_sponsorUserOperation request JSON:\n{}",
+                    serde_json::to_string_pretty(&root).unwrap_or_else(|_| {
+                        String::from_utf8_lossy(&body).into_owned()
+                    })
+                );
+                let result = if let Some(custom) = &self.sponsor_response_override {
+                    SponsorUserOperationResponseLite {
+                        paymaster: custom.paymaster.as_deref(),
+                        paymaster_data: custom.paymaster_data.as_deref(),
+                        pre_verification_gas: custom.pre_verification_gas.clone(),
+                        verification_gas_limit: custom
+                            .verification_gas_limit
+                            .clone(),
+                        call_gas_limit: custom.call_gas_limit.clone(),
+                        paymaster_verification_gas_limit: custom
+                            .paymaster_verification_gas_limit
+                            .clone(),
+                        paymaster_post_op_gas_limit: custom
+                            .paymaster_post_op_gas_limit
+                            .clone(),
+                        max_priority_fee_per_gas: custom
+                            .max_priority_fee_per_gas
+                            .clone(),
+                        max_fee_per_gas: custom.max_fee_per_gas.clone(),
+                        provider_name: custom.provider_name.clone(),
+                    }
+                } else {
+                    SponsorUserOperationResponseLite {
+                        paymaster: None,
+                        paymaster_data: None,
+                        pre_verification_gas: "0x200000".into(), // 2M
+                        verification_gas_limit: "0x200000".into(), // 2M
+                        call_gas_limit: "0x200000".into(),       // 2M
+                        paymaster_verification_gas_limit: "0x0".into(),
+                        paymaster_post_op_gas_limit: "0x0".into(),
+                        max_priority_fee_per_gas: "0x12A05F200".into(), // 5 gwei
+                        max_fee_per_gas: "0x12A05F200".into(),          // 5 gwei
+                        provider_name: "pimlico".into(),
+                    }
                 };
                 let resp = serde_json::json!({
                     "jsonrpc": "2.0",
@@ -222,6 +287,12 @@ where
             }
             // Execute the inner call directly through the Safe 4337 Module (no sponsorship path)
             "eth_sendUserOperation" => {
+                println!(
+                    "eth_sendUserOperation request JSON:\n{}",
+                    serde_json::to_string_pretty(&root).unwrap_or_else(|_| {
+                        String::from_utf8_lossy(&body).into_owned()
+                    })
+                );
                 let params = params.as_array().ok_or(HttpError::Generic {
                     error_message: "invalid params".into(),
                 })?;
