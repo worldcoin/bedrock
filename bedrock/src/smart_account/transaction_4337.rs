@@ -3,12 +3,13 @@
 //! A transaction can be initialized through a `UserOperation` struct.
 //!
 
-use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
+use crate::primitives::contracts::{EncodedSafeOpStruct, IEntryPoint, UserOperation};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
 use crate::transactions::rpc::{RpcError, RpcProviderName};
 
-use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
+use alloy::primitives::{aliases::{U192, U48}, Address, Bytes, FixedBytes, U256};
+use alloy::sol_types::SolCall;
 use chrono::{Duration, Utc};
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
@@ -18,12 +19,35 @@ use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 /// Operations are valid for this duration from the time they are signed.
 pub const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
 
+/// The backdating window applied to 4337 `UserOperation` signatures.
+///
+/// This matches app-backend's validity window construction to avoid edge cases
+/// around clock skew between sponsorship and submission.
+pub const USER_OPERATION_VALIDITY_BACKDATE_MINUTES: i64 = 10;
+
+pub(crate) fn validity_window_seconds() -> (u64, u64) {
+    let now = Utc::now();
+    let valid_after = (now - Duration::minutes(USER_OPERATION_VALIDITY_BACKDATE_MINUTES))
+        .timestamp()
+        .try_into()
+        .unwrap_or(0);
+    let valid_until = (now + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
+        .timestamp()
+        .try_into()
+        .unwrap_or(0);
+    (valid_after, valid_until)
+}
+
+fn timestamp_to_u48_and_bytes(seconds: u64) -> (U48, [u8; 6]) {
+    let bytes = seconds.to_be_bytes();
+    let mut out = [0u8; 6];
+    out.copy_from_slice(&bytes[2..8]);
+    (U48::from(seconds), out)
+}
+
 impl SafeSmartAccount {
-    /// Signs a `UserOperation` with fresh validity timestamps and sets the composed
-    /// 77-byte signature (`validAfter` + `validUntil` + ECDSA) on the operation.
-    ///
-    /// `validAfter` is set to 0 (immediately valid) and `validUntil` is set to
-    /// [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] from now.
+    /// Signs a `UserOperation` with the provided validity timestamps and sets the
+    /// composed 77-byte signature (`validAfter` + `validUntil` + ECDSA) on the operation.
     ///
     /// # Errors
     /// * Returns `RpcError` if the `EncodedSafeOpStruct` cannot be built from the operation
@@ -32,19 +56,13 @@ impl SafeSmartAccount {
         &self,
         user_operation: &mut UserOperation,
         network: Network,
+        valid_after_seconds: u64,
+        valid_until_seconds: u64,
     ) -> Result<(), RpcError> {
-        // validAfter = 0 (immediately valid)
-        let valid_after_u48 = U48::from(0u64);
-        let valid_after_bytes: [u8; 6] = [0u8; 6];
-
-        // validUntil = now + configured duration
-        let valid_until_seconds = (Utc::now()
-            + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
-        .timestamp();
-        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
-        let valid_until_u48 = U48::from(valid_until_seconds);
-        let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
-        let valid_until_bytes: &[u8] = &valid_until_bytes_full[2..8]; // 48-bit timestamp
+        let (valid_after_u48, valid_after_bytes) =
+            timestamp_to_u48_and_bytes(valid_after_seconds);
+        let (valid_until_u48, valid_until_bytes) =
+            timestamp_to_u48_and_bytes(valid_until_seconds);
 
         let encoded_safe_op = EncodedSafeOpStruct::from_user_op_with_validity(
             user_operation,
@@ -61,7 +79,7 @@ impl SafeSmartAccount {
         // Compose the final signature: validAfter (6 bytes) + validUntil (6 bytes) + ECDSA (65 bytes) = 77 bytes
         let mut full_signature = Vec::with_capacity(77);
         full_signature.extend_from_slice(&valid_after_bytes);
-        full_signature.extend_from_slice(valid_until_bytes);
+        full_signature.extend_from_slice(&valid_until_bytes);
         full_signature.extend_from_slice(&signature.as_bytes()[..]);
 
         user_operation.signature = full_signature.into();
@@ -128,6 +146,37 @@ pub trait Is4337Encodable {
         let mut user_operation =
             self.as_preflight_user_operation(safe_account.wallet_address, metadata)?;
 
+        // Match app-backend semantics by resolving the current sequence from EntryPoint
+        // for the operation's nonce key and by using a real validity window in the
+        // placeholder signature during sponsorship.
+        let nonce_key = {
+            let nonce_bytes = user_operation.nonce.to_be_bytes::<32>();
+            let mut key_bytes = [0u8; 24];
+            key_bytes.copy_from_slice(&nonce_bytes[..24]);
+            U192::from_be_bytes(key_bytes)
+        };
+        let nonce_call = IEntryPoint::getNonceCall {
+            sender: user_operation.sender,
+            key: nonce_key,
+        };
+        let nonce_result = rpc_client
+            .eth_call(network, *ENTRYPOINT_4337, nonce_call.abi_encode().into())
+            .await?;
+        let resolved_nonce: U256 = IEntryPoint::getNonceCall::abi_decode_returns(&nonce_result)
+            .map_err(|e| RpcError::InvalidResponse {
+                error_message: format!("Failed to decode EntryPoint.getNonce response: {e}"),
+            })?;
+        user_operation.nonce = resolved_nonce;
+
+        let (valid_after_seconds, valid_until_seconds) = validity_window_seconds();
+        let (_, valid_after_bytes) = timestamp_to_u48_and_bytes(valid_after_seconds);
+        let (_, valid_until_bytes) = timestamp_to_u48_and_bytes(valid_until_seconds);
+        let mut placeholder_signature = Vec::with_capacity(77);
+        placeholder_signature.extend_from_slice(&valid_after_bytes);
+        placeholder_signature.extend_from_slice(&valid_until_bytes);
+        placeholder_signature.extend_from_slice(&[0xff; 65]);
+        user_operation.signature = placeholder_signature.into();
+
         // 2. Request sponsorship
         let sponsor_response = rpc_client
             .sponsor_user_operation(
@@ -143,7 +192,12 @@ pub trait Is4337Encodable {
         user_operation = user_operation.with_paymaster_data(&sponsor_response);
 
         // 4. Sign the UserOperation with fresh validity timestamps
-        safe_account.sign_user_operation(&mut user_operation, network)?;
+        safe_account.sign_user_operation(
+            &mut user_operation,
+            network,
+            valid_after_seconds,
+            valid_until_seconds,
+        )?;
 
         // 5. Submit UserOperation
         let user_op_hash = rpc_client
@@ -492,20 +546,27 @@ mod tests {
         )
         .unwrap();
 
+        let (valid_after_seconds, valid_until_seconds) = validity_window_seconds();
+
         let mut user_op = UserOperation::new_with_defaults(
             address!("0x4564420674EA68fcc61b463C0494807C759d47e6"),
             U256::ZERO,
             Bytes::from_str("0x1234").unwrap(),
         );
 
-        safe.sign_user_operation(&mut user_op, Network::WorldChain)
-            .unwrap();
+        safe.sign_user_operation(
+            &mut user_op,
+            Network::WorldChain,
+            valid_after_seconds,
+            valid_until_seconds,
+        )
+        .unwrap();
 
         // Signature should be exactly 77 bytes (6 + 6 + 65)
         assert_eq!(user_op.signature.len(), 77);
 
-        // validAfter (first 6 bytes) should be all zeros (immediately valid)
-        assert_eq!(&user_op.signature[0..6], &[0u8; 6]);
+        // validAfter (first 6 bytes) should be populated with the expected backdated timestamp
+        assert_ne!(&user_op.signature[0..6], &[0u8; 6]);
 
         // validUntil (next 6 bytes) should be non-zero (30 minutes from now)
         let valid_until_bytes = &user_op.signature[6..12];
@@ -513,7 +574,7 @@ mod tests {
 
         // The timestamps should be extractable from the signed operation
         let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
-        assert_eq!(valid_after, U48::from(0u64));
-        assert!(valid_until > U48::from(0u64));
+        assert_eq!(valid_after, U48::from(valid_after_seconds));
+        assert_eq!(valid_until, U48::from(valid_until_seconds));
     }
 }

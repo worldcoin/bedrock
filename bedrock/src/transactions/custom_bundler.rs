@@ -10,6 +10,7 @@
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, FixedBytes};
 use bedrock_macros::bedrock_export;
+use chrono::{Duration as ChronoDuration, Utc};
 use once_cell::sync::OnceCell;
 use serde_json::Value;
 use std::str::FromStr;
@@ -27,6 +28,19 @@ use crate::{
 
 /// Global reqwest client for direct HTTP requests to bundler endpoints.
 static REQWEST_CLIENT: OnceCell<reqwest::Client> = OnceCell::new();
+
+fn validity_window_seconds() -> (u64, u64) {
+    let now = Utc::now();
+    let valid_after = (now - ChronoDuration::minutes(10))
+        .timestamp()
+        .try_into()
+        .unwrap_or(0);
+    let valid_until = (now + ChronoDuration::minutes(30))
+        .timestamp()
+        .try_into()
+        .unwrap_or(0);
+    (valid_after, valid_until)
+}
 
 // ── URL validation ────────────────────────────────────────────────────────────
 
@@ -255,13 +269,19 @@ impl SafeSmartAccount {
 
         crate::info!("bundler_sponsored_user_op.sending bundler_host={bundler_host}");
 
-        self.sign_user_operation(&mut user_op, Network::WorldChain)
-            .map_err(|e| {
-                crate::error!("bundler_sponsored_user_op.sign_failed error={e}");
-                TransactionError::Generic {
-                    error_message: format!("Failed to sign user operation: {e}"),
-                }
-            })?;
+        let (valid_after_seconds, valid_until_seconds) = validity_window_seconds();
+        self.sign_user_operation(
+            &mut user_op,
+            Network::WorldChain,
+            valid_after_seconds,
+            valid_until_seconds,
+        )
+        .map_err(|e| {
+            crate::error!("bundler_sponsored_user_op.sign_failed error={e}");
+            TransactionError::Generic {
+                error_message: format!("Failed to sign user operation: {e}"),
+            }
+        })?;
 
         let user_op_hash =
             send_user_operation_to_url(&rpc_url, &user_op, *ENTRYPOINT_4337)

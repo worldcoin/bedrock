@@ -360,6 +360,8 @@ sol! {
             address aggregator;
             bytes signature;
         }
+
+        function getNonce(address sender, uint192 key) external view returns (uint256 nonce);
     }
 
     contract IPBHEntryPoint {
