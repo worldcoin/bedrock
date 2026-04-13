@@ -14,8 +14,8 @@ use bedrock::{
 use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 #[tokio::test]
-async fn test_transaction_erc20_approve_full_flow_sets_allowance(
-) -> anyhow::Result<()> {
+async fn test_transaction_erc20_approve_full_flow_sets_allowance() -> anyhow::Result<()>
+{
     // 1) Spin up anvil fork
     let anvil = setup_anvil();
 
@@ -28,7 +28,9 @@ async fn test_transaction_erc20_approve_full_flow_sets_allowance(
         .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());
 
-    provider.anvil_set_balance(owner, U256::from(1e18 as u64)).await?;
+    provider
+        .anvil_set_balance(owner, U256::from(1e18 as u64))
+        .await?;
 
     // 3) Deploy Safe with 4337 module enabled
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
@@ -57,7 +59,10 @@ async fn test_transaction_erc20_approve_full_flow_sets_allowance(
     let spender = PrivateKeySigner::random().address();
     let amount = U256::from(10u128.pow(18));
 
-    assert_eq!(token.allowance(safe_address, spender).call().await?, U256::ZERO);
+    assert_eq!(
+        token.allowance(safe_address, spender).call().await?,
+        U256::ZERO
+    );
 
     // 6) Install mocked HTTP client that routes sponsorship and send calls to Anvil
     let client = AnvilBackedHttpClient::new(provider.clone());
