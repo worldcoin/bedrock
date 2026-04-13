@@ -14,7 +14,7 @@ use crate::{
     },
     transactions::{
         contracts::{
-            erc20::{Erc20, TransferAssociation},
+            erc20::{Erc20, Erc20Approve, TransferAssociation},
             usd_legacy_vault::Permit2Data,
             world_gift_manager::WorldGiftManager,
         },
@@ -143,7 +143,7 @@ impl SafeSmartAccount {
             Address::parse_from_ffi(spender_address, "spender_address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
 
-        let transaction = Erc20::approve(token_address, spender_address, amount);
+        let transaction = Erc20Approve::new(token_address, spender_address, amount);
 
         let provider = RpcProviderName::Any;
 

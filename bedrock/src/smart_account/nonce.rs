@@ -48,6 +48,8 @@ pub enum TransactionTypeId {
     WLDVaultMigration = 139,
     /// USD Vault migration to ERC-4626 vault
     USDVaultMigration = 140,
+    /// Standard ERC-20 approve
+    Erc20Approve = 141,
 }
 
 impl TransactionTypeId {
