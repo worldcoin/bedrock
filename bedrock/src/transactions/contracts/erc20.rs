@@ -199,6 +199,76 @@ impl Is4337Encodable for Erc20 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Erc20Approve (standalone ERC-20 approve via 4337)
+// ---------------------------------------------------------------------------
+
+/// Represents a standard ERC-20 `approve(spender, value)` call executed as a
+/// 4337 `UserOperation`.
+///
+/// This is distinct from [`Erc20`] (which is for transfers) and from
+/// [`super::permit2::Permit2Approve`] (which calls the Permit2 contract).
+pub struct Erc20Approve {
+    /// The ABI-encoded calldata for `IERC20.approve(spender, value)`.
+    call_data: Vec<u8>,
+    /// The address of the ERC-20 token contract.
+    token_address: Address,
+}
+
+impl Erc20Approve {
+    /// Creates a new ERC-20 approve operation.
+    ///
+    /// # Arguments
+    /// * `token_address` - The address of the ERC-20 token contract.
+    /// * `spender` - The spender being approved.
+    /// * `value` - The approval amount.
+    #[must_use]
+    pub fn new(token_address: Address, spender: Address, value: U256) -> Self {
+        let call_data = IErc20::approveCall { spender, value }.abi_encode();
+
+        Self {
+            call_data,
+            token_address,
+        }
+    }
+}
+
+impl Is4337Encodable for Erc20Approve {
+    type MetadataArg = ();
+
+    fn as_execute_user_op_call_data(&self) -> Bytes {
+        ISafe4337Module::executeUserOpCall {
+            to: self.token_address,
+            value: U256::ZERO,
+            data: self.call_data.clone().into(),
+            operation: SafeOperation::Call as u8,
+        }
+        .abi_encode()
+        .into()
+    }
+
+    fn as_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+        _metadata: Option<Self::MetadataArg>,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let call_data = self.as_execute_user_op_call_data();
+
+        let key = NonceKeyV1::new(
+            TransactionTypeId::Erc20Approve,
+            InstructionFlag::Default,
+            [0u8; 10],
+        );
+        let nonce = key.encode_with_sequence(0);
+
+        Ok(UserOperation::new_with_defaults(
+            wallet_address,
+            nonce,
+            call_data,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::primitives::bytes;
@@ -222,6 +292,42 @@ mod tests {
         let expected_call_data = bytes!("0x7bb374280000000000000000000000002cfc85d8e48f8eab294be644d9e25c30308630030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb0000000000000000000000001234567890123456789012345678901234567890000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000");
 
         assert_eq!(execute_user_op_call_data, expected_call_data);
+    }
+
+    #[test]
+    fn test_erc20_approve_call_data() {
+        let approve = Erc20Approve::new(
+            Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap(),
+            Address::from_str("0x1234567890123456789012345678901234567890").unwrap(),
+            U256::from(1),
+        );
+
+        let execute_user_op_call_data = approve.as_execute_user_op_call_data();
+
+        let expected_call_data = bytes!("0x7bb374280000000000000000000000002cfc85d8e48f8eab294be644d9e25c30308630030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044095ea7b30000000000000000000000001234567890123456789012345678901234567890000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000");
+
+        assert_eq!(execute_user_op_call_data, expected_call_data);
+    }
+
+    #[test]
+    fn test_erc20_approve_preflight_nonce_type_id() {
+        let token =
+            Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
+        let spender =
+            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
+        let approve = Erc20Approve::new(token, spender, U256::MAX);
+
+        let wallet =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let user_op = approve.as_preflight_user_operation(wallet, None).unwrap();
+
+        let be: [u8; 32] = user_op.nonce.to_be_bytes();
+
+        assert_eq!(&be[0..=4], BEDROCK_NONCE_PREFIX_CONST);
+        assert_eq!(be[5], TransactionTypeId::Erc20Approve as u8);
+        assert_eq!(be[6], 0u8);
+        assert_eq!(&be[7..=16], &[0u8; 10]);
+        assert_eq!(&be[24..32], &[0u8; 8]);
     }
 
     #[test]
