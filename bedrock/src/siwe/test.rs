@@ -334,7 +334,7 @@ fn address_placeholder_replaced_in_address_line() {
     let msg = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://example.com",
+        &vec!["https://example.com".to_string()],
         "https://example.com",
     )
     .unwrap();
@@ -367,7 +367,7 @@ fn address_placeholder_only_first_occurrence() {
     let msg = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://example.com",
+        &vec!["https://example.com".to_string()],
         "https://example.com",
     )
     .unwrap();
@@ -392,7 +392,7 @@ fn no_placeholder_still_parses() {
     let msg = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://example.com",
+        &vec!["https://example.com".to_string()],
         "https://example.com",
     )
     .unwrap();
@@ -681,7 +681,29 @@ fn authorized_host_matches_domain_and_uri() {
     let msg = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://app.example.com/registered",
+        &vec!["https://app.example.com/registered".to_string()],
+        "https://app.example.com/current",
+    )
+    .unwrap();
+    assert_eq!(msg.domain, "app.example.com");
+}
+
+#[test]
+fn authorized_host_matches_from_list_of_authorized_urls() {
+    let account = test_smart_account();
+    let raw_msg = make_siwe_raw(
+        "app.example.com",
+        "https://app.example.com/callback",
+        &now_rfc3339(),
+    );
+    let msg = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec![
+            "https://anotherdomain.com".to_string(),
+            "https://example.com".to_string(),
+            "https://app.example.com/registered".to_string(),
+        ],
         "https://app.example.com/current",
     )
     .unwrap();
@@ -696,7 +718,7 @@ fn rejects_mismatched_authorized_and_querying_hosts() {
     let err = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://app.example.com",
+        &vec!["https://example.com".to_string()],
         "https://evil.com",
     )
     .unwrap_err();
@@ -710,7 +732,7 @@ fn rejects_message_domain_not_matching_authorized_host() {
     let err = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://app.example.com",
+        &vec!["https://app.example.com".to_string()],
         "https://app.example.com",
     )
     .unwrap_err();
@@ -725,7 +747,7 @@ fn rejects_message_uri_not_matching_authorized_host() {
     let err = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://app.example.com",
+        &vec!["https://app.example.com".to_string()],
         "https://app.example.com",
     )
     .unwrap_err();
@@ -743,7 +765,7 @@ fn domain_with_port_matches_authorized_authority() {
     let msg = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://app.example.com:8080",
+        &vec!["https://app.example.com:8080".to_string()],
         "https://app.example.com:8080",
     )
     .unwrap();
@@ -761,7 +783,7 @@ fn rejects_different_port_on_same_host() {
     let err = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://app.example.com:8080",
+        &vec!["https://app.example.com:8080".to_string()],
         "https://app.example.com:8080",
     )
     .unwrap_err();
@@ -779,7 +801,7 @@ fn rejects_querying_url_with_different_port() {
     let err = SiweMessage::from_str_with_account(
         &raw_msg,
         &account,
-        "https://app.example.com:8080",
+        &vec!["https://app.example.com:8080".to_string()],
         "https://app.example.com:9090",
     )
     .unwrap_err();

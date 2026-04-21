@@ -391,17 +391,11 @@ impl SiweMessage {
     pub fn from_str_with_account(
         s: &str,
         smart_account: &SafeSmartAccount,
-        authorized_url: &str,
+        authorized_urls: &Vec<String>,
         querying_url: &str,
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
 
-        let (expected_authority, _) = parse_authority(authorized_url).map_err(|e| {
-            PrimitiveError::InvalidInput {
-                attribute: "authorized_url".to_string(),
-                error_message: e.to_string(),
-            }
-        })?;
         let (current_authority, _) = parse_authority(querying_url).map_err(|e| {
             PrimitiveError::InvalidInput {
                 attribute: "querying_url".to_string(),
@@ -409,9 +403,23 @@ impl SiweMessage {
             }
         })?;
 
-        if expected_authority != current_authority {
-            return Err(SiweError::UnauthorizedHost);
-        }
+        let expected_authority: Authority =
+            {
+                let mut found = None;
+                for authorized_url in authorized_urls {
+                    let (expected_authority, _) = parse_authority(authorized_url)
+                        .map_err(|e| PrimitiveError::InvalidInput {
+                            attribute: "authorized_url".to_string(),
+                            error_message: e.to_string(),
+                        })?;
+
+                    if expected_authority == current_authority {
+                        found = Some(expected_authority);
+                        break;
+                    }
+                }
+                found.ok_or(SiweError::UnauthorizedHost)?
+            };
 
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
