@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.14](https://github.com/worldcoin/bedrock/compare/0.2.13...0.2.14) - 2026-04-22
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.2.13](https://github.com/worldcoin/bedrock/compare/0.2.12...0.2.13) - 2026-04-21
 
 ### Added
