@@ -48,9 +48,12 @@ pub enum RpcMethod {
     /// Queries the status of a `UserOperation`
     #[serde(rename = "wa_getUserOperationReceipt")]
     WaGetUserOperationReceipt,
-    /// Submit a signed `UserOperation`
+    /// Submit a signed `UserOperation` (V1)
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
+    /// Submit a signed `UserOperation` (V2)
+    #[serde(rename = "eth_sendUserOperation")]
+    SendUserOperationV2,
     /// Make a read call to a smart contract
     #[serde(rename = "eth_call")]
     EthCall,
@@ -91,7 +94,7 @@ impl RpcMethod {
             Self::SponsorUserOperation => "wa_sponsorUserOperation",
             Self::PmSponsorUserOperation => "pm_sponsorUserOperation",
             Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
-            Self::SendUserOperation => "eth_sendUserOperation",
+            Self::SendUserOperation | Self::SendUserOperationV2 => "eth_sendUserOperation",
             Self::EthCall => "eth_call",
             Self::SupportedEntryPoints => "eth_supportedEntryPoints",
         }
@@ -308,7 +311,7 @@ impl RpcClient {
         let version = match method {
             RpcMethod::EthCall
             | RpcMethod::PmSponsorUserOperation
-            | RpcMethod::SendUserOperation => "v2",
+            | RpcMethod::SendUserOperationV2 => "v2",
             _ => "v1",
         };
         format!("/{version}/rpc/{}", network.network_name())
@@ -468,6 +471,45 @@ impl RpcClient {
 
         let result: String = self
             .rpc_call(network, RpcMethod::SendUserOperation, params, provider)
+            .await?;
+
+        FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            error_message: format!("Invalid userOpHash format: {e}"),
+        })
+    }
+
+    /// Submits a signed `UserOperation` via the V2 RPC endpoint (`/v2/rpc/{network}`).
+    ///
+    /// Identical wire format to [`send_user_operation`] but routed to the V2 path.
+    /// Use this from V2 execution flows (e.g. `sign_and_execute_v2`) so that
+    /// V1 callers remain fully on the legacy path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The HTTP request fails
+    /// - The request serialization fails
+    /// - The response parsing fails
+    /// - The RPC returns an error response
+    /// - The returned user operation hash is invalid
+    pub async fn send_user_operation_v2(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entrypoint: Address,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let params = vec![
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+            serde_json::Value::String(format!("{entrypoint:?}")),
+        ];
+
+        let result: String = self
+            .rpc_call(
+                network,
+                RpcMethod::SendUserOperationV2,
+                params,
+                RpcProviderName::Any,
+            )
             .await?;
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
@@ -788,8 +830,8 @@ mod tests {
     fn test_rpc_endpoint_v2_methods_route_to_v2() {
         let network = Network::WorldChain;
         for method in [
-            RpcMethod::SendUserOperation,
             RpcMethod::PmSponsorUserOperation,
+            RpcMethod::SendUserOperationV2,
             RpcMethod::EthCall,
         ] {
             let url = RpcClient::rpc_endpoint(network, &method);
@@ -805,6 +847,7 @@ mod tests {
         let network = Network::WorldChain;
         for method in [
             RpcMethod::SponsorUserOperation,
+            RpcMethod::SendUserOperation,
             RpcMethod::WaGetUserOperationReceipt,
             RpcMethod::SupportedEntryPoints,
         ] {
@@ -818,10 +861,10 @@ mod tests {
 
     #[test]
     fn test_rpc_endpoint_includes_network_name() {
-        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperation);
+        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperationV2);
         assert_eq!(url, "/v2/rpc/worldchain");
 
-        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SponsorUserOperation);
+        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperation);
         assert_eq!(url, "/v1/rpc/worldchain");
     }
 

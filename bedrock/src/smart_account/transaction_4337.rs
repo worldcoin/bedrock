@@ -199,12 +199,7 @@ pub trait Is4337Encodable {
 
         // 5. Submit UserOperation via eth_sendUserOperation (V2)
         let user_op_hash = rpc_client
-            .send_user_operation(
-                network,
-                &user_operation,
-                *ENTRYPOINT_4337,
-                RpcProviderName::Any,
-            )
+            .send_user_operation_v2(network, &user_operation, *ENTRYPOINT_4337)
             .await?;
 
         Ok(user_op_hash)
