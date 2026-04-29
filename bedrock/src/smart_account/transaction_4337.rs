@@ -77,28 +77,24 @@ pub trait Is4337Encodable {
     /// constructing a preflight `UserOperation`.
     type MetadataArg;
 
-    /// Converts the object into a `callData` for the `executeUserOp` method. This is the inner-most `calldata`.
-    ///
-    /// # Errors
-    /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn as_execute_user_op_call_data(&self) -> Bytes;
+    /// Builds the `callData` for the `executeUserOp` method. This is the inner-most calldata.
+    fn build_execute_user_op_call_data(&self) -> Bytes;
 
-    /// Converts the object into a preflight `UserOperation` for use with the `Safe4337Module`.
+    /// Builds a preflight `UserOperation` for use with the `Safe4337Module`.
     ///
-    /// A preflight operation is defined as having empty gas & paymaster data and a dummy signature.
-    ///
-    /// The preflight operation is sent to the RPC to request sponsorship.
+    /// A preflight operation has zeroed gas fields and a dummy signature.
+    /// It is sent to the sponsor endpoint to request gas estimation and paymaster data.
     ///
     /// # Errors
-    /// - Will throw a parsing error if any of the provided attributes are invalid.
-    fn as_preflight_user_operation(
+    /// - Returns an error if any of the provided attributes are invalid.
+    fn build_preflight_user_operation(
         &self,
         wallet_address: Address,
         metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError>;
 
     /// Signs and executes a 4337 `UserOperation` by:
-    /// 1. Creating a preflight `UserOperation`
+    /// 1. Building a preflight `UserOperation`
     /// 2. Requesting sponsorship via `wa_sponsorUserOperation`
     /// 3. Merging paymaster data into the `UserOperation`
     /// 4. Signing the `UserOperation`
@@ -126,7 +122,7 @@ pub trait Is4337Encodable {
 
         // 1. Create preflight UserOperation using default metadata for this implementation
         let mut user_operation =
-            self.as_preflight_user_operation(safe_account.wallet_address, metadata)?;
+            self.build_preflight_user_operation(safe_account.wallet_address, metadata)?;
 
         // 2. Request sponsorship
         let sponsor_response = rpc_client

@@ -136,7 +136,7 @@ impl WorldGiftManager {
 impl Is4337Encodable for WorldGiftManager {
     type MetadataArg = ();
 
-    fn as_execute_user_op_call_data(&self) -> Bytes {
+    fn build_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             to: self.to,
             value: self.value,
@@ -147,12 +147,12 @@ impl Is4337Encodable for WorldGiftManager {
         .into()
     }
 
-    fn as_preflight_user_operation(
+    fn build_preflight_user_operation(
         &self,
         wallet_address: Address,
         _metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.as_execute_user_op_call_data();
+        let call_data = self.build_execute_user_op_call_data();
 
         let mut metadata_bytes = [0u8; 10];
         metadata_bytes.copy_from_slice(&self.gift_id[0..10]);
@@ -215,7 +215,7 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = gift.as_preflight_user_operation(wallet, None).unwrap();
+        let user_op = gift.build_preflight_user_operation(wallet, None).unwrap();
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
@@ -241,7 +241,7 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = gift.as_preflight_user_operation(wallet, None).unwrap();
+        let user_op = gift.build_preflight_user_operation(wallet, None).unwrap();
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
@@ -263,7 +263,7 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = gift.as_preflight_user_operation(wallet, None).unwrap();
+        let user_op = gift.build_preflight_user_operation(wallet, None).unwrap();
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();

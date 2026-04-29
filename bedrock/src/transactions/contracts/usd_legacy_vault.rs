@@ -327,7 +327,7 @@ impl UsdLegacyVault {
 impl Is4337Encodable for UsdLegacyVault {
     type MetadataArg = ();
 
-    fn as_execute_user_op_call_data(&self) -> Bytes {
+    fn build_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             to: self.to,
             value: U256::ZERO,
@@ -338,12 +338,12 @@ impl Is4337Encodable for UsdLegacyVault {
         .into()
     }
 
-    fn as_preflight_user_operation(
+    fn build_preflight_user_operation(
         &self,
         wallet_address: Address,
         _metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.as_execute_user_op_call_data();
+        let call_data = self.build_execute_user_op_call_data();
 
         let key = NonceKeyV1::new(self.action, InstructionFlag::Default, [0u8; 10]);
         let nonce = key.encode_with_sequence(0);
