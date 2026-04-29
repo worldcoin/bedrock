@@ -39,9 +39,12 @@ pub enum Id {
 /// Supported RPC methods in Bedrock
 #[derive(Debug, Clone, Serialize)]
 pub enum RpcMethod {
-    /// Request sponsorship for a `UserOperation`
+    /// Request sponsorship for a `UserOperation` (V1, app-backend-main)
     #[serde(rename = "wa_sponsorUserOperation")]
     SponsorUserOperation,
+    /// Request sponsorship for a `UserOperation` (V2, temporal-apps)
+    #[serde(rename = "pm_sponsorUserOperation")]
+    PmSponsorUserOperation,
     /// Queries the status of a `UserOperation`
     #[serde(rename = "wa_getUserOperationReceipt")]
     WaGetUserOperationReceipt,
@@ -86,6 +89,7 @@ impl RpcMethod {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::SponsorUserOperation => "wa_sponsorUserOperation",
+            Self::PmSponsorUserOperation => "pm_sponsorUserOperation",
             Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
             Self::SendUserOperation => "eth_sendUserOperation",
             Self::EthCall => "eth_call",
@@ -216,6 +220,49 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
+/// Response from `pm_sponsorUserOperation` (temporal-apps V2)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PmSponsorUserOperationResponse {
+    /// Sponsorship mode; currently always "bundler-sponsored"
+    pub mode: String,
+    /// Call gas limit
+    pub call_gas_limit: U128,
+    /// Verification gas limit
+    pub verification_gas_limit: U128,
+    /// Pre-verification gas
+    pub pre_verification_gas: U256,
+    /// Max fee per gas
+    pub max_fee_per_gas: U128,
+    /// Max priority fee per gas
+    pub max_priority_fee_per_gas: U128,
+    /// Paymaster address
+    pub paymaster: Option<Address>,
+    /// Paymaster verification gas limit
+    pub paymaster_verification_gas_limit: U128,
+    /// Paymaster post-op gas limit
+    pub paymaster_post_op_gas_limit: U128,
+    /// Paymaster data
+    pub paymaster_data: Option<Bytes>,
+}
+
+impl From<PmSponsorUserOperationResponse> for SponsorUserOperationResponse {
+    fn from(r: PmSponsorUserOperationResponse) -> Self {
+        Self {
+            paymaster: r.paymaster,
+            paymaster_data: r.paymaster_data,
+            pre_verification_gas: r.pre_verification_gas,
+            verification_gas_limit: r.verification_gas_limit,
+            call_gas_limit: r.call_gas_limit,
+            paymaster_verification_gas_limit: Some(r.paymaster_verification_gas_limit),
+            paymaster_post_op_gas_limit: Some(r.paymaster_post_op_gas_limit),
+            max_priority_fee_per_gas: r.max_priority_fee_per_gas,
+            max_fee_per_gas: r.max_fee_per_gas,
+            provider_name: RpcProviderName::Any,
+        }
+    }
+}
+
 /// Response from `wa_getUserOperationReceipt`
 #[derive(Debug, Deserialize, uniffi::Record, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -259,7 +306,9 @@ impl RpcClient {
     /// Constructs the RPC endpoint URL for the specified network and method
     fn rpc_endpoint(network: Network, method: &RpcMethod) -> String {
         let version = match method {
-            RpcMethod::EthCall => "v2",
+            RpcMethod::EthCall
+            | RpcMethod::PmSponsorUserOperation
+            | RpcMethod::SendUserOperation => "v2",
             _ => "v1",
         };
         format!("/{version}/rpc/{}", network.network_name())
@@ -365,6 +414,34 @@ impl RpcClient {
 
         self.rpc_call(network, RpcMethod::SponsorUserOperation, params, provider)
             .await
+    }
+
+    /// Requests sponsorship for a `UserOperation` via `pm_sponsorUserOperation` (temporal-apps V2)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The HTTP request fails
+    /// - The request serialization fails
+    /// - The response parsing fails
+    /// - The RPC returns an error response
+    pub async fn pm_sponsor_user_operation(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entry_point: Address,
+    ) -> Result<PmSponsorUserOperationResponse, RpcError> {
+        let params = vec![
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+            serde_json::Value::String(format!("{entry_point:?}")),
+        ];
+        self.rpc_call(
+            network,
+            RpcMethod::PmSponsorUserOperation,
+            params,
+            RpcProviderName::Any,
+        )
+        .await
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
