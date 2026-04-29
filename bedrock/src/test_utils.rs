@@ -35,7 +35,7 @@ struct SponsorUserOperationResponseLite<'a> {
     provider_name: String,
 }
 
-/// Represents a response from '`pm_sponsorUserOperation`' rpc method (temporal-apps V2)
+/// Represents a response from '`pm_sponsorUserOperation`' rpc method (V2)
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PmSponsorUserOperationResponseLite<'a> {
@@ -215,7 +215,7 @@ where
             .unwrap_or(serde_json::Value::Null);
 
         match method {
-            // Respond with minimal, sane gas values and no paymaster (temporal-apps V2)
+            // Respond with minimal, sane gas values and no paymaster (V2)
             "pm_sponsorUserOperation" => {
                 let result = PmSponsorUserOperationResponseLite {
                     mode: "bundler-sponsored",
