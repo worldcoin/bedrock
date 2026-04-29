@@ -32,7 +32,7 @@ sol! {
 /// Enables operations with the ERC-20 token contract.
 pub struct Erc20 {
     /// The inner call data for the ERC-20 `transferCall` function.
-    call_data: Vec<u8>,
+    call_data: Bytes,
     /// The address of the ERC-20 token contract.
     token_address: Address,
 }
@@ -46,7 +46,7 @@ impl Erc20 {
     /// * `value` - The amount of tokens to transfer.
     #[must_use]
     pub fn new(token_address: Address, to: Address, value: U256) -> Self {
-        let call_data = IErc20::transferCall { to, value }.abi_encode();
+        let call_data = IErc20::transferCall { to, value }.abi_encode().into();
 
         Self {
             call_data,
@@ -163,7 +163,7 @@ impl Is4337Encodable for Erc20 {
             // The token address
             to: self.token_address,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: SafeOperation::Call as u8,
         }
         .abi_encode()

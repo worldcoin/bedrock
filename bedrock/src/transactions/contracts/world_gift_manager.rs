@@ -50,7 +50,7 @@ pub struct WorldGiftManager {
     gift_id: [u8; 14],
     tx_type_id: TransactionTypeId,
     /// The inner call data for the function.
-    call_data: Vec<u8>,
+    call_data: Bytes,
     operation: SafeOperation,
     to: Address,
     value: U256,
@@ -97,7 +97,7 @@ impl WorldGiftManager {
         Self {
             gift_id,
             tx_type_id: TransactionTypeId::WorldGiftManagerGift,
-            call_data: bundle.data,
+            call_data: bundle.data.into(),
             operation: bundle.operation,
             to: bundle.to,
             value: bundle.value,
@@ -107,7 +107,7 @@ impl WorldGiftManager {
     /// Creates a redeem operation.
     #[must_use]
     pub fn redeem(gift_id: U256) -> Self {
-        let call_data = IWorldGiftManager::redeemCall { giftId: gift_id }.abi_encode();
+        let call_data = IWorldGiftManager::redeemCall { giftId: gift_id }.abi_encode().into();
         Self {
             gift_id: u256_to_gift_id(gift_id),
             tx_type_id: TransactionTypeId::WorldGiftManagerRedeem,
@@ -121,7 +121,7 @@ impl WorldGiftManager {
     /// Creates a cancel operation.
     #[must_use]
     pub fn cancel(gift_id: U256) -> Self {
-        let call_data = IWorldGiftManager::cancelCall { giftId: gift_id }.abi_encode();
+        let call_data = IWorldGiftManager::cancelCall { giftId: gift_id }.abi_encode().into();
         Self {
             gift_id: u256_to_gift_id(gift_id),
             tx_type_id: TransactionTypeId::WorldGiftManagerCancel,
@@ -140,7 +140,7 @@ impl Is4337Encodable for WorldGiftManager {
         ISafe4337Module::executeUserOpCall {
             to: self.to,
             value: self.value,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: self.operation as u8,
         }
         .abi_encode()

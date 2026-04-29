@@ -71,7 +71,7 @@ sol! {
 #[derive(Debug)]
 pub struct UsdLegacyVault {
     /// The encoded call data for the operation.
-    pub call_data: Vec<u8>,
+    pub call_data: Bytes,
     /// The action type.
     action: TransactionTypeId,
     /// The target address for the operation.
@@ -316,7 +316,7 @@ impl UsdLegacyVault {
         let bundle = MultiSend::build_bundle(&entries);
 
         Ok(Self {
-            call_data: bundle.data,
+            call_data: bundle.data.into(),
             action: TransactionTypeId::USDVaultMigration,
             to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
             operation: SafeOperation::DelegateCall,
@@ -331,7 +331,7 @@ impl Is4337Encodable for UsdLegacyVault {
         ISafe4337Module::executeUserOpCall {
             to: self.to,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: self.operation as u8,
         }
         .abi_encode()

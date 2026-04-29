@@ -105,7 +105,7 @@ sol! {
 /// Reference: <https://docs.uniswap.org/contracts/permit2/reference/allowance-transfer#approve>
 pub struct Permit2Approve {
     /// The ABI-encoded calldata for `IAllowanceTransfer.approve(token, spender, amount, expiration)`.
-    call_data: Vec<u8>,
+    call_data: Bytes,
 }
 
 impl Permit2Approve {
@@ -131,7 +131,7 @@ impl Permit2Approve {
         }
         .abi_encode();
 
-        Self { call_data }
+        Self { call_data: call_data.into() }
     }
 }
 
@@ -142,7 +142,7 @@ impl Is4337Encodable for Permit2Approve {
         ISafe4337Module::executeUserOpCall {
             to: PERMIT2_ADDRESS,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: SafeOperation::Call as u8,
         }
         .abi_encode()
@@ -180,7 +180,7 @@ impl Is4337Encodable for Permit2Approve {
 /// Builds a single 4337 `UserOperation` that grants a spender contract max allowance
 /// on each of the given token contracts.
 pub struct BatchPermit2Approval {
-    call_data: Vec<u8>,
+    call_data: Bytes,
     to: Address,
     operation: SafeOperation,
 }
@@ -208,7 +208,7 @@ impl BatchPermit2Approval {
         let bundle = MultiSend::build_bundle(&entries);
 
         Self {
-            call_data: bundle.data,
+            call_data: bundle.data.into(),
             to: bundle.to,
             operation: bundle.operation,
         }
@@ -222,7 +222,7 @@ impl Is4337Encodable for BatchPermit2Approval {
         ISafe4337Module::executeUserOpCall {
             to: self.to,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: self.operation as u8,
         }
         .abi_encode()

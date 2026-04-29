@@ -44,7 +44,7 @@ sol! {
 #[derive(Debug)]
 pub struct Erc4626Vault {
     /// The encoded call data for the operation.
-    pub call_data: Vec<u8>,
+    pub call_data: Bytes,
     /// The action type.
     action: TransactionTypeId,
     /// The target address for the operation.
@@ -204,7 +204,7 @@ impl Erc4626Vault {
         let bundle = MultiSend::build_bundle(&entries);
 
         Ok(Self {
-            call_data: bundle.data,
+            call_data: bundle.data.into(),
             action: TransactionTypeId::ERC4626Deposit,
             to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
             operation: SafeOperation::DelegateCall,
@@ -291,7 +291,7 @@ impl Erc4626Vault {
             .abi_encode();
 
             return Ok(Self {
-                call_data: redeem_data,
+                call_data: redeem_data.into(),
                 action: TransactionTypeId::ERC4626Redeem,
                 to: vault_address,
                 operation: SafeOperation::Call,
@@ -308,7 +308,7 @@ impl Erc4626Vault {
         .abi_encode();
 
         Ok(Self {
-            call_data: withdraw_data,
+            call_data: withdraw_data.into(),
             action: TransactionTypeId::ERC4626Withdraw,
             to: vault_address,
             operation: SafeOperation::Call,
@@ -375,7 +375,7 @@ impl Erc4626Vault {
         .abi_encode();
 
         Ok(Self {
-            call_data: redeem_data,
+            call_data: redeem_data.into(),
             action: TransactionTypeId::ERC4626Redeem,
             to: vault_address,
             operation: SafeOperation::Call,
@@ -391,7 +391,7 @@ impl Is4337Encodable for Erc4626Vault {
         ISafe4337Module::executeUserOpCall {
             to: self.to,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: self.operation as u8,
         }
         .abi_encode()
