@@ -39,10 +39,10 @@ pub enum Id {
 /// Supported RPC methods in Bedrock
 #[derive(Debug, Clone, Serialize)]
 pub enum RpcMethod {
-    /// Request sponsorship for a `UserOperation` (V1, app-backend-main)
+    /// Request sponsorship for a `UserOperation` (V1)
     #[serde(rename = "wa_sponsorUserOperation")]
     SponsorUserOperation,
-    /// Request sponsorship for a `UserOperation` (V2, temporal-apps)
+    /// Request sponsorship for a `UserOperation` (V2)
     #[serde(rename = "pm_sponsorUserOperation")]
     PmSponsorUserOperation,
     /// Queries the status of a `UserOperation`
@@ -220,7 +220,7 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
-/// Response from `pm_sponsorUserOperation` (temporal-apps V2)
+/// Response from `pm_sponsorUserOperation` (V2)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PmSponsorUserOperationResponse {
@@ -289,7 +289,7 @@ pub struct WaGetUserOperationReceiptResponse {
 
 /// RPC client for handling 4337 `UserOperation` requests
 ///
-/// This client communicates with the app-backend's RPC endpoint at `/v1/rpc/{network}`.
+/// This client communicates with the RPC endpoint at `/v1/rpc/{network}` and `/v2/rpc/{network}`.
 pub struct RpcClient {
     http_client: Arc<dyn AuthenticatedHttpClient>,
 }
@@ -416,7 +416,7 @@ impl RpcClient {
             .await
     }
 
-    /// Requests sponsorship for a `UserOperation` via `pm_sponsorUserOperation` (temporal-apps V2)
+    /// Requests sponsorship for a `UserOperation` via `pm_sponsorUserOperation` (V2)
     ///
     /// # Errors
     ///

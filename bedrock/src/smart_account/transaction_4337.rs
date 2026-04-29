@@ -97,7 +97,7 @@ pub trait Is4337Encodable {
 
     /// Signs and executes a 4337 `UserOperation` by:
     /// 1. Building a preflight `UserOperation`
-    /// 2. Requesting sponsorship via `wa_sponsorUserOperation` (app-backend-main V1)
+    /// 2. Requesting sponsorship via `wa_sponsorUserOperation` (V1)
     /// 3. Merging paymaster data into the `UserOperation`
     /// 4. Signing the `UserOperation`
     /// 5. Submitting via `eth_sendUserOperation`
@@ -156,12 +156,12 @@ pub trait Is4337Encodable {
         Ok(user_op_hash)
     }
 
-    /// Signs and executes a 4337 `UserOperation` via the temporal-apps V2 RPC endpoints:
+    /// Signs and executes a 4337 `UserOperation` via the V2 RPC endpoints:
     /// 1. Building a preflight `UserOperation`
-    /// 2. Requesting sponsorship via `pm_sponsorUserOperation` (temporal-apps V2)
+    /// 2. Requesting sponsorship via `pm_sponsorUserOperation` (V2)
     /// 3. Merging paymaster data into the `UserOperation`
     /// 4. Signing the `UserOperation`
-    /// 5. Submitting via `eth_sendUserOperation` (temporal-apps V2)
+    /// 5. Submitting via `eth_sendUserOperation` (V2)
     ///
     /// Uses the global RPC client automatically.
     ///
@@ -185,7 +185,7 @@ pub trait Is4337Encodable {
         let mut user_operation =
             self.build_preflight_user_operation(safe_account.wallet_address, metadata)?;
 
-        // 2. Request sponsorship via pm_sponsorUserOperation (temporal-apps V2)
+        // 2. Request sponsorship via pm_sponsorUserOperation (V2)
         let sponsor_response = rpc_client
             .pm_sponsor_user_operation(network, &user_operation, *ENTRYPOINT_4337)
             .await?;
@@ -197,7 +197,7 @@ pub trait Is4337Encodable {
         // 4. Sign the UserOperation with fresh validity timestamps
         safe_account.sign_user_operation(&mut user_operation, network)?;
 
-        // 5. Submit UserOperation via eth_sendUserOperation (temporal-apps V2)
+        // 5. Submit UserOperation via eth_sendUserOperation (V2)
         let user_op_hash = rpc_client
             .send_user_operation(
                 network,
