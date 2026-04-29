@@ -824,4 +824,89 @@ mod tests {
         let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SponsorUserOperation);
         assert_eq!(url, "/v1/rpc/worldchain");
     }
+
+    #[test]
+    fn test_pm_sponsor_response_parsing() {
+        // Bundler-sponsored (no paymaster) — the common production shape
+        let no_paymaster = json!({
+            "mode": "bundler-sponsored",
+            "callGasLimit": "0x200000",
+            "verificationGasLimit": "0x200000",
+            "preVerificationGas": "0x200000",
+            "maxFeePerGas": "0x12A05F200",
+            "maxPriorityFeePerGas": "0x12A05F200",
+            "paymaster": null,
+            "paymasterVerificationGasLimit": "0x0",
+            "paymasterPostOpGasLimit": "0x0",
+            "paymasterData": null,
+        });
+        let r: PmSponsorUserOperationResponse =
+            serde_json::from_value(no_paymaster).unwrap();
+        assert_eq!(r.mode, "bundler-sponsored");
+        assert_eq!(r.call_gas_limit, U128::from(0x200000_u32));
+        assert_eq!(r.verification_gas_limit, U128::from(0x200000_u32));
+        assert_eq!(r.pre_verification_gas, U256::from(0x200000_u32));
+        assert_eq!(r.max_fee_per_gas, U128::from(0x12A05F200_u64));
+        assert_eq!(r.max_priority_fee_per_gas, U128::from(0x12A05F200_u64));
+        assert!(r.paymaster.is_none());
+        assert_eq!(r.paymaster_verification_gas_limit, U128::ZERO);
+        assert_eq!(r.paymaster_post_op_gas_limit, U128::ZERO);
+        assert!(r.paymaster_data.is_none());
+
+        // Paymaster-sponsored shape — verify optional address and data parse correctly
+        let with_paymaster = json!({
+            "mode": "bundler-sponsored",
+            "callGasLimit": "0x212df",
+            "verificationGasLimit": "0x501ab",
+            "preVerificationGas": "0x350f7",
+            "maxFeePerGas": "0x7A5CF70D5",
+            "maxPriorityFeePerGas": "0x3B9ACA00",
+            "paymaster": "0x0000000000000039cd5e8aE05257CE51C473ddd1",
+            "paymasterVerificationGasLimit": "0x6dae",
+            "paymasterPostOpGasLimit": "0x706e",
+            "paymasterData": "0x01000066d1a1a4",
+        });
+        let r: PmSponsorUserOperationResponse =
+            serde_json::from_value(with_paymaster).unwrap();
+        assert_eq!(
+            r.paymaster,
+            Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
+        );
+        assert_eq!(r.paymaster_verification_gas_limit, U128::from(0x6dae_u32));
+        assert_eq!(r.paymaster_post_op_gas_limit, U128::from(0x706e_u32));
+        assert!(r.paymaster_data.is_some());
+    }
+
+    #[test]
+    fn test_pm_sponsor_response_from_conversion() {
+        let pm = PmSponsorUserOperationResponse {
+            mode: "bundler-sponsored".to_string(),
+            call_gas_limit: U128::from(0x212df_u32),
+            verification_gas_limit: U128::from(0x501ab_u32),
+            pre_verification_gas: U256::from(0x350f7_u32),
+            max_fee_per_gas: U128::from(0x7A5CF70D5_u64),
+            max_priority_fee_per_gas: U128::from(0x3B9ACA00_u64),
+            paymaster: Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1")),
+            paymaster_verification_gas_limit: U128::from(0x6dae_u32),
+            paymaster_post_op_gas_limit: U128::from(0x706e_u32),
+            paymaster_data: Some(bytes!("01000066d1a1a4")),
+        };
+
+        let s = SponsorUserOperationResponse::from(pm);
+
+        assert_eq!(
+            s.paymaster,
+            Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
+        );
+        assert_eq!(s.call_gas_limit, U128::from(0x212df_u32));
+        assert_eq!(s.verification_gas_limit, U128::from(0x501ab_u32));
+        assert_eq!(s.pre_verification_gas, U256::from(0x350f7_u32));
+        assert_eq!(s.max_fee_per_gas, U128::from(0x7A5CF70D5_u64));
+        assert_eq!(s.max_priority_fee_per_gas, U128::from(0x3B9ACA00_u64));
+        // paymasterVerificationGasLimit and paymasterPostOpGasLimit are wrapped in Some
+        assert_eq!(s.paymaster_verification_gas_limit, Some(U128::from(0x6dae_u32)));
+        assert_eq!(s.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
+        // provider_name is always RpcProviderName::Any for V2
+        assert_eq!(s.provider_name, RpcProviderName::Any);
+    }
 }
