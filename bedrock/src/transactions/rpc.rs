@@ -783,4 +783,45 @@ mod tests {
         assert_eq!(serialized["paymasterVerificationGasLimit"], "0xa");
         assert_eq!(serialized["paymasterPostOpGasLimit"], "0x0");
     }
+
+    #[test]
+    fn test_rpc_endpoint_v2_methods_route_to_v2() {
+        let network = Network::WorldChain;
+        for method in [
+            RpcMethod::SendUserOperation,
+            RpcMethod::PmSponsorUserOperation,
+            RpcMethod::EthCall,
+        ] {
+            let url = RpcClient::rpc_endpoint(network, &method);
+            assert!(
+                url.starts_with("/v2/"),
+                "{method:?} should route to /v2/, got {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rpc_endpoint_legacy_methods_stay_on_v1() {
+        let network = Network::WorldChain;
+        for method in [
+            RpcMethod::SponsorUserOperation,
+            RpcMethod::WaGetUserOperationReceipt,
+            RpcMethod::SupportedEntryPoints,
+        ] {
+            let url = RpcClient::rpc_endpoint(network, &method);
+            assert!(
+                url.starts_with("/v1/"),
+                "{method:?} should route to /v1/, got {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rpc_endpoint_includes_network_name() {
+        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperation);
+        assert_eq!(url, "/v2/rpc/worldchain");
+
+        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SponsorUserOperation);
+        assert_eq!(url, "/v1/rpc/worldchain");
+    }
 }
