@@ -6,7 +6,9 @@
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
-use crate::transactions::rpc::{RpcError, RpcProviderName};
+use crate::transactions::rpc::{
+    RpcError, RpcProviderName, SponsorUserOperationResponse,
+};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::{Duration, Utc};
@@ -95,7 +97,7 @@ pub trait Is4337Encodable {
 
     /// Signs and executes a 4337 `UserOperation` by:
     /// 1. Building a preflight `UserOperation`
-    /// 2. Requesting sponsorship via `wa_sponsorUserOperation`
+    /// 2. Requesting sponsorship via `wa_sponsorUserOperation` (app-backend-main V1)
     /// 3. Merging paymaster data into the `UserOperation`
     /// 4. Signing the `UserOperation`
     /// 5. Submitting via `eth_sendUserOperation`
@@ -148,6 +150,60 @@ pub trait Is4337Encodable {
                 &user_operation,
                 *ENTRYPOINT_4337,
                 sponsor_response.provider_name,
+            )
+            .await?;
+
+        Ok(user_op_hash)
+    }
+
+    /// Signs and executes a 4337 `UserOperation` via the temporal-apps V2 RPC endpoints:
+    /// 1. Building a preflight `UserOperation`
+    /// 2. Requesting sponsorship via `pm_sponsorUserOperation` (temporal-apps V2)
+    /// 3. Merging paymaster data into the `UserOperation`
+    /// 4. Signing the `UserOperation`
+    /// 5. Submitting via `eth_sendUserOperation` (temporal-apps V2)
+    ///
+    /// Uses the global RPC client automatically.
+    ///
+    /// # Returns
+    /// * `Result<FixedBytes<32>, RpcError>` - The `userOpHash` on success
+    ///
+    /// # Errors
+    /// * Returns `RpcError` if any RPC operation fails
+    /// * Returns `RpcError` if signing fails
+    /// * Returns `RpcError` if the global HTTP client has not been initialized
+    async fn sign_and_execute_v2(
+        &self,
+        safe_account: &SafeSmartAccount,
+        network: Network,
+        metadata: Option<Self::MetadataArg>,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        // 0. Get the global RPC client
+        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
+
+        // 1. Create preflight UserOperation
+        let mut user_operation =
+            self.build_preflight_user_operation(safe_account.wallet_address, metadata)?;
+
+        // 2. Request sponsorship via pm_sponsorUserOperation (temporal-apps V2)
+        let sponsor_response = rpc_client
+            .pm_sponsor_user_operation(network, &user_operation, *ENTRYPOINT_4337)
+            .await?;
+
+        // 3. Merge paymaster data
+        user_operation = user_operation
+            .with_paymaster_data(&SponsorUserOperationResponse::from(sponsor_response));
+
+        // 4. Sign the UserOperation with fresh validity timestamps
+        safe_account.sign_user_operation(&mut user_operation, network)?;
+
+        // 5. Submit UserOperation via eth_sendUserOperation (temporal-apps V2)
+        let user_op_hash = rpc_client
+            .send_user_operation(
+                network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                RpcProviderName::Any,
             )
             .await?;
 
