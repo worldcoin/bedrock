@@ -161,7 +161,7 @@ impl Is4337Encodable for Permit2Approve {
             InstructionFlag::Default,
             [0u8; 10],
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,
@@ -241,7 +241,7 @@ impl Is4337Encodable for BatchPermit2Approval {
             InstructionFlag::Default,
             [0u8; 10],
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,

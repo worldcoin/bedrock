@@ -149,6 +149,12 @@ impl NonceKeyV1 {
         out
     }
 
+    /// Encodes the nonceKey with a sequence of 0, the standard for Bedrock-crafted transactions.
+    #[must_use]
+    pub fn encode(&self) -> U256 {
+        self.encode_with_sequence(0)
+    }
+
     /// Encodes the 24-byte nonceKey together with a provided 8-byte sequence into a U256 integer
     /// for use with the 4337 `EntryPoint` contract.
     #[must_use]
@@ -196,7 +202,7 @@ mod tests {
             [0u8; 10],
             [0u8; 7],
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode_with_sequence(0); // explicit 0 to test encode_with_sequence directly
         let lower_64 = nonce & U256::from(u64::MAX);
         assert!(lower_64.is_zero(), "sequence must be zero"); // checks the lower 64 bits of the nonce (i.e. the sequence) are zero
     }

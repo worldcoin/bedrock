@@ -406,7 +406,7 @@ impl Is4337Encodable for Erc4626Vault {
         let call_data = self.build_execute_user_op_call_data();
 
         let key = NonceKeyV1::new(self.action, InstructionFlag::Default, self.metadata);
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,

@@ -168,7 +168,7 @@ impl Is4337Encodable for WorldGiftManager {
             metadata_bytes,
             random_tail,
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,

@@ -189,7 +189,7 @@ impl Is4337Encodable for Erc20 {
             InstructionFlag::Default,
             metadata_bytes,
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,
