@@ -7,7 +7,7 @@ use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
 use crate::transactions::rpc::{
-    RpcError, RpcProviderName, SponsorUserOperationResponse,
+    self, RpcError, RpcProviderName, SponsorUserOperationResponse,
 };
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
@@ -120,7 +120,7 @@ pub trait Is4337Encodable {
         provider: RpcProviderName,
     ) -> Result<FixedBytes<32>, RpcError> {
         // 0. Get the global RPC client
-        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
+        let rpc_client = rpc::get_rpc_client()?;
 
         // 1. Create preflight UserOperation using default metadata for this implementation
         let mut user_operation =
