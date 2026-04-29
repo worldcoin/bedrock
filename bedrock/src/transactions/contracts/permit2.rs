@@ -131,7 +131,9 @@ impl Permit2Approve {
         }
         .abi_encode();
 
-        Self { call_data: call_data.into() }
+        Self {
+            call_data: call_data.into(),
+        }
     }
 }
 
@@ -343,7 +345,9 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = approve.build_preflight_user_operation(wallet, None).unwrap();
+        let user_op = approve
+            .build_preflight_user_operation(wallet, None)
+            .unwrap();
 
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
 

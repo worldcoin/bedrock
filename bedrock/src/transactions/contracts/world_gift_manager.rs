@@ -107,7 +107,9 @@ impl WorldGiftManager {
     /// Creates a redeem operation.
     #[must_use]
     pub fn redeem(gift_id: U256) -> Self {
-        let call_data = IWorldGiftManager::redeemCall { giftId: gift_id }.abi_encode().into();
+        let call_data = IWorldGiftManager::redeemCall { giftId: gift_id }
+            .abi_encode()
+            .into();
         Self {
             gift_id: u256_to_gift_id(gift_id),
             tx_type_id: TransactionTypeId::WorldGiftManagerRedeem,
@@ -121,7 +123,9 @@ impl WorldGiftManager {
     /// Creates a cancel operation.
     #[must_use]
     pub fn cancel(gift_id: U256) -> Self {
-        let call_data = IWorldGiftManager::cancelCall { giftId: gift_id }.abi_encode().into();
+        let call_data = IWorldGiftManager::cancelCall { giftId: gift_id }
+            .abi_encode()
+            .into();
         Self {
             gift_id: u256_to_gift_id(gift_id),
             tx_type_id: TransactionTypeId::WorldGiftManagerCancel,
