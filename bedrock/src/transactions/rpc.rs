@@ -94,7 +94,9 @@ impl RpcMethod {
             Self::SponsorUserOperation => "wa_sponsorUserOperation",
             Self::PmSponsorUserOperation => "pm_sponsorUserOperation",
             Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
-            Self::SendUserOperation | Self::SendUserOperationV2 => "eth_sendUserOperation",
+            Self::SendUserOperation | Self::SendUserOperationV2 => {
+                "eth_sendUserOperation"
+            }
             Self::EthCall => "eth_call",
             Self::SupportedEntryPoints => "eth_supportedEntryPoints",
         }
@@ -861,10 +863,14 @@ mod tests {
 
     #[test]
     fn test_rpc_endpoint_includes_network_name() {
-        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperationV2);
+        let url = RpcClient::rpc_endpoint(
+            Network::WorldChain,
+            &RpcMethod::SendUserOperationV2,
+        );
         assert_eq!(url, "/v2/rpc/worldchain");
 
-        let url = RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperation);
+        let url =
+            RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperation);
         assert_eq!(url, "/v1/rpc/worldchain");
     }
 
@@ -947,7 +953,10 @@ mod tests {
         assert_eq!(s.max_fee_per_gas, U128::from(0x7A5CF70D5_u64));
         assert_eq!(s.max_priority_fee_per_gas, U128::from(0x3B9ACA00_u64));
         // paymasterVerificationGasLimit and paymasterPostOpGasLimit are wrapped in Some
-        assert_eq!(s.paymaster_verification_gas_limit, Some(U128::from(0x6dae_u32)));
+        assert_eq!(
+            s.paymaster_verification_gas_limit,
+            Some(U128::from(0x6dae_u32))
+        );
         assert_eq!(s.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
         // provider_name is always RpcProviderName::Any for V2
         assert_eq!(s.provider_name, RpcProviderName::Any);
