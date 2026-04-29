@@ -105,7 +105,7 @@ sol! {
 /// Reference: <https://docs.uniswap.org/contracts/permit2/reference/allowance-transfer#approve>
 pub struct Permit2Approve {
     /// The ABI-encoded calldata for `IAllowanceTransfer.approve(token, spender, amount, expiration)`.
-    call_data: Vec<u8>,
+    call_data: Bytes,
 }
 
 impl Permit2Approve {
@@ -131,37 +131,39 @@ impl Permit2Approve {
         }
         .abi_encode();
 
-        Self { call_data }
+        Self {
+            call_data: call_data.into(),
+        }
     }
 }
 
 impl Is4337Encodable for Permit2Approve {
     type MetadataArg = ();
 
-    fn as_execute_user_op_call_data(&self) -> Bytes {
+    fn build_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             to: PERMIT2_ADDRESS,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: SafeOperation::Call as u8,
         }
         .abi_encode()
         .into()
     }
 
-    fn as_preflight_user_operation(
+    fn build_preflight_user_operation(
         &self,
         wallet_address: Address,
         _metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.as_execute_user_op_call_data();
+        let call_data = self.build_execute_user_op_call_data();
 
         let key = NonceKeyV1::new(
             TransactionTypeId::Permit2Approve,
             InstructionFlag::Default,
             [0u8; 10],
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,
@@ -180,7 +182,7 @@ impl Is4337Encodable for Permit2Approve {
 /// Builds a single 4337 `UserOperation` that grants a spender contract max allowance
 /// on each of the given token contracts.
 pub struct BatchPermit2Approval {
-    call_data: Vec<u8>,
+    call_data: Bytes,
     to: Address,
     operation: SafeOperation,
 }
@@ -208,7 +210,7 @@ impl BatchPermit2Approval {
         let bundle = MultiSend::build_bundle(&entries);
 
         Self {
-            call_data: bundle.data,
+            call_data: bundle.data.into(),
             to: bundle.to,
             operation: bundle.operation,
         }
@@ -218,30 +220,30 @@ impl BatchPermit2Approval {
 impl Is4337Encodable for BatchPermit2Approval {
     type MetadataArg = ();
 
-    fn as_execute_user_op_call_data(&self) -> Bytes {
+    fn build_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             to: self.to,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: self.operation as u8,
         }
         .abi_encode()
         .into()
     }
 
-    fn as_preflight_user_operation(
+    fn build_preflight_user_operation(
         &self,
         wallet_address: Address,
         _metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.as_execute_user_op_call_data();
+        let call_data = self.build_execute_user_op_call_data();
 
         let key = NonceKeyV1::new(
             TransactionTypeId::Permit2Approve,
             InstructionFlag::Default,
             [0u8; 10],
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,
@@ -299,7 +301,7 @@ mod tests {
         let expiration = U48::from(1_704_067_200u64);
 
         let approve = Permit2Approve::new(token, spender, amount, expiration);
-        let execute_user_op_call_data = approve.as_execute_user_op_call_data();
+        let execute_user_op_call_data = approve.build_execute_user_op_call_data();
 
         let call_data_bytes: &[u8] = &execute_user_op_call_data;
 
@@ -343,7 +345,9 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = approve.as_preflight_user_operation(wallet, None).unwrap();
+        let user_op = approve
+            .build_preflight_user_operation(wallet, None)
+            .unwrap();
 
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
 
@@ -362,7 +366,7 @@ mod tests {
         let tokens = vec![usdc, weth];
         let batch = BatchPermit2Approval::new(&tokens);
 
-        let call_data = batch.as_execute_user_op_call_data();
+        let call_data = batch.build_execute_user_op_call_data();
         let call_data_bytes: &[u8] = &call_data;
 
         let decoded =

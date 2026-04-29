@@ -32,7 +32,7 @@ sol! {
 /// Enables operations with the ERC-20 token contract.
 pub struct Erc20 {
     /// The inner call data for the ERC-20 `transferCall` function.
-    call_data: Vec<u8>,
+    call_data: Bytes,
     /// The address of the ERC-20 token contract.
     token_address: Address,
 }
@@ -46,7 +46,7 @@ impl Erc20 {
     /// * `value` - The amount of tokens to transfer.
     #[must_use]
     pub fn new(token_address: Address, to: Address, value: U256) -> Self {
-        let call_data = IErc20::transferCall { to, value }.abi_encode();
+        let call_data = IErc20::transferCall { to, value }.abi_encode().into();
 
         Self {
             call_data,
@@ -158,24 +158,24 @@ pub struct MetadataArg {
 impl Is4337Encodable for Erc20 {
     type MetadataArg = MetadataArg;
 
-    fn as_execute_user_op_call_data(&self) -> Bytes {
+    fn build_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             // The token address
             to: self.token_address,
             value: U256::ZERO,
-            data: self.call_data.clone().into(),
+            data: self.call_data.clone(),
             operation: SafeOperation::Call as u8,
         }
         .abi_encode()
         .into()
     }
 
-    fn as_preflight_user_operation(
+    fn build_preflight_user_operation(
         &self,
         wallet_address: Address,
         metadata: Option<Self::MetadataArg>,
     ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.as_execute_user_op_call_data();
+        let call_data = self.build_execute_user_op_call_data();
 
         let mut metadata_bytes: [u8; 10] = [0u8; 10];
         if let Some(metadata) = metadata {
@@ -189,7 +189,7 @@ impl Is4337Encodable for Erc20 {
             InstructionFlag::Default,
             metadata_bytes,
         );
-        let nonce = key.encode_with_sequence(0);
+        let nonce = key.encode();
 
         Ok(UserOperation::new_with_defaults(
             wallet_address,
@@ -216,7 +216,7 @@ mod tests {
             U256::from(1),
         );
 
-        let execute_user_op_call_data = erc20.as_execute_user_op_call_data();
+        let execute_user_op_call_data = erc20.build_execute_user_op_call_data();
 
         // generated with `chisel`
         let expected_call_data = bytes!("0x7bb374280000000000000000000000002cfc85d8e48f8eab294be644d9e25c30308630030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb0000000000000000000000001234567890123456789012345678901234567890000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000");
@@ -234,7 +234,7 @@ mod tests {
 
         let wallet =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        let user_op = erc20.as_preflight_user_operation(wallet, None).unwrap();
+        let user_op = erc20.build_preflight_user_operation(wallet, None).unwrap();
 
         // Check nonce layout
         let be: [u8; 32] = user_op.nonce.to_be_bytes();
@@ -265,7 +265,7 @@ mod tests {
         };
 
         let user_op = erc20
-            .as_preflight_user_operation(wallet, Some(metadata))
+            .build_preflight_user_operation(wallet, Some(metadata))
             .unwrap();
 
         // Check nonce layout

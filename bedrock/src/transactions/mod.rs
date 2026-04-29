@@ -14,7 +14,7 @@ use crate::{
     },
     transactions::{
         contracts::{
-            erc20::{Erc20, TransferAssociation},
+            erc20::{Erc20, MetadataArg, TransferAssociation},
             usd_legacy_vault::Permit2Data,
             world_gift_manager::WorldGiftManager,
         },
@@ -103,7 +103,7 @@ impl SafeSmartAccount {
 
         let transaction = Erc20::new(token_address, to_address, amount);
 
-        let metadata = crate::transactions::contracts::erc20::MetadataArg {
+        let metadata = MetadataArg {
             association: transfer_association,
         };
 
