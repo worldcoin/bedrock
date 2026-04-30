@@ -892,11 +892,11 @@ mod tests {
         let r: PmSponsorUserOperationResponse =
             serde_json::from_value(no_paymaster).unwrap();
         assert_eq!(r.mode, "bundler-sponsored");
-        assert_eq!(r.call_gas_limit, U128::from(0x200000_u32));
-        assert_eq!(r.verification_gas_limit, U128::from(0x200000_u32));
-        assert_eq!(r.pre_verification_gas, U256::from(0x200000_u32));
-        assert_eq!(r.max_fee_per_gas, U128::from(0x12A05F200_u64));
-        assert_eq!(r.max_priority_fee_per_gas, U128::from(0x12A05F200_u64));
+        assert_eq!(r.call_gas_limit, U128::from(0x0020_0000_u32));
+        assert_eq!(r.verification_gas_limit, U128::from(0x0020_0000_u32));
+        assert_eq!(r.pre_verification_gas, U256::from(0x0020_0000_u32));
+        assert_eq!(r.max_fee_per_gas, U128::from(0x0001_2A05_F200_u64));
+        assert_eq!(r.max_priority_fee_per_gas, U128::from(0x0001_2A05_F200_u64));
         assert!(r.paymaster.is_none());
         assert_eq!(r.paymaster_verification_gas_limit, U128::ZERO);
         assert_eq!(r.paymaster_post_op_gas_limit, U128::ZERO);
@@ -930,11 +930,11 @@ mod tests {
     fn test_pm_sponsor_response_from_conversion() {
         let pm = PmSponsorUserOperationResponse {
             mode: "bundler-sponsored".to_string(),
-            call_gas_limit: U128::from(0x212df_u32),
-            verification_gas_limit: U128::from(0x501ab_u32),
-            pre_verification_gas: U256::from(0x350f7_u32),
-            max_fee_per_gas: U128::from(0x7A5CF70D5_u64),
-            max_priority_fee_per_gas: U128::from(0x3B9ACA00_u64),
+            call_gas_limit: U128::from(0x0002_12DF_u32),
+            verification_gas_limit: U128::from(0x0005_01AB_u32),
+            pre_verification_gas: U256::from(0x0003_50F7_u32),
+            max_fee_per_gas: U128::from(0x0007_A5CF_70D5_u64),
+            max_priority_fee_per_gas: U128::from(0x3B9A_CA00_u64),
             paymaster: Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1")),
             paymaster_verification_gas_limit: U128::from(0x6dae_u32),
             paymaster_post_op_gas_limit: U128::from(0x706e_u32),
@@ -947,11 +947,11 @@ mod tests {
             s.paymaster,
             Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
         );
-        assert_eq!(s.call_gas_limit, U128::from(0x212df_u32));
-        assert_eq!(s.verification_gas_limit, U128::from(0x501ab_u32));
-        assert_eq!(s.pre_verification_gas, U256::from(0x350f7_u32));
-        assert_eq!(s.max_fee_per_gas, U128::from(0x7A5CF70D5_u64));
-        assert_eq!(s.max_priority_fee_per_gas, U128::from(0x3B9ACA00_u64));
+        assert_eq!(s.call_gas_limit, U128::from(0x0002_12DF_u32));
+        assert_eq!(s.verification_gas_limit, U128::from(0x0005_01AB_u32));
+        assert_eq!(s.pre_verification_gas, U256::from(0x0003_50F7_u32));
+        assert_eq!(s.max_fee_per_gas, U128::from(0x0007_A5CF_70D5_u64));
+        assert_eq!(s.max_priority_fee_per_gas, U128::from(0x3B9A_CA00_u64));
         // paymasterVerificationGasLimit and paymasterPostOpGasLimit are wrapped in Some
         assert_eq!(
             s.paymaster_verification_gas_limit,
