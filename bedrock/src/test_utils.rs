@@ -35,6 +35,22 @@ struct SponsorUserOperationResponseLite<'a> {
     provider_name: String,
 }
 
+/// Represents a response from '`pm_sponsorUserOperation`' rpc method (V2)
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PmSponsorUserOperationResponseLite<'a> {
+    mode: &'a str,
+    paymaster: Option<&'a str>,
+    paymaster_data: Option<&'a str>,
+    pre_verification_gas: String,
+    verification_gas_limit: String,
+    call_gas_limit: String,
+    paymaster_verification_gas_limit: String,
+    paymaster_post_op_gas_limit: String,
+    max_priority_fee_per_gas: String,
+    max_fee_per_gas: String,
+}
+
 sol! {
     /// Packed user operation for `EntryPoint`
     #[sol(rename_all = "camelCase")]
@@ -199,7 +215,28 @@ where
             .unwrap_or(serde_json::Value::Null);
 
         match method {
-            // Respond with minimal, sane gas values and no paymaster
+            // Respond with minimal, sane gas values and no paymaster (V2)
+            "pm_sponsorUserOperation" => {
+                let result = PmSponsorUserOperationResponseLite {
+                    mode: "bundler-sponsored",
+                    paymaster: None,
+                    paymaster_data: None,
+                    pre_verification_gas: "0x200000".into(), // 2M
+                    verification_gas_limit: "0x200000".into(), // 2M
+                    call_gas_limit: "0x200000".into(),       // 2M
+                    paymaster_verification_gas_limit: "0x0".into(),
+                    paymaster_post_op_gas_limit: "0x0".into(),
+                    max_priority_fee_per_gas: "0x12A05F200".into(), // 5 gwei
+                    max_fee_per_gas: "0x12A05F200".into(),          // 5 gwei
+                };
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": result,
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
+            // Respond with minimal, sane gas values and no paymaster (V1 legacy)
             "wa_sponsorUserOperation" => {
                 let result = SponsorUserOperationResponseLite {
                     paymaster: None,
