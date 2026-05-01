@@ -58,7 +58,7 @@ hpke = { version = "0.10", features = [
 ], default-features = false }
 k256 = { version = "0.13.4", default-features = false, features = ["std", "ecdsa"] }
 log = "0.4.22"
-once_cell = "1.19"
+once_cell = "1.21"
 p256 = { version = "0.13.2", default-features = false, features = [
   "ecdsa",
   "pem",
