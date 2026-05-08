@@ -25,7 +25,7 @@ test_utils = []
 __test = ["test_utils"]
 
 [dependencies]
-alloy = { version = "1.7.3", default-features = false, features = [
+alloy = { version = "2.0.4", default-features = false, features = [
   "dyn-abi",
   "eip712",
   "signer-local",
@@ -92,7 +92,7 @@ http = "1.4.0"
 
 [dev-dependencies]
 bedrock = { path = ".", features = ["test_utils"] }
-alloy = { version = "1.7.3", default-features = false, features = [
+alloy = { version = "2.0.4", default-features = false, features = [
   "json",
   "contract",
   "node-bindings",
