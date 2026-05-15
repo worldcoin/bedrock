@@ -21,7 +21,7 @@ const TEST_KEY: &str =
 const TEST_WALLET: &str = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 
 fn test_smart_account() -> SafeSmartAccount {
-    SafeSmartAccount::from_private_key_hex(TEST_KEY, TEST_WALLET).unwrap()
+    SafeSmartAccount::from_private_key_hex(TEST_KEY.to_string(), TEST_WALLET).unwrap()
 }
 
 fn make_valid_message(datetime: &str) -> String {
@@ -471,7 +471,8 @@ fn sign_produces_verifiable_signature() {
     let signer = PrivateKeySigner::from_str(TEST_KEY).unwrap();
     let eoa_address = signer.address();
     let account =
-        SafeSmartAccount::from_private_key_hex(TEST_KEY, TEST_WALLET).unwrap();
+        SafeSmartAccount::from_private_key_hex(TEST_KEY.to_string(), TEST_WALLET)
+            .unwrap();
 
     let msg = SiweMessage {
         scheme: Some(Scheme::HTTPS),

@@ -64,17 +64,16 @@ impl SafeSmartAccount {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use std::sync::Arc;
     /// use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
-    /// use bedrock::test_utils::InMemoryKeyManager;
     /// use bedrock::transactions::TransactionError;
     /// use bedrock::primitives::Network;
     ///
-    /// # async fn example() -> Result<(), TransactionError> {
+    /// # async fn example(
+    /// #     key_manager: Arc<dyn SmartAccountKeyManager>,
+    /// # ) -> Result<(), TransactionError> {
     /// // Assume we have a configured SafeSmartAccount
-    /// # let key_manager: Arc<dyn SmartAccountKeyManager> =
-    /// #     Arc::new(InMemoryKeyManager::new("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"));
     /// # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
     ///
     /// // Transfer USDC on World Chain

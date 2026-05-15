@@ -34,11 +34,12 @@ pub struct InMemoryKeyManager {
 
 impl InMemoryKeyManager {
     /// Wraps a hex-encoded private key.
-    pub fn new<S: Into<String>>(private_key_hex: S) -> Self {
+    #[must_use]
+    pub const fn new(private_key_hex: String) -> Self {
         // Normally we'd verify the sk length here, but because we have tests that require
         // passing invalid secrets, we don't enforce it.
         Self {
-            hex_bytes: private_key_hex.into().into_bytes(),
+            hex_bytes: private_key_hex.into_bytes(),
         }
     }
 }
@@ -48,7 +49,13 @@ impl SmartAccountKeyManager for InMemoryKeyManager {
         let len =
             u32::try_from(self.hex_bytes.len()).expect("secret len must fit in u32");
         let session = SiegelSession::new(len).expect("failed to create siegel session");
-        // SAFETY: only reads `len` bytes from `src`.
+        // SAFETY:
+        // - `session.handle()` was just returned by `SiegelSession::new` and the
+        //   session is still alive (held by `session` until the end of this fn).
+        // - `self.hex_bytes` is owned by `&self` and lives until the function
+        //   returns, so the pointer is valid for `self.hex_bytes.len()` reads.
+        // - the session was allocated with capacity `len == self.hex_bytes.len()`,
+        //   matching what `siegel_fill` expects.
         let rc = unsafe {
             siegel_fill(
                 session.handle(),
@@ -56,7 +63,9 @@ impl SmartAccountKeyManager for InMemoryKeyManager {
                 self.hex_bytes.len(),
             )
         };
-        assert_eq!(rc, FILL_OK, "siegel_fill failed: {rc}");
+        // Test-only: a non-OK return code indicates broken test setup, not a
+        // user-actionable error, so we panic with the raw status.
+        assert!(rc == FILL_OK, "siegel_fill failed with code {rc}");
         session
     }
 }
