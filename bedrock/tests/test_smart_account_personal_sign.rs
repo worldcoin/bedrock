@@ -38,8 +38,11 @@ async fn test_integration_personal_sign() {
     let message = "Hello from Safe integration test!";
     let chain_id = Network::WorldChain as u32;
 
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
-        .expect("Failed to create SafeSmartAccount");
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )
+    .expect("Failed to create SafeSmartAccount");
 
     let signature = safe_account
         .personal_sign(chain_id, message.to_string())
@@ -119,8 +122,11 @@ async fn test_integration_personal_sign_failure_on_incorrect_chain_id() {
     let message = "Hello from Safe integration test!";
     let chain_id = 10; // Note: This is not World Chain, verification will fail
 
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
-        .expect("Failed to create SafeSmartAccount");
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )
+    .expect("Failed to create SafeSmartAccount");
 
     let signature = safe_account
         .personal_sign(chain_id, message.to_string())
@@ -180,8 +186,11 @@ async fn test_integration_personal_sign_failure_on_incorrect_eip_191_prefix() {
     let message = "Hello from Safe integration test!";
     let chain_id = Network::WorldChain as u32;
 
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
-        .expect("Failed to create SafeSmartAccount");
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )
+    .expect("Failed to create SafeSmartAccount");
 
     let signature = safe_account
         .personal_sign(chain_id, message.to_string())

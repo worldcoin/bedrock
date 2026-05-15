@@ -91,7 +91,10 @@ async fn test_erc4626_deposit_wld() -> anyhow::Result<()> {
     set_http_client(Arc::new(client));
 
     // 8) Create and execute ERC4626 deposit using the generic implementation
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )?;
 
     // First create the transaction to log call data for unit tests
     let rpc_client = bedrock::transactions::rpc::get_rpc_client().unwrap();

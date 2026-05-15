@@ -102,7 +102,6 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
     ) -> Result<Signature, SafeSmartAccountError> {
         let message_hash = self.get_message_hash_for_safe(message, chain_id, None);
         self.sign_hash_sync(&message_hash)
-            .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
     }
 
     fn sign_digest(
@@ -114,34 +113,33 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
         let message_hash =
             self.eip_712_hash(digest, chain_id, domain_separator_address);
         self.sign_hash_sync(&message_hash)
-            .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
     }
 }
 
 impl SafeSmartAccount {
-    /// Signs a fully encoded digest using the wallet's private key in a
-    /// scope closure that ensures zeroization after signature.
+    /// Signs a fully encoded digest using the wallet's private key.
+    ///
+    /// The key is pulled from the [`SmartAccountKeyManager`] via a one-shot
+    /// siegel session that is zeroized as soon as the closure returns, so the
+    /// secret only lives on the Rust heap for the duration of the signature.
     ///
     /// # Arguments
-    /// - `final_digest`: the digest to sign. the output must come from a collision-resistant hash function
+    /// - `final_digest`: the digest to sign. the output must come from a collision-resistant hash function.
     fn sign_hash_sync(
         &self,
         final_digest: &FixedBytes<32>,
     ) -> Result<Signature, SafeSmartAccountError> {
         let siegel = self.key_manager.get_eoa_private_key();
-        let mut signature: Option<Signature>;
-        siegel.read_once(|private_key| {
+        siegel.read_once(|private_key| -> Result<Signature, SafeSmartAccountError> {
             let signer = LocalSigner::from_slice(
                 &hex::decode(private_key)
                     .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
             )
             .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
-            signature = Some(signer.sign_hash_sync(final_digest)?);
-            drop(signer);
-        });
-        signature.ok_or(SafeSmartAccountError::Generic {
-            error_message: "unexpectedly unable to generate signature".to_string(),
-        })
+            signer
+                .sign_hash_sync(final_digest)
+                .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
+        })?
     }
 
     /// Computes the digest for a specific message to be signed by the Safe Smart Account.
@@ -298,7 +296,7 @@ mod tests {
     fn test_get_domain_separator() {
         // https://optimistic.etherscan.io/address/0x4564420674EA68fcc61b463C0494807C759d47e6
 
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x4564420674EA68fcc61b463C0494807C759d47e6",
         )
@@ -313,7 +311,7 @@ mod tests {
         );
 
         // https://etherscan.io/address/0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6",
         )
@@ -328,7 +326,7 @@ mod tests {
         );
 
         // 1.4.1 Safe - https://optimistic.etherscan.io/address/0x75c9553956dfe249c815700b1e7076a5738f3d6d#readProxyContract
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x75c9553956dfe249C815700b1E7076A5738F3d6d",
         )
@@ -345,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_compute_domain_separator_world_chain() {
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762",
         )
@@ -361,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_compute_domain_separator_world_chain_alt() {
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x619525ED4E862B62cFEDACCc4dA5a9864D6f4A97",
         )
@@ -379,7 +377,7 @@ mod tests {
     /// Reference: <https://optimistic.etherscan.io/address/0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4>
     #[test]
     fn test_get_message_hash_for_safe() {
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x4564420674EA68fcc61b463C0494807C759d47e6",
         )
@@ -405,7 +403,7 @@ mod tests {
     /// Reference: <https://optimistic.etherscan.io/address/0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4>
     #[test]
     fn test_get_message_hash_for_safe_alt() {
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0x4564420674EA68fcc61b463C0494807C759d47e6",
         )
@@ -433,7 +431,7 @@ mod tests {
     /// Reference: <https://etherscan.io/address/0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4>
     #[test]
     fn test_get_message_hash_for_safe_ethereum_chain() {
-        let smart_account = SafeSmartAccount::new(
+        let smart_account = SafeSmartAccount::from_private_key_hex(
             hex::encode(PrivateKeySigner::random().to_bytes()),
             "0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6",
         )

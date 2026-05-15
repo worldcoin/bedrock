@@ -1,6 +1,7 @@
 //! Test utilities for unit tests and E2E tests for mocking RPC responses either from Anvil or hard-coded for unit tests.
 #![allow(clippy::all)]
 use std::str::FromStr;
+use std::sync::Arc;
 
 use alloy::{
     network::Ethereum,
@@ -9,15 +10,56 @@ use alloy::{
     sol,
     sol_types::{SolEvent, SolValue},
 };
+use siegel_uniffi::{siegel_fill, SiegelSession, FILL_OK};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{
     primitives::{
         http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
         PrimitiveError,
     },
-    smart_account::UserOperation,
+    smart_account::{SmartAccountKeyManager, UserOperation},
     transactions::foreign::UnparsedUserOperation,
 };
+
+/// In-memory [`SmartAccountKeyManager`] for unit and integration tests.
+///
+/// Wraps a hex-encoded private key as bytes and seeds a fresh
+/// [`SiegelSession`] on every access mirroring how a real key store
+/// (e.g. iOS Keychain) would deliver the secret one use at a time.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct InMemoryKeyManager {
+    hex_bytes: Vec<u8>,
+}
+
+impl InMemoryKeyManager {
+    /// Wraps a hex-encoded private key.
+    pub fn new<S: Into<String>>(private_key_hex: S) -> Self {
+        // Normally we'd verify the sk length here, but because we have tests that require
+        // passing invalid secrets, we don't enforce it.
+        Self {
+            hex_bytes: private_key_hex.into().into_bytes(),
+        }
+    }
+}
+
+impl SmartAccountKeyManager for InMemoryKeyManager {
+    fn get_eoa_private_key(&self) -> Arc<SiegelSession> {
+        let len =
+            u32::try_from(self.hex_bytes.len()).expect("secret len must fit in u32");
+        let session = SiegelSession::new(len).expect("failed to create siegel session");
+        // SAFETY: only reads `len` bytes from `src`.
+        let rc = unsafe {
+            siegel_fill(
+                session.handle(),
+                self.hex_bytes.as_ptr(),
+                self.hex_bytes.len(),
+            )
+        };
+        assert_eq!(rc, FILL_OK, "siegel_fill failed: {rc}");
+        session
+    }
+}
 
 /// Represents a response from '`wa_sponsorUserOperation`' rpc method
 #[derive(serde::Serialize)]

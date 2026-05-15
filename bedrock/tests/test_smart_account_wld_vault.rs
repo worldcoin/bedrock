@@ -60,7 +60,10 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     println!("✓ Deployed Safe at: {safe_address}");
 
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )?;
 
     provider
         .anvil_set_balance(safe_address, parse_ether("1").unwrap())
