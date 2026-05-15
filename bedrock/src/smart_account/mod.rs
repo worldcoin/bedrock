@@ -81,12 +81,12 @@ pub enum SafeSmartAccountError {
     ///
     /// `kind` is a stable machine-readable discriminant (e.g. `"consumed"`,
     /// `"invalid_state"`); `message` is the human-readable description.
-    #[error("siegel session error ({kind}): {message}")]
+    #[error("siegel session error ({kind}): {error_message}")]
     SiegelSession {
         /// Stable machine-readable discriminant for the underlying [`SessionError`] variant.
         kind: String,
-        /// Human-readable description of the session error.
-        message: String,
+        /// Full description of the session error.
+        error_message: String,
     },
     /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
     #[error("invalid input on {attribute}: {error_message}")]
@@ -130,7 +130,7 @@ impl From<SessionError> for SafeSmartAccountError {
         };
         Self::SiegelSession {
             kind: kind.to_string(),
-            message: e.to_string(),
+            error_message: e.to_string(),
         }
     }
 }
