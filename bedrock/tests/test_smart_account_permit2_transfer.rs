@@ -87,7 +87,10 @@ async fn test_integration_permit2_transfer() -> anyhow::Result<()> {
     // Step 2: Deploy a Safe (World App User)
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     let chain_id = Network::WorldChain as u32;
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )?;
 
     // Step 3: Give the Safe some simulated WLD balance
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
@@ -243,7 +246,10 @@ async fn test_integration_permit2_approve_and_allowance_transfer() -> anyhow::Re
     // Step 2: Deploy a Safe (World App User)
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     let chain_id = Network::WorldChain as u32;
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )?;
 
     // Step 3: Give the Safe some simulated WLD balance
     let wld_token_address = address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");

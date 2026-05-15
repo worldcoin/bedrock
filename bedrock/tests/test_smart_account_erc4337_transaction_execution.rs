@@ -94,8 +94,11 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     let mut user_op: UserOperation = user_op.try_into().unwrap();
 
     // Sign the userOp and prepend validity timestamps
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())
-        .expect("Failed to create SafeSmartAccount");
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )
+    .expect("Failed to create SafeSmartAccount");
     let (va, vu) = user_op.extract_validity_timestamps()?;
     let op_hash = EncodedSafeOpStruct::from_user_op_with_validity(&user_op, va, vu)
         .unwrap()

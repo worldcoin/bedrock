@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_sign_user_operation_produces_valid_77_byte_signature() {
-        let safe = SafeSmartAccount::new(
+        let safe = SafeSmartAccount::from_private_key_hex(
             "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
                 .to_string(),
             "0x4564420674EA68fcc61b463C0494807C759d47e6",

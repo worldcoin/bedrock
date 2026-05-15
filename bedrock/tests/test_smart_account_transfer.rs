@@ -71,7 +71,10 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     set_http_client(Arc::new(client));
 
     // 8) Execute high-level transfer via transaction_transfer
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )?;
     let amount = "1000000000000000000"; // 1 WLD
     let _user_op_hash = safe_account
         .transaction_transfer(
