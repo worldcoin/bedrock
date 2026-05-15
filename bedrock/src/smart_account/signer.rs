@@ -7,6 +7,7 @@ use alloy::{
 };
 use k256::ecdsa::SigningKey;
 use ruint::aliases::U256;
+use zeroize::Zeroizing;
 
 use crate::primitives::{address::BedrockAddress, HexEncodedData};
 
@@ -131,14 +132,22 @@ impl SafeSmartAccount {
     ) -> Result<Signature, SafeSmartAccountError> {
         let siegel = self.key_manager.get_eoa_private_key();
         siegel.read_once(|private_key| -> Result<Signature, SafeSmartAccountError> {
-            let signer = LocalSigner::from_slice(
-                &hex::decode(private_key)
+            // The key is passed by foreign code as hex bytes. These hex bytes need to be
+            // parsed. We do this in a Zeroizing closure to ensure the result gets zeroized.
+            let raw_key: Zeroizing<Vec<u8>> = Zeroizing::new(
+                hex::decode(private_key)
                     .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
-            )
-            .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
-            signer
+            );
+            let signer = LocalSigner::from_slice(&raw_key)
+                .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
+            let signature = signer
                 .sign_hash_sync(final_digest)
-                .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
+                .map_err(|e| SafeSmartAccountError::Signing(e.to_string()));
+            // Redundant, but added for an abundance of clarity. All copies are zeroized, only the signature
+            // escapes the closure.
+            drop(signer);
+            drop(raw_key);
+            signature
         })?
     }
 

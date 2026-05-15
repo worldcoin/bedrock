@@ -4,6 +4,7 @@ use alloy::{dyn_abi::TypedData, primitives::Address, signers::local::LocalSigner
 use siegel_uniffi::{SessionError, SiegelSession};
 pub use signer::{Eip191Signer, EoaSigner, SafeSmartAccountSigner};
 pub use transaction_4337::Is4337Encodable;
+use zeroize::Zeroizing;
 
 #[cfg(any(test, doc))]
 use crate::primitives::Network;
@@ -77,8 +78,16 @@ pub enum SafeSmartAccountError {
     #[error("the contract {0} is restricted from TypedData signing.")]
     RestrictedContract(String),
     /// Error originating from the siegel secure-memory session backing the EOA key.
-    #[error("siegel session error: {0}")]
-    SiegelSession(String),
+    ///
+    /// `kind` is a stable machine-readable discriminant (e.g. `"consumed"`,
+    /// `"invalid_state"`); `message` is the human-readable description.
+    #[error("siegel session error ({kind}): {message}")]
+    SiegelSession {
+        /// Stable machine-readable discriminant for the underlying [`SessionError`] variant.
+        kind: String,
+        /// Human-readable description of the session error.
+        message: String,
+    },
     /// A provided raw input could not be parsed, is incorrectly formatted, incorrectly encoded or otherwise invalid.
     #[error("invalid input on {attribute}: {error_message}")]
     InvalidInput {
@@ -109,7 +118,20 @@ impl std::fmt::Debug for SafeSmartAccount {
 
 impl From<SessionError> for SafeSmartAccountError {
     fn from(e: SessionError) -> Self {
-        Self::SiegelSession(e.to_string())
+        let kind = match &e {
+            SessionError::InvalidLength => "invalid_length",
+            SessionError::LengthMismatch => "length_mismatch",
+            SessionError::InvalidState => "invalid_state",
+            SessionError::Consumed => "consumed",
+            SessionError::AllocationFailed { .. } => "allocation_failed",
+            SessionError::ProtectionFailed { .. } => "protection_failed",
+            SessionError::LockFailed { .. } => "lock_failed",
+            SessionError::CanaryCorrupted => "canary_corrupted",
+        };
+        Self::SiegelSession {
+            kind: kind.to_string(),
+            message: e.to_string(),
+        }
     }
 }
 
@@ -149,7 +171,7 @@ impl SafeSmartAccount {
     /// # Errors
     /// - Will return an error if the wallet address is not a valid hex-encoded address.
     /// - Will return an error if the key is not a validly encoded hex string.
-    /// - Will return an error if the key is not a valid point in the k256 curve.
+    /// - Will return an error if the decoded key is not a valid k256 scalar (zero or out of range).
     /// - Will return an error if the siegel session cannot be read.
     #[uniffi::constructor]
     pub fn new(
@@ -165,12 +187,17 @@ impl SafeSmartAccount {
         let siegel = key_manager.get_eoa_private_key();
         let eoa_address = siegel.read_once(
             |private_key| -> Result<Address, SafeSmartAccountError> {
-                let signer =
-                    LocalSigner::from_slice(&hex::decode(private_key).map_err(
-                        |e| SafeSmartAccountError::KeyDecoding(e.to_string()),
-                    )?)
+                let raw_key: Zeroizing<Vec<u8>> =
+                    Zeroizing::new(hex::decode(private_key).map_err(|e| {
+                        SafeSmartAccountError::KeyDecoding(e.to_string())
+                    })?);
+                let signer = LocalSigner::from_slice(&raw_key)
                     .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
-                Ok(signer.address())
+                let address = signer.address();
+                // Redundant (`raw_key` and `signer` get immediately zeroized) but added for an abundance of clarity
+                drop(raw_key);
+                drop(signer);
+                Ok(address)
             },
         )??;
 
@@ -236,47 +263,45 @@ impl SafeSmartAccount {
     /// - Will throw an error if the signature process unexpectedly fails.
     ///
     /// # Examples
-    /// ```ignore
+    /// ```no_run
     /// use std::sync::Arc;
-    /// use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
-    /// use bedrock::test_utils::InMemoryKeyManager;
+    /// use bedrock::smart_account::{
+    ///     SafeSmartAccount, SafeSmartAccountError, SmartAccountKeyManager,
+    /// };
     /// use bedrock::transactions::foreign::UnparsedUserOperation;
     /// use bedrock::primitives::Network;
     ///
-    /// let key_manager: Arc<dyn SmartAccountKeyManager> = Arc::new(
-    ///     // this is Anvil's default private key, it is a test secret
-    ///     InMemoryKeyManager::new(
-    ///         "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-    ///     ),
-    /// );
-    /// let safe = SafeSmartAccount::new(
-    ///     key_manager,
-    ///     "0x4564420674EA68fcc61b463C0494807C759d47e6",
-    /// )
-    /// .unwrap();
+    /// fn sign(
+    ///     key_manager: Arc<dyn SmartAccountKeyManager>,
+    /// ) -> Result<(), SafeSmartAccountError> {
+    ///     let safe = SafeSmartAccount::new(
+    ///         key_manager,
+    ///         "0x4564420674EA68fcc61b463C0494807C759d47e6",
+    ///     )?;
     ///
-    /// // This would normally be crafted by the user, or requested by Mini Apps.
-    /// let user_op = UnparsedUserOperation {
-    ///     sender:"0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
-    ///     nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
-    ///     call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
-    ///     signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
-    ///     call_gas_limit: "0xabb8".to_string(),
-    ///     verification_gas_limit: "0xfa07".to_string(),
-    ///     pre_verification_gas: "0x8e4d78".to_string(),
-    ///     max_fee_per_gas: "0x1af6f".to_string(),
-    ///     max_priority_fee_per_gas: "0x1adb0".to_string(),
-    ///     paymaster: Some("0xEF725Aa22d43Ea69FB22bE2EBe6ECa205a6BCf5B".to_string()),
-    ///     paymaster_verification_gas_limit: Some("0x7415".to_string()),
-    ///     paymaster_post_op_gas_limit: Some("0x".to_string()),
-    ///     paymaster_data: Some("000000000000000067789a97c4af0f8ae7acc9237c8f9611a0eb4662009d366b8defdf5f68fed25d22ca77be64b8eef49d917c3f8642ca539571594a84be9d0ee717c099160b79a845bea2111b".to_string()),
-    ///     factory: None,
-    ///     factory_data: None,
-    /// };
+    ///     // Crafted by the user, or requested by Mini Apps.
+    ///     let user_op = UnparsedUserOperation {
+    ///         sender: "0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+    ///         nonce: "0x0".to_string(),
+    ///         call_data: "0x".to_string(),
+    ///         signature: "0x".to_string(),
+    ///         call_gas_limit: "0x0".to_string(),
+    ///         verification_gas_limit: "0x0".to_string(),
+    ///         pre_verification_gas: "0x0".to_string(),
+    ///         max_fee_per_gas: "0x0".to_string(),
+    ///         max_priority_fee_per_gas: "0x0".to_string(),
+    ///         paymaster: None,
+    ///         paymaster_verification_gas_limit: None,
+    ///         paymaster_post_op_gas_limit: None,
+    ///         paymaster_data: None,
+    ///         factory: None,
+    ///         factory_data: None,
+    ///     };
     ///
-    /// let signature = safe.sign_4337_op(Network::WorldChain as u32, user_op).unwrap();
-    ///
-    /// println!("Signature: {}", signature.to_hex_string());
+    ///     let signature = safe.sign_4337_op(Network::WorldChain as u32, user_op)?;
+    ///     println!("Signature: {}", signature.to_hex_string());
+    ///     Ok(())
+    /// }
     /// ```
     pub fn sign_4337_op(
         &self,
@@ -439,15 +464,26 @@ pub struct SafeTransaction {
 /// Foreign-side key store that delivers the EOA private key wrapped in a
 /// fresh [`SiegelSession`] each time it is needed.
 ///
-/// Implementations live on Swift/Kotlin side and pull the secret from the
-/// platform's secure storage (e.g. iOS Keychain), fill the allocated protected
-/// memory via `siegel_fill` and zeoized after use. Secret is pulled from secure
-/// storage explicitly for the signataure operation and zeroized.
+/// Implementations live on the Swift/Kotlin side: they fetch the secret from
+/// the platform's secure storage (e.g. iOS Keychain), allocate a fresh
+/// `SiegelSession` and fill it via `siegel_fill`. Rust consumes the session
+/// with a single `read_once` call which zeroizes the protected buffer.
+///
+/// # Foreign contract
+///
+/// - **Session length**: 64 bytes — the EOA private key as ASCII hex (the
+///   secp256k1 scalar is 32 raw bytes, encoded as 64 hex characters).
+/// - **Byte format**: ASCII hex (lowercase or uppercase, no `0x` prefix).
+/// - **Lifetime**: each call returns a brand-new session. The previous one is
+///   consumed and zeroized as soon as Rust finishes signing.
+/// - **Call frequency**: invoked once per signing operation (and once at
+///   construction to validate the key and cache the EOA address). A typical
+///   user flow may trigger several invocations.
 #[uniffi::export(with_foreign)]
 pub trait SmartAccountKeyManager: Send + Sync {
-    /// Returns a freshly allocated and filled Siegel session containing the
-    /// hex-encoded EOA private key. The session is consumed by a single
-    /// `read_once`.
+    /// Returns a freshly allocated and filled [`SiegelSession`] containing
+    /// the hex-encoded EOA private key. See the [trait docs](Self) for the
+    /// expected length, encoding and call semantics.
     fn get_eoa_private_key(&self) -> Arc<SiegelSession>;
 }
 
@@ -460,7 +496,7 @@ impl SafeSmartAccount {
     /// # Errors
     /// - Same conditions as [`SafeSmartAccount::new`].
     pub fn from_private_key_hex(
-        private_key_hex: impl Into<String>,
+        private_key_hex: String,
         wallet_address: &str,
     ) -> Result<Self, SafeSmartAccountError> {
         let manager: Arc<dyn SmartAccountKeyManager> =
