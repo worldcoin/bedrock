@@ -1,10 +1,11 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use alloy::{
     dyn_abi::TypedData,
     primitives::Address,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
+use siegel_uniffi::SiegelSession;
 pub use signer::{Eip191Signer, EoaSigner, SafeSmartAccountSigner};
 pub use transaction_4337::Is4337Encodable;
 
@@ -103,10 +104,9 @@ impl From<crate::primitives::PrimitiveError> for SafeSmartAccountError {
 /// It is used to sign messages, transactions and typed data on behalf of the Safe smart contract.
 ///
 /// Reference: <https://github.com/safe-global/safe-smart-account>
-#[derive(Debug, uniffi::Object)]
+#[derive(uniffi::Object)]
 pub struct SafeSmartAccount {
-    /// The Ethereum signer from the EOA which is an owner for the Safe Smart Account.
-    signer: LocalSigner<SigningKey>,
+    key_manager: Arc<dyn SmartAccountKeyManager>,
     /// The address of the Safe Smart Account (i.e. the deployed smart contract)
     pub wallet_address: Address,
 }
@@ -127,20 +127,9 @@ impl SafeSmartAccount {
     /// - Will return an error if the key is not a valid point in the k256 curve.
     #[uniffi::constructor]
     pub fn new(
-        private_key: String,
+        key_manager: Arc<dyn SmartAccountKeyManager>,
         wallet_address: &str,
     ) -> Result<Self, SafeSmartAccountError> {
-        debug!(
-            "Initializing SafeSmartAccount with wallet address: {}",
-            wallet_address
-        );
-
-        let signer = LocalSigner::from_slice(
-            &hex::decode(private_key)
-                .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
-        )
-        .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
-
         let wallet_address = Address::from_str(wallet_address).map_err(|_| {
             SafeSmartAccountError::AddressParsing(wallet_address.to_string())
         })?;
@@ -150,8 +139,18 @@ impl SafeSmartAccount {
             wallet_address
         );
 
+        // Verify once that the key manager is correct and the key is a valid secp256k1 scalar
+        let siegel = key_manager.get_eoa_private_key();
+        siegel.read_once(|private_key| {
+            let signer = LocalSigner::from_slice(
+                &hex::decode(private_key)
+                    .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
+            )
+            .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
+        });
+
         Ok(Self {
-            signer,
+            key_manager,
             wallet_address,
         })
     }
@@ -398,6 +397,11 @@ pub struct SafeTransaction {
     /// The sequential nonce of the transaction. Used to prevent replay attacks.
     /// Solidity type: `uint256`
     pub nonce: String,
+}
+
+#[uniffi::export(with_foreign)]
+pub trait SmartAccountKeyManager: Send + Sync {
+    fn get_eoa_private_key(&self) -> Arc<SiegelSession>;
 }
 
 #[cfg(test)]

@@ -101,8 +101,7 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
         chain_id: u32,
     ) -> Result<Signature, SafeSmartAccountError> {
         let message_hash = self.get_message_hash_for_safe(message, chain_id, None);
-        self.signer
-            .sign_hash_sync(&message_hash)
+        self.sign_hash_sync(&message_hash)
             .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
     }
 
@@ -114,13 +113,37 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
     ) -> Result<Signature, SafeSmartAccountError> {
         let message_hash =
             self.eip_712_hash(digest, chain_id, domain_separator_address);
-        self.signer
-            .sign_hash_sync(&message_hash)
+        self.sign_hash_sync(&message_hash)
             .map_err(|e| SafeSmartAccountError::Signing(e.to_string()))
     }
 }
 
 impl SafeSmartAccount {
+    /// Signs a fully encoded digest using the wallet's private key in a
+    /// scope closure that ensures zeroization after signature.
+    ///
+    /// # Arguments
+    /// - `final_digest`: the digest to sign. the output must come from a collision-resistant hash function
+    fn sign_hash_sync(
+        &self,
+        final_digest: &FixedBytes<32>,
+    ) -> Result<Signature, SafeSmartAccountError> {
+        let siegel = self.key_manager.get_eoa_private_key();
+        let mut signature: Option<Signature>;
+        siegel.read_once(|private_key| {
+            let signer = LocalSigner::from_slice(
+                &hex::decode(private_key)
+                    .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
+            )
+            .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
+            signature = Some(signer.sign_hash_sync(final_digest)?);
+            drop(signer);
+        });
+        signature.ok_or(SafeSmartAccountError::Generic {
+            error_message: "unexpectedly unable to generate signature".to_string(),
+        })
+    }
+
     /// Computes the digest for a specific message to be signed by the Safe Smart Account.
     ///
     /// This is equivalent to the contract's `getMessageHashForSafe` method (including also the `encodeMessageDataForSafe` logic).
