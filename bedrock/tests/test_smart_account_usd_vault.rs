@@ -11,6 +11,7 @@ use alloy::{
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
+use anyhow::Context;
 use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use std::str::FromStr;
@@ -196,7 +197,7 @@ where
             &morpho_vault_address.to_string(),
         )
         .await
-        .unwrap_or_else(|err| panic!("{vault_name} migration failed: {err}"));
+        .with_context(|| format!("{vault_name} migration failed"))?;
     println!("✓ Migrated {vault_name} to MorphoVault");
 
     let sdai_balance_after = sdai.balanceOf(safe_address).call().await?;
