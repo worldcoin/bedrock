@@ -25,12 +25,29 @@ use crate::common::{
 
 #[tokio::test]
 async fn test_usd_vault_migration() -> anyhow::Result<()> {
+    run_usd_vault_migration(
+        "no-limit USDVault",
+        Address::from_str("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC").unwrap(),
+    )
+    .await?;
+
+    run_usd_vault_migration(
+        "main USDVault",
+        Address::from_str("0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB").unwrap(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn run_usd_vault_migration(
+    vault_name: &str,
+    usd_vault_address: Address,
+) -> anyhow::Result<()> {
     let usdc_address =
         Address::from_str("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1").unwrap();
     let sdai_address =
         Address::from_str("0x859DBE24b90C9f2f7742083d3cf59cA41f55Be5d").unwrap();
-    let usd_vault_address =
-        Address::from_str("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC").unwrap();
     let morpho_vault_address =
         Address::from_str("0xb1E80387EbE53Ff75a89736097D34dC8D9E9045B").unwrap();
     let bad_morpho_vault_address =
@@ -89,8 +106,8 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
 
     let vault_usdc_balance = usdc.balanceOf(usd_vault_address).call().await?;
     let vault_sdai_balance = sdai.balanceOf(usd_vault_address).call().await?;
-    println!("USDVault USDC balance: {vault_usdc_balance}");
-    println!("USDVault sDAI balance: {vault_sdai_balance}");
+    println!("{vault_name} USDC balance: {vault_usdc_balance}");
+    println!("{vault_name} sDAI balance: {vault_sdai_balance}");
 
     let sdai_amount: U256 = parse_units("10", 18).unwrap().into();
 
@@ -112,7 +129,7 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
         "Expected error message to contain 'Cannot migrate with zero sDAI balance', got: {}",
         error_message
     );
-    println!("✓ Migration correctly failed with zero sDAI balance error");
+    println!("✓ {vault_name} migration correctly failed with zero sDAI balance error");
 
     // Now set up sDAI balance for actual migration test
     set_erc20_balance_for_safe(&provider, sdai_address, safe_address, sdai_amount)
@@ -142,7 +159,9 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
         "Expected error message to contain 'Asset address mismatch between USDVault and ERC-4626 Vault', got: {}",
         error_message
     );
-    println!("✓ Migration correctly failed with asset address mismatch error");
+    println!(
+        "✓ {vault_name} migration correctly failed with asset address mismatch error"
+    );
 
     // Now perform successful migration
     safe_account
@@ -151,8 +170,8 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
             &morpho_vault_address.to_string(),
         )
         .await
-        .expect("USDVault migration failed");
-    println!("✓ Migrated USDVault to MorphoVault");
+        .unwrap_or_else(|err| panic!("{vault_name} migration failed: {err}"));
+    println!("✓ Migrated {vault_name} to MorphoVault");
 
     let sdai_balance_after = sdai.balanceOf(safe_address).call().await?;
     println!("sDAI balance after migration: {sdai_balance_after}");
