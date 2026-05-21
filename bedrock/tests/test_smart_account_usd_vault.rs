@@ -3,13 +3,15 @@ use std::sync::Arc;
 
 mod common;
 use alloy::{
+    network::Ethereum,
     primitives::{
         utils::{parse_ether, parse_units},
         Address, U256,
     },
-    providers::{ext::AnvilApi, ProviderBuilder},
+    providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
+use anyhow::Context;
 use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use std::str::FromStr;
@@ -25,17 +27,6 @@ use crate::common::{
 
 #[tokio::test]
 async fn test_usd_vault_migration() -> anyhow::Result<()> {
-    let usdc_address =
-        Address::from_str("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1").unwrap();
-    let sdai_address =
-        Address::from_str("0x859DBE24b90C9f2f7742083d3cf59cA41f55Be5d").unwrap();
-    let usd_vault_address =
-        Address::from_str("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC").unwrap();
-    let morpho_vault_address =
-        Address::from_str("0xb1E80387EbE53Ff75a89736097D34dC8D9E9045B").unwrap();
-    let bad_morpho_vault_address =
-        Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
-
     let owner_signer = PrivateKeySigner::random();
     let owner_key_hex = hex::encode(owner_signer.to_bytes());
     let owner = owner_signer.address();
@@ -46,10 +37,6 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
         .connect_http(anvil.endpoint_url());
     let client = AnvilBackedHttpClient::new(provider.clone());
     set_http_client(Arc::new(client));
-
-    let usdc = IERC20::new(usdc_address, &provider);
-    let sdai = IERC20::new(sdai_address, &provider);
-    let morpho_vault = IERC20::new(morpho_vault_address, &provider);
 
     let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
     println!("✓ Deployed Safe at: {safe_address}");
@@ -69,8 +56,55 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
     .await?;
     println!("✓ Set Safe as verified until far future");
 
-    set_erc20_balance_with_slot(
+    run_usd_vault_migration(
         &provider,
+        &safe_account,
+        safe_address,
+        "no-limit USDVault",
+        Address::from_str("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC").unwrap(),
+        false,
+    )
+    .await?;
+
+    run_usd_vault_migration(
+        &provider,
+        &safe_account,
+        safe_address,
+        "main USDVault",
+        Address::from_str("0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB").unwrap(),
+        true,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn run_usd_vault_migration<P>(
+    provider: &P,
+    safe_account: &SafeSmartAccount,
+    safe_address: Address,
+    vault_name: &str,
+    usd_vault_address: Address,
+    limit_withdrawals_to_deposits: bool,
+) -> anyhow::Result<()>
+where
+    P: Provider<Ethereum> + AnvilApi<Ethereum>,
+{
+    let usdc_address =
+        Address::from_str("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1").unwrap();
+    let sdai_address =
+        Address::from_str("0x859DBE24b90C9f2f7742083d3cf59cA41f55Be5d").unwrap();
+    let morpho_vault_address =
+        Address::from_str("0xb1E80387EbE53Ff75a89736097D34dC8D9E9045B").unwrap();
+    let bad_morpho_vault_address =
+        Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+
+    let usdc = IERC20::new(usdc_address, provider);
+    let sdai = IERC20::new(sdai_address, provider);
+    let morpho_vault = IERC20::new(morpho_vault_address, provider);
+
+    set_erc20_balance_with_slot(
+        provider,
         usdc_address,
         usd_vault_address,
         parse_units("10000", 6).unwrap().into(),
@@ -78,7 +112,7 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
     )
     .await?;
     set_erc20_balance_with_slot(
-        &provider,
+        provider,
         sdai_address,
         usd_vault_address,
         parse_units("10000", 18).unwrap().into(),
@@ -89,8 +123,8 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
 
     let vault_usdc_balance = usdc.balanceOf(usd_vault_address).call().await?;
     let vault_sdai_balance = sdai.balanceOf(usd_vault_address).call().await?;
-    println!("USDVault USDC balance: {vault_usdc_balance}");
-    println!("USDVault sDAI balance: {vault_sdai_balance}");
+    println!("{vault_name} USDC balance: {vault_usdc_balance}");
+    println!("{vault_name} sDAI balance: {vault_sdai_balance}");
 
     let sdai_amount: U256 = parse_units("10", 18).unwrap().into();
 
@@ -112,11 +146,21 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
         "Expected error message to contain 'Cannot migrate with zero sDAI balance', got: {}",
         error_message
     );
-    println!("✓ Migration correctly failed with zero sDAI balance error");
+    println!("✓ {vault_name} migration correctly failed with zero sDAI balance error");
 
     // Now set up sDAI balance for actual migration test
-    set_erc20_balance_for_safe(&provider, sdai_address, safe_address, sdai_amount)
+    set_erc20_balance_for_safe(provider, sdai_address, safe_address, sdai_amount)
         .await?;
+    if limit_withdrawals_to_deposits {
+        set_erc20_balance_with_slot(
+            provider,
+            usd_vault_address,
+            safe_address,
+            sdai_amount,
+            U256::from(1), // USDVault.sDAIBalances is at slot 1
+        )
+        .await?;
+    }
 
     let sdai_balance_before = sdai.balanceOf(safe_address).call().await?;
     println!("sDAI balance before migration: {sdai_balance_before}");
@@ -142,7 +186,9 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
         "Expected error message to contain 'Asset address mismatch between USDVault and ERC-4626 Vault', got: {}",
         error_message
     );
-    println!("✓ Migration correctly failed with asset address mismatch error");
+    println!(
+        "✓ {vault_name} migration correctly failed with asset address mismatch error"
+    );
 
     // Now perform successful migration
     safe_account
@@ -151,8 +197,8 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
             &morpho_vault_address.to_string(),
         )
         .await
-        .expect("USDVault migration failed");
-    println!("✓ Migrated USDVault to MorphoVault");
+        .with_context(|| format!("{vault_name} migration failed"))?;
+    println!("✓ Migrated {vault_name} to MorphoVault");
 
     let sdai_balance_after = sdai.balanceOf(safe_address).call().await?;
     println!("sDAI balance after migration: {sdai_balance_after}");
