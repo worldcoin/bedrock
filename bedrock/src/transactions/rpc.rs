@@ -958,10 +958,7 @@ mod tests {
             r.paymaster_verification_gas_limit,
             Some(U128::from(0x6dae_u32))
         );
-        assert_eq!(
-            r.paymaster_post_op_gas_limit,
-            Some(U128::from(0x706e_u32))
-        );
+        assert_eq!(r.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
         assert!(r.paymaster_data.is_some());
     }
 
