@@ -226,11 +226,16 @@ pub struct SponsorUserOperationResponse {
 }
 
 /// Response from `pm_sponsorUserOperation` (V2)
+///
+/// Paymaster fields (`paymaster`, `paymaster_data`,
+/// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
+/// absent from the bundler-sponsored response shape and present on the
+/// self-sponsored (token) response — see
+/// `docs/architecture/transactions/prepare_sign_tx.md`. They are modelled as
+/// `Option<T>` so both shapes deserialize.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PmSponsorUserOperationResponse {
-    /// Sponsorship mode; currently always "bundler-sponsored"
-    pub mode: String,
     /// Call gas limit
     pub call_gas_limit: U128,
     /// Verification gas limit
@@ -241,13 +246,13 @@ pub struct PmSponsorUserOperationResponse {
     pub max_fee_per_gas: U128,
     /// Max priority fee per gas
     pub max_priority_fee_per_gas: U128,
-    /// Paymaster address
+    /// Paymaster address (absent on the bundler-sponsored path)
     pub paymaster: Option<Address>,
-    /// Paymaster verification gas limit
-    pub paymaster_verification_gas_limit: U128,
-    /// Paymaster post-op gas limit
-    pub paymaster_post_op_gas_limit: U128,
-    /// Paymaster data
+    /// Paymaster verification gas limit (absent on the bundler-sponsored path)
+    pub paymaster_verification_gas_limit: Option<U128>,
+    /// Paymaster post-op gas limit (absent on the bundler-sponsored path)
+    pub paymaster_post_op_gas_limit: Option<U128>,
+    /// Paymaster data (absent on the bundler-sponsored path)
     pub paymaster_data: Option<Bytes>,
 }
 
@@ -259,8 +264,8 @@ impl From<PmSponsorUserOperationResponse> for SponsorUserOperationResponse {
             pre_verification_gas: r.pre_verification_gas,
             verification_gas_limit: r.verification_gas_limit,
             call_gas_limit: r.call_gas_limit,
-            paymaster_verification_gas_limit: Some(r.paymaster_verification_gas_limit),
-            paymaster_post_op_gas_limit: Some(r.paymaster_post_op_gas_limit),
+            paymaster_verification_gas_limit: r.paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit: r.paymaster_post_op_gas_limit,
             max_priority_fee_per_gas: r.max_priority_fee_per_gas,
             max_fee_per_gas: r.max_fee_per_gas,
             provider_name: RpcProviderName::Any,
@@ -908,35 +913,31 @@ mod tests {
 
     #[test]
     fn test_pm_sponsor_response_parsing() {
-        // Bundler-sponsored (no paymaster) — the common production shape
+        // Bundler-sponsored shape — paymaster fields are absent from the
+        // response body entirely (not present-with-zero). Modelled as
+        // Option<T>, so all four deserialize to None.
         let no_paymaster = json!({
-            "mode": "bundler-sponsored",
-            "callGasLimit": "0x200000",
-            "verificationGasLimit": "0x200000",
-            "preVerificationGas": "0x200000",
-            "maxFeePerGas": "0x12A05F200",
-            "maxPriorityFeePerGas": "0x12A05F200",
-            "paymaster": null,
-            "paymasterVerificationGasLimit": "0x0",
-            "paymasterPostOpGasLimit": "0x0",
-            "paymasterData": null,
+            "callGasLimit": "0x0",
+            "verificationGasLimit": "0x0",
+            "preVerificationGas": "0x0",
+            "maxFeePerGas": "0x0",
+            "maxPriorityFeePerGas": "0x0",
         });
         let r: PmSponsorUserOperationResponse =
             serde_json::from_value(no_paymaster).unwrap();
-        assert_eq!(r.mode, "bundler-sponsored");
-        assert_eq!(r.call_gas_limit, U128::from(0x0020_0000_u32));
-        assert_eq!(r.verification_gas_limit, U128::from(0x0020_0000_u32));
-        assert_eq!(r.pre_verification_gas, U256::from(0x0020_0000_u32));
-        assert_eq!(r.max_fee_per_gas, U128::from(0x0001_2A05_F200_u64));
-        assert_eq!(r.max_priority_fee_per_gas, U128::from(0x0001_2A05_F200_u64));
+        assert_eq!(r.call_gas_limit, U128::ZERO);
+        assert_eq!(r.verification_gas_limit, U128::ZERO);
+        assert_eq!(r.pre_verification_gas, U256::ZERO);
+        assert_eq!(r.max_fee_per_gas, U128::ZERO);
+        assert_eq!(r.max_priority_fee_per_gas, U128::ZERO);
         assert!(r.paymaster.is_none());
-        assert_eq!(r.paymaster_verification_gas_limit, U128::ZERO);
-        assert_eq!(r.paymaster_post_op_gas_limit, U128::ZERO);
+        assert!(r.paymaster_verification_gas_limit.is_none());
+        assert!(r.paymaster_post_op_gas_limit.is_none());
         assert!(r.paymaster_data.is_none());
 
-        // Paymaster-sponsored shape — verify optional address and data parse correctly
+        // Self-sponsored shape — all four paymaster fields present with real
+        // values from Pimlico's ERC-20 paymaster.
         let with_paymaster = json!({
-            "mode": "bundler-sponsored",
             "callGasLimit": "0x212df",
             "verificationGasLimit": "0x501ab",
             "preVerificationGas": "0x350f7",
@@ -953,23 +954,29 @@ mod tests {
             r.paymaster,
             Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
         );
-        assert_eq!(r.paymaster_verification_gas_limit, U128::from(0x6dae_u32));
-        assert_eq!(r.paymaster_post_op_gas_limit, U128::from(0x706e_u32));
+        assert_eq!(
+            r.paymaster_verification_gas_limit,
+            Some(U128::from(0x6dae_u32))
+        );
+        assert_eq!(
+            r.paymaster_post_op_gas_limit,
+            Some(U128::from(0x706e_u32))
+        );
         assert!(r.paymaster_data.is_some());
     }
 
     #[test]
     fn test_pm_sponsor_response_from_conversion() {
+        // Self-sponsored shape — all four paymaster fields present.
         let pm = PmSponsorUserOperationResponse {
-            mode: "bundler-sponsored".to_string(),
             call_gas_limit: U128::from(0x0002_12DF_u32),
             verification_gas_limit: U128::from(0x0005_01AB_u32),
             pre_verification_gas: U256::from(0x0003_50F7_u32),
             max_fee_per_gas: U128::from(0x0007_A5CF_70D5_u64),
             max_priority_fee_per_gas: U128::from(0x3B9A_CA00_u64),
             paymaster: Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1")),
-            paymaster_verification_gas_limit: U128::from(0x6dae_u32),
-            paymaster_post_op_gas_limit: U128::from(0x706e_u32),
+            paymaster_verification_gas_limit: Some(U128::from(0x6dae_u32)),
+            paymaster_post_op_gas_limit: Some(U128::from(0x706e_u32)),
             paymaster_data: Some(bytes!("01000066d1a1a4")),
         };
 
@@ -984,7 +991,7 @@ mod tests {
         assert_eq!(s.pre_verification_gas, U256::from(0x0003_50F7_u32));
         assert_eq!(s.max_fee_per_gas, U128::from(0x0007_A5CF_70D5_u64));
         assert_eq!(s.max_priority_fee_per_gas, U128::from(0x3B9A_CA00_u64));
-        // paymasterVerificationGasLimit and paymasterPostOpGasLimit are wrapped in Some
+        // paymaster gas fields pass through as Option<U128>
         assert_eq!(
             s.paymaster_verification_gas_limit,
             Some(U128::from(0x6dae_u32))
@@ -992,6 +999,30 @@ mod tests {
         assert_eq!(s.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
         // provider_name is always RpcProviderName::Any for V2
         assert_eq!(s.provider_name, RpcProviderName::Any);
+    }
+
+    #[test]
+    fn test_pm_sponsor_response_from_conversion_bundler_sponsored() {
+        // Bundler-sponsored shape — paymaster fields are None, must remain None
+        // through the conversion (not silently wrapped in Some).
+        let pm = PmSponsorUserOperationResponse {
+            call_gas_limit: U128::ZERO,
+            verification_gas_limit: U128::ZERO,
+            pre_verification_gas: U256::ZERO,
+            max_fee_per_gas: U128::ZERO,
+            max_priority_fee_per_gas: U128::ZERO,
+            paymaster: None,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_data: None,
+        };
+
+        let s = SponsorUserOperationResponse::from(pm);
+
+        assert!(s.paymaster.is_none());
+        assert!(s.paymaster_verification_gas_limit.is_none());
+        assert!(s.paymaster_post_op_gas_limit.is_none());
+        assert!(s.paymaster_data.is_none());
     }
 
     #[test]
