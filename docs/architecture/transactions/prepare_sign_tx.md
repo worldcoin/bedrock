@@ -56,7 +56,7 @@ sequenceDiagram
     App->>Server: POST /transfer/prepare<br/>{ token, amount, recipient, ... }
     Note over Server: Server encodes transfer(...)<br/>and wraps it in Safe<br/>execTransaction, then computes<br/>userOpHash. Full UserOp cached<br/>server-side.
     Server-->>App: { operationHash }
-    App->>User: Confirm: sign operationHash<br/>(opaque to user; trust required)
+    App->>User: Confirm: sign operationHash<br/>(opaque to user, trust required)
     User-->>App: Approve
     App->>App: Sign operationHash with device key
     App->>Server: POST /transfer/send<br/>{ operationHash, signature }
@@ -311,14 +311,14 @@ mined or until a deadline is reached. The user-facing state machine
 All responses use HTTP `200 OK`; success vs. error is indicated by the
 JSON-RPC body. Bedrock categorises outcomes as follows:
 
-| Category                | How it manifests                          | Bedrock's response                                                                                                            |
-| ----------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Network / transport     | HTTP error, timeout                       | Surface to user as transient; the user may retry. No signing occurred.                                                        |
-| Sponsorship declined    | `-32602` with `token` + `paymasterAddress` | Run the self-sponsored retry (steps 5–7).                                                                                     |
-| Invalid request         | `-32602` without the decline payload      | Bug in Bedrock — should not happen in production. Surface generically; do not retry.                                          |
-| Endpoint internal error | `-32603`                                  | Surface as transient; user may retry. No signing occurred.                                                                    |
-| Bundler error on send   | error on `eth_sendUserOperation`          | Surface to user; the UserOp was signed but not accepted by the bundler. Bedrock does not auto-retry sends to avoid duplicates. |
-| Mined-revert            | receipt with `success: false`             | Surface as a failed transaction. The on-chain effect is whatever the EntryPoint did before reverting (typically nothing).      |
+| Category                | How it manifests                           | Bedrock's response                                                                                                             |
+| ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Network / transport     | HTTP error, timeout                        | Surface to user as transient; the user may retry. No signing occurred.                                                         |
+| Sponsorship declined    | `-32602` with `token` + `paymasterAddress` | Run the self-sponsored retry (steps 5–7).                                                                                      |
+| Invalid request         | `-32602` without the decline payload       | Bug in Bedrock — should not happen in production. Surface generically; do not retry.                                           |
+| Endpoint internal error | `-32603`                                   | Surface as transient; user may retry. No signing occurred.                                                                     |
+| Bundler error on send   | error on `eth_sendUserOperation`           | Surface to user; the UserOp was signed but not accepted by the bundler. Bedrock does not auto-retry sends to avoid duplicates. |
+| Mined-revert            | receipt with `success: false`              | Surface as a failed transaction. The on-chain effect is whatever the EntryPoint did before reverting (typically nothing).      |
 
 In every category Bedrock retains the locally-built calldata and the
 locally-computed userOpHash, so the user-facing failure message can be
