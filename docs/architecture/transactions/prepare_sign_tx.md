@@ -38,50 +38,11 @@ modulo an `approve()` prepended by Bedrock itself on the ERC-20 retry path.
 
 ## What this design replaces
 
-Prior to this design, the wallet sent transactions through a two-step
-prepare/send flow served by a separate backend. The device transmitted the
-user's _intent_ — token, amount, recipient — and the backend constructed
-the calldata, wrapped it in a Safe `execTransaction`, computed the UserOp
-hash, and returned only that hash to the device. The user's device signed
-the hash without ever holding the bytes it represented.
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant App as Mobile app
-    participant Server as Prepare/send server
-    participant Bundler
-
-    User->>App: Intent (send X WLD to Alice)
-    App->>Server: POST /transfer/prepare<br/>{ token, amount, recipient, ... }
-    Note over Server: Server encodes transfer(...)<br/>and wraps it in Safe<br/>execTransaction, then computes<br/>userOpHash. Full UserOp cached<br/>server-side.
-    Server-->>App: { operationHash }
-    App->>User: Confirm: sign operationHash<br/>(opaque to user, trust required)
-    User-->>App: Approve
-    App->>App: Sign operationHash with device key
-    App->>Server: POST /transfer/send<br/>{ operationHash, signature }
-    Note over Server: Retrieves cached UserOp,<br/>attaches signature, submits.
-    Server->>Bundler: signed UserOp
-    Bundler-->>Server: tx hash
-    Server-->>App: tx hash
-```
-
-Two properties of this legacy flow motivated the redesign:
-
-- **The user signs a hash, not its preimage.** `operationHash` is computed
-  by the server. The device has no independent way to confirm the hash
-  corresponds to the intent the user approved. A compromised or
-  misconfigured backend could in principle return a hash for a different
-  recipient, a different amount, or a different contract call, and the
-  device would sign it.
-- **The calldata is held by the backend between prepare and send.** The
-  UserOp is cached server-side and only retrieved at send time. The device
-  cannot inspect what is about to be broadcast.
-
-The design described in the rest of this document closes both gaps by
-moving calldata construction onto the device, computing the UserOp hash
-locally from bytes the device holds, and treating the remote endpoint as a
-sponsor-and-relay rather than a builder.
+Earlier wallet flows had a remote service construct the calldata and the
+UserOp hash from the user's intent (token, amount, recipient); the device
+then signed the resulting hash. This design moves calldata construction
+onto the device so the user signs only payloads the device can
+independently verify.
 
 ## High-level flow
 
