@@ -70,8 +70,8 @@ For every transaction:
 7. **Submit.** `eth_sendUserOperation` ships the signed UserOp through the
    relay; the relay forwards it to a bundler which calls `handleOps` on the
    [EntryPoint](https://eips.ethereum.org/EIPS/eip-4337#entrypoint).
-8. **Poll for receipt.** Bedrock polls `eth_getUserOperationByHash` /
-   `eth_getUserOperationReceipt` until the UserOp is mined.
+8. **Poll for receipt.** Bedrock polls `eth_getUserOperationReceipt` until
+   the UserOp is mined.
 
 From iOS or Android, all of the above is a single FFI call; the two
 round-trips inside it (sponsor + send) are not exposed to the platform layer.
@@ -251,10 +251,9 @@ polling.
 
 ### 8. Poll for receipt
 
-`eth_getUserOperationByHash` (transaction-mined check) and
-`eth_getUserOperationReceipt` (full receipt with logs) are polled until
-mined or until a deadline is reached. The user-facing state machine
-(`pending`, `mined`, `failed`) is derived from these results.
+`eth_getUserOperationReceipt` is polled until the UserOp is mined or until a
+deadline is reached. The user-facing state machine (`pending`, `mined`,
+`failed`) is derived from the receipt.
 
 ## Error handling
 
