@@ -110,7 +110,7 @@ sequenceDiagram
     Bedrock-->>User: ✓ Sent
 ```
 
-**Wire shape — bundler-sponsored response:**
+**Wire shape — sponsored response:**
 
 ```json
 {
@@ -227,7 +227,7 @@ user can be shown exactly what they are about to sign.
 callData, signature placeholder, optional factory/factoryData) and an empty
 context. The endpoint inspects current conditions and either:
 
-- returns a bundler-sponsored response (zeroed gas, absent paymaster fields), or
+- returns a sponsored response (zeroed gas, absent paymaster fields), or
 - returns `-32602 "sponsorship declined"` with the structured payload above.
 
 Bedrock never retries on transport errors or `-32603` (internal server

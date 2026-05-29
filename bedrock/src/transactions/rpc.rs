@@ -258,14 +258,16 @@ pub struct PmSponsorUserOperationResponse {
 
 /// Context object passed as the third parameter of `pm_sponsorUserOperation`.
 ///
-/// V2 sponsorship is a two-mode protocol: an initial bundler-sponsored attempt
-/// with empty context, followed (on a structured decline) by a self-sponsored
-/// retry that names the ERC-20 token paying for gas. See
+/// V2 sponsorship is a two-mode protocol: an initial protocol-sponsored
+/// attempt with empty context, followed (on a structured decline) by a
+/// self-sponsored retry that names the ERC-20 token paying for gas. See
 /// `docs/architecture/transactions/prepare_sign_tx.md`.
 #[derive(Debug, Clone)]
 pub enum SponsorshipContext {
-    /// Empty context — request bundler-sponsored mode.
-    Bundler,
+    /// Empty context — request protocol sponsorship (the wallet provider
+    /// pays gas). Distinct from the ERC-4337 notion of bundler sponsorship,
+    /// which implies a user-appointed bundler choosing to sponsor.
+    Protocol,
     /// Self-sponsored mode with the given ERC-20 token paying for gas.
     SelfSponsoredToken(Address),
 }
@@ -273,7 +275,7 @@ pub enum SponsorshipContext {
 impl SponsorshipContext {
     fn to_json_value(&self) -> serde_json::Value {
         match self {
-            Self::Bundler => serde_json::json!({}),
+            Self::Protocol => serde_json::json!({}),
             Self::SelfSponsoredToken(token) => {
                 serde_json::json!({ "token": format!("{token:?}") })
             }
@@ -437,9 +439,10 @@ impl RpcClient {
     /// Requests sponsorship for a `UserOperation` via `pm_sponsorUserOperation` (V2)
     ///
     /// Sends the three-element params vec `[userOperation, entryPoint, context]`
-    /// per the V2 contract. `context` is `SponsorshipContext::Bundler` (serializes
-    /// to `{}`) for the initial attempt and `SponsorshipContext::SelfSponsoredToken`
-    /// for the self-sponsored retry after a decline.
+    /// per the V2 contract. `context` is `SponsorshipContext::Protocol`
+    /// (serializes to `{}`) for the initial attempt and
+    /// `SponsorshipContext::SelfSponsoredToken` for the self-sponsored retry
+    /// after a decline.
     ///
     /// # Errors
     ///
@@ -947,8 +950,8 @@ mod tests {
 
     #[test]
     fn test_sponsorship_context_serialization() {
-        // Bundler-sponsored: empty object is sent as the third param.
-        assert_eq!(SponsorshipContext::Bundler.to_json_value(), json!({}));
+        // Protocol-sponsored: empty object is sent as the third param.
+        assert_eq!(SponsorshipContext::Protocol.to_json_value(), json!({}));
 
         // Self-sponsored: { "token": "0x..." } with a lowercase 0x-prefixed
         // hex address, matching the entry_point formatting convention.
