@@ -256,23 +256,6 @@ pub struct PmSponsorUserOperationResponse {
     pub paymaster_data: Option<Bytes>,
 }
 
-impl From<PmSponsorUserOperationResponse> for SponsorUserOperationResponse {
-    fn from(r: PmSponsorUserOperationResponse) -> Self {
-        Self {
-            paymaster: r.paymaster,
-            paymaster_data: r.paymaster_data,
-            pre_verification_gas: r.pre_verification_gas,
-            verification_gas_limit: r.verification_gas_limit,
-            call_gas_limit: r.call_gas_limit,
-            paymaster_verification_gas_limit: r.paymaster_verification_gas_limit,
-            paymaster_post_op_gas_limit: r.paymaster_post_op_gas_limit,
-            max_priority_fee_per_gas: r.max_priority_fee_per_gas,
-            max_fee_per_gas: r.max_fee_per_gas,
-            provider_name: RpcProviderName::Any,
-        }
-    }
-}
-
 /// Context object passed as the third parameter of `pm_sponsorUserOperation`.
 ///
 /// V2 sponsorship is a two-mode protocol: an initial bundler-sponsored attempt
@@ -960,66 +943,6 @@ mod tests {
         );
         assert_eq!(r.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
         assert!(r.paymaster_data.is_some());
-    }
-
-    #[test]
-    fn test_pm_sponsor_response_from_conversion() {
-        // Self-sponsored shape — all four paymaster fields present.
-        let pm = PmSponsorUserOperationResponse {
-            call_gas_limit: U128::from(0x0002_12DF_u32),
-            verification_gas_limit: U128::from(0x0005_01AB_u32),
-            pre_verification_gas: U256::from(0x0003_50F7_u32),
-            max_fee_per_gas: U128::from(0x0007_A5CF_70D5_u64),
-            max_priority_fee_per_gas: U128::from(0x3B9A_CA00_u64),
-            paymaster: Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1")),
-            paymaster_verification_gas_limit: Some(U128::from(0x6dae_u32)),
-            paymaster_post_op_gas_limit: Some(U128::from(0x706e_u32)),
-            paymaster_data: Some(bytes!("01000066d1a1a4")),
-        };
-
-        let s = SponsorUserOperationResponse::from(pm);
-
-        assert_eq!(
-            s.paymaster,
-            Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
-        );
-        assert_eq!(s.call_gas_limit, U128::from(0x0002_12DF_u32));
-        assert_eq!(s.verification_gas_limit, U128::from(0x0005_01AB_u32));
-        assert_eq!(s.pre_verification_gas, U256::from(0x0003_50F7_u32));
-        assert_eq!(s.max_fee_per_gas, U128::from(0x0007_A5CF_70D5_u64));
-        assert_eq!(s.max_priority_fee_per_gas, U128::from(0x3B9A_CA00_u64));
-        // paymaster gas fields pass through as Option<U128>
-        assert_eq!(
-            s.paymaster_verification_gas_limit,
-            Some(U128::from(0x6dae_u32))
-        );
-        assert_eq!(s.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
-        // provider_name is always RpcProviderName::Any for V2
-        assert_eq!(s.provider_name, RpcProviderName::Any);
-    }
-
-    #[test]
-    fn test_pm_sponsor_response_from_conversion_bundler_sponsored() {
-        // Bundler-sponsored shape — paymaster fields are None, must remain None
-        // through the conversion (not silently wrapped in Some).
-        let pm = PmSponsorUserOperationResponse {
-            call_gas_limit: U128::ZERO,
-            verification_gas_limit: U128::ZERO,
-            pre_verification_gas: U256::ZERO,
-            max_fee_per_gas: U128::ZERO,
-            max_priority_fee_per_gas: U128::ZERO,
-            paymaster: None,
-            paymaster_verification_gas_limit: None,
-            paymaster_post_op_gas_limit: None,
-            paymaster_data: None,
-        };
-
-        let s = SponsorUserOperationResponse::from(pm);
-
-        assert!(s.paymaster.is_none());
-        assert!(s.paymaster_verification_gas_limit.is_none());
-        assert!(s.paymaster_post_op_gas_limit.is_none());
-        assert!(s.paymaster_data.is_none());
     }
 
     #[test]
