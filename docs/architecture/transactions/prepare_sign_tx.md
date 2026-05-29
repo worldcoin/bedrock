@@ -17,7 +17,7 @@ device, and the user should sign only payloads they can independently verify.
 Bedrock is structured around that invariant:
 
 - **Bedrock constructs the calldata locally.** ERC-20 transfer encoding,
-  Safe `execTransaction` wrapping, paymaster `approve()` insertion (when
+  Safe `executeUserOp` wrapping, paymaster `approve()` insertion (when
   applicable) — all of it happens on device, using
   [Alloy](https://github.com/alloy-rs/core) primitives that the user (or a
   third-party auditor) can inspect by reading the Bedrock source.
@@ -50,10 +50,12 @@ For every transaction:
 
 1. **Build callData.** Encode the contract call (ERC-20 `transfer`, ERC-4626
    `deposit`, etc.) using Alloy.
-2. **Wrap in `execTransaction`.** The user's wallet is a
-   [Safe smart account](https://docs.safe.global/) (ERC-4337 compatible
-   variant). Bedrock wraps the inner call in a Safe `execTransaction` so the
-   UserOp executes through the smart account.
+2. **Wrap in `executeUserOp`.** The user's wallet is a
+   [Safe smart account](https://docs.safe.global/) with the ERC-4337 module
+   installed. Bedrock wraps the inner call in a
+   `executeUserOp(to, value, data, operation)` invocation on the module so
+   the UserOp executes through the smart account when the EntryPoint
+   dispatches it.
 3. **Compute the UserOp hash locally.** Used for confirmation UI and to verify
    later that the chain transaction matches what was signed.
 4. **Ask for sponsorship.** Bedrock calls `pm_sponsorUserOperation` with an
@@ -88,7 +90,7 @@ sequenceDiagram
 
     User->>Bedrock: Intent (send X WLD to Alice)
     Bedrock->>Bedrock: Build callData (Alloy)
-    Bedrock->>Bedrock: Wrap in Safe execTransaction
+    Bedrock->>Bedrock: Wrap in Safe executeUserOp
     Bedrock->>Bedrock: Compute userOpHash
 
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
@@ -145,13 +147,13 @@ sequenceDiagram
     participant Bundler
 
     User->>Bedrock: Intent
-    Bedrock->>Bedrock: Build callData, wrap in Safe execTransaction
+    Bedrock->>Bedrock: Build callData, wrap in Safe executeUserOp
 
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
     Endpoint-->>Bedrock: -32602 "sponsorship declined"<br/>data: { token, paymasterAddress, costNative?, costToken? }
 
     Bedrock->>Bedrock: Prepend approve(paymaster, amount) to callData
-    Bedrock->>Bedrock: Rebuild Safe execTransaction with new callData
+    Bedrock->>Bedrock: Rebuild Safe executeUserOp with new callData
 
     Bedrock->>Endpoint: pm_sponsorUserOperation(updatedUserOp, entryPoint, { token })
     Endpoint-->>Bedrock: real gas + paymaster + paymasterData
@@ -209,11 +211,12 @@ migrations, etc., the relevant function is encoded against the on-chain ABI.
 
 Nothing leaves the device at this step.
 
-### 2. Wrap in `execTransaction`
+### 2. Wrap in `executeUserOp`
 
-The Safe smart account requires the actual call to be wrapped in a Safe
-`execTransaction(target, value, data, operation, …)`. This becomes the
-`callData` field of the UserOp.
+The actual call is wrapped in `executeUserOp(to, value, data, operation)` on
+the Safe's ERC-4337 module. This becomes the `callData` field of the UserOp;
+when the EntryPoint dispatches the UserOp, it calls `executeUserOp` on the
+smart account, which performs the inner call.
 
 ### 3. Compute the UserOp hash
 
@@ -242,7 +245,7 @@ When declined, Bedrock:
    paymaster contract can transfer the fee at execution time. `amount` is
    chosen high enough to cover the worst-case gas cost (the contract will
    only pull what it actually charges).
-2. Re-wraps the new callData in a Safe `execTransaction`.
+2. Re-wraps the new callData in a Safe `executeUserOp`.
 3. Re-issues `pm_sponsorUserOperation` with `context = { "token": <token> }`.
 
 The second response carries the real gas estimates and the paymaster
