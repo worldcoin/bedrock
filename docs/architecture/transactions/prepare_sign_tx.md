@@ -16,9 +16,9 @@ The wallet is **self-custodial**. The user's signing key never leaves the
 device, and the user should sign only payloads they can independently verify.
 Bedrock is structured around that invariant:
 
-- **Bedrock constructs the calldata locally.** ERC-20 transfer encoding,
-  Safe `executeUserOp` wrapping, paymaster `approve()` insertion (when
-  applicable) — all of it happens on device, using
+- **Bedrock constructs the calldata locally.** All encoding — ERC-20
+  calls, Safe `executeUserOp` wrapping, and any composition needed for a
+  given transaction — happens on device, using
   [Alloy](https://github.com/alloy-rs/core) primitives that the user (or a
   third-party auditor) can inspect by reading the Bedrock source.
 - **The remote sponsorship endpoint is a sponsor and a relay.** It chooses
@@ -33,8 +33,7 @@ Bedrock is structured around that invariant:
 
 The boundary is sharp: anything the server returns is treated as untrusted
 input. Gas fields and paymaster fields are merged into the UserOp, but the
-calldata Bedrock submits is byte-equal to the calldata Bedrock built locally,
-modulo an `approve()` prepended by Bedrock itself on the ERC-20 retry path.
+calldata Bedrock submits is byte-equal to the calldata Bedrock built locally.
 
 ## What this design replaces
 
@@ -62,11 +61,10 @@ For every transaction:
    empty context. The endpoint either sponsors directly (the wallet pays gas
    on the user's behalf) or returns a structured decline with the information
    needed to retry as a self-paid transaction.
-5. **(Decline branch only.) Prepare a self-sponsored retry.** Bedrock prepends
-   `approve(paymaster, amount)` to callData so the paymaster contract can pull
-   the ERC-20 fee at execution time, and re-issues `pm_sponsorUserOperation`
-   with the chosen token in context. The response carries real gas estimates
-   and a paymaster signature.
+5. **(Decline branch only.) Retry as self-sponsored.** Bedrock retries the
+   request in self-sponsored mode using the token returned in the decline
+   payload; the endpoint then returns the gas estimates and paymaster
+   fields needed to finalise the UserOp.
 6. **Sign.** Bedrock merges the gas (and paymaster, if any) fields into the
    UserOp and signs locally with the device key.
 7. **Submit.** `eth_sendUserOperation` ships the signed UserOp through the
@@ -152,8 +150,7 @@ sequenceDiagram
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
     Endpoint-->>Bedrock: -32602 "sponsorship declined"<br/>data: { token, paymasterAddress, costNative?, costToken? }
 
-    Bedrock->>Bedrock: Prepend approve(paymaster, amount) to callData
-    Bedrock->>Bedrock: Rebuild Safe executeUserOp with new callData
+    Bedrock->>Bedrock: Prepare self-sponsored userOp
 
     Bedrock->>Endpoint: pm_sponsorUserOperation(updatedUserOp, entryPoint, { token })
     Endpoint-->>Bedrock: real gas + paymaster + paymasterData
@@ -173,7 +170,7 @@ sequenceDiagram
 | Field              | Required | Meaning                                                                                          |
 | ------------------ | -------- | ------------------------------------------------------------------------------------------------ |
 | `token`            | yes      | ERC-20 token address the user should pay gas in (e.g. WLD). Bedrock uses this for the retry.     |
-| `paymasterAddress` | yes      | ERC-20 paymaster contract that will pull the fee. Bedrock uses this as the `approve()` spender.  |
+| `paymasterAddress` | yes      | ERC-20 paymaster contract that will pull the fee at execution time.                              |
 | `costNative`       | no       | Advisory: estimated gas cost in native units (hex wei). May be absent.                           |
 | `costToken`        | no       | Advisory: estimated cost in the token's smallest unit (hex). Surface to the user when available. |
 
@@ -233,23 +230,12 @@ context. The endpoint inspects current conditions and either:
 - returns a sponsored response (zeroed gas, absent paymaster fields), or
 - returns `-32602 "sponsorship declined"` with the structured payload above.
 
-Bedrock never retries on transport errors or `-32603` (internal server
-error) — those surface as errors to the user. The decline payload is the
-only branch that triggers the self-sponsored retry.
-
 ### 5. Self-sponsored retry
 
-When declined, Bedrock:
-
-1. Prepends an ERC-20 `approve(paymasterAddress, amount)` to callData so the
-   paymaster contract can transfer the fee at execution time. `amount` is
-   chosen high enough to cover the worst-case gas cost (the contract will
-   only pull what it actually charges).
-2. Re-wraps the new callData in a Safe `executeUserOp`.
-3. Re-issues `pm_sponsorUserOperation` with `context = { "token": <token> }`.
-
-The second response carries the real gas estimates and the paymaster
-signature.
+When the endpoint declines to sponsor, Bedrock retries the request in
+self-sponsored mode using the token returned in the decline payload. The
+second response carries the gas estimates and paymaster fields needed to
+finalise the UserOp.
 
 ### 6. Sign
 
