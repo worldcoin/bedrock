@@ -4,6 +4,8 @@ set -e
 # Creates the dynamic Package.swift file for release.
 # Usage: ./archive_swift.sh --asset-url <URL> --checksum <CHECKSUM> --release-version <VERSION>
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Initialize variables
 ASSET_URL=""
 CHECKSUM=""
@@ -56,40 +58,21 @@ echo "   Checksum: $CHECKSUM"
 echo "   Release Version: $RELEASE_VERSION"
 echo ""
 
-cat > Package.swift << EOF
-// swift-tools-version: 5.7
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+awk -v url="$ASSET_URL" -v checksum="$CHECKSUM" '
+/<binary_target>/ {
+    print "        .binaryTarget("
+    print "            name: \"BedrockFFI\","
+    print "            url: \"" url "\","
+    print "            checksum: \"" checksum "\""
+    print "        )"
+    next
+}
+{ print }
+' "$SCRIPT_DIR/Package.swift.template" > Package.swift
 
-// Release version: $RELEASE_VERSION
+echo "// Release version: $RELEASE_VERSION" >> Package.swift
 
-import PackageDescription
-
-let package = Package(
-    name: "Bedrock",
-    platforms: [
-        .iOS(.v13)
-    ],
-    products: [
-        .library(
-            name: "Bedrock",
-            targets: ["Bedrock"]),
-    ],
-    targets: [
-        .target(
-            name: "Bedrock",
-            dependencies: ["BedrockFFI"],
-            path: "Sources/Bedrock"
-        ),
-        .binaryTarget(
-            name: "BedrockFFI",
-            url: "$ASSET_URL",
-            checksum: "$CHECKSUM"
-        )
-    ]
-)
-EOF
-
-swiftlint lint --autocorrect Package.swift 
+swiftlint lint --autocorrect Package.swift
 
 echo ""
 echo "✅ Package.swift built successfully for version $RELEASE_VERSION!"
