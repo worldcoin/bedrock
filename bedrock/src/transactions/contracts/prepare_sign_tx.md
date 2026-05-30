@@ -23,19 +23,10 @@ Bedrock is structured around that invariant:
   given transaction — happens on device, using
   [Alloy](https://github.com/alloy-rs/core) primitives that the user (or a
   third-party auditor) can inspect by reading the Bedrock source.
-- **The remote sponsorship endpoint is a sponsor and a relay.** It chooses
-  whether to pay gas, attaches paymaster signatures when the user pays in an
-  ERC-20 token, and forwards the signed UserOp to a bundler. It does not
-  construct calldata, does not modify the user's calldata, and the on-chain
-  outcome can be diffed against what Bedrock built before signing.
 - **The user signs the UserOp hash, not a server-provided blob.** The hash is
   derived from the fully-assembled UserOp (sender, nonce, callData, gas
   fields, paymaster fields if any) per
   [ERC-4337 §4.1](https://eips.ethereum.org/EIPS/eip-4337#useroperation).
-
-The boundary is sharp: anything the server returns is treated as untrusted
-input. Gas fields and paymaster fields are merged into the UserOp, but the
-calldata Bedrock submits is byte-equal to the calldata Bedrock built locally.
 
 ## What this design replaces
 
