@@ -39,15 +39,21 @@ pub enum Id {
 /// Supported RPC methods in Bedrock
 #[derive(Debug, Clone, Serialize)]
 pub enum RpcMethod {
-    /// Request sponsorship for a `UserOperation`
+    /// Request sponsorship for a `UserOperation` (V1)
     #[serde(rename = "wa_sponsorUserOperation")]
     SponsorUserOperation,
+    /// Request sponsorship for a `UserOperation` (V2)
+    #[serde(rename = "pm_sponsorUserOperation")]
+    PmSponsorUserOperation,
     /// Queries the status of a `UserOperation`
     #[serde(rename = "wa_getUserOperationReceipt")]
     WaGetUserOperationReceipt,
-    /// Submit a signed `UserOperation`
+    /// Submit a signed `UserOperation` (V1)
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
+    /// Submit a signed `UserOperation` (V2)
+    #[serde(rename = "eth_sendUserOperation")]
+    SendUserOperationV2,
     /// Make a read call to a smart contract
     #[serde(rename = "eth_call")]
     EthCall,
@@ -86,8 +92,11 @@ impl RpcMethod {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::SponsorUserOperation => "wa_sponsorUserOperation",
+            Self::PmSponsorUserOperation => "pm_sponsorUserOperation",
             Self::WaGetUserOperationReceipt => "wa_getUserOperationReceipt",
-            Self::SendUserOperation => "eth_sendUserOperation",
+            Self::SendUserOperation | Self::SendUserOperationV2 => {
+                "eth_sendUserOperation"
+            }
             Self::EthCall => "eth_call",
             Self::SupportedEntryPoints => "eth_supportedEntryPoints",
         }
@@ -216,6 +225,64 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
+/// Response from `pm_sponsorUserOperation` (V2)
+///
+/// Paymaster fields (`paymaster`, `paymaster_data`,
+/// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
+/// absent from the bundler-sponsored response shape and present on the
+/// self-sponsored (token) response — see
+/// `bedrock/src/transactions/contracts/prepare_sign_tx.md`. They are modelled as
+/// `Option<T>` so both shapes deserialize.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PmSponsorUserOperationResponse {
+    /// Call gas limit
+    pub call_gas_limit: U128,
+    /// Verification gas limit
+    pub verification_gas_limit: U128,
+    /// Pre-verification gas
+    pub pre_verification_gas: U256,
+    /// Max fee per gas
+    pub max_fee_per_gas: U128,
+    /// Max priority fee per gas
+    pub max_priority_fee_per_gas: U128,
+    /// Paymaster address (absent on the bundler-sponsored path)
+    pub paymaster: Option<Address>,
+    /// Paymaster verification gas limit (absent on the bundler-sponsored path)
+    pub paymaster_verification_gas_limit: Option<U128>,
+    /// Paymaster post-op gas limit (absent on the bundler-sponsored path)
+    pub paymaster_post_op_gas_limit: Option<U128>,
+    /// Paymaster data (absent on the bundler-sponsored path)
+    pub paymaster_data: Option<Bytes>,
+}
+
+/// Context object passed as the third parameter of `pm_sponsorUserOperation`.
+///
+/// V2 sponsorship is a two-mode protocol: an initial protocol-sponsored
+/// attempt with empty context, followed (on a structured decline) by a
+/// self-sponsored retry that names the ERC-20 token paying for gas. See
+/// `bedrock/src/transactions/contracts/prepare_sign_tx.md`.
+#[derive(Debug, Clone)]
+pub enum SponsorshipContext {
+    /// Empty context — request protocol sponsorship (the wallet provider
+    /// pays gas). Distinct from the ERC-4337 notion of bundler sponsorship,
+    /// which implies a user-appointed bundler choosing to sponsor.
+    Protocol,
+    /// Self-sponsored mode with the given ERC-20 token paying for gas.
+    SelfSponsoredToken(Address),
+}
+
+impl SponsorshipContext {
+    fn to_json_value(&self) -> serde_json::Value {
+        match self {
+            Self::Protocol => serde_json::json!({}),
+            Self::SelfSponsoredToken(token) => {
+                serde_json::json!({ "token": format!("{token:?}") })
+            }
+        }
+    }
+}
+
 /// Response from `wa_getUserOperationReceipt`
 #[derive(Debug, Deserialize, uniffi::Record, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -242,7 +309,7 @@ pub struct WaGetUserOperationReceiptResponse {
 
 /// RPC client for handling 4337 `UserOperation` requests
 ///
-/// This client communicates with the app-backend's RPC endpoint at `/v1/rpc/{network}`.
+/// This client communicates with the RPC endpoint at `/v1/rpc/{network}` and `/v2/rpc/{network}`.
 pub struct RpcClient {
     http_client: Arc<dyn AuthenticatedHttpClient>,
 }
@@ -259,7 +326,9 @@ impl RpcClient {
     /// Constructs the RPC endpoint URL for the specified network and method
     fn rpc_endpoint(network: Network, method: &RpcMethod) -> String {
         let version = match method {
-            RpcMethod::EthCall => "v2",
+            RpcMethod::EthCall
+            | RpcMethod::PmSponsorUserOperation
+            | RpcMethod::SendUserOperationV2 => "v2",
             _ => "v1",
         };
         format!("/{version}/rpc/{}", network.network_name())
@@ -367,6 +436,42 @@ impl RpcClient {
             .await
     }
 
+    /// Requests sponsorship for a `UserOperation` via `pm_sponsorUserOperation` (V2)
+    ///
+    /// Sends the three-element params vec `[userOperation, entryPoint, context]`
+    /// per the V2 contract. `context` is `SponsorshipContext::Protocol`
+    /// (serializes to `{}`) for the initial attempt and
+    /// `SponsorshipContext::SelfSponsoredToken` for the self-sponsored retry
+    /// after a decline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The HTTP request fails
+    /// - The request serialization fails
+    /// - The response parsing fails
+    /// - The RPC returns an error response
+    pub async fn pm_sponsor_user_operation(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entry_point: Address,
+        context: &SponsorshipContext,
+    ) -> Result<PmSponsorUserOperationResponse, RpcError> {
+        let params = vec![
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+            serde_json::Value::String(format!("{entry_point:?}")),
+            context.to_json_value(),
+        ];
+        self.rpc_call(
+            network,
+            RpcMethod::PmSponsorUserOperation,
+            params,
+            RpcProviderName::Any,
+        )
+        .await
+    }
+
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
     ///
     /// # Errors
@@ -391,6 +496,45 @@ impl RpcClient {
 
         let result: String = self
             .rpc_call(network, RpcMethod::SendUserOperation, params, provider)
+            .await?;
+
+        FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            error_message: format!("Invalid userOpHash format: {e}"),
+        })
+    }
+
+    /// Submits a signed `UserOperation` via the V2 RPC endpoint (`/v2/rpc/{network}`).
+    ///
+    /// Identical wire format to [`send_user_operation`] but routed to the V2 path.
+    /// Use this from V2 execution flows (e.g. `sign_and_execute_v2`) so that
+    /// V1 callers remain fully on the legacy path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The HTTP request fails
+    /// - The request serialization fails
+    /// - The response parsing fails
+    /// - The RPC returns an error response
+    /// - The returned user operation hash is invalid
+    pub async fn send_user_operation_v2(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entrypoint: Address,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let params = vec![
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+            serde_json::Value::String(format!("{entrypoint:?}")),
+        ];
+
+        let result: String = self
+            .rpc_call(
+                network,
+                RpcMethod::SendUserOperationV2,
+                params,
+                RpcProviderName::Any,
+            )
             .await?;
 
         FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
@@ -705,5 +849,116 @@ mod tests {
         assert_eq!(serialized["paymasterData"], "0x");
         assert_eq!(serialized["paymasterVerificationGasLimit"], "0xa");
         assert_eq!(serialized["paymasterPostOpGasLimit"], "0x0");
+    }
+
+    #[test]
+    fn test_rpc_endpoint_v2_methods_route_to_v2() {
+        let network = Network::WorldChain;
+        for method in [
+            RpcMethod::PmSponsorUserOperation,
+            RpcMethod::SendUserOperationV2,
+            RpcMethod::EthCall,
+        ] {
+            let url = RpcClient::rpc_endpoint(network, &method);
+            assert!(
+                url.starts_with("/v2/"),
+                "{method:?} should route to /v2/, got {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rpc_endpoint_legacy_methods_stay_on_v1() {
+        let network = Network::WorldChain;
+        for method in [
+            RpcMethod::SponsorUserOperation,
+            RpcMethod::SendUserOperation,
+            RpcMethod::WaGetUserOperationReceipt,
+            RpcMethod::SupportedEntryPoints,
+        ] {
+            let url = RpcClient::rpc_endpoint(network, &method);
+            assert!(
+                url.starts_with("/v1/"),
+                "{method:?} should route to /v1/, got {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rpc_endpoint_includes_network_name() {
+        let url = RpcClient::rpc_endpoint(
+            Network::WorldChain,
+            &RpcMethod::SendUserOperationV2,
+        );
+        assert_eq!(url, "/v2/rpc/worldchain");
+
+        let url =
+            RpcClient::rpc_endpoint(Network::WorldChain, &RpcMethod::SendUserOperation);
+        assert_eq!(url, "/v1/rpc/worldchain");
+    }
+
+    #[test]
+    fn test_pm_sponsor_response_parsing() {
+        // Bundler-sponsored shape — paymaster fields are absent from the
+        // response body entirely (not present-with-zero). Modelled as
+        // Option<T>, so all four deserialize to None.
+        let no_paymaster = json!({
+            "callGasLimit": "0x0",
+            "verificationGasLimit": "0x0",
+            "preVerificationGas": "0x0",
+            "maxFeePerGas": "0x0",
+            "maxPriorityFeePerGas": "0x0",
+        });
+        let r: PmSponsorUserOperationResponse =
+            serde_json::from_value(no_paymaster).unwrap();
+        assert_eq!(r.call_gas_limit, U128::ZERO);
+        assert_eq!(r.verification_gas_limit, U128::ZERO);
+        assert_eq!(r.pre_verification_gas, U256::ZERO);
+        assert_eq!(r.max_fee_per_gas, U128::ZERO);
+        assert_eq!(r.max_priority_fee_per_gas, U128::ZERO);
+        assert!(r.paymaster.is_none());
+        assert!(r.paymaster_verification_gas_limit.is_none());
+        assert!(r.paymaster_post_op_gas_limit.is_none());
+        assert!(r.paymaster_data.is_none());
+
+        // Self-sponsored shape — all four paymaster fields present with real
+        // values from Pimlico's ERC-20 paymaster.
+        let with_paymaster = json!({
+            "callGasLimit": "0x212df",
+            "verificationGasLimit": "0x501ab",
+            "preVerificationGas": "0x350f7",
+            "maxFeePerGas": "0x7A5CF70D5",
+            "maxPriorityFeePerGas": "0x3B9ACA00",
+            "paymaster": "0x0000000000000039cd5e8aE05257CE51C473ddd1",
+            "paymasterVerificationGasLimit": "0x6dae",
+            "paymasterPostOpGasLimit": "0x706e",
+            "paymasterData": "0x01000066d1a1a4",
+        });
+        let r: PmSponsorUserOperationResponse =
+            serde_json::from_value(with_paymaster).unwrap();
+        assert_eq!(
+            r.paymaster,
+            Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
+        );
+        assert_eq!(
+            r.paymaster_verification_gas_limit,
+            Some(U128::from(0x6dae_u32))
+        );
+        assert_eq!(r.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
+        assert!(r.paymaster_data.is_some());
+    }
+
+    #[test]
+    fn test_sponsorship_context_serialization() {
+        // Protocol-sponsored: empty object is sent as the third param.
+        assert_eq!(SponsorshipContext::Protocol.to_json_value(), json!({}));
+
+        // Self-sponsored: { "token": "0x..." } with a lowercase 0x-prefixed
+        // hex address, matching the entry_point formatting convention.
+        let token = address!("2cfc85d8e48f8eab294be644d9e25c3030863003");
+        assert_eq!(
+            SponsorshipContext::SelfSponsoredToken(token).to_json_value(),
+            json!({ "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003" })
+        );
     }
 }
