@@ -1,9 +1,11 @@
-# Prepare & Sign Transaction
+# Prepare & Sign Transaction (V2 flow)
 
-This document describes how Bedrock — the open-source, on-device SDK that powers
-the wallet — turns a user intent (e.g. "send 5 WLD to `0x…`") into a signed
+This document describes the **V2** on-device flow: how Bedrock — the
+open-source, on-device SDK that powers the wallet — turns a user intent
+(e.g. "send 5 WLD to `0x…`") into a signed
 [ERC-4337 UserOperation](https://eips.ethereum.org/EIPS/eip-4337) that lands on
-chain.
+chain. The earlier prepare/send flow is being phased out per transaction type;
+see [Versioning and compatibility](#versioning-and-compatibility) below.
 
 It is a living document. The wallet's sponsorship policy evolves over time;
 when it changes, this file changes with it. The on-device steps Bedrock performs
