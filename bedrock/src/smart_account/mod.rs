@@ -187,6 +187,11 @@ impl SafeSmartAccount {
         let siegel = key_manager.get_eoa_private_key();
         let eoa_address = siegel.read_once(
             |private_key| -> Result<Address, SafeSmartAccountError> {
+                if private_key.len() != 64 {
+                    return Err(SafeSmartAccountError::KeyDecoding(
+                        "encoded key was not the right length (64 hex)".to_string(),
+                    ));
+                }
                 let raw_key: Zeroizing<Vec<u8>> =
                     Zeroizing::new(hex::decode(private_key).map_err(|e| {
                         SafeSmartAccountError::KeyDecoding(e.to_string())

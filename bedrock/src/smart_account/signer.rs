@@ -132,6 +132,12 @@ impl SafeSmartAccount {
     ) -> Result<Signature, SafeSmartAccountError> {
         let siegel = self.key_manager.get_eoa_private_key();
         siegel.read_once(|private_key| -> Result<Signature, SafeSmartAccountError> {
+            if private_key.len() != 64 {
+                return Err(SafeSmartAccountError::KeyDecoding(
+                    "encoded key was not the right length (64 hex)".to_string(),
+                ));
+            }
+
             // The key is passed by foreign code as hex bytes. These hex bytes need to be
             // parsed. We do this in a Zeroizing closure to ensure the result gets zeroized.
             let raw_key: Zeroizing<Vec<u8>> = Zeroizing::new(
