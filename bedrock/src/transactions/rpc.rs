@@ -214,7 +214,7 @@ pub struct SponsorUserOperationResponse {
 /// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
 /// absent from the bundler-sponsored response shape and present on the
 /// self-sponsored (token) response — see
-/// `bedrock/src/transactions/contracts/prepare_sign_tx.md`. They are modelled as
+/// `bedrock/src/transactions/transaction.md`. They are modelled as
 /// `Option<T>` so both shapes deserialize.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,7 +244,7 @@ pub struct PmSponsorUserOperationResponse {
 /// V2 sponsorship is a two-mode protocol: an initial protocol-sponsored
 /// attempt with empty context, followed (on a structured decline) by a
 /// self-sponsored retry that names the ERC-20 token paying for gas. See
-/// `bedrock/src/transactions/contracts/prepare_sign_tx.md`.
+/// `bedrock/src/transactions/transaction.md`.
 #[derive(Debug, Clone)]
 pub enum SponsorshipContext {
     /// Empty context — request protocol sponsorship (the wallet provider
