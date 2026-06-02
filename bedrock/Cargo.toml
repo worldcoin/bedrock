@@ -100,4 +100,4 @@ alloy = { version = "2.0.4", default-features = false, features = [
 dotenvy = "0.15.7"
 serial_test = "3.4.0"
 tokio = { version = "1.50.0", features = ["time"] }
-tokio-test = "0.4.4"
+tokio-test = "0.4.5"
