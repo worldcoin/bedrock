@@ -1,3 +1,11 @@
+//! World App's "Backup & Recovery" (client-side primitives).
+//!
+//! This module owns the backup file format, manifest computation, sealing/unsealing,
+//! and the Turnkey stamping helpers shared across iOS and Android.
+//!
+//! For the architecture, factor model, flows, and threat model, see the central docs:
+//! <https://docs.toolsforhumanity.com/world-app/backup>.
+
 mod backup_format;
 mod client_events;
 mod manifest;
@@ -252,7 +260,7 @@ impl BackupManager {
     }
 
     /// Adds new factor by re-encrypting the backup keypair (not the backup itself!)
-    /// with a new factor secret.
+    /// with a new factor secret. (See BF-3 Adding a Main Faactor)
     ///
     /// * `encrypted_backup_key_with_existing_factor_secret` - is the backup keypair that was
     ///   encrypted with the existing factor secret. Hex encoded.
@@ -639,6 +647,8 @@ impl<'de> Deserialize<'de> for BackupFileDesignator {
 }
 
 /// Errors that can occur when working with backups and manifests.
+///
+/// Further error documentation: <https://docs.toolsforhumanity.com/world-app/backup/components#what-the-service-rejects>
 #[crate::bedrock_error]
 pub enum BackupError {
     #[error("Failed to decode factor secret as hex")]
