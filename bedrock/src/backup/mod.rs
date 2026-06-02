@@ -615,6 +615,8 @@ pub enum BackupFileDesignator {
     CredentialVault,
     /// Face Personal Custody Package (PCP) or "Face Credential"
     FacePkg,
+    /// Anonymized user IDs and associated requests per Relying Party
+    AnonymizedThirdPartyAnalytics,
 }
 
 impl Serialize for BackupFileDesignator {

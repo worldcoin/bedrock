@@ -8,7 +8,7 @@ set -e
 
 PROJECT_ROOT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_PATH="$PROJECT_ROOT_PATH/swift" # The base path for the Swift build
-LOCAL_BUILD_PATH="$BASE_PATH/local_build" # Local build artifacts directory
+LOCAL_BUILD_PATH="$BASE_PATH/local_build/bedrock-swift" # Local build artifacts directory
 FRAMEWORK="Bedrock.xcframework"
 
 echo "Building $FRAMEWORK for local iOS development"
@@ -26,36 +26,16 @@ bash "$BASE_PATH/build_swift.sh" "$LOCAL_BUILD_PATH"
 
 echo "Creating Package.swift for local development..."
 
-# Create Package.swift for local development
-cat > $LOCAL_BUILD_PATH/Package.swift << EOF
-// swift-tools-version: 5.7
-// The swift-tools-version declares the minimum version of Swift required to build this package.
-
-import PackageDescription
-
-let package = Package(
-    name: "Bedrock",
-    platforms: [
-        .iOS(.v13)
-    ],
-    products: [
-        .library(
-            name: "Bedrock",
-            targets: ["Bedrock"]),
-    ],
-    targets: [
-        .target(
-            name: "Bedrock",
-            dependencies: ["BedrockFFI"],
-            path: "Sources/Bedrock"
-        ),
-        .binaryTarget(
-            name: "BedrockFFI",
-            path: "Bedrock.xcframework"
-        )
-    ]
-)
-EOF
+awk -v path="$FRAMEWORK" '
+/<binary_target>/ {
+    print "        .binaryTarget("
+    print "            name: \"BedrockFFI\","
+    print "            path: \"" path "\""
+    print "        )"
+    next
+}
+{ print }
+' "$BASE_PATH/Package.swift.template" > "$LOCAL_BUILD_PATH/Package.swift"
 
 echo ""
 echo "✅ Swift package built successfully!"
@@ -68,4 +48,4 @@ echo "2. Click 'Add Local...' and select the local_build directory: $LOCAL_BUILD
 echo "3. Or add it to your Package.swift dependencies:"
 echo "   .package(path: \"$LOCAL_BUILD_PATH\")"
 echo ""
-echo "The package exports the 'Bedrock' library that you can import in your Swift code." 
+echo "The package exports the 'Bedrock' library that you can import in your Swift code."

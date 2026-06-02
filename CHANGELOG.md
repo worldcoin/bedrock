@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.14](https://github.com/worldcoin/bedrock/compare/0.2.13...0.2.14) - 2026-05-28
+
+### Other
+
+- Add bedrock support for third-party-requests.json ([#357](https://github.com/worldcoin/bedrock/pull/357))
+- *(deps)* bump flate2 from 1.1.5 to 1.1.9 ([#349](https://github.com/worldcoin/bedrock/pull/349))
+- *(deps)* bump serial_test from 3.2.0 to 3.4.0 ([#351](https://github.com/worldcoin/bedrock/pull/351))
+- *(deps)* bump alloy from 1.7.3 to 2.0.4 ([#353](https://github.com/worldcoin/bedrock/pull/353))
+- *(smart_account)* idiomatic Rust cleanup on tx4337 ([#347](https://github.com/worldcoin/bedrock/pull/347))
+
 ## [0.2.13](https://github.com/worldcoin/bedrock/compare/0.2.12...0.2.13) - 2026-04-21
 
 ### Added
