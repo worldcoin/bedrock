@@ -409,6 +409,56 @@ mod tests {
         assert!(updated.paymaster_post_op_gas_limit.is_none());
     }
 
+    /// A protocol-sponsored response clears any stale paymaster fields that
+    /// were already on the `UserOp` — the response is the source of truth, so
+    /// `None` overwrites prior `Some(...)`.
+    #[test]
+    fn test_with_sponsorship_data_protocol_clears_stale_paymaster() {
+        use crate::transactions::rpc::PmSponsorUserOperationResponse;
+
+        let mut user_op = UserOperation::new_with_defaults(
+            address!("0x1111111111111111111111111111111111111111"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+        // Pre-populate paymaster fields as if a prior self-sponsored merge had
+        // happened on this UserOp; the protocol-sponsored merge below must
+        // clear them.
+        user_op.paymaster =
+            Some(address!("0x3333333333333333333333333333333333333333"));
+        user_op.paymaster_data = Some(Bytes::from_str("0xdead").unwrap());
+        user_op.paymaster_verification_gas_limit = Some(U128::from(999));
+        user_op.paymaster_post_op_gas_limit = Some(U128::from(888));
+
+        let sponsor_response = PmSponsorUserOperationResponse {
+            call_gas_limit: U128::from(500),
+            verification_gas_limit: U128::from(400),
+            pre_verification_gas: U256::from(300),
+            max_fee_per_gas: U128::from(900),
+            max_priority_fee_per_gas: U128::from(800),
+            paymaster: None,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_data: None,
+        };
+
+        let updated = user_op.with_sponsorship_data(&sponsor_response);
+
+        assert!(updated.paymaster.is_none(), "stale paymaster not cleared");
+        assert!(
+            updated.paymaster_data.is_none(),
+            "stale paymaster_data not cleared"
+        );
+        assert!(
+            updated.paymaster_verification_gas_limit.is_none(),
+            "stale paymaster_verification_gas_limit not cleared"
+        );
+        assert!(
+            updated.paymaster_post_op_gas_limit.is_none(),
+            "stale paymaster_post_op_gas_limit not cleared"
+        );
+    }
+
     /// Self-sponsored V2 response (token context): every field, including the
     /// paymaster ones, is merged onto the `UserOp`.
     #[test]

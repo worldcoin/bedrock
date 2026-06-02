@@ -281,12 +281,13 @@ impl UserOperation {
 
     /// Merges a V2 `pm_sponsorUserOperation` response into the `UserOperation`.
     ///
-    /// Gas fields are always written; paymaster fields are conditional. On the
-    /// protocol-sponsored response shape, the paymaster fields are absent — the
-    /// `Option`s on `PmSponsorUserOperationResponse` are `None` and the
-    /// corresponding `UserOperation` fields are left untouched at their
-    /// preflight defaults (no paymaster). On the self-sponsored response shape,
-    /// the paymaster fields are populated and copied through verbatim.
+    /// Every field on the response is written through unconditionally — the
+    /// response is the source of truth for the post-merge `UserOp`. Gas fields
+    /// always carry values on both response shapes; paymaster fields are
+    /// `Some(...)` only on the self-sponsored shape, `None` on the
+    /// protocol-sponsored shape. A `None` clears any prior paymaster data on
+    /// the input `UserOp`, so the protocol-sponsored merge cannot accidentally
+    /// preserve stale paymaster fields from earlier mutations.
     ///
     /// See `bedrock/src/transactions/transaction.md` for the wire contract.
     #[must_use]
@@ -301,21 +302,15 @@ impl UserOperation {
         self.max_fee_per_gas = sponsor_response.max_fee_per_gas;
         self.max_priority_fee_per_gas = sponsor_response.max_priority_fee_per_gas;
 
-        // Paymaster fields are absent on the protocol-sponsored path. Only
-        // overwrite the UserOp when the response actually carries them so the
-        // protocol-sponsored UserOp stays paymaster-less.
-        if let Some(paymaster) = sponsor_response.paymaster {
-            self.paymaster = Some(paymaster);
-        }
-        if let Some(data) = &sponsor_response.paymaster_data {
-            self.paymaster_data = Some(data.clone());
-        }
-        if let Some(p_ver_gas) = sponsor_response.paymaster_verification_gas_limit {
-            self.paymaster_verification_gas_limit = Some(p_ver_gas);
-        }
-        if let Some(p_post_op_gas) = sponsor_response.paymaster_post_op_gas_limit {
-            self.paymaster_post_op_gas_limit = Some(p_post_op_gas);
-        }
+        // Paymaster fields: overwrite unconditionally. `None` on the
+        // protocol-sponsored shape clears any prior paymaster data, mirroring
+        // V1's `with_paymaster_data` so the two merge paths stay symmetric.
+        self.paymaster = sponsor_response.paymaster;
+        self.paymaster_data
+            .clone_from(&sponsor_response.paymaster_data);
+        self.paymaster_verification_gas_limit =
+            sponsor_response.paymaster_verification_gas_limit;
+        self.paymaster_post_op_gas_limit = sponsor_response.paymaster_post_op_gas_limit;
 
         self
     }
