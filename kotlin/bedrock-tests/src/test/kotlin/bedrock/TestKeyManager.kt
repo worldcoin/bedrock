@@ -45,7 +45,7 @@ internal class TestKeyManager(
         val mem = Memory(bytes.size.toLong())
         try {
             mem.write(0, bytes, 0, bytes.size)
-            val rc = SiegelNative.siegel_fill(session.handle_id().toLong(), mem, bytes.size.toLong())
+            val rc = SiegelNative.siegel_fill(session.handleId().toLong(), mem, bytes.size.toLong())
             check(rc == 0) { "siegel_fill failed with code $rc" }
         } finally {
             mem.clear()

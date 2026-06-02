@@ -36,7 +36,7 @@ final class TestKeyManager: SmartAccountKeyManager, @unchecked Sendable {
         }
         let session = try! SiegelSession(len: UInt32(raw.count))
         let rc = raw.withUnsafeBufferPointer { buf -> Int32 in
-            siegel_fill(session.handle(), buf.baseAddress!, raw.count)
+            siegel_fill(session.handleId(), buf.baseAddress!, raw.count)
         }
         precondition(rc == 0, "siegel_fill failed with code \(rc)")
         return session
