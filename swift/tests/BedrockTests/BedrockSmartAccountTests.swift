@@ -34,11 +34,13 @@ final class TestKeyManager: SmartAccountKeyManager, @unchecked Sendable {
                 }
             }
         }
-        let session = try! SiegelSession(len: UInt32(raw.count))
-        let rc = raw.withUnsafeBufferPointer { buf -> Int32 in
+        guard let session = try? SiegelSession(len: UInt32(raw.count)) else {
+            fatalError("SiegelSession(len:) must succeed for non-empty len")
+        }
+        let fillResult = raw.withUnsafeBufferPointer { buf -> Int32 in
             siegel_fill(session.handleId(), buf.baseAddress!, raw.count)
         }
-        precondition(rc == 0, "siegel_fill failed with code \(rc)")
+        precondition(fillResult == 0, "siegel_fill failed with code \(fillResult)")
         return session
     }
 }
@@ -77,8 +79,7 @@ final class BedrockSmartAccountTests: XCTestCase {
 
         // Expected signature from Rust test
         // swiftlint:disable:next line_length
-        let expectedSignature =
-            "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
+        let expectedSignature = "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
 
         // Verify we got the exact expected signature
         XCTAssertEqual(
@@ -100,7 +101,7 @@ final class BedrockSmartAccountTests: XCTestCase {
             "Another test message",
             "Special characters: !@#$%^&*()",
             "Numbers: 1234567890",
-            "Empty string test: ",
+            "Empty string test: "
         ]
 
         for message in messages {

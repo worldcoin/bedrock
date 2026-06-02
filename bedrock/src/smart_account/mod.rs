@@ -1,6 +1,7 @@
 use std::{str::FromStr, sync::Arc};
 
 use alloy::{dyn_abi::TypedData, primitives::Address, signers::local::LocalSigner};
+use k256::ecdsa::SigningKey;
 use siegel_uniffi::{SessionError, SiegelSession};
 pub use signer::{Eip191Signer, EoaSigner, SafeSmartAccountSigner};
 pub use transaction_4337::Is4337Encodable;
@@ -189,20 +190,9 @@ impl SafeSmartAccount {
         let siegel = key_manager.get_eoa_private_key();
         let eoa_address = siegel.read_once(
             |private_key| -> Result<Address, SafeSmartAccountError> {
-                if private_key.len() != 64 {
-                    return Err(SafeSmartAccountError::KeyDecoding(
-                        "encoded key was not the right length (64 hex)".to_string(),
-                    ));
-                }
-                let raw_key: Zeroizing<Vec<u8>> =
-                    Zeroizing::new(hex::decode(private_key).map_err(|e| {
-                        SafeSmartAccountError::KeyDecoding(e.to_string())
-                    })?);
-                let signer = LocalSigner::from_slice(&raw_key)
-                    .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
+                let signer = signer_from_siegel_bytes(private_key)?;
                 let address = signer.address();
-                // Redundant (`raw_key` and `signer` get immediately zeroized) but added for an abundance of clarity
-                drop(raw_key);
+                // Redundant (`signer` get immediately zeroized) but added for an abundance of clarity
                 drop(signer);
                 Ok(address)
             },
@@ -492,6 +482,29 @@ pub trait SmartAccountKeyManager: Send + Sync {
     /// the hex-encoded EOA private key. See the [trait docs](Self) for the
     /// expected length, encoding and call semantics.
     fn get_eoa_private_key(&self) -> Arc<SiegelSession>;
+}
+
+/// **Warning**. Only to be used within a Siegel `read_once` closure.
+///
+/// Performs validation and parsing of the raw bytes of the private key
+/// to instantiate a `secp256k1` signer.
+fn signer_from_siegel_bytes(
+    bytes: &[u8],
+) -> Result<LocalSigner<SigningKey>, SafeSmartAccountError> {
+    if bytes.len() != 64 {
+        return Err(SafeSmartAccountError::KeyDecoding(
+            "encoded key was not the right length (64 hex)".to_string(),
+        ));
+    }
+
+    // The key is passed by foreign code as hex bytes. These hex bytes need to be
+    // parsed. We do this in a Zeroizing closure to ensure the result gets zeroized.
+    let raw_key: Zeroizing<Vec<u8>> = Zeroizing::new(
+        hex::decode(bytes)
+            .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
+    );
+    LocalSigner::from_slice(&raw_key)
+        .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))
 }
 
 #[cfg(any(test, feature = "test_utils"))]
