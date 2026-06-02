@@ -1,5 +1,7 @@
 use crate::primitives::PrimitiveError;
-use crate::transactions::rpc::SponsorUserOperationResponse;
+use crate::transactions::rpc::{
+    PmSponsorUserOperationResponse, SponsorUserOperationResponse,
+};
 use alloy::hex::FromHex;
 use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes, U128};
 use alloy::sol;
@@ -273,6 +275,47 @@ impl UserOperation {
         self.call_gas_limit = sponsor_response.call_gas_limit;
         self.max_fee_per_gas = sponsor_response.max_fee_per_gas;
         self.max_priority_fee_per_gas = sponsor_response.max_priority_fee_per_gas;
+
+        self
+    }
+
+    /// Merges a V2 `pm_sponsorUserOperation` response into the `UserOperation`.
+    ///
+    /// Gas fields are always written; paymaster fields are conditional. On the
+    /// protocol-sponsored response shape, the paymaster fields are absent — the
+    /// `Option`s on `PmSponsorUserOperationResponse` are `None` and the
+    /// corresponding `UserOperation` fields are left untouched at their
+    /// preflight defaults (no paymaster). On the self-sponsored response shape,
+    /// the paymaster fields are populated and copied through verbatim.
+    ///
+    /// See `bedrock/src/transactions/transaction.md` for the wire contract.
+    #[must_use]
+    pub fn with_sponsorship_data(
+        mut self,
+        sponsor_response: &PmSponsorUserOperationResponse,
+    ) -> Self {
+        // Gas fields are always populated on both response shapes.
+        self.pre_verification_gas = sponsor_response.pre_verification_gas;
+        self.verification_gas_limit = sponsor_response.verification_gas_limit;
+        self.call_gas_limit = sponsor_response.call_gas_limit;
+        self.max_fee_per_gas = sponsor_response.max_fee_per_gas;
+        self.max_priority_fee_per_gas = sponsor_response.max_priority_fee_per_gas;
+
+        // Paymaster fields are absent on the protocol-sponsored path. Only
+        // overwrite the UserOp when the response actually carries them so the
+        // protocol-sponsored UserOp stays paymaster-less.
+        if let Some(paymaster) = sponsor_response.paymaster {
+            self.paymaster = Some(paymaster);
+        }
+        if let Some(data) = &sponsor_response.paymaster_data {
+            self.paymaster_data = Some(data.clone());
+        }
+        if let Some(p_ver_gas) = sponsor_response.paymaster_verification_gas_limit {
+            self.paymaster_verification_gas_limit = Some(p_ver_gas);
+        }
+        if let Some(p_post_op_gas) = sponsor_response.paymaster_post_op_gas_limit {
+            self.paymaster_post_op_gas_limit = Some(p_post_op_gas);
+        }
 
         self
     }

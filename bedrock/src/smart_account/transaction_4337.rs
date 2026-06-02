@@ -6,7 +6,7 @@
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
-use crate::transactions::rpc::{RpcError, RpcProviderName};
+use crate::transactions::rpc::{RpcError, RpcProviderName, SponsorshipContext};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::{Duration, Utc};
@@ -152,6 +152,67 @@ pub trait Is4337Encodable {
             .await?;
 
         Ok(user_op_hash)
+    }
+
+    /// V2 of [`sign_and_execute`] targeting the wallet provider's
+    /// path-versioned RPC at `/v2/rpc/{network}`.
+    ///
+    /// Happy path only: requests protocol sponsorship by calling
+    /// `pm_sponsorUserOperation` with `SponsorshipContext::Protocol`,
+    /// merges the response's gas fields (and any paymaster fields the
+    /// response carries) into the `UserOp`, signs locally, and submits via
+    /// `eth_sendUserOperation` on the V2 path.
+    ///
+    /// Decline handling — parsing the `-32602 "sponsorship declined"`
+    /// payload and retrying as self-sponsored with
+    /// `SponsorshipContext::SelfSponsoredToken` — is not implemented yet
+    /// and will be added in a follow-up. A decline today surfaces as the
+    /// RPC error from `pm_sponsor_user_operation`.
+    ///
+    /// V1 [`sign_and_execute`] remains the active path for every existing
+    /// UniFFI export until its caller in `transactions/mod.rs` opts in to
+    /// V2 explicitly. See `bedrock/src/transactions/transaction.md` for
+    /// the on-device wire contract.
+    ///
+    /// # Errors
+    /// * Returns `RpcError` if any RPC operation fails
+    /// * Returns `RpcError` if signing fails
+    /// * Returns `RpcError` if the global HTTP client has not been initialized
+    async fn sign_and_execute_v2(
+        &self,
+        safe_account: &SafeSmartAccount,
+        network: Network,
+        metadata: Option<Self::MetadataArg>,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        // 0. Global RPC client
+        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
+
+        // 1. Preflight UserOperation
+        let mut user_operation =
+            self.build_preflight_user_operation(safe_account.wallet_address, metadata)?;
+
+        // 2. Request protocol sponsorship via V2 pm_sponsorUserOperation
+        let sponsor_response = rpc_client
+            .pm_sponsor_user_operation(
+                network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                &SponsorshipContext::Protocol,
+            )
+            .await?;
+
+        // 3. Merge gas (and paymaster fields if any) into the `UserOp`.
+        //    For SponsorshipContext::Protocol the response carries only
+        //    gas fields; paymaster fields stay None.
+        user_operation = user_operation.with_sponsorship_data(&sponsor_response);
+
+        // 4. Sign with fresh validity timestamps
+        safe_account.sign_user_operation(&mut user_operation, network)?;
+
+        // 5. Submit via the V2 RPC path
+        rpc_client
+            .send_user_operation_v2(network, &user_operation, *ENTRYPOINT_4337)
+            .await
     }
 }
 
@@ -302,6 +363,93 @@ mod tests {
         );
         assert_eq!(updated_user_op.max_priority_fee_per_gas, U128::from(800));
         assert_eq!(updated_user_op.max_fee_per_gas, U128::from(900));
+    }
+
+    /// Protocol-sponsored V2 response (empty context): gas fields overwritten,
+    /// paymaster fields stay at their preflight defaults because the response
+    /// omits them.
+    #[test]
+    fn test_with_sponsorship_data_protocol() {
+        use crate::transactions::rpc::PmSponsorUserOperationResponse;
+
+        let mut user_op = UserOperation::new_with_defaults(
+            address!("0x1111111111111111111111111111111111111111"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+        // Seed paymaster fields with the preflight defaults so we can assert
+        // they survive the merge unchanged.
+        user_op.paymaster = None;
+        user_op.paymaster_data = None;
+        user_op.paymaster_verification_gas_limit = None;
+        user_op.paymaster_post_op_gas_limit = None;
+
+        let sponsor_response = PmSponsorUserOperationResponse {
+            call_gas_limit: U128::from(500),
+            verification_gas_limit: U128::from(400),
+            pre_verification_gas: U256::from(300),
+            max_fee_per_gas: U128::from(900),
+            max_priority_fee_per_gas: U128::from(800),
+            paymaster: None,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_data: None,
+        };
+
+        let updated = user_op.with_sponsorship_data(&sponsor_response);
+
+        assert_eq!(updated.call_gas_limit, U128::from(500));
+        assert_eq!(updated.verification_gas_limit, U128::from(400));
+        assert_eq!(updated.pre_verification_gas, U256::from(300));
+        assert_eq!(updated.max_fee_per_gas, U128::from(900));
+        assert_eq!(updated.max_priority_fee_per_gas, U128::from(800));
+        assert!(updated.paymaster.is_none());
+        assert!(updated.paymaster_data.is_none());
+        assert!(updated.paymaster_verification_gas_limit.is_none());
+        assert!(updated.paymaster_post_op_gas_limit.is_none());
+    }
+
+    /// Self-sponsored V2 response (token context): every field, including the
+    /// paymaster ones, is merged onto the `UserOp`.
+    #[test]
+    fn test_with_sponsorship_data_self_sponsored() {
+        use crate::transactions::rpc::PmSponsorUserOperationResponse;
+
+        let user_op = UserOperation::new_with_defaults(
+            address!("0x1111111111111111111111111111111111111111"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+
+        let sponsor_response = PmSponsorUserOperationResponse {
+            call_gas_limit: U128::from(500),
+            verification_gas_limit: U128::from(400),
+            pre_verification_gas: U256::from(300),
+            max_fee_per_gas: U128::from(900),
+            max_priority_fee_per_gas: U128::from(800),
+            paymaster: Some(address!("0x2222222222222222222222222222222222222222")),
+            paymaster_verification_gas_limit: Some(U128::from(600)),
+            paymaster_post_op_gas_limit: Some(U128::from(700)),
+            paymaster_data: Some(Bytes::from_str("0xabcd").unwrap()),
+        };
+
+        let updated = user_op.with_sponsorship_data(&sponsor_response);
+
+        assert_eq!(
+            updated.paymaster,
+            Some(address!("0x2222222222222222222222222222222222222222"))
+        );
+        assert_eq!(
+            updated.paymaster_data,
+            Some(Bytes::from_str("0xabcd").unwrap())
+        );
+        assert_eq!(
+            updated.paymaster_verification_gas_limit,
+            Some(U128::from(600))
+        );
+        assert_eq!(updated.paymaster_post_op_gas_limit, Some(U128::from(700)));
+        assert_eq!(updated.call_gas_limit, U128::from(500));
+        assert_eq!(updated.max_fee_per_gas, U128::from(900));
     }
 
     #[test]
