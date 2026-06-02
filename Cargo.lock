@@ -5205,9 +5205,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "siegel"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6ad2272eb97e86ac485964f8d26287d73af4ae9e1a3ddbaf7586644aa41c0a6"
+checksum = "76e7be3bd3792e86519ef639757407f1abd86d21aa65bb3313d4327172f0f9b0"
 dependencies = [
  "libc",
  "thiserror 2.0.18",
@@ -5216,10 +5216,11 @@ dependencies = [
 
 [[package]]
 name = "siegel-uniffi"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b30a1624db67abe426b85ff03348f361af58be258bad030b664340c7105fd41"
+checksum = "02b1af96d641e2c8c7cc8d8c2c16d4b8ddd73f9068a2100721f46c23533012e1"
 dependencies = [
+ "getrandom 0.4.1",
  "siegel",
  "thiserror 2.0.18",
  "uniffi",

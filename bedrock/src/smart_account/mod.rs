@@ -127,6 +127,8 @@ impl From<SessionError> for SafeSmartAccountError {
             SessionError::ProtectionFailed { .. } => "protection_failed",
             SessionError::LockFailed { .. } => "lock_failed",
             SessionError::CanaryCorrupted => "canary_corrupted",
+            SessionError::TooManyActiveSessions => "too_many_active_sessions",
+            SessionError::HandleAllocationFailed { .. } => "handle_allocation_failed",
         };
         Self::SiegelSession {
             kind: kind.to_string(),
@@ -559,7 +561,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
         result.unwrap_err().to_string(),
-        format!("failed to decode hex-encoded secret into k256 signer: Odd number of digits")
+        format!("failed to decode hex-encoded secret into k256 signer: encoded key was not the right length (64 hex)")
     );
     }
 
@@ -574,7 +576,7 @@ mod tests {
         assert_eq!(
             result.unwrap_err().to_string(),
             format!(
-                "failed to decode hex-encoded secret into k256 signer: signature error"
+                "failed to decode hex-encoded secret into k256 signer: encoded key was not the right length (64 hex)"
             )
         );
     }

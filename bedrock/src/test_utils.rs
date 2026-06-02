@@ -58,7 +58,7 @@ impl SmartAccountKeyManager for InMemoryKeyManager {
         //   matching what `siegel_fill` expects.
         let rc = unsafe {
             siegel_fill(
-                session.handle(),
+                session.handle_id(),
                 self.hex_bytes.as_ptr(),
                 self.hex_bytes.len(),
             )
