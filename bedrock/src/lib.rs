@@ -30,8 +30,6 @@ pub mod transactions;
 /// Introduces low level primitives for the crypto wallet, including logging functionality.
 pub mod primitives;
 
-/// Tools for storing, retrieving, encrypting and decrypting backup data and metadata.
-/// See `backup::BackupManager` for the high-level API.
 pub mod backup;
 
 /// Introduces low level operations for interacting with a Nitro Enclave.
