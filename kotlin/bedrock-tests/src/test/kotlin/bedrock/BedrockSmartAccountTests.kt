@@ -1,20 +1,22 @@
 package bedrock
 
+import uniffi.bedrock.SafeSmartAccount
+import uniffi.bedrock.SafeSmartAccountException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import uniffi.bedrock.SafeSmartAccount
-import uniffi.bedrock.SafeSmartAccountException
 
 class BedrockSmartAccountTests {
     private val testPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
     private val testWalletAddress = "0x4564420674EA68fcc61b463C0494807C759d47e6"
     private val chainId: UInt = 10u // Optimism
 
-    private fun account(privateKey: String = testPrivateKey, walletAddress: String = testWalletAddress) =
-        SafeSmartAccount(TestKeyManager(privateKey), walletAddress)
+    private fun account(
+        privateKey: String = testPrivateKey,
+        walletAddress: String = testWalletAddress,
+    ) = SafeSmartAccount(TestKeyManager(privateKey), walletAddress)
 
     // No explicit library preload is necessary: UniFFI-generated bindings
     // load the native `bedrock` library on first access.
@@ -122,7 +124,14 @@ class BedrockSmartAccountTests {
 
     @Test
     fun testComputeWalletAddressForFreshAccount() {
-        val walletAddress = uniffi.bedrock.computeWalletAddressForFreshAccount("0xa4eb68ce21c862f42e26ff31bb8351bf87f2c41a")
-        assertEquals(walletAddress, "0xd462bac17966fd7a9ee76b55191a6083edf6f80b", "computeFreshWalletAddress did not yield the expected result")
+        val walletAddress =
+            uniffi.bedrock.computeWalletAddressForFreshAccount(
+                "0xa4eb68ce21c862f42e26ff31bb8351bf87f2c41a",
+            )
+        assertEquals(
+            walletAddress,
+            "0xd462bac17966fd7a9ee76b55191a6083edf6f80b",
+            "computeFreshWalletAddress did not yield the expected result",
+        )
     }
 }

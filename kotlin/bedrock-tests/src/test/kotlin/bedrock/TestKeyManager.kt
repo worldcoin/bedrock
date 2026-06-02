@@ -17,7 +17,12 @@ internal object SiegelNative {
     }
 
     @JvmStatic
-    external fun siegel_fill(handle: Long, src: Pointer, len: Long): Int
+    @Suppress("ktlint:standard:function-naming")
+    external fun siegel_fill(
+        handle: Long,
+        src: Pointer,
+        len: Long,
+    ): Int
 }
 
 /**
@@ -25,19 +30,28 @@ internal object SiegelNative {
  * key in a fresh [SiegelSession] on every call. Production foreign code
  * would fetch the secret from the platform key store (e.g. Keychain).
  *
- * For the empty-key test case we pad with a single zero byte so the
- * `SiegelSession::new` length check passes and the failure surfaces from
- * Rust as a `SafeSmartAccountException.KeyDecoding`.
+ *
+ * JNA can't safely pass a pointer to JVM heap memory (the GC may relocate
+ * it), so the bytes are copied into an off-heap [Memory] buffer. All buffers
+ * are zeroized after filling the Siegel.
  */
-internal class TestKeyManager(private val hexKey: String) : SmartAccountKeyManager {
+internal class TestKeyManager(
+    private val hexKey: String,
+) : SmartAccountKeyManager {
     override fun getEoaPrivateKey(): SiegelSession {
         val raw = hexKey.toByteArray(Charsets.US_ASCII)
         val bytes = if (raw.isEmpty()) byteArrayOf(0) else raw
         val session = SiegelSession(bytes.size.toUInt())
         val mem = Memory(bytes.size.toLong())
-        mem.write(0, bytes, 0, bytes.size)
-        val rc = SiegelNative.siegel_fill(session.handle().toLong(), mem, bytes.size.toLong())
-        check(rc == 0) { "siegel_fill failed with code $rc" }
+        try {
+            mem.write(0, bytes, 0, bytes.size)
+            val rc = SiegelNative.siegel_fill(session.handle().toLong(), mem, bytes.size.toLong())
+            check(rc == 0) { "siegel_fill failed with code $rc" }
+        } finally {
+            mem.clear()
+            mem.close()
+            bytes.fill(0)
+        }
         return session
     }
 }
