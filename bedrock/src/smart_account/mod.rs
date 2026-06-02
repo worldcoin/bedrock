@@ -580,16 +580,18 @@ mod tests {
 
     #[test]
     fn test_cannot_initialize_with_invalid_curve_point() {
-        let invalid_hex = "2a"; // `42` is not a valid point on the curve
+        // This is the `secp256k1` modulus, not a valid field element
+        let invalid_curve_point =
+            "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f";
         let result = SafeSmartAccount::from_private_key_hex(
-            invalid_hex.to_string(),
+            invalid_curve_point.to_string(),
             "0x0000000000000000000000000000000000000042",
         );
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
             format!(
-                "failed to decode hex-encoded secret into k256 signer: encoded key was not the right length (64 hex)"
+                "failed to decode hex-encoded secret into k256 signer: signature error"
             )
         );
     }
