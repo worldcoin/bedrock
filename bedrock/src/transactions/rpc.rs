@@ -280,8 +280,7 @@ impl SponsorshipContext {
 /// whether to retry as self-sponsored, and to surface the worst-case cost to
 /// the wallet UI so the user can confirm the WLD spend.
 ///
-/// Wire shape (see `bedrock/src/transactions/transaction.md` and the
-/// temporal-apps `docs/architecture/jsonrpc/sponsorship_triggers.md`):
+/// Wire shape (see `bedrock/src/transactions/transaction.md`):
 ///
 /// ```json
 /// {
@@ -305,9 +304,8 @@ pub struct SponsorshipDecline {
     pub cost_token: U256,
 }
 
-/// Sentinel error message used by the temporal-apps server when declining a
-/// sponsorship request. See `apps/jsonrpc/controllers/userop.go` (the
-/// `jsonRpcInvalidParams(..., "sponsorship declined", ...)` callsite).
+/// Sentinel error message returned by the sponsorship endpoint when
+/// declining a sponsorship request.
 const SPONSORSHIP_DECLINED_MESSAGE: &str = "sponsorship declined";
 
 impl RpcError {
