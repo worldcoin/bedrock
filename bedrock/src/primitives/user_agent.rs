@@ -73,12 +73,6 @@ impl UserAgentBuilder {
         self.with_segment("bedrock", env!("CARGO_PKG_VERSION"))
     }
 
-    /// Appends `{client_name}/{os_version}` to match the app client suffix convention.
-    #[must_use]
-    pub fn with_client_segment(&self, client_name: &str, os_version: &str) -> Self {
-        self.with_segment(client_name, os_version)
-    }
-
     /// Finalizes the header value as [`UserAgent`].
     #[must_use]
     pub fn build(&self) -> UserAgent {
@@ -107,7 +101,7 @@ mod tests {
         UserAgentBuilder::new()
             .with_app_segment_for_client(app_version, client_name)
             .with_bedrock_segment()
-            .with_client_segment(client_name, os_version)
+            .with_segment(client_name, os_version)
             .build()
     }
 
