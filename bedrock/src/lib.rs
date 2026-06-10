@@ -36,7 +36,9 @@ pub mod backup;
 pub mod nitro_enclave;
 
 // Re-export commonly used primitives at the crate root for convenience
-pub use primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
+pub use primitives::{
+    AuthenticatedHttpClient, HttpError, HttpMethod, UserAgent, UserAgentBuilder,
+};
 
 /// Key management for World App.
 mod root_key;

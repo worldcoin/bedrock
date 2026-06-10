@@ -10,6 +10,7 @@ use std::str::FromStr;
 
 // Re-export HTTP client types for external use
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
+pub use user_agent::{UserAgent, UserAgentBuilder};
 
 /// The prefix for Bedrock-generated transactions.
 pub static BEDROCK_NONCE_PREFIX_CONST: &[u8; 5] = b"bdrck";
@@ -58,6 +59,9 @@ pub mod filesystem;
 
 /// Introduces authenticated HTTP client functionality that native applications must implement for bedrock.
 pub mod http_client;
+
+/// Introduces User-Agent helpers for requests issued through Bedrock consumers.
+pub mod user_agent;
 
 /// Introduces key-value store functionality for persisting device data.
 pub mod key_value_store;
