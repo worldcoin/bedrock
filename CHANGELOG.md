@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15](https://github.com/worldcoin/bedrock/compare/0.2.14...0.2.15) - 2026-06-11
+
+### Added
+
+- *(POP-3811)* support World ID bedrock user agents ([#362](https://github.com/worldcoin/bedrock/pull/362))
+- *(rpc)* add V2 RPC primitives, on-device prepare/sign doc ([#348](https://github.com/worldcoin/bedrock/pull/348))
+
+### Other
+
+- *(deps)* bump tokio from 1.47.1 to 1.50.0 ([#350](https://github.com/worldcoin/bedrock/pull/350))
+- *(deps)* bump once_cell from 1.21.3 to 1.21.4 ([#352](https://github.com/worldcoin/bedrock/pull/352))
+- link backup & recovery docs ([#354](https://github.com/worldcoin/bedrock/pull/354))
+
 ## [0.2.14](https://github.com/worldcoin/bedrock/compare/0.2.13...0.2.14) - 2026-05-28
 
 ### Other
