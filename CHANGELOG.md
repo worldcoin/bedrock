@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/worldcoin/bedrock/compare/0.3.0...0.4.0) - 2026-06-16
+
+### Added
+
+- [**breaking**] siegel key manager for Safe Smart Account 🧧 ([#355](https://github.com/worldcoin/bedrock/pull/355))
+- *(POP-3811)* support World ID bedrock user agents ([#362](https://github.com/worldcoin/bedrock/pull/362))
+- *(rpc)* add V2 RPC primitives, on-device prepare/sign doc ([#348](https://github.com/worldcoin/bedrock/pull/348))
+- allow multiple authorized host options for SIWE ([#344](https://github.com/worldcoin/bedrock/pull/344))
+
+### Other
+
+- *(deps)* bump tokio-test from 0.4.4 to 0.4.5 ([#364](https://github.com/worldcoin/bedrock/pull/364))
+- *(deps)* bump log from 0.4.27 to 0.4.31 ([#365](https://github.com/worldcoin/bedrock/pull/365))
+- *(deps)* bump tokio from 1.47.1 to 1.50.0 ([#350](https://github.com/worldcoin/bedrock/pull/350))
+- *(deps)* bump once_cell from 1.21.3 to 1.21.4 ([#352](https://github.com/worldcoin/bedrock/pull/352))
+- link backup & recovery docs ([#354](https://github.com/worldcoin/bedrock/pull/354))
+- Add bedrock support for third-party-requests.json ([#357](https://github.com/worldcoin/bedrock/pull/357))
+- *(deps)* bump flate2 from 1.1.5 to 1.1.9 ([#349](https://github.com/worldcoin/bedrock/pull/349))
+- *(deps)* bump serial_test from 3.2.0 to 3.4.0 ([#351](https://github.com/worldcoin/bedrock/pull/351))
+- *(deps)* bump alloy from 1.7.3 to 2.0.4 ([#353](https://github.com/worldcoin/bedrock/pull/353))
+- *(smart_account)* idiomatic Rust cleanup on tx4337 ([#347](https://github.com/worldcoin/bedrock/pull/347))
+- *(deps)* bump turnkey_enclave_encrypt from 0.3.0 to 0.6.0 ([#302](https://github.com/worldcoin/bedrock/pull/302))
+
 ## [0.3.0](https://github.com/worldcoin/bedrock/compare/0.2.15...0.3.0) - 2026-06-16
 
 ### Added
