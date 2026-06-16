@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/worldcoin/bedrock/compare/0.2.15...0.3.0) - 2026-06-16
+
+### Added
+
+- [**breaking**] siegel key manager for Safe Smart Account 🧧 ([#355](https://github.com/worldcoin/bedrock/pull/355))
+
+### Other
+
+- *(deps)* bump tokio-test from 0.4.4 to 0.4.5 ([#364](https://github.com/worldcoin/bedrock/pull/364))
+- *(deps)* bump log from 0.4.27 to 0.4.31 ([#365](https://github.com/worldcoin/bedrock/pull/365))
+
 ## [0.2.15](https://github.com/worldcoin/bedrock/compare/0.2.14...0.2.15) - 2026-06-11
 
 ### Added
