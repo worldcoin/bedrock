@@ -3,7 +3,7 @@ set -e
 
 # Creates a Swift build of the `Bedrock` library.
 # This script can be used directly or called by other scripts.
-# 
+#
 # Usage: build_swift.sh [OUTPUT_DIR]
 #   OUTPUT_DIR: Directory where the XCFramework should be placed (default: swift/)
 
@@ -18,25 +18,25 @@ FRAMEWORK="Bedrock.xcframework"
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --help|-h)
-            echo "Usage: $0 [OUTPUT_DIR]"
-            echo ""
-            echo "Arguments:"
-            echo "  OUTPUT_DIR    Directory where the XCFramework should be placed (default: swift/)"
-            echo ""
-            exit 0
-            ;;
-        *)
-            # Assume it's the output directory if it doesn't start with --
-            if [[ ! "$1" =~ ^-- ]]; then
-                OUTPUT_DIR="$1"
-            else
-                echo "Unknown option: $1"
-                echo "Use --help for usage information"
-                exit 1
-            fi
-            shift
-            ;;
+    --help | -h)
+        echo "Usage: $0 [OUTPUT_DIR]"
+        echo ""
+        echo "Arguments:"
+        echo "  OUTPUT_DIR    Directory where the XCFramework should be placed (default: swift/)"
+        echo ""
+        exit 0
+        ;;
+    *)
+        # Assume it's the output directory if it doesn't start with --
+        if [[ ! "$1" =~ ^-- ]]; then
+            OUTPUT_DIR="$1"
+        else
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+        fi
+        shift
+        ;;
     esac
 done
 
@@ -75,35 +75,46 @@ echo "Rust packages built. Combining simulator targets into universal binary..."
 
 # Create universal binary for simulators
 lipo -create target/aarch64-apple-ios-sim/release/lib${PACKAGE_NAME}.a \
-  target/x86_64-apple-ios/release/lib${PACKAGE_NAME}.a \
-  -output $BASE_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
+    target/x86_64-apple-ios/release/lib${PACKAGE_NAME}.a \
+    -output "$BASE_PATH"/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
 
-lipo -info $BASE_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
+lipo -info "$BASE_PATH"/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a
 
 echo "Generating Swift bindings..."
 
 # Generate Swift bindings using uniffi
 cargo run -p uniffi-bindgen generate \
-  target/aarch64-apple-ios-sim/release/lib${PACKAGE_NAME}.dylib \
-  --library \
-  --language swift \
-  --no-format \
-  --out-dir $BASE_PATH/ios_build/bindings
+    target/aarch64-apple-ios-sim/release/lib${PACKAGE_NAME}.dylib \
+    --library \
+    --language swift \
+    --no-format \
+    --out-dir "$BASE_PATH"/ios_build/bindings
 
-# Move generated Swift file to Sources directory
-mv $BASE_PATH/ios_build/bindings/${PACKAGE_NAME}.swift ${SWIFT_SOURCES_DIR}/
+# uniffi-bindgen emits one set of files per linked uniffi crate. Move all
+# generated Swift sources to the Sources directory and all FFI headers.
+shopt -s nullglob
+for swift_file in "$BASE_PATH"/ios_build/bindings/*.swift; do
+    mv "$swift_file" "$SWIFT_SOURCES_DIR/"
+done
 
-# Move headers
-mv $BASE_PATH/ios_build/bindings/${PACKAGE_NAME}FFI.h $SWIFT_HEADERS_DIR/
-cat $BASE_PATH/ios_build/bindings/${PACKAGE_NAME}FFI.modulemap > $SWIFT_HEADERS_DIR/module.modulemap
+for header in "$BASE_PATH"/ios_build/bindings/*FFI.h; do
+    mv "$header" "$SWIFT_HEADERS_DIR/"
+done
+
+: >"$SWIFT_HEADERS_DIR"/module.modulemap
+for modmap in "$BASE_PATH"/ios_build/bindings/*FFI.modulemap; do
+    cat "$modmap" >>"$SWIFT_HEADERS_DIR"/module.modulemap
+    printf '\n' >>"$SWIFT_HEADERS_DIR"/module.modulemap
+done
+shopt -u nullglob
 
 echo "Creating XCFramework..."
 
 # Create XCFramework
 xcodebuild -create-xcframework \
-  -library target/aarch64-apple-ios/release/lib${PACKAGE_NAME}.a -headers $BASE_PATH/ios_build/Headers \
-  -library $BASE_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a -headers $BASE_PATH/ios_build/Headers \
-  -output $FRAMEWORK_OUTPUT
+    -library target/aarch64-apple-ios/release/lib${PACKAGE_NAME}.a -headers $BASE_PATH/ios_build/Headers \
+    -library $BASE_PATH/ios_build/target/universal-ios-sim/release/lib${PACKAGE_NAME}.a -headers $BASE_PATH/ios_build/Headers \
+    -output $FRAMEWORK_OUTPUT
 
 # Clean up intermediate build files
 rm -rf $BASE_PATH/ios_build

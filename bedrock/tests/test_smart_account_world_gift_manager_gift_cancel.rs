@@ -64,8 +64,10 @@ async fn test_transaction_world_gift_manager_gift_cancel_user_operations(
 
     set_http_client(Arc::new(client));
 
-    let safe_account_giftor =
-        SafeSmartAccount::new(owner_key_hex.clone(), &safe_address_giftor.to_string())?;
+    let safe_account_giftor = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex.clone(),
+        &safe_address_giftor.to_string(),
+    )?;
     let amount = U256::from(1e18);
 
     let gift_result = safe_account_giftor

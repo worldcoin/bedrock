@@ -1,6 +1,49 @@
+import Darwin
 import XCTest
 
 @testable import Bedrock
+
+/// Raw C `siegel_fill` symbol. Declared with `@_silgen_name` since the
+/// function is `extern "C"` in the bedrock cdylib but is not part of the
+/// uniffi-generated FFI headers.
+@_silgen_name("siegel_fill")
+private func siegel_fill(_ handle: UInt64, _ src: UnsafePointer<UInt8>, _ len: Int) -> Int32
+
+/// Test [`SmartAccountKeyManager`] that delivers a hex-encoded
+/// private key in a fresh [`SiegelSession`] on every call. Production
+/// foreign code would fetch the secret from the platform key store
+/// (e.g. Keychain) into a mutable `Data` / `[UInt8]`, fill the siegel,
+/// then zeroize the source buffer.
+final class TestKeyManager: SmartAccountKeyManager, @unchecked Sendable {
+    // Naturally in production, the key should never live in memory like this.
+    private let hexKey: String
+
+    init(_ hexKey: String) {
+        self.hexKey = hexKey
+    }
+
+    func getEoaPrivateKey() -> SiegelSession {
+        var raw = Array(hexKey.utf8)
+        if raw.isEmpty {
+            raw = [0]
+        }
+        defer {
+            raw.withUnsafeMutableBufferPointer { buf in
+                if let base = buf.baseAddress {
+                    memset_s(base, buf.count, 0, buf.count)
+                }
+            }
+        }
+        guard let session = try? SiegelSession(len: UInt32(raw.count)) else {
+            fatalError("SiegelSession(len:) must succeed for non-empty len")
+        }
+        let fillResult = raw.withUnsafeBufferPointer { buf -> Int32 in
+            siegel_fill(session.handleId(), buf.baseAddress!, raw.count)
+        }
+        precondition(fillResult == 0, "siegel_fill failed with code \(fillResult)")
+        return session
+    }
+}
 
 final class BedrockSmartAccountTests: XCTestCase {
 
@@ -9,23 +52,23 @@ final class BedrockSmartAccountTests: XCTestCase {
     let testWalletAddress = "0x4564420674EA68fcc61b463C0494807C759d47e6"
     let chainId: UInt32 = 10  // Optimism
 
-    func testSafeSmartAccountCreation() throws {
-        // Test creating a SafeSmartAccount instance
-        let account = try SafeSmartAccount(
-            privateKey: testPrivateKey,
-            walletAddress: testWalletAddress
+    private func makeAccount(
+        privateKey: String? = nil,
+        walletAddress: String? = nil
+    ) throws -> SafeSmartAccount {
+        try SafeSmartAccount(
+            keyManager: TestKeyManager(privateKey ?? testPrivateKey),
+            walletAddress: walletAddress ?? testWalletAddress
         )
+    }
 
-        // If we get here without throwing, the account was created successfully
+    func testSafeSmartAccountCreation() throws {
+        let account = try makeAccount()
         XCTAssertNotNil(account)
     }
 
     func testPersonalSign() throws {
-        // Create account
-        let account = try SafeSmartAccount(
-            privateKey: testPrivateKey,
-            walletAddress: testWalletAddress
-        )
+        let account = try makeAccount()
 
         // Test message signing - using same parameters as Rust test
         let message = "Hello, Safe Smart Account!"
@@ -36,8 +79,7 @@ final class BedrockSmartAccountTests: XCTestCase {
 
         // Expected signature from Rust test
         // swiftlint:disable:next line_length
-        let expectedSignature =
-            "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
+        let expectedSignature = "0xa9781c5233828575e8c7bababbef2b05b9f60a0c34581173655e6deaa40a3a8a0357d8877723588478c0113c630f68f6d118de0a0a97b6a5fa0284beeec721431c"
 
         // Verify we got the exact expected signature
         XCTAssertEqual(
@@ -51,11 +93,7 @@ final class BedrockSmartAccountTests: XCTestCase {
     }
 
     func testMultipleMessages() throws {
-        // Create account
-        let account = try SafeSmartAccount(
-            privateKey: testPrivateKey,
-            walletAddress: testWalletAddress
-        )
+        let account = try makeAccount()
 
         // Test signing multiple messages
         let messages = [
@@ -63,7 +101,7 @@ final class BedrockSmartAccountTests: XCTestCase {
             "Another test message",
             "Special characters: !@#$%^&*()",
             "Numbers: 1234567890",
-            "Empty string test: ",
+            "Empty string test: "
         ]
 
         for message in messages {
@@ -81,10 +119,7 @@ final class BedrockSmartAccountTests: XCTestCase {
     func testInvalidPrivateKey() {
         // Test with invalid private key - should throw
         XCTAssertThrowsError(
-            try SafeSmartAccount(
-                privateKey: "invalid_key",
-                walletAddress: testWalletAddress
-            )
+            try makeAccount(privateKey: "invalid_key")
         ) { error in
             // Verify we got an error
             XCTAssertNotNil(error)
@@ -94,10 +129,7 @@ final class BedrockSmartAccountTests: XCTestCase {
     func testEmptyPrivateKey() {
         // Test with empty private key - should throw
         XCTAssertThrowsError(
-            try SafeSmartAccount(
-                privateKey: "",
-                walletAddress: testWalletAddress
-            )
+            try makeAccount(privateKey: "")
         ) { error in
             XCTAssertNotNil(error)
         }
@@ -106,21 +138,14 @@ final class BedrockSmartAccountTests: XCTestCase {
     func testInvalidWalletAddress() {
         // Test with invalid wallet address format
         XCTAssertThrowsError(
-            try SafeSmartAccount(
-                privateKey: testPrivateKey,
-                walletAddress: "invalid_address"
-            )
+            try makeAccount(walletAddress: "invalid_address")
         ) { error in
             XCTAssertNotNil(error)
         }
     }
 
     func testDifferentChainIds() throws {
-        // Create account
-        let account = try SafeSmartAccount(
-            privateKey: testPrivateKey,
-            walletAddress: testWalletAddress
-        )
+        let account = try makeAccount()
 
         // Test signing with different chain IDs
         let chainIds: [UInt32] = [1, 10, 137, 42161]  // Ethereum, Optimism, Polygon, Arbitrum
@@ -149,11 +174,7 @@ final class BedrockSmartAccountTests: XCTestCase {
     }
 
     func testLongMessage() throws {
-        // Create account
-        let account = try SafeSmartAccount(
-            privateKey: testPrivateKey,
-            walletAddress: testWalletAddress
-        )
+        let account = try makeAccount()
 
         // Test with a very long message
         let longMessage = String(repeating: "Lorem ipsum dolor sit amet. ", count: 100)
@@ -168,11 +189,7 @@ final class BedrockSmartAccountTests: XCTestCase {
     }
 
     func testUnicodeMessage() throws {
-        // Create account
-        let account = try SafeSmartAccount(
-            privateKey: testPrivateKey,
-            walletAddress: testWalletAddress
-        )
+        let account = try makeAccount()
 
         // Test with unicode characters
         let unicodeMessage = "Hello 世界 🌍 Здравствуй мир"
@@ -194,4 +211,4 @@ final class BedrockSmartAccountTests: XCTestCase {
 
         XCTAssertEqual(walletAddress, "0xea51b7e5c07bb29237194aa14618057333435f3e")
     }
-} 
+}

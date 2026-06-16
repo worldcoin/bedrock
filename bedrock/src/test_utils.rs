@@ -1,6 +1,7 @@
 //! Test utilities for unit tests and E2E tests for mocking RPC responses either from Anvil or hard-coded for unit tests.
 #![allow(clippy::all)]
 use std::str::FromStr;
+use std::sync::Arc;
 
 use alloy::{
     network::Ethereum,
@@ -9,15 +10,65 @@ use alloy::{
     sol,
     sol_types::{SolEvent, SolValue},
 };
+use siegel_uniffi::{siegel_fill, SiegelSession, FILL_OK};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{
     primitives::{
         http_client::{AuthenticatedHttpClient, HttpError, HttpHeader, HttpMethod},
         PrimitiveError,
     },
-    smart_account::UserOperation,
+    smart_account::{SmartAccountKeyManager, UserOperation},
     transactions::foreign::UnparsedUserOperation,
 };
+
+/// In-memory [`SmartAccountKeyManager`] for unit and integration tests.
+///
+/// Wraps a hex-encoded private key as bytes and seeds a fresh
+/// [`SiegelSession`] on every access mirroring how a real key store
+/// (e.g. iOS Keychain) would deliver the secret one use at a time.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct InMemoryKeyManager {
+    hex_bytes: Vec<u8>,
+}
+
+impl InMemoryKeyManager {
+    /// Wraps a hex-encoded private key.
+    #[must_use]
+    pub const fn new(private_key_hex: String) -> Self {
+        // Normally we'd verify the sk length here, but because we have tests that require
+        // passing invalid secrets, we don't enforce it.
+        Self {
+            hex_bytes: private_key_hex.into_bytes(),
+        }
+    }
+}
+
+impl SmartAccountKeyManager for InMemoryKeyManager {
+    fn get_eoa_private_key(&self) -> Arc<SiegelSession> {
+        let len =
+            u32::try_from(self.hex_bytes.len()).expect("secret len must fit in u32");
+        let session = SiegelSession::new(len).expect("failed to create siegel session");
+        // SAFETY:
+        // - `session.handle()` was just returned by `SiegelSession::new` and the
+        //   session is still alive (held by `session` until the end of this fn).
+        // - `self.hex_bytes` is owned by `&self` and lives until the function
+        //   returns, so the pointer is valid for `self.hex_bytes.len()` reads.
+        // - the session was allocated with capacity `len == self.hex_bytes.len()`,
+        //   matching what `siegel_fill` expects.
+        let rc = unsafe {
+            siegel_fill(
+                session.handle_id(),
+                self.hex_bytes.as_ptr(),
+                self.hex_bytes.len(),
+            )
+        };
+        // Test-only: a non-OK return code indicates broken test setup, not a
+        // user-actionable error, so we panic with the raw status.
+        assert!(rc == FILL_OK, "siegel_fill failed with code {rc}");
+        session
+    }
+}
 
 /// Represents a response from '`wa_sponsorUserOperation`' rpc method
 #[derive(serde::Serialize)]

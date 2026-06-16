@@ -46,7 +46,7 @@ class BedrockSolMacroTests {
     fun `test sign Permit2 transfer integration`() {
         // Test that the unparsed types work with the signing function
         val safeAccount = SafeSmartAccount(
-            privateKey = "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583",
+            keyManager = TestKeyManager("4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"),
             walletAddress = "0x4564420674EA68fcc61b463C0494807C759d47e6"
         )
         

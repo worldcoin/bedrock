@@ -19,7 +19,8 @@ dependencies {
 sourceSets {
     test {
         kotlin.srcDirs(
-            "$rootDir/bedrock-android/src/main/java/uniffi/bedrock"
+            "$rootDir/bedrock-android/src/main/java/uniffi/bedrock",
+            "$rootDir/bedrock-android/src/main/java/uniffi/siegel_uniffi",
         )
     }
 }

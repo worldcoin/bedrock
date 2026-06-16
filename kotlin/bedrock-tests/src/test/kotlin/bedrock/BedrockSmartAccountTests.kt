@@ -13,18 +13,23 @@ class BedrockSmartAccountTests {
     private val testWalletAddress = "0x4564420674EA68fcc61b463C0494807C759d47e6"
     private val chainId: UInt = 10u // Optimism
 
+    private fun account(
+        privateKey: String = testPrivateKey,
+        walletAddress: String = testWalletAddress,
+    ) = SafeSmartAccount(TestKeyManager(privateKey), walletAddress)
+
     // No explicit library preload is necessary: UniFFI-generated bindings
     // load the native `bedrock` library on first access.
 
     @Test
     fun testSafeSmartAccountCreation() {
-        val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
+        val account = account()
         assertNotNull(account)
     }
 
     @Test
     fun testPersonalSign() {
-        val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
+        val account = account()
 
         // Test message signing - using same parameters as Rust test
         val message = "Hello, Safe Smart Account!"
@@ -46,7 +51,7 @@ class BedrockSmartAccountTests {
 
     @Test
     fun testMultipleMessages() {
-        val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
+        val account = account()
         val messages =
             listOf(
                 "Message 1",
@@ -66,27 +71,27 @@ class BedrockSmartAccountTests {
     @Test
     fun testInvalidPrivateKey() {
         assertFailsWith<SafeSmartAccountException> {
-            SafeSmartAccount("invalid_key", testWalletAddress)
+            account(privateKey = "invalid_key")
         }
     }
 
     @Test
     fun testEmptyPrivateKey() {
         assertFailsWith<SafeSmartAccountException> {
-            SafeSmartAccount("", testWalletAddress)
+            account(privateKey = "")
         }
     }
 
     @Test
     fun testInvalidWalletAddress() {
         assertFailsWith<SafeSmartAccountException> {
-            SafeSmartAccount(testPrivateKey, "invalid_address")
+            account(walletAddress = "invalid_address")
         }
     }
 
     @Test
     fun testDifferentChainIds() {
-        val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
+        val account = account()
         val chainIds = listOf(1u, 10u, 137u, 42161u)
         val message = "Testing different chains"
         val signatures = mutableSetOf<String>()
@@ -101,7 +106,7 @@ class BedrockSmartAccountTests {
 
     @Test
     fun testLongMessage() {
-        val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
+        val account = account()
         val longMsg = "Lorem ipsum dolor sit amet. ".repeat(100)
         val sig = account.personalSign(chainId, longMsg).toHexString()
         assertTrue(sig.isNotEmpty(), "Signature for long message should not be empty")
@@ -110,7 +115,7 @@ class BedrockSmartAccountTests {
 
     @Test
     fun testUnicodeMessage() {
-        val account = SafeSmartAccount(testPrivateKey, testWalletAddress)
+        val account = account()
         val unicodeMsg = "Hello 世界 🌍 Здравствуй мир"
         val sig = account.personalSign(chainId, unicodeMsg).toHexString()
         assertTrue(sig.isNotEmpty(), "Signature for unicode message should not be empty")
@@ -119,7 +124,14 @@ class BedrockSmartAccountTests {
 
     @Test
     fun testComputeWalletAddressForFreshAccount() {
-        val walletAddress = uniffi.bedrock.computeWalletAddressForFreshAccount("0xa4eb68ce21c862f42e26ff31bb8351bf87f2c41a")
-        assertEquals(walletAddress, "0xd462bac17966fd7a9ee76b55191a6083edf6f80b", "computeFreshWalletAddress did not yield the expected result")
+        val walletAddress =
+            uniffi.bedrock.computeWalletAddressForFreshAccount(
+                "0xa4eb68ce21c862f42e26ff31bb8351bf87f2c41a",
+            )
+        assertEquals(
+            walletAddress,
+            "0xd462bac17966fd7a9ee76b55191a6083edf6f80b",
+            "computeFreshWalletAddress did not yield the expected result",
+        )
     }
 }

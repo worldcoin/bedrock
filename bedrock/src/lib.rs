@@ -54,3 +54,4 @@ pub mod siwe;
 pub mod test_utils;
 
 uniffi::setup_scaffolding!("bedrock");
+siegel_uniffi::uniffi_reexport_scaffolding!();

@@ -40,14 +40,17 @@ echo -e "${BLUE}📦 Step 2: Copying generated Swift files to test package${NC}"
 # Ensure the destination directory exists
 mkdir -p "$TESTS_PATH/$SOURCES_PATH_NAME"
 
-# Copy the generated Swift file to the test package
-if [ -f "$BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift" ]; then
-    cp "$BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift" "$TESTS_PATH/$SOURCES_PATH_NAME"
-    echo -e "${GREEN}✅ Swift bindings copied to test package${NC}"
-else
-    echo -e "${RED}✗ Could not find generated Swift bindings at: $BASE_PATH/$SOURCES_PATH_NAME/bedrock.swift${NC}"
+# Copy all generated Swift bindings to the test package. The build emits one
+# Swift file per linked uniffi crate (e.g. bedrock.swift, siegel_uniffi.swift).
+shopt -s nullglob
+swift_files=("$BASE_PATH/$SOURCES_PATH_NAME"/*.swift)
+shopt -u nullglob
+if [ ${#swift_files[@]} -eq 0 ]; then
+    echo -e "${RED}✗ Could not find any generated Swift bindings in: $BASE_PATH/$SOURCES_PATH_NAME${NC}"
     exit 1
 fi
+cp "${swift_files[@]}" "$TESTS_PATH/$SOURCES_PATH_NAME"
+echo -e "${GREEN}✅ Swift bindings copied to test package (${#swift_files[@]} file(s))${NC}"
 
 echo ""
 echo -e "${BLUE}🧪 Running Swift tests with verbose output...${NC}"

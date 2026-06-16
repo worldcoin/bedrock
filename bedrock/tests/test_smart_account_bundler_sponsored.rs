@@ -182,7 +182,10 @@ async fn test_send_bundler_sponsored_user_operation() -> anyhow::Result<()> {
     };
 
     // 9) Execute via send_bundler_sponsored_user_operation
-    let safe_account = SafeSmartAccount::new(owner_key_hex, &safe_address.to_string())?;
+    let safe_account = SafeSmartAccount::from_private_key_hex(
+        owner_key_hex,
+        &safe_address.to_string(),
+    )?;
     let _user_op_hash = safe_account
         .send_bundler_sponsored_user_operation(unparsed_user_op, bundler_url.clone())
         .await
@@ -268,7 +271,8 @@ async fn test_send_bundler_sponsored_user_operation_live() -> anyhow::Result<()>
         factory_data: None,
     };
 
-    let safe_account = SafeSmartAccount::new(owner_key, &safe_address.to_string())?;
+    let safe_account =
+        SafeSmartAccount::from_private_key_hex(owner_key, &safe_address.to_string())?;
     let user_op_hash = safe_account
         .send_bundler_sponsored_user_operation(unparsed_user_op, rpc_url)
         .await
@@ -301,8 +305,9 @@ async fn test_send_bundler_sponsored_user_operation_bundler_rejected() {
     );
     let owner_key_hex =
         hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
-    let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)
-        .expect("failed to create SafeSmartAccount");
+    let safe_account =
+        SafeSmartAccount::from_private_key_hex(owner_key_hex, safe_address)
+            .expect("failed to create SafeSmartAccount");
 
     let err = safe_account
         .send_bundler_sponsored_user_operation(
@@ -337,8 +342,9 @@ async fn test_send_bundler_sponsored_user_operation_http_error_is_generic() {
     let owner_key_hex =
         hex::encode(alloy::signers::local::PrivateKeySigner::random().to_bytes());
     let safe_address = "0x1234567890123456789012345678901234567890";
-    let safe_account = SafeSmartAccount::new(owner_key_hex, safe_address)
-        .expect("failed to create SafeSmartAccount");
+    let safe_account =
+        SafeSmartAccount::from_private_key_hex(owner_key_hex, safe_address)
+            .expect("failed to create SafeSmartAccount");
 
     let err = safe_account
         .send_bundler_sponsored_user_operation(

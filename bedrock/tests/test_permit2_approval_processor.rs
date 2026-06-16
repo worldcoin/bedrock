@@ -56,7 +56,7 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     set_http_client(Arc::new(client));
 
     // 6) Create the processor
-    let safe_account = Arc::new(SafeSmartAccount::new(
+    let safe_account = Arc::new(SafeSmartAccount::from_private_key_hex(
         owner_key_hex,
         &safe_address.to_string(),
     )?);
