@@ -517,9 +517,21 @@ fn swift_test() -> Result<()> {
         is_test_output_interesting,
     )?;
 
-    print_test_summary(&output);
+    let summary = parse_test_summary(&output);
+    print_test_summary(&summary);
+
     if !status.success() {
         bail!("xcodebuild test failed ({status})");
+    }
+    if summary.total == 0 {
+        bail!("xcodebuild reported success but did not execute any test cases");
+    }
+    if summary.failed > 0 || summary.suites_failed > 0 {
+        bail!(
+            "{} test case(s) and {} test suite(s) failed",
+            summary.failed,
+            summary.suites_failed
+        );
     }
     println!();
     println!("🎉 All tests passed!");
@@ -542,23 +554,34 @@ fn is_test_output_interesting(line: &str) -> bool {
         || line.contains(": FAILED")
 }
 
-/// Print a count of test cases / suites parsed from xcodebuild's test output.
-fn print_test_summary(output: &str) {
+struct TestSummary {
+    total: usize,
+    passed: usize,
+    failed: usize,
+    suites_failed: usize,
+}
+
+/// Count test cases and suites from xcodebuild's test output.
+fn parse_test_summary(output: &str) -> TestSummary {
     let count = |needle: &str, status: &str| -> usize {
         output
             .lines()
             .filter(|l| l.contains(needle) && l.contains(status))
             .count()
     };
-    let passed = count("Test Case", "passed");
-    let failed = count("Test Case", "failed");
-    let suites_failed = count("Test Suite", "failed");
+    TestSummary {
+        total: count("Test Case", "started"),
+        passed: count("Test Case", "passed"),
+        failed: count("Test Case", "failed"),
+        suites_failed: count("Test Suite", "failed"),
+    }
+}
 
-    println!();
-    println!("✅ Tests passed: {passed}");
-    println!("❌ Tests failed: {failed}");
-    if suites_failed > 0 {
-        println!("📦 Test suites failed: {suites_failed}");
+fn print_test_summary(s: &TestSummary) {
+    println!("✅ Tests passed: {}", s.passed);
+    println!("❌ Tests failed: {}", s.failed);
+    if s.suites_failed > 0 {
+        println!("📦 Test suites failed: {}", s.suites_failed);
     }
 }
 
@@ -650,29 +673,58 @@ fn swift_link_local(consumer_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Replace any `.package(url: "https://github.com/worldcoin/bedrock-swift", exact: "X.Y.Z")`
-/// with `.package(path: "<local-build>")`.
+/// Replace each line containing a `worldcoin/bedrock-swift` reference with
+/// `<indent>.package(path: "<local-build>"),`. The trailing comma is always
+/// emitted — Swift permits trailing commas in array literals, which is the
+/// only place SPM `.package(...)` entries appear in practice.
 fn rewrite_consumer_package(contents: &str, local_build: &Path) -> String {
     let mut out = String::with_capacity(contents.len());
-    let replacement = format!(".package(path: \"{}\")", local_build.display());
+    let replacement = format!(".package(path: \"{}\"),", local_build.display());
     for line in contents.split_inclusive('\n') {
-        if line.contains("worldcoin/bedrock-swift") && line.contains(".package(") {
-            let indent: String =
-                line.chars().take_while(|c| c.is_whitespace()).collect();
-            let trailing = if line.ends_with("\r\n") {
-                "\r\n"
-            } else if line.ends_with('\n') {
-                "\n"
-            } else {
-                ""
-            };
-            out.push_str(&indent);
-            out.push_str(&replacement);
-            out.push_str(trailing);
-        } else {
+        if !line.contains("worldcoin/bedrock-swift") {
             out.push_str(line);
+            continue;
         }
+        let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+        out.push_str(&indent);
+        out.push_str(&replacement);
+        out.push('\n');
     }
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> &'static str {
+        r#"dependencies: [
+    .package(url: "https://github.com/worldcoin/bedrock-swift", exact: "0.4.0"),
+    .package(url: "https://github.com/other/dep", from: "1.0.0"),
+],
+"#
+    }
+
+    #[test]
+    fn preserves_trailing_comma_and_neighbours() {
+        let out = rewrite_consumer_package(fixture(), Path::new("/tmp/local"));
+        assert!(out.contains(".package(path: \"/tmp/local\"),"));
+        assert!(out.contains(".package(url: \"https://github.com/other/dep\""));
+    }
+
+    #[test]
+    fn no_match_leaves_file_untouched() {
+        let unrelated = "let package = Package(name: \"X\")\n";
+        assert_eq!(
+            rewrite_consumer_package(unrelated, Path::new("/tmp/local")),
+            unrelated
+        );
+    }
+
+    #[test]
+    fn always_emits_trailing_comma_even_when_source_lacks_one() {
+        let line = "    .package(url: \"https://github.com/worldcoin/bedrock-swift\", exact: \"0.4.0\")\n";
+        let out = rewrite_consumer_package(line, Path::new("/tmp/local"));
+        assert_eq!(out, "    .package(path: \"/tmp/local\"),\n");
+    }
+}
