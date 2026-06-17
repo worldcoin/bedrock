@@ -110,10 +110,10 @@ fn run(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
-/// Run `cmd`, capturing all of its stdout into a `String` while live-printing
-/// only the lines for which `show` returns `true`. The full buffer is always
-/// returned so callers can post-process noise that was filtered from the
-/// console (e.g. parse test counts).
+/// Run `cmd`, capturing the merged stdout+stderr stream into a `String` while
+/// live-printing only the lines for which `show` returns `true`. The full
+/// buffer is returned so callers can post-process noise that was filtered from
+/// the console (e.g. parse test counts). Equivalent of bash's `2>&1` redirect.
 fn run_streamed(
     cmd: &mut Command,
     show: impl Fn(&str) -> bool,
@@ -121,20 +121,41 @@ fn run_streamed(
     let pretty = format!("{cmd:?}");
     let mut child = cmd
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("failed to spawn: {pretty}"))?;
     let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+
+    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let stderr_sender = sender.clone();
+    let stdout_thread = std::thread::spawn(move || forward_lines(stdout, &sender));
+    let stderr_thread =
+        std::thread::spawn(move || forward_lines(stderr, &stderr_sender));
+
     let mut buffer = String::new();
-    for line in std::io::BufReader::new(stdout).lines() {
-        let line = line?;
+    for line in receiver {
         if show(&line) {
             println!("{line}");
         }
         buffer.push_str(&line);
         buffer.push('\n');
     }
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
     let status = child.wait()?;
     Ok((buffer, status))
+}
+
+fn forward_lines<R: std::io::Read>(stream: R, sink: &std::sync::mpsc::Sender<String>) {
+    for line in std::io::BufReader::new(stream)
+        .lines()
+        .map_while(Result::ok)
+    {
+        if sink.send(line).is_err() {
+            break;
+        }
+    }
 }
 
 /// Run `cmd` to completion and return its captured stdout as a UTF-8 string.
@@ -673,20 +694,21 @@ fn swift_link_local(consumer_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Replace each line containing a `worldcoin/bedrock-swift` reference with
-/// `<indent>.package(path: "<local-build>"),`. The trailing comma is always
-/// emitted — Swift permits trailing commas in array literals, which is the
-/// only place SPM `.package(...)` entries appear in practice.
+/// Replace each `.package(url: "...worldcoin/bedrock-swift...", ...)` dependency
+/// declaration with `.package(path: "<local-build>")`
 fn rewrite_consumer_package(contents: &str, local_build: &Path) -> String {
     let mut out = String::with_capacity(contents.len());
     let replacement = format!(".package(path: \"{}\"),", local_build.display());
     for line in contents.split_inclusive('\n') {
-        if !line.contains("worldcoin/bedrock-swift") {
+        let trimmed = line.trim_start();
+        let is_pkg_decl = trimmed.starts_with(".package(url:")
+            && line.contains("worldcoin/bedrock-swift");
+        if !is_pkg_decl {
             out.push_str(line);
             continue;
         }
-        let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-        out.push_str(&indent);
+        let indent = &line[..line.len() - trimmed.len()];
+        out.push_str(indent);
         out.push_str(&replacement);
         out.push('\n');
     }
@@ -719,6 +741,12 @@ mod tests {
             rewrite_consumer_package(unrelated, Path::new("/tmp/local")),
             unrelated
         );
+    }
+
+    #[test]
+    fn leaves_comments_mentioning_the_repo_untouched() {
+        let src = "// pinned via worldcoin/bedrock-swift release notes\n";
+        assert_eq!(rewrite_consumer_package(src, Path::new("/tmp/local")), src);
     }
 
     #[test]
