@@ -1,57 +1,42 @@
 # 🐦‍🔥 Swift for Bedrock
 
-This folder contains all relevant support files for Bedrock to work in Swift:
+This folder contains support files for Bedrock's Swift bindings:
 
-1. Script to cross-compile and build Swift bindings.
-2. Script to build Swift package for local development.
-3. Foreign tests. Unit tests for Swift (`/tests` folder). Foreign unit tests run the XCTest suite on iOS simulator using `xcodebuild`.
+1. The generated Swift sources and `Bedrock.xcframework` (regenerated on every build).
+2. Foreign tests in `tests/` — XCTest suite run on the iOS simulator via `xcodebuild`.
 
-### Building the Swift Bindings
+All build tasks are exposed as subcommands of `cargo xtask swift` (see `xtask/`):
 
-To build the Swift project for release/distribution:
-
-```bash
-    # run from the root project directory
-    ./swift/build_swift.sh
-```
-
-### Testing `Bedrock` locally
-
-To build a Swift package that can be imported locally via Swift Package Manager:
+### Build the Swift bindings for release/distribution
 
 ```bash
-    # run from the root project directory
-    ./swift/local_swift.sh
+cargo xtask swift build
 ```
 
-This creates a complete Swift package in the `swift/local_build/` directory that you can import in your iOS project:
+### Build a local Swift package for iOS app development
 
-### Integration via Package.swift
+```bash
+cargo xtask swift local
+```
 
-Add the local package to your Package.swift dependencies:
+Produces a `file://`-installable package in `swift/local_build/bedrock-swift/`. Add it
+to your consumer `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(name: "Bedrock", path: "../../../bedrock/swift/local_build"),
-    // ... other dependencies
+    .package(name: "Bedrock", path: "../../../bedrock/swift/local_build/bedrock-swift"),
 ],
 ```
 
-Then add it to specific targets that need bedrock functionality:
-
-```swift
-.target(
-    name: "YourTarget",
-    dependencies: [
-        .product(name: "Bedrock", package: "Bedrock"),
-        // ... other dependencies
-    ]
-),
-```
-
-### Running foreign tests for Swift
+To automatically rewrite a WorldApp checkout's `Package.swift` to point at the local
+build, set `WORLD_APP_PATH` (or pass `--world-app-path`) and run:
 
 ```bash
-    # run from the root project directory
-    ./swift/test_swift.sh
+cargo xtask swift link-local
+```
+
+### Run the foreign Swift tests
+
+```bash
+cargo xtask swift test
 ```

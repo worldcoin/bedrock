@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Creates Kotlin/JNA bindings for the `bedrock` library and places them in the
-# This script mirrors the behavior of `build_swift.sh` for Kotlin/JVM.
+# Creates Kotlin/JNA bindings for the `bedrock` library.
+# This is the Kotlin counterpart of `cargo xtask swift build`.
 
 PROJECT_ROOT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KOTLIN_DIR="$PROJECT_ROOT_PATH/kotlin"

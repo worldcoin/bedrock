@@ -1,0 +1,677 @@
+#![deny(clippy::all, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::missing_errors_doc)]
+
+//! Build and release tasks for the bedrock Swift bindings.
+//!
+//! All paths are resolved relative to the workspace root so the commands
+//! behave the same whether invoked from the root or a sub-directory.
+
+use std::ffi::OsStr;
+use std::fmt::Write as _;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus, Stdio};
+
+use anyhow::{bail, Context, Result};
+use clap::{Parser, Subcommand};
+
+const IOS_DEPLOYMENT_TARGET: &str = "13.0";
+const IOS_RUSTFLAGS: &str = "-C link-arg=-Wl,-application_extension";
+const IOS_TARGETS: &[&str] = &[
+    "aarch64-apple-ios-sim",
+    "aarch64-apple-ios",
+    "x86_64-apple-ios",
+];
+
+#[derive(Parser)]
+#[command(name = "xtask", about = "Build automation for bedrock")]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Swift bindings and packaging.
+    Swift {
+        #[command(subcommand)]
+        cmd: SwiftCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SwiftCmd {
+    /// Build `Bedrock.xcframework` + generated Swift sources.
+    Build {
+        /// Output directory (defaults to `swift/`).
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
+    },
+    /// Build a local Swift package importable via SPM `file://` URLs.
+    Local,
+    /// Build bindings and run the foreign Swift test suite on a simulator.
+    Test,
+    /// Emit `Package.swift` referencing a hosted xcframework asset.
+    Archive {
+        #[arg(long)]
+        asset_url: String,
+        #[arg(long)]
+        checksum: String,
+        #[arg(long)]
+        release_version: String,
+    },
+    /// Patch a consumer `Package.swift` to depend on the local build.
+    LinkLocal {
+        /// Path to the `WorldApp` checkout to patch.
+        #[arg(long, env = "WORLD_APP_PATH")]
+        world_app_path: PathBuf,
+    },
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let Cmd::Swift { cmd } = cli.cmd;
+    match cmd {
+        SwiftCmd::Build { out_dir } => swift_build(out_dir.as_deref()),
+        SwiftCmd::Local => swift_local(),
+        SwiftCmd::Test => swift_test(),
+        SwiftCmd::Archive {
+            asset_url,
+            checksum,
+            release_version,
+        } => swift_archive(&asset_url, &checksum, &release_version),
+        SwiftCmd::LinkLocal { world_app_path } => swift_link_local(&world_app_path),
+    }
+}
+
+/// Absolute path to the workspace root (one level above `xtask/`).
+fn project_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask Cargo.toml lives one directory below the workspace root")
+        .to_path_buf()
+}
+
+/// Absolute path to the `swift/` directory inside the workspace.
+fn swift_dir() -> PathBuf {
+    project_root().join("swift")
+}
+
+/// Run `cmd` to completion; return an error if it exits non-zero.
+fn run(cmd: &mut Command) -> Result<()> {
+    let pretty = format!("{cmd:?}");
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to spawn: {pretty}"))?;
+    if !status.success() {
+        bail!("command failed ({status}): {pretty}");
+    }
+    Ok(())
+}
+
+/// Run `cmd`, streaming its stdout to our own stdout while also collecting it
+/// into a `String` so callers can post-process the output (e.g. parse test
+/// counts). Returns the captured output alongside the exit status.
+fn run_streamed(cmd: &mut Command) -> Result<(String, ExitStatus)> {
+    let pretty = format!("{cmd:?}");
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn: {pretty}"))?;
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let mut buffer = String::new();
+    for line in std::io::BufReader::new(stdout).lines() {
+        let line = line?;
+        println!("{line}");
+        buffer.push_str(&line);
+        buffer.push('\n');
+    }
+    let status = child.wait()?;
+    Ok((buffer, status))
+}
+
+/// Run `cmd` to completion and return its captured stdout as a UTF-8 string.
+fn capture(cmd: &mut Command) -> Result<String> {
+    let pretty = format!("{cmd:?}");
+    let out = cmd
+        .output()
+        .with_context(|| format!("failed to spawn: {pretty}"))?;
+    if !out.status.success() {
+        bail!("command failed ({}): {pretty}", out.status);
+    }
+    String::from_utf8(out.stdout).context("non-utf8 command output")
+}
+
+/// Remove `path` (recursively) if it exists, then recreate it as an empty directory.
+fn reset_dir(path: &Path) -> Result<()> {
+    if path.exists() {
+        std::fs::remove_dir_all(path)
+            .with_context(|| format!("removing {}", path.display()))?;
+    }
+    std::fs::create_dir_all(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    Ok(())
+}
+
+/// Build the iOS static libs, run `uniffi-bindgen`, and assemble `Bedrock.xcframework`.
+fn swift_build(out_dir: Option<&Path>) -> Result<()> {
+    let root = project_root();
+    let swift = swift_dir();
+    let out_dir = match out_dir {
+        Some(p) if p.is_absolute() => p.to_path_buf(),
+        Some(p) => swift.join(p),
+        None => swift.clone(),
+    };
+
+    let ios_build = swift.join("ios_build");
+    let sources_dir = out_dir.join("Sources/Bedrock");
+    let headers_dir = ios_build.join("Headers/Bedrock");
+    let bindings_dir = ios_build.join("bindings");
+    let sim_universal_dir = ios_build.join("target/universal-ios-sim/release");
+    let framework_out = out_dir.join("Bedrock.xcframework");
+
+    println!(
+        "Building Bedrock.xcframework -> {}",
+        framework_out.display()
+    );
+
+    if ios_build.exists() {
+        std::fs::remove_dir_all(&ios_build)?;
+    }
+    if framework_out.exists() {
+        std::fs::remove_dir_all(&framework_out)?;
+    }
+    for dir in [
+        &bindings_dir,
+        &sim_universal_dir,
+        &sources_dir,
+        &headers_dir,
+    ] {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    build_ios_static_libs(&root)?;
+    let sim_universal = lipo_universal_sim(&root, &sim_universal_dir)?;
+    generate_uniffi_bindings(&root, &bindings_dir)?;
+    assemble_ffi_module(&bindings_dir, &sources_dir, &headers_dir)?;
+    create_xcframework(
+        &root.join("target/aarch64-apple-ios/release/libbedrock.a"),
+        &sim_universal,
+        &ios_build.join("Headers"),
+        &framework_out,
+    )?;
+
+    std::fs::remove_dir_all(&ios_build)?;
+    println!(
+        "✅ Swift framework built successfully at: {}",
+        framework_out.display()
+    );
+    Ok(())
+}
+
+/// `cargo build` the `bedrock` crate for every iOS target (device, arm sim, x86 sim).
+fn build_ios_static_libs(root: &Path) -> Result<()> {
+    for target in IOS_TARGETS {
+        run(Command::new("cargo")
+            .current_dir(root)
+            .args(["build", "--package", "bedrock", "--release", "--target"])
+            .arg(target)
+            .env("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)
+            .env("RUSTFLAGS", IOS_RUSTFLAGS))?;
+    }
+    Ok(())
+}
+
+/// Combine the arm + x86 simulator static libs into a universal binary at `out_dir/libbedrock.a`.
+fn lipo_universal_sim(root: &Path, out_dir: &Path) -> Result<PathBuf> {
+    let sim_arm = root.join("target/aarch64-apple-ios-sim/release/libbedrock.a");
+    let sim_x86 = root.join("target/x86_64-apple-ios/release/libbedrock.a");
+    let universal = out_dir.join("libbedrock.a");
+    run(Command::new("lipo")
+        .arg("-create")
+        .args([&sim_arm, &sim_x86])
+        .arg("-output")
+        .arg(&universal))?;
+    run(Command::new("lipo").arg("-info").arg(&universal))?;
+    Ok(universal)
+}
+
+/// Run `uniffi-bindgen` against the simulator dylib to emit Swift sources and FFI headers.
+fn generate_uniffi_bindings(root: &Path, out_dir: &Path) -> Result<()> {
+    println!("Generating Swift bindings...");
+    let sim_dylib = root.join("target/aarch64-apple-ios-sim/release/libbedrock.dylib");
+    run(Command::new("cargo")
+        .current_dir(root)
+        .args(["run", "-p", "uniffi-bindgen", "generate"])
+        .arg(&sim_dylib)
+        .args([
+            "--library",
+            "--language",
+            "swift",
+            "--no-format",
+            "--out-dir",
+        ])
+        .arg(out_dir))?;
+    Ok(())
+}
+
+/// Xcode 16's explicit-module scanner resolves a single clang module per SPM
+/// `.binaryTarget`, so multiple top-level FFI modules in one xcframework would
+/// leave all but one unresolved. Collapse the per-crate uniffi headers into one
+/// umbrella module named `BedrockFFI` and rewrite the matching `import ...FFI`
+/// lines in the generated Swift sources.
+fn assemble_ffi_module(
+    bindings_dir: &Path,
+    sources_dir: &Path,
+    headers_dir: &Path,
+) -> Result<()> {
+    let mut ffi_headers: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(bindings_dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .with_context(|| {
+                format!("non-utf8 binding filename: {}", entry.path().display())
+            })?
+            .to_owned();
+        if name.ends_with("FFI.h") {
+            ffi_headers.push(name);
+        }
+    }
+    ffi_headers.sort();
+    if ffi_headers.is_empty() {
+        bail!("uniffi-bindgen did not emit any *FFI.h headers");
+    }
+
+    rewrite_swift_imports(bindings_dir, sources_dir)?;
+    write_umbrella_modulemap(&headers_dir.join("module.modulemap"), &ffi_headers)?;
+    for header in &ffi_headers {
+        std::fs::rename(bindings_dir.join(header), headers_dir.join(header))?;
+    }
+    Ok(())
+}
+
+/// Invoke `xcodebuild -create-xcframework` with the device and simulator slices.
+fn create_xcframework(
+    device_lib: &Path,
+    sim_lib: &Path,
+    headers: &Path,
+    out: &Path,
+) -> Result<()> {
+    println!("Creating XCFramework...");
+    run(Command::new("xcodebuild")
+        .arg("-create-xcframework")
+        .arg("-library")
+        .arg(device_lib)
+        .arg("-headers")
+        .arg(headers)
+        .arg("-library")
+        .arg(sim_lib)
+        .arg("-headers")
+        .arg(headers)
+        .arg("-output")
+        .arg(out))?;
+    Ok(())
+}
+
+/// Move each generated `.swift` file into `sources_dir`, rewriting the
+/// per-crate FFI module imports to the single umbrella `BedrockFFI` module.
+fn rewrite_swift_imports(bindings_dir: &Path, sources_dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(bindings_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension() != Some(OsStr::new("swift")) {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .with_context(|| format!("bad swift filename: {}", path.display()))?;
+        let per_crate = format!("{stem}FFI");
+        let content = std::fs::read_to_string(&path)?
+            .replace(&format!("canImport({per_crate})"), "canImport(BedrockFFI)")
+            .replace(&format!("import {per_crate}"), "import BedrockFFI");
+        let dest =
+            sources_dir.join(path.file_name().expect("read_dir entry has a name"));
+        std::fs::write(&dest, content)?;
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
+/// Emit a clang modulemap declaring a single `BedrockFFI` module over all FFI headers.
+fn write_umbrella_modulemap(path: &Path, headers: &[String]) -> Result<()> {
+    let mut out = String::from("module BedrockFFI {\n");
+    for h in headers {
+        writeln!(out, "    header \"{h}\"").expect("writing to String is infallible");
+    }
+    out.push_str("    export *\n");
+    out.push_str("    use \"Darwin\"\n");
+    out.push_str("    use \"_Builtin_stdbool\"\n");
+    out.push_str("    use \"_Builtin_stdint\"\n");
+    out.push_str("}\n");
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+/// Build the package into `swift/local_build/bedrock-swift/` for SPM `file://` consumption.
+fn swift_local() -> Result<()> {
+    let local_build = swift_dir().join("local_build/bedrock-swift");
+    if local_build.exists() {
+        std::fs::remove_dir_all(&local_build)?;
+    }
+    std::fs::create_dir_all(&local_build)?;
+
+    swift_build(Some(&local_build))?;
+    let binary_target = r#".binaryTarget(
+            name: "BedrockFFI",
+            path: "Bedrock.xcframework"
+        )"#;
+    std::fs::write(
+        local_build.join("Package.swift"),
+        render_package_swift(binary_target),
+    )?;
+
+    println!();
+    println!("✅ Swift package built successfully!");
+    println!();
+    println!("📦 Package location: {}", local_build.display());
+    println!();
+    println!("Add it to your iOS app via either:");
+    println!("  • Xcode: File → Add Package Dependencies → Add Local…");
+    println!(
+        "  • Package.swift: .package(path: \"{}\")",
+        local_build.display()
+    );
+    Ok(())
+}
+
+/// Render the shared `Package.swift` scaffold, splicing in a `.binaryTarget(...)` body.
+fn render_package_swift(binary_target: &str) -> String {
+    format!(
+        r#"// swift-tools-version: 5.7
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+let package = Package(
+    name: "Bedrock",
+    platforms: [
+        .iOS(.v13)
+    ],
+    products: [
+        .library(
+            name: "Bedrock",
+            targets: ["Bedrock"]),
+    ],
+    targets: [
+        .target(
+            name: "Bedrock",
+            dependencies: ["BedrockFFI"],
+            path: "Sources/Bedrock"
+        ),
+        {binary_target}
+    ]
+)
+"#
+    )
+}
+
+/// Write a `Package.swift` to the current directory referencing the hosted xcframework asset.
+fn swift_archive(asset_url: &str, checksum: &str, release_version: &str) -> Result<()> {
+    println!("🔧 Creating Package.swift with:");
+    println!("   Asset URL: {asset_url}");
+    println!("   Checksum: {checksum}");
+    println!("   Release Version: {release_version}");
+
+    let binary_target = format!(
+        r#".binaryTarget(
+            name: "BedrockFFI",
+            url: "{asset_url}",
+            checksum: "{checksum}"
+        )"#
+    );
+    let contents = format!(
+        "{}// Release version: {release_version}\n",
+        render_package_swift(&binary_target)
+    );
+    std::fs::write("Package.swift", contents)?;
+    println!("✅ Package.swift built successfully for version {release_version}!");
+    Ok(())
+}
+
+/// Build the bindings and run the foreign Swift test suite on an iOS simulator.
+fn swift_test() -> Result<()> {
+    let swift = swift_dir();
+    let tests = swift.join("tests");
+
+    let sdks = capture(Command::new("xcodebuild").arg("-showsdks"))?;
+    if !sdks.contains("iphonesimulator") {
+        bail!("No iOS Simulator SDK installed. Available SDKs:\n{sdks}");
+    }
+
+    println!("🔨 Building Swift bindings");
+    swift_build(None)?;
+
+    let framework = swift.join("Bedrock.xcframework");
+    if !framework.exists() {
+        bail!("Failed to build XCFramework at {}", framework.display());
+    }
+
+    println!("📦 Copying generated Swift files to test package");
+    let src_sources = swift.join("Sources/Bedrock");
+    let dest_sources = tests.join("Sources/Bedrock");
+    std::fs::create_dir_all(&dest_sources)?;
+    let mut copied = 0_usize;
+    for entry in std::fs::read_dir(&src_sources)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension() == Some(OsStr::new("swift")) {
+            std::fs::copy(&path, dest_sources.join(path.file_name().expect("named")))?;
+            copied += 1;
+        }
+    }
+    if copied == 0 {
+        bail!(
+            "Could not find any generated Swift bindings in: {}",
+            src_sources.display()
+        );
+    }
+    println!("✅ Copied {copied} Swift binding file(s) to test package");
+
+    reset_dir(&tests.join(".build"))?;
+    clear_derived_data("BedrockForeignTestPackage-")?;
+
+    let simulator_id = pick_simulator()?;
+    println!("📱 Using simulator ID: {simulator_id}");
+
+    if in_ci() {
+        println!("🧹 Running simulator hygiene (CI environment detected)...");
+        // `simctl shutdown` returns a non-zero exit if the simulator is already
+        // shut down; treat that as success.
+        let _ = Command::new("xcrun")
+            .args(["simctl", "shutdown", &simulator_id])
+            .status();
+        run(Command::new("xcrun").args(["simctl", "erase", &simulator_id]))?;
+        run(Command::new("xcrun").args(["simctl", "boot", &simulator_id]))?;
+        run(Command::new("xcrun").args(["simctl", "bootstatus", &simulator_id, "-b"]))?;
+    }
+
+    println!("🚀 Running tests on iOS Simulator...");
+    let (output, status) = run_streamed(
+        Command::new("xcodebuild")
+            .current_dir(&tests)
+            .arg("-quiet")
+            .arg("test")
+            .args(["-scheme", "BedrockForeignTestPackage"])
+            .arg("-destination")
+            .arg(format!("platform=iOS Simulator,id={simulator_id}"))
+            .args(["-sdk", "iphonesimulator", "CODE_SIGNING_ALLOWED=NO"]),
+    )?;
+
+    print_test_summary(&output);
+    if !status.success() {
+        bail!("xcodebuild test failed ({status})");
+    }
+    println!();
+    println!("🎉 All tests passed!");
+    Ok(())
+}
+
+/// Print a count of test cases / suites parsed from xcodebuild's test output.
+fn print_test_summary(output: &str) {
+    let count = |needle: &str, status: &str| -> usize {
+        output
+            .lines()
+            .filter(|l| l.contains(needle) && l.contains(status))
+            .count()
+    };
+    let total = count("Test Case", "started");
+    let passed = count("Test Case", "passed");
+    let failed = count("Test Case", "failed");
+    let suites_failed = count("Test Suite", "failed");
+
+    println!();
+    println!("📊 Test Results");
+    println!("================");
+    println!("📋 Total test cases: {total}");
+    println!("✅ Tests passed: {passed}");
+    println!("❌ Tests failed: {failed}");
+    if suites_failed > 0 {
+        println!("📦 Test suites failed: {suites_failed}");
+    }
+}
+
+/// Remove Xcode `DerivedData` directories whose names start with `prefix`.
+/// Stale data from prior runs occasionally caused the simulator test runner
+/// to never start ("never began executing tests after launching" timeout).
+fn clear_derived_data(prefix: &str) -> Result<()> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(());
+    };
+    let derived = PathBuf::from(home).join("Library/Developer/Xcode/DerivedData");
+    if !derived.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(&derived)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(prefix) {
+            std::fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+/// Return `true` when running inside GitHub Actions or a generic CI environment.
+fn in_ci() -> bool {
+    std::env::var("CI").as_deref() == Ok("true")
+        || std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+}
+
+/// Pick the first available iPhone simulator (preferring iPhone 16).
+fn pick_simulator() -> Result<String> {
+    let listing = capture(Command::new("xcrun").args([
+        "simctl",
+        "list",
+        "devices",
+        "available",
+    ]))?;
+    let preferred = listing
+        .lines()
+        .find(|line| line.contains("iPhone 16"))
+        .or_else(|| listing.lines().find(|line| line.contains("iPhone")));
+    let line = preferred.context("no iPhone simulator available")?;
+    // Each line ends in `(UUID) (state)`. Grab the last parenthesised UUID.
+    let id = line
+        .rsplit('(')
+        .nth(1)
+        .and_then(|s| s.split(')').next())
+        .with_context(|| format!("could not parse simulator UUID from: {line}"))?;
+    Ok(id.to_owned())
+}
+
+/// Rebuild locally, then patch every consumer `Package.swift` under `world_app_path` to
+/// depend on the local build instead of the hosted `worldcoin/bedrock-swift` package.
+fn swift_link_local(world_app_path: &Path) -> Result<()> {
+    swift_local()?;
+    let local_build = swift_dir().join("local_build/bedrock-swift");
+
+    let mut patched = 0_usize;
+    for path in find_package_swift_files(world_app_path)? {
+        let contents = std::fs::read_to_string(&path)?;
+        if !contents.contains("worldcoin/bedrock-swift") {
+            continue;
+        }
+        let rewritten = rewrite_consumer_package(&contents, &local_build);
+        if rewritten == contents {
+            continue;
+        }
+        println!("Patching {}...", path.display());
+        std::fs::write(&path, rewritten)?;
+        patched += 1;
+    }
+
+    if patched == 0 {
+        bail!(
+            "No Package.swift referencing worldcoin/bedrock-swift found in {}",
+            world_app_path.display()
+        );
+    }
+    println!(
+        "Done! In Xcode, make sure package resolution succeeds (via the Issue Navigator)."
+    );
+    Ok(())
+}
+
+/// Replace any `.package(url: "https://github.com/worldcoin/bedrock-swift", exact: "X.Y.Z")`
+/// with `.package(path: "<local-build>")`.
+fn rewrite_consumer_package(contents: &str, local_build: &Path) -> String {
+    let mut out = String::with_capacity(contents.len());
+    let replacement = format!(".package(path: \"{}\")", local_build.display());
+    for line in contents.split_inclusive('\n') {
+        if line.contains("worldcoin/bedrock-swift") && line.contains(".package(") {
+            let indent: String =
+                line.chars().take_while(|c| c.is_whitespace()).collect();
+            let trailing = if line.ends_with("\r\n") {
+                "\r\n"
+            } else if line.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            out.push_str(&indent);
+            out.push_str(&replacement);
+            out.push_str(trailing);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// Recursively collect every `Package.swift` file under `root`, skipping
+/// build/VCS directories that never contain consumer packages.
+fn find_package_swift_files(root: &Path) -> Result<Vec<PathBuf>> {
+    const IGNORED: &[&str] = &[".build", ".claude", ".git", "node_modules"];
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .with_context(|| format!("reading {}", dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if path.is_dir() {
+                if !IGNORED.contains(&name.as_ref()) {
+                    stack.push(path);
+                }
+            } else if name == "Package.swift" {
+                found.push(path);
+            }
+        }
+    }
+    Ok(found)
+}
