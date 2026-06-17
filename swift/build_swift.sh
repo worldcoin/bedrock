@@ -90,21 +90,36 @@ cargo run -p uniffi-bindgen generate \
     --no-format \
     --out-dir "$BASE_PATH"/ios_build/bindings
 
-# uniffi-bindgen emits one set of files per linked uniffi crate. Move all
-# generated Swift sources to the Sources directory and all FFI headers.
+# uniffi-bindgen emits one set of files per linked uniffi crate. Xcode 16's
+# explicit-module scanner resolves a single clang module per SPM .binaryTarget,
+# so multiple top-level FFI modules in one xcframework would leave all but one
+# unresolved. Collapse the per-crate modulemaps into one umbrella module named
+# BedrockFFI and rewrite the per-crate `import ...FFI` lines accordingly.
 shopt -s nullglob
 for swift_file in "$BASE_PATH"/ios_build/bindings/*.swift; do
+    sed -i '' -E \
+        -e 's/canImport\([a-zA-Z_][a-zA-Z0-9_]*FFI\)/canImport(BedrockFFI)/g' \
+        -e 's/^import [a-zA-Z_][a-zA-Z0-9_]*FFI$/import BedrockFFI/' \
+        "$swift_file"
     mv "$swift_file" "$SWIFT_SOURCES_DIR/"
 done
 
+{
+    echo "module BedrockFFI {"
+    for header in "$BASE_PATH"/ios_build/bindings/*FFI.h; do
+        echo "    header \"$(basename "$header")\""
+    done
+    cat <<'EOF'
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}
+EOF
+} >"$SWIFT_HEADERS_DIR"/module.modulemap
+
 for header in "$BASE_PATH"/ios_build/bindings/*FFI.h; do
     mv "$header" "$SWIFT_HEADERS_DIR/"
-done
-
-: >"$SWIFT_HEADERS_DIR"/module.modulemap
-for modmap in "$BASE_PATH"/ios_build/bindings/*FFI.modulemap; do
-    cat "$modmap" >>"$SWIFT_HEADERS_DIR"/module.modulemap
-    printf '\n' >>"$SWIFT_HEADERS_DIR"/module.modulemap
 done
 shopt -u nullglob
 
