@@ -28,8 +28,8 @@ dependencies: [
 ],
 ```
 
-To automatically rewrite a WorldApp checkout's `Package.swift` to point at the local
-build, set `WORLD_APP_PATH` (or pass `--world-app-path`) and run:
+To automatically rewrite a consumer project's `Package.swift` to point at the local
+build, set `CONSUMER_PATH` (or pass `--consumer-path`) and run:
 
 ```bash
 cargo xtask swift link-local

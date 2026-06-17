@@ -1,7 +1,7 @@
 #![deny(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::missing_errors_doc)]
 
-//! Build and release tasks for the bedrock Swift bindings.
+//! Build and release tasks for the Swift bindings.
 //!
 //! All paths are resolved relative to the workspace root so the commands
 //! behave the same whether invoked from the root or a sub-directory.
@@ -62,9 +62,10 @@ enum SwiftCmd {
     },
     /// Patch a consumer `Package.swift` to depend on the local build.
     LinkLocal {
-        /// Path to the `WorldApp` checkout to patch.
-        #[arg(long, env = "WORLD_APP_PATH")]
-        world_app_path: PathBuf,
+        /// Path to the consumer project (e.g. an iOS app checkout) whose
+        /// `Package.swift` should be rewritten to point at the local build.
+        #[arg(long, env = "CONSUMER_PATH")]
+        consumer_path: PathBuf,
     },
 }
 
@@ -80,11 +81,11 @@ fn main() -> Result<()> {
             checksum,
             release_version,
         } => swift_archive(&asset_url, &checksum, &release_version),
-        SwiftCmd::LinkLocal { world_app_path } => swift_link_local(&world_app_path),
+        SwiftCmd::LinkLocal { consumer_path } => swift_link_local(&consumer_path),
     }
 }
 
-/// Absolute path to the workspace root (one level above `xtask/`).
+/// Absolute path to the workspace root
 fn project_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -109,10 +110,14 @@ fn run(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
-/// Run `cmd`, streaming its stdout to our own stdout while also collecting it
-/// into a `String` so callers can post-process the output (e.g. parse test
-/// counts). Returns the captured output alongside the exit status.
-fn run_streamed(cmd: &mut Command) -> Result<(String, ExitStatus)> {
+/// Run `cmd`, capturing all of its stdout into a `String` while live-printing
+/// only the lines for which `show` returns `true`. The full buffer is always
+/// returned so callers can post-process noise that was filtered from the
+/// console (e.g. parse test counts).
+fn run_streamed(
+    cmd: &mut Command,
+    show: impl Fn(&str) -> bool,
+) -> Result<(String, ExitStatus)> {
     let pretty = format!("{cmd:?}");
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -122,7 +127,9 @@ fn run_streamed(cmd: &mut Command) -> Result<(String, ExitStatus)> {
     let mut buffer = String::new();
     for line in std::io::BufReader::new(stdout).lines() {
         let line = line?;
-        println!("{line}");
+        if show(&line) {
+            println!("{line}");
+        }
         buffer.push_str(&line);
         buffer.push('\n');
     }
@@ -153,7 +160,7 @@ fn reset_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Build the iOS static libs, run `uniffi-bindgen`, and assemble `Bedrock.xcframework`.
+/// Build the entire output for Swift bindings into `Bedrock.xcframework`.
 fn swift_build(out_dir: Option<&Path>) -> Result<()> {
     let root = project_root();
     let swift = swift_dir();
@@ -502,12 +509,12 @@ fn swift_test() -> Result<()> {
     let (output, status) = run_streamed(
         Command::new("xcodebuild")
             .current_dir(&tests)
-            .arg("-quiet")
             .arg("test")
             .args(["-scheme", "BedrockForeignTestPackage"])
             .arg("-destination")
             .arg(format!("platform=iOS Simulator,id={simulator_id}"))
             .args(["-sdk", "iphonesimulator", "CODE_SIGNING_ALLOWED=NO"]),
+        is_test_output_interesting,
     )?;
 
     print_test_summary(&output);
@@ -519,6 +526,22 @@ fn swift_test() -> Result<()> {
     Ok(())
 }
 
+/// Whitelist filter: show only lines from xcodebuild that matter to the user
+/// (test progress, the final summary line, failures, and compiler diagnostics).
+/// Hides build-phase chatter like `CompileSwiftSources`, `ExtractAppIntentsMetadata`,
+/// `CodeSign`, etc.
+fn is_test_output_interesting(line: &str) -> bool {
+    let trim = line.trim_start();
+    trim.starts_with("Test Suite")
+        || trim.starts_with("Test Case")
+        || trim.starts_with("Executed ")
+        || trim.starts_with("** TEST ")
+        || trim.starts_with("** BUILD FAILED")
+        || line.contains(": error:")
+        || line.contains(": warning:")
+        || line.contains(": FAILED")
+}
+
 /// Print a count of test cases / suites parsed from xcodebuild's test output.
 fn print_test_summary(output: &str) {
     let count = |needle: &str, status: &str| -> usize {
@@ -527,15 +550,11 @@ fn print_test_summary(output: &str) {
             .filter(|l| l.contains(needle) && l.contains(status))
             .count()
     };
-    let total = count("Test Case", "started");
     let passed = count("Test Case", "passed");
     let failed = count("Test Case", "failed");
     let suites_failed = count("Test Suite", "failed");
 
     println!();
-    println!("📊 Test Results");
-    println!("================");
-    println!("📋 Total test cases: {total}");
     println!("✅ Tests passed: {passed}");
     println!("❌ Tests failed: {failed}");
     if suites_failed > 0 {
@@ -591,32 +610,39 @@ fn pick_simulator() -> Result<String> {
     Ok(id.to_owned())
 }
 
-/// Rebuild locally, then patch every consumer `Package.swift` under `world_app_path` to
+/// Rebuild locally, then patch every consumer `Package.swift` under `consumer_path` to
 /// depend on the local build instead of the hosted `worldcoin/bedrock-swift` package.
-fn swift_link_local(world_app_path: &Path) -> Result<()> {
+fn swift_link_local(consumer_path: &Path) -> Result<()> {
     swift_local()?;
     let local_build = swift_dir().join("local_build/bedrock-swift");
 
-    let mut patched = 0_usize;
-    for path in find_package_swift_files(world_app_path)? {
-        let contents = std::fs::read_to_string(&path)?;
-        if !contents.contains("worldcoin/bedrock-swift") {
-            continue;
-        }
+    let grep = Command::new("grep")
+        .args([
+            "-rl",
+            "worldcoin/bedrock-swift",
+            "--include=Package.swift",
+            "--exclude-dir=.build",
+            "--exclude-dir=.git",
+        ])
+        .arg(consumer_path)
+        .output()
+        .context("failed to spawn grep")?;
+    if grep.status.code() != Some(0) {
+        bail!(
+            "No Package.swift referencing worldcoin/bedrock-swift found in {}",
+            consumer_path.display()
+        );
+    }
+
+    for line in String::from_utf8(grep.stdout)?.lines() {
+        let path = Path::new(line);
+        let contents = std::fs::read_to_string(path)?;
         let rewritten = rewrite_consumer_package(&contents, &local_build);
         if rewritten == contents {
             continue;
         }
         println!("Patching {}...", path.display());
-        std::fs::write(&path, rewritten)?;
-        patched += 1;
-    }
-
-    if patched == 0 {
-        bail!(
-            "No Package.swift referencing worldcoin/bedrock-swift found in {}",
-            world_app_path.display()
-        );
+        std::fs::write(path, rewritten)?;
     }
     println!(
         "Done! In Xcode, make sure package resolution succeeds (via the Issue Navigator)."
@@ -650,28 +676,3 @@ fn rewrite_consumer_package(contents: &str, local_build: &Path) -> String {
     out
 }
 
-/// Recursively collect every `Package.swift` file under `root`, skipping
-/// build/VCS directories that never contain consumer packages.
-fn find_package_swift_files(root: &Path) -> Result<Vec<PathBuf>> {
-    const IGNORED: &[&str] = &[".build", ".claude", ".git", "node_modules"];
-    let mut found = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)
-            .with_context(|| format!("reading {}", dir.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if path.is_dir() {
-                if !IGNORED.contains(&name.as_ref()) {
-                    stack.push(path);
-                }
-            } else if name == "Package.swift" {
-                found.push(path);
-            }
-        }
-    }
-    Ok(found)
-}
