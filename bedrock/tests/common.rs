@@ -99,7 +99,7 @@ pub fn setup_anvil() -> AnvilInstance {
     dotenvy::dotenv().ok();
     let rpc_url = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
         // Fallback to a public, no-key RPC if available.
-        "https://worldchain-mainnet.g.alchemy.com/v2/demo".to_string()
+        "https://worldchain-mainnet.g.alchemy.com/public".to_string()
     });
 
     alloy::node_bindings::Anvil::new().fork(rpc_url).spawn()
