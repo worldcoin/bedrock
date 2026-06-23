@@ -152,7 +152,7 @@ jobs:
           toolchain: stable
 
       - name: Build and test Kotlin bindings
-        run: ./kotlin/test_kotlin.sh
+        run: cargo xtask kotlin test
 
       - name: Install ktlint
         run: |

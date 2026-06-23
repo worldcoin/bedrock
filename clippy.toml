@@ -5,6 +5,8 @@ doc-valid-idents = [
   "UniFFI",
   "Swift",
   "Kotlin",
+  "JUnit",
+  "JNA",
   "Rust",
   "iOS",
   "Android",
