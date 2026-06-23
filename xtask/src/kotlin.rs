@@ -278,20 +278,32 @@ fn set_java_home_if_unset() {
 /// Locate the newest Homebrew `openjdk@17` install on macOS, if present.
 fn homebrew_jdk17() -> Option<PathBuf> {
     let cellar = Path::new("/opt/homebrew/Cellar/openjdk@17");
-    let mut versions: Vec<PathBuf> = std::fs::read_dir(cellar)
+    let latest = std::fs::read_dir(cellar)
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
+        .filter_map(|path| {
+            let key = path
+                .file_name()
                 .and_then(OsStr::to_str)
-                .is_some_and(|name| name.starts_with("17."))
+                .filter(|name| name.starts_with("17."))
+                .map(version_key)?;
+            Some((key, path))
         })
-        .collect();
-    versions.sort();
-    let latest = versions.pop()?;
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, path)| path)?;
     let home = latest.join("libexec/openjdk.jdk/Contents/Home");
     home.exists().then_some(home)
+}
+
+/// Parse a version directory name (e.g. `17.0.14` or `17.0.9_1`) into its
+/// numeric components so the newest patch release sorts highest. Plain
+/// lexicographic ordering would rank `17.0.9` above `17.0.14`.
+fn version_key(name: &str) -> Vec<u64> {
+    name.split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect()
 }
 
 /// Derive `JAVA_HOME` from the resolved `java` binary on `PATH` (`<home>/bin/java`).
@@ -348,5 +360,12 @@ mod tests {
     #[test]
     fn missing_attribute_sums_to_zero() {
         assert_eq!(sum_attr("<testsuite name=\"x\"/>", "tests="), 0);
+    }
+
+    #[test]
+    fn version_key_orders_patch_releases_numerically() {
+        assert!(version_key("17.0.14") > version_key("17.0.9"));
+        assert!(version_key("17.0.9_1") > version_key("17.0.9"));
+        assert!(version_key("17.0.14") > version_key("17.0.9_1"));
     }
 }
