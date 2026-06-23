@@ -79,7 +79,6 @@ fn host_build() -> Result<()> {
     reset_dir(&java_src)?;
     reset_dir(&libs)?;
 
-    println!("🟢 Building Rust cdylib for host platform");
     run(Command::new("cargo").current_dir(&root).args([
         "build",
         "--package",
@@ -91,7 +90,6 @@ fn host_build() -> Result<()> {
     let name = lib.file_name().expect("host library has a filename");
     std::fs::copy(&lib, libs.join(name))
         .with_context(|| format!("copying {}", lib.display()))?;
-    println!("📦 Copied {} for host", name.to_string_lossy());
 
     generate_bindings(&root, &lib, &java_src)?;
     println!("✅ Kotlin bindings written to {}", java_src.display());
@@ -116,7 +114,6 @@ fn host_library(root: &Path) -> Result<PathBuf> {
 
 /// Run `uniffi-bindgen` to emit Kotlin sources from `library` into `out_dir`.
 fn generate_bindings(root: &Path, library: &Path, out_dir: &Path) -> Result<()> {
-    println!("🟡 Generating Kotlin bindings via uniffi-bindgen");
     run(Command::new("cargo")
         .current_dir(root)
         .args(["run", "-p", "uniffi-bindgen", "generate"])
