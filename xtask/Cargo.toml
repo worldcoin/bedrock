@@ -1,0 +1,23 @@
+[package]
+description = "Build and release automation for bedrock"
+name = "xtask"
+publish = false
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+exclude.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
