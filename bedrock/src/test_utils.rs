@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use alloy::{
     network::Ethereum,
-    primitives::{keccak256, Address, FixedBytes, Log, U128, U256},
+    primitives::{keccak256, Address, Bytes, FixedBytes, Log, U128, U256},
     providers::Provider,
     sol,
     sol_types::{SolEvent, SolValue},
@@ -124,6 +124,24 @@ sol! {
         function handleOps(PackedUserOperation[] calldata ops, address payable beneficiary) external;
     }
 
+    /// Minimal Safe `execTransaction` interface used to simulate the backend
+    /// relay (`wa_relaySafeTransaction`) against Anvil.
+    #[sol(rpc)]
+    #[allow(clippy::too_many_arguments)]
+    interface ISafeExec {
+        function execTransaction(
+            address to,
+            uint256 value,
+            bytes calldata data,
+            uint8 operation,
+            uint256 safeTxGas,
+            uint256 baseGas,
+            uint256 gasPrice,
+            address gasToken,
+            address payable refundReceiver,
+            bytes memory signatures
+        ) external payable returns (bool success);
+    }
 }
 
 /// Pack two U128 in 32 bytes
@@ -548,6 +566,119 @@ where
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": format!("0x{}", hex::encode(result)),
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
+            // Forward storage reads (e.g. the Safe fallback-handler slot) to Anvil.
+            "eth_getStorageAt" => {
+                let arr = params.as_array().ok_or(HttpError::Generic {
+                    error_message: "invalid params".into(),
+                })?;
+                let address = arr.first().cloned().unwrap_or(serde_json::Value::Null);
+                let slot = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
+
+                let result: String = self
+                    .provider
+                    .raw_request::<_, String>(
+                        "eth_getStorageAt".into(),
+                        [address, slot, serde_json::json!("latest")],
+                    )
+                    .await
+                    .map_err(|e| HttpError::Generic {
+                        error_message: format!("eth_getStorageAt failed: {e}"),
+                    })?;
+
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": result,
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
+            // Simulate the backend relay: submit the signed Safe execTransaction
+            // on-chain via Anvil and return the transaction hash.
+            "wa_relaySafeTransaction" => {
+                let arr = params.as_array().ok_or(HttpError::Generic {
+                    error_message: "invalid params".into(),
+                })?;
+                let tx = arr.first().and_then(|v| v.as_object()).ok_or(
+                    HttpError::Generic {
+                        error_message: "missing relay tx param".into(),
+                    },
+                )?;
+
+                let req = |k: &str| -> Result<&str, HttpError> {
+                    tx.get(k).and_then(|v| v.as_str()).ok_or_else(|| {
+                        HttpError::Generic {
+                            error_message: format!("missing {k}"),
+                        }
+                    })
+                };
+                let parse_addr = |k: &str| -> Result<Address, HttpError> {
+                    Address::from_str(req(k)?).map_err(|_| HttpError::Generic {
+                        error_message: format!("invalid address {k}"),
+                    })
+                };
+                let parse_u256 = |k: &str| -> Result<U256, HttpError> {
+                    U256::from_str_radix(req(k)?.trim_start_matches("0x"), 16).map_err(
+                        |_| HttpError::Generic {
+                            error_message: format!("invalid uint {k}"),
+                        },
+                    )
+                };
+                let parse_bytes = |k: &str| -> Result<Bytes, HttpError> {
+                    let decoded = hex::decode(req(k)?.trim_start_matches("0x")).map_err(
+                        |_| HttpError::Generic {
+                            error_message: format!("invalid bytes {k}"),
+                        },
+                    )?;
+                    Ok(Bytes::from(decoded))
+                };
+
+                let safe = parse_addr("safeAddress")?;
+                let operation = tx
+                    .get("operation")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u8::try_from(v).ok())
+                    .ok_or(HttpError::Generic {
+                        error_message: "missing or invalid operation".into(),
+                    })?;
+
+                let safe_contract = ISafeExec::new(safe, &self.provider);
+                let pending = safe_contract
+                    .execTransaction(
+                        parse_addr("to")?,
+                        parse_u256("value")?,
+                        parse_bytes("data")?,
+                        operation,
+                        parse_u256("safeTxGas")?,
+                        parse_u256("baseGas")?,
+                        parse_u256("gasPrice")?,
+                        parse_addr("gasToken")?,
+                        parse_addr("refundReceiver")?,
+                        parse_bytes("signatures")?,
+                    )
+                    .send()
+                    .await
+                    .map_err(|e| HttpError::Generic {
+                        error_message: format!("execTransaction failed: {e}"),
+                    })?;
+
+                let receipt =
+                    pending.get_receipt().await.map_err(|e| HttpError::Generic {
+                        error_message: format!("execTransaction receipt failed: {e}"),
+                    })?;
+
+                if !receipt.status() {
+                    return Err(HttpError::Generic {
+                        error_message: "execTransaction reverted".into(),
+                    });
+                }
+
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": format!("{:#x}", receipt.transaction_hash),
                 });
                 Ok(serde_json::to_vec(&resp).unwrap())
             }
