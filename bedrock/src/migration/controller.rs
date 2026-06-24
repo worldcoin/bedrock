@@ -2,6 +2,7 @@ use crate::bedrock_export;
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
+use crate::migration::processors::safe_4337_module_processor::Safe4337ModuleProcessor;
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
 use crate::smart_account::SafeSmartAccount;
@@ -235,13 +236,16 @@ impl MigrationController {
     /// Returns the default set of migration processors.
     ///
     /// When `safe_account` is `None`, processors that depend on it
-    /// (e.g. [`Permit2ApprovalProcessor`]) are omitted.
+    /// (e.g. [`Permit2ApprovalProcessor`], [`Safe4337ModuleProcessor`]) are omitted.
     fn default_processors(
         safe_account: Option<Arc<SafeSmartAccount>>,
     ) -> Vec<Arc<dyn MigrationProcessor>> {
         let mut processors: Vec<Arc<dyn MigrationProcessor>> = Vec::new();
         if let Some(account) = safe_account {
-            processors.push(Arc::new(Permit2ApprovalProcessor::new(account)));
+            processors
+                .push(Arc::new(Permit2ApprovalProcessor::new(account.clone())));
+            processors
+                .push(Safe4337ModuleProcessor::new(account).as_migration_processor());
         }
         processors
     }
