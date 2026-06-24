@@ -206,8 +206,9 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
         // to `Success` once the repair is confirmed in place.
         Ok(ProcessorResult::Retryable {
             error_code: "REPAIR_RELAYED".to_string(),
-            error_message: "4337 repair relayed; will confirm on the next migration run"
-                .to_string(),
+            error_message:
+                "4337 repair relayed; will confirm on the next migration run"
+                    .to_string(),
         })
     }
 }

@@ -85,7 +85,10 @@ async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
 
     // 6) Run 1: relays the repair, not yet confirmed (stays retryable).
     assert!(
-        matches!(processor.execute().await?, ProcessorResult::Retryable { .. }),
+        matches!(
+            processor.execute().await?,
+            ProcessorResult::Retryable { .. }
+        ),
         "first run should relay and report retryable"
     );
 

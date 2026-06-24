@@ -242,8 +242,7 @@ impl MigrationController {
     ) -> Vec<Arc<dyn MigrationProcessor>> {
         let mut processors: Vec<Arc<dyn MigrationProcessor>> = Vec::new();
         if let Some(account) = safe_account {
-            processors
-                .push(Arc::new(Permit2ApprovalProcessor::new(account.clone())));
+            processors.push(Arc::new(Permit2ApprovalProcessor::new(account.clone())));
             processors
                 .push(Safe4337ModuleProcessor::new(account).as_migration_processor());
         }
