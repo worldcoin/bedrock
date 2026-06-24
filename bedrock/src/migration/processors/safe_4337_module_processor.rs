@@ -7,7 +7,6 @@ use alloy::primitives::{Address, U256};
 use alloy::sol_types::SolCall;
 use async_trait::async_trait;
 use log::info;
-use tokio::sync::Mutex;
 
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
@@ -27,9 +26,6 @@ use crate::transactions::rpc::{get_rpc_client, RelaySafeTransactionRequest};
 #[derive(uniffi::Object)]
 pub struct Safe4337ModuleProcessor {
     safe_account: Arc<SafeSmartAccount>,
-    /// Repairs determined by the most recent `is_applicable` check, reused by
-    /// `execute` (the controller always calls `is_applicable` first).
-    repairs: Mutex<Safe4337Repairs>,
 }
 
 #[uniffi::export]
@@ -39,10 +35,7 @@ impl Safe4337ModuleProcessor {
     #[uniffi::constructor]
     #[must_use]
     pub fn new(safe_account: Arc<SafeSmartAccount>) -> Arc<Self> {
-        Arc::new(Self {
-            safe_account,
-            repairs: Mutex::new(Safe4337Repairs::default()),
-        })
+        Arc::new(Self { safe_account })
     }
 
     /// Returns this processor as a [`MigrationProcessor`] trait object so it can
@@ -151,13 +144,11 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
     }
 
     async fn is_applicable(&self) -> Result<bool, MigrationError> {
-        let repairs = self.fetch_repairs().await?;
-        *self.repairs.lock().await = repairs;
-        Ok(repairs.any())
+        Ok(self.fetch_repairs().await?.any())
     }
 
     async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
-        let repairs = *self.repairs.lock().await;
+        let repairs = self.fetch_repairs().await?;
         if !repairs.any() {
             return Ok(ProcessorResult::Success);
         }
@@ -188,16 +179,14 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
         {
             Ok(tx_hash) => {
                 info!(
-                    "Relayed Safe 4337 repair for {safe_address:#x} (enable_module={}, set_fallback_handler={}), txHash: {tx_hash}",
+                    "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}), txHash: {tx_hash}",
                     repairs.enable_module, repairs.set_fallback_handler
                 );
                 Ok(ProcessorResult::Success)
             }
             Err(e) => Ok(ProcessorResult::Retryable {
                 error_code: "RELAY_ERROR".to_string(),
-                error_message: format!(
-                    "Failed to relay 4337 repair for {safe_address:#x}: {e}"
-                ),
+                error_message: format!("Failed to relay 4337 repair: {e}"),
             }),
         }
     }
@@ -224,10 +213,7 @@ mod tests {
             SafeSmartAccount::from_private_key_hex(TEST_KEY.to_string(), TEST_WALLET)
                 .unwrap(),
         );
-        Safe4337ModuleProcessor {
-            safe_account,
-            repairs: Mutex::new(Safe4337Repairs::default()),
-        }
+        Safe4337ModuleProcessor { safe_account }
     }
 
     #[test]

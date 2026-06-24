@@ -1,11 +1,8 @@
 //! Helpers for enabling the ERC-4337 module on an already-deployed Safe.
 //!
-//!
-//! This module builds the calldata that retro-fits such a Safe to match a
+//! This module builds the calldata that retrofits such a Safe to match a
 //! freshly-deployed account: it both `enableModule`s and `setFallbackHandler`s
-//! the [`GNOSIS_SAFE_4337_MODULE`], exactly as the fresh-account `setup` does
-//! (see [`crate::smart_account::wallet_address`], which sets the same module as
-//! both an enabled module and the fallback handler).
+//! the [`GNOSIS_SAFE_4337_MODULE`].
 //!
 //! Because the module is absent, this batch **cannot** be executed as a 4337
 //! `UserOperation` (that is the very thing that is broken). It is encoded as a
