@@ -627,11 +627,10 @@ where
                     )
                 };
                 let parse_bytes = |k: &str| -> Result<Bytes, HttpError> {
-                    let decoded = hex::decode(req(k)?.trim_start_matches("0x")).map_err(
-                        |_| HttpError::Generic {
+                    let decoded = hex::decode(req(k)?.trim_start_matches("0x"))
+                        .map_err(|_| HttpError::Generic {
                             error_message: format!("invalid bytes {k}"),
-                        },
-                    )?;
+                        })?;
                     Ok(Bytes::from(decoded))
                 };
 
@@ -665,9 +664,14 @@ where
                     })?;
 
                 let receipt =
-                    pending.get_receipt().await.map_err(|e| HttpError::Generic {
-                        error_message: format!("execTransaction receipt failed: {e}"),
-                    })?;
+                    pending
+                        .get_receipt()
+                        .await
+                        .map_err(|e| HttpError::Generic {
+                            error_message: format!(
+                                "execTransaction receipt failed: {e}"
+                            ),
+                        })?;
 
                 if !receipt.status() {
                     return Err(HttpError::Generic {
