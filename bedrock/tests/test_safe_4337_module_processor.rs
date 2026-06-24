@@ -80,36 +80,32 @@ async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
         "wallet.safe.enable_4337_module.v1"
     );
 
-    // 5) Applicable while the module/handler are missing.
+    // 5) Always applicable — the on-chain check lives in `execute`.
+    assert!(processor.is_applicable().await?);
+
+    // 6) Run 1: relays the repair, not yet confirmed (stays retryable).
     assert!(
-        processor.is_applicable().await?,
-        "processor should be applicable before repair"
+        matches!(processor.execute().await?, ProcessorResult::Retryable { .. }),
+        "first run should relay and report retryable"
     );
 
-    // 6) Execute the repair (signed execTransaction relayed on-chain).
-    let result = processor.execute().await?;
-    assert!(
-        matches!(result, ProcessorResult::Success),
-        "expected ProcessorResult::Success"
-    );
-
-    // 7) Post-state: module enabled AND fallback handler == module.
+    // The relayed execTransaction has landed: module enabled AND handler set.
     assert!(
         safe.isModuleEnabled(SAFE_4337_MODULE_ADDRESS)
             .call()
             .await?,
-        "module should be enabled after repair"
+        "module should be enabled after the relayed repair"
     );
     assert_eq!(
         fallback_handler(&provider, safe_address).await?,
         SAFE_4337_MODULE_ADDRESS,
-        "fallback handler should be the module after repair"
+        "fallback handler should be the module after the relayed repair"
     );
 
-    // 8) No longer applicable once repaired.
+    // 7) Run 2: sees the repair in place and marks the migration done.
     assert!(
-        !processor.is_applicable().await?,
-        "processor should not be applicable after repair"
+        matches!(processor.execute().await?, ProcessorResult::Success),
+        "second run should confirm the repair and report success"
     );
 
     Ok(())

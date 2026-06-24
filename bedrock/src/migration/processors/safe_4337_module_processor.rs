@@ -144,10 +144,20 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
     }
 
     async fn is_applicable(&self) -> Result<bool, MigrationError> {
-        Ok(self.fetch_repairs().await?.any())
+        // Always attempt — the on-chain check lives in `execute`, which is the
+        // idempotent source of truth. On the first run it relays the repair and
+        // stays retryable; on the next run it sees the module + fallback handler
+        // in place and returns `Success`, which is what marks the migration
+        // done. (Once `Succeeded`, the controller stops calling this until the
+        // TTL recheck.)
+        Ok(true)
     }
 
     async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+        // `execute` performs the on-chain check itself: if the Safe is already
+        // configured (e.g. a repair relayed on a previous run has since mined),
+        // report success; otherwise relay the repair and stay retryable so the
+        // next run confirms it.
         let repairs = self.fetch_repairs().await?;
         if !repairs.any() {
             return Ok(ProcessorResult::Success);
@@ -173,22 +183,32 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
             return Ok(ProcessorResult::Success);
         };
 
-        match rpc_client
+        let tx_hash = match rpc_client
             .relay_safe_transaction(Network::WorldChain, &request)
             .await
         {
-            Ok(tx_hash) => {
-                info!(
-                    "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}), txHash: {tx_hash}",
-                    repairs.enable_module, repairs.set_fallback_handler
-                );
-                Ok(ProcessorResult::Success)
+            Ok(tx_hash) => tx_hash,
+            Err(e) => {
+                return Ok(ProcessorResult::Retryable {
+                    error_code: "RELAY_ERROR".to_string(),
+                    error_message: format!("Failed to relay 4337 repair: {e}"),
+                });
             }
-            Err(e) => Ok(ProcessorResult::Retryable {
-                error_code: "RELAY_ERROR".to_string(),
-                error_message: format!("Failed to relay 4337 repair: {e}"),
-            }),
-        }
+        };
+
+        info!(
+            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}), txHash: {tx_hash}",
+            repairs.enable_module, repairs.set_fallback_handler
+        );
+
+        // Not done yet: the relayed transaction may not have mined. Stay
+        // retryable so the next run re-reads on-chain state (above) and settles
+        // to `Success` once the repair is confirmed in place.
+        Ok(ProcessorResult::Retryable {
+            error_code: "REPAIR_RELAYED".to_string(),
+            error_message: "4337 repair relayed; will confirm on the next migration run"
+                .to_string(),
+        })
     }
 }
 
