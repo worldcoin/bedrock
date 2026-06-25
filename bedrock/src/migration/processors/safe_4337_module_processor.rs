@@ -183,21 +183,17 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
             return Ok(ProcessorResult::Success);
         };
 
-        let tx_hash = match rpc_client
+        rpc_client
             .relay_safe_transaction(Network::WorldChain, &request)
             .await
-        {
-            Ok(tx_hash) => tx_hash,
-            Err(e) => {
-                return Ok(ProcessorResult::Retryable {
-                    error_code: "RELAY_ERROR".to_string(),
-                    error_message: format!("Failed to relay 4337 repair: {e}"),
-                });
-            }
-        };
+            .map_err(|e| {
+                MigrationError::InvalidOperation(format!(
+                    "Failed to relay 4337 repair: {e}"
+                ))
+            })?;
 
         info!(
-            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}), txHash: {tx_hash}",
+            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={})",
             repairs.enable_module, repairs.set_fallback_handler
         );
 
