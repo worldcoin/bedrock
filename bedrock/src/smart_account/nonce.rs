@@ -13,7 +13,7 @@ use ruint::aliases::U256;
 use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
 
 /// Stable, never-reordered identifiers for transaction classes.
-/// Changes to this enum require maintainer approval because downstream 
+/// Changes to this enum require maintainer approval because downstream
 /// systems may depend on these exact numeric values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
