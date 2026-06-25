@@ -13,6 +13,8 @@ use ruint::aliases::U256;
 use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
 
 /// Stable, never-reordered identifiers for transaction classes.
+/// Changes to this enum require maintainer approval because downstream 
+/// systems may depend on these exact numeric values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TransactionTypeId {
@@ -38,10 +40,6 @@ pub enum TransactionTypeId {
     ERC4626Withdraw = 134,
     /// Generic ERC-4626 redeem
     ERC4626Redeem = 135,
-    /// Morpho-specific vault deposit
-    MorphoDeposit = 136,
-    /// Morpho-specific vault withdraw
-    MorphoWithdraw = 137,
     /// ERC-20 approve for Permit2 contract
     Permit2Approve = 138,
     /// WLD Vault migration to ERC-4626 vault
