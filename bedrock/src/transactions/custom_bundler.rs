@@ -66,6 +66,7 @@ async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcEr
         reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
+            .gzip(true)
             .build()
             .map_err(|e| {
                 RpcError::HttpError(format!(
