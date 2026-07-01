@@ -99,7 +99,7 @@ async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcEr
     Ok(bytes.to_vec())
 }
 
-// ── Parsing helper ─────────────────────────────────────────────────────────────
+// ── Parsing helper ────────────────────────────────────────────────────────────
 
 /// Parses a JSON-RPC response, extracting the `result` field or surfacing the `error`.
 fn parse_json_rpc_response(response_bytes: &[u8]) -> Result<Value, RpcError> {
