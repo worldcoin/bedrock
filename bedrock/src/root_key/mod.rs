@@ -15,8 +15,8 @@ type KeyType = [u8; KEY_LENGTH];
 #[bedrock_error]
 pub enum RootKeyError {
     /// The provided input is likely not an actual `RootKey`. It is malformed or not the right format.
-    #[error("failed to parse key")]
-    KeyParseError,
+    #[error("failed to parse key. is_json: {is_json}")]
+    KeyParseError { is_json: bool },
     /// Key derivation unexpectedly fail
     #[error("key derivation failure: {0}")]
     KeyDerivation(String),
@@ -106,8 +106,11 @@ impl RootKey {
     #[uniffi::constructor]
     pub fn from_json(json_str: &str) -> Result<Self, RootKeyError> {
         // no need to zeroize `key` because it's moved into the `SecretBox`
-        let key: VersionedKey =
-            serde_json::from_str(json_str).map_err(|_| RootKeyError::KeyParseError)?;
+        let key: VersionedKey = serde_json::from_str(json_str).map_err(|e| {
+            RootKeyError::KeyParseError {
+                is_json: e.is_data(),
+            }
+        })?;
 
         Ok(Self {
             inner: SecretBox::new(Box::new(key)),
