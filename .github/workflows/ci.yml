@@ -110,6 +110,7 @@ jobs:
 
       - name: Run tests
         env:
+          # Details in http://go/rpc-ci-account (`bedrock` app)
           WORLDCHAIN_RPC_URL: ${{ secrets.WORLDCHAIN_RPC_URL || 'https://worldchain-mainnet.g.alchemy.com/public' }}
         run: |
           cp .env.example .env
