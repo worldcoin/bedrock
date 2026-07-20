@@ -224,7 +224,7 @@ where
 /// Reference <https://github.com/worldcoin/worldcoin-vault/blob/main/src/WorldIDAddressBook.sol>
 fn address_book_address() -> Address {
     match current_environment_or_default() {
-        BedrockEnvironment::Staging => {
+        BedrockEnvironment::Staging | BedrockEnvironment::Sandbox => {
             Address::from_str("0xfd5b7aefdd478f34ae61d8399a206a4879f0af0a")
                 .expect("failed to decode staging address book address")
         }
