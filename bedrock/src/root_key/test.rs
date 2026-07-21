@@ -100,7 +100,7 @@ fn test_derive_public_backup_account_key() {
 }
 
 #[test]
-fn test_ensure_backup_account_id_can_be_used_to_sign() {
+fn test_ensure_backup_account_public_key_can_be_used_to_sign() {
     let key = RootKey::new_random();
     let backup_account_key = key.derive_public_backup_account_key().unwrap();
     let signing_secret_key = key.derive_backup_account_key().unwrap();

@@ -237,7 +237,7 @@ impl RootKey {
     /// Key derivation. "Public" value.
     ///
     /// Derives the deterministic public backup account used to uniquely identify a backup. This
-    /// method returns only the public key (SEC.1 compressesed point, hex-encoded).
+    /// method returns only the public key (SEC.1 compressed point, hex-encoded).
     ///
     /// The `backup_account_id` is generally used to ensure that only a single backup can exist
     /// per account, otherwise this could lead to race conditions and undefined behavior with
