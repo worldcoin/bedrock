@@ -386,7 +386,7 @@ impl BackupManager {
         &self,
         root_secret: Arc<SiegelSession>,
     ) -> Result<BackupAccount, BackupError> {
-        Self::with_root_key(root_secret, |root_key| Self::backup_account(root_key))
+        Self::with_root_key(root_secret, Self::backup_account)
     }
 
     /// Should be called after the backup is disabled/deleted.

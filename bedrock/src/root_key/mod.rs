@@ -258,12 +258,5 @@ impl RootKey {
     }
 }
 
-/// Public key derivation implementations. These are not considered secret and may be exposed. They are also exposed
-/// to foreign bindings.
-///
-/// Note these values are not returned in a `SecretBox`.
-#[bedrock_export]
-impl RootKey {}
-
 #[cfg(test)]
 mod test;

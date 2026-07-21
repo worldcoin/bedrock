@@ -1,16 +1,20 @@
 //! This module allows interactions with the Turnkey API for the user's backup.
 
+use std::sync::Arc;
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use bedrock_macros::{bedrock_error, bedrock_export};
 use hpke::kem::DhP256HkdfSha256;
 use hpke::{Deserializable, Kem as KemTrait};
 use p256::ecdsa::signature::Signer;
-use p256::ecdsa::Signature;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use serde_json::json;
+use siegel_uniffi::SiegelSession;
 use turnkey_enclave_encrypt::client::EnclaveEncryptClient;
 use turnkey_enclave_encrypt::QuorumPublicKey;
+
+use crate::root_key::RootKey;
 
 /// Allows interactions with Turnkey API.
 #[derive(uniffi::Object, Clone, Debug, Default)]
@@ -96,13 +100,82 @@ impl Turnkey {
             serde_json::from_str(body).map_err(|_| TurnkeyError::DecodeBodyError)?;
 
         // Sign the body with the private key
-        let signature: Signature = signing_key.sign(body.as_bytes());
+        let signature: p256::ecdsa::Signature = signing_key.sign(body.as_bytes());
 
         // Convert the signature to the expected header format
         let json_stamp = json!({
             "publicKey": hex::encode(private_key.public_key().to_encoded_point(true).as_bytes()),
             "signature": hex::encode(signature.to_der()),
             "scheme": "SIGNATURE_SCHEME_TK_API_P256",
+        });
+        let json_stamp = serde_json::to_string(&json_stamp)
+            .map_err(|_| TurnkeyError::SerializeStampError)?;
+
+        Ok(URL_SAFE_NO_PAD.encode(json_stamp.as_bytes()))
+    }
+
+    /// Stamps a JSON activity with the backup account key. See [`Self::stamp`] for
+    /// more details on stamping.
+    ///
+    /// This should only be used for disaster recovery (`/reset`) to clear the Turnkey
+    /// account that will go out of use.
+    ///
+    /// # Errors
+    /// * `TurnkeyError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+    ///   root secret cannot be parsed.
+    /// * `TurnkeyError::DecodeBodyError` - if `body` is not valid JSON.
+    /// * `TurnkeyError::SigningError` - if signing fails.
+    /// * `TurnkeyError::Generic` - if the Siegel session cannot be read, key derivation
+    ///   fails, or the stamp cannot be serialized.
+    #[expect(
+        clippy::unused_self,
+        reason = "uniffi doesn't support associated functions"
+    )]
+    pub fn stamp_with_backup_account_key(
+        &self,
+        root_secret: Arc<SiegelSession>,
+        body: String,
+    ) -> Result<String, TurnkeyError> {
+        // Validate JSON body, but raw bytes are signed
+        let _json: serde_json::Value =
+            serde_json::from_str(&body).map_err(|_| TurnkeyError::DecodeBodyError)?;
+
+        let (signature, public_key) = root_secret.read_once(
+            move |bytes| -> Result<
+                (k256::ecdsa::Signature, k256::EncodedPoint),
+                TurnkeyError,
+            > {
+                let root_key = RootKey::from_slice(bytes)
+                    .map_err(|_| TurnkeyError::InvalidRootSecretError)?;
+                let key = root_key.derive_backup_account_key().map_err(|_| {
+                    TurnkeyError::Generic {
+                        error_message: "unexpected kdf failure".to_string(),
+                    }
+                })?;
+
+                // the backup account is `secp256k1`; zeroized on drop
+                let signing_key = k256::ecdsa::SigningKey::from(key);
+
+                // note: k256 already normalizes to low-S
+                let signature: k256::ecdsa::Signature =
+                    signing_key.try_sign(body.as_bytes())?;
+
+                // Return the (public) compressed point so no reference to the local
+                // signing key escapes the closure.
+                Ok((
+                    signature,
+                    signing_key.verifying_key().to_encoded_point(true),
+                ))
+            },
+        )??;
+
+        // release the session explicitly
+        drop(root_secret);
+
+        let json_stamp = json!({
+            "publicKey": hex::encode(public_key.as_bytes()),
+            "signature": hex::encode(signature.to_der()),
+            "scheme": "SIGNATURE_SCHEME_TK_API_SECP256K1",
         });
         let json_stamp = serde_json::to_string(&json_stamp)
             .map_err(|_| TurnkeyError::SerializeStampError)?;
@@ -131,7 +204,10 @@ impl Turnkey {
     /// - `InvalidFactorSecret`: The factor secret is not a valid hex-encoded 32-byte string.
     /// - `EncryptFactorSecretError`: Failed to encrypt the factor secret using the import bundle.
     /// - `SerializeEncryptedBundleError`: Failed to serialize the encrypted bundle to a JSON string.
-    #[allow(clippy::unused_self)] // Uniffi doesn't support associated functions
+    #[expect(
+        clippy::unused_self,
+        reason = "uniffi doesn't support associated functions"
+    )]
     pub fn generate_import_bundle_for_factor_secret(
         &self,
         factor_secret: &str,
@@ -293,6 +369,23 @@ pub enum TurnkeyError {
     ConvertP256KeypairToHpkeKeypairError,
     #[error("Failed to convert enclave public key to verifying key")]
     ConvertEnclavePublicKeyToVerifyingKeyError,
+    /// Errors propagated from a Siegel session
+    #[error(transparent)]
+    SiegelError(#[from] siegel_uniffi::SessionError),
+    /// Root secret is invalid.
+    #[error("Invalid root secret provided in Siegel session")]
+    InvalidRootSecretError,
+    /// Unexpected error signing Turnkey activity
+    #[error("error signing turnkey activity")]
+    SigningError,
+}
+
+impl From<k256::ecdsa::Error> for TurnkeyError {
+    fn from(_e: k256::ecdsa::Error) -> Self {
+        // while `e` is already opaque, the source could leak some privacy info, and it's generally
+        // not very useful anyway, so it's not logged
+        Self::SigningError
+    }
 }
 
 #[cfg(test)]

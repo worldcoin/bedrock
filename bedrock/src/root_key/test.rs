@@ -76,40 +76,41 @@ fn test_new_generates_seemingly_random_keys() {
 }
 
 #[test]
-fn test_derive_public_backup_account_id() {
+fn test_derive_public_backup_account_key() {
     // Test with a known V1 key to verify deterministic output
     let key = r#"{"key":"1111111111111111111111111111111111111111111111111111111111111111","version":"V1"}"#;
     let key = RootKey::from_json(key).unwrap();
 
-    let backup_id = key.derive_public_backup_account_id().unwrap();
+    let backup_key = key.derive_public_backup_account_key().unwrap();
 
-    // Assert format and expected well-known output
-    assert_eq!(backup_id, "backup_account_039797dc9fec4e3d3f2f27173ba0faac160ee2f803954e8552c308da22ab40ab5c");
+    // Assert format and expected well-known output (compressed SEC1 hex, no prefix)
+    assert_eq!(
+        backup_key,
+        "039797dc9fec4e3d3f2f27173ba0faac160ee2f803954e8552c308da22ab40ab5c"
+    );
 
-    // Verify determinism - same key should produce same ID
-    let backup_id2 = key.derive_public_backup_account_id().unwrap();
-    assert_eq!(backup_id, backup_id2);
+    // Verify determinism - same key should produce same public key
+    let backup_key2 = key.derive_public_backup_account_key().unwrap();
+    assert_eq!(backup_key, backup_key2);
 
-    // Different keys produce different IDs
+    // Different keys produce different public keys
     let key2 = RootKey::new_random();
-    let backup_id3 = key2.derive_public_backup_account_id().unwrap();
-    assert_ne!(backup_id, backup_id3);
+    let backup_key3 = key2.derive_public_backup_account_key().unwrap();
+    assert_ne!(backup_key, backup_key3);
 }
 
 #[test]
 fn test_ensure_backup_account_id_can_be_used_to_sign() {
     let key = RootKey::new_random();
-    let backup_account_id = key.derive_public_backup_account_id().unwrap();
-    let backup_account_key = key.derive_backup_account_key().unwrap();
+    let backup_account_key = key.derive_public_backup_account_key().unwrap();
+    let signing_secret_key = key.derive_backup_account_key().unwrap();
 
-    let signing_key = k256::ecdsa::SigningKey::from(backup_account_key);
+    let signing_key = k256::ecdsa::SigningKey::from(signing_secret_key);
 
     let message = "Hello, world!";
     let (signature, rec_id) = signing_key.sign_recoverable(message.as_bytes()).unwrap();
 
-    let public_key_bytes =
-        hex::decode(backup_account_id.strip_prefix("backup_account_").unwrap())
-            .unwrap();
+    let public_key_bytes = hex::decode(&backup_account_key).unwrap();
     let public_key = VerifyingKey::from_sec1_bytes(&public_key_bytes).unwrap();
     assert!(public_key.verify(message.as_bytes(), &signature).is_ok());
 
