@@ -630,10 +630,9 @@ impl BackupManager {
             files: manifest_entries,
         });
 
-        crate::info!(
-            "Saving manifest file with {} files and hash: {} (current hash: {current_manifest_hash_hex})",
+        crate::debug!(
+            "Saving manifest file with {} files",
             manifest.entries_length(),
-            hex::encode(manifest.to_hash()?)
         );
 
         let manifest_manager = ManifestManager::new();
