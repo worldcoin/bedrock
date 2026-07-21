@@ -181,8 +181,6 @@ impl BackupManager {
     /// * `factor_secret` - is the factor secret that was used to encrypt the backup keypair. Hex encoded.
     /// * `factor_type` - is the type of factor that was used to encrypt the backup keypair.
     ///   It should mark what kind of key `factor_secret` is.
-    /// * `current_manifest_hash` - hex-encoded 32-byte blake3 hash of the manifest head at the time
-    ///   the fetched backup was created (returned by the remote and provided by the native layer).
     ///
     /// # Errors
     /// * `BackupError::DecodeFactorSecretError` - if the factor secret is invalid, e.g. not hex encoded.
@@ -204,7 +202,6 @@ impl BackupManager {
         encrypted_backup_keypair: String,
         factor_secret: String,
         factor_type: FactorType,
-        current_manifest_hash: &str,
     ) -> Result<DecryptedBackup, BackupError> {
         crate::info!("Decrypting sealed backup with factor: {factor_type:?}");
 
@@ -239,7 +236,7 @@ impl BackupManager {
 
         crate::info!("Backup successfully decrypted, initiating unpacking.");
 
-        Self::unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
+        Self::unpack_backup_to_filesystem(&unsealed_backup)?;
 
         crate::info!("Backup successfully unpacked to filesystem.");
 
@@ -569,7 +566,6 @@ impl BackupManager {
 
     fn unpack_backup_to_filesystem(
         unsealed_backup: &BackupFormat,
-        current_manifest_hash_hex: &str,
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
 

@@ -940,7 +940,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             prf_result.clone(),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 
@@ -967,7 +966,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             incorrect_factor_secret,
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .expect_err("Expected decryption to fail with incorrect factor secret");
     assert_eq!(
@@ -988,7 +986,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             incorrect_encrypted_backup_keypair,
             prf_result,
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .expect_err(
             "Expected decryption to fail with incorrect encrypted backup keypair",
@@ -1028,7 +1025,6 @@ async fn test_decrypt_and_unpack_default_manifest_hash() {
             create_result.encrypted_backup_keypair.clone(),
             prf_result,
             FactorType::Prf,
-            &create_result.manifest_hash,
         )
         .unwrap();
 
@@ -1090,7 +1086,6 @@ fn test_unpack_writes_files_and_manifest() {
             hex::encode(encrypted_backup_keypair),
             hex::encode(factor_sk.to_bytes()),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 
@@ -1174,7 +1169,6 @@ fn test_unpack_writes_files_and_manifest_unicode() {
             hex::encode(encrypted_backup_keypair),
             hex::encode(factor_sk.to_bytes()),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 

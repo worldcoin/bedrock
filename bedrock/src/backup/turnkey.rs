@@ -370,14 +370,20 @@ pub enum TurnkeyError {
     #[error("Failed to convert enclave public key to verifying key")]
     ConvertEnclavePublicKeyToVerifyingKeyError,
     /// Errors propagated from a Siegel session
-    #[error(transparent)]
-    SiegelError(#[from] siegel_uniffi::SessionError),
+    #[error("siegel session error: {0}")]
+    SiegelSession(String),
     /// Root secret is invalid.
     #[error("Invalid root secret provided in Siegel session")]
     InvalidRootSecretError,
     /// Unexpected error signing Turnkey activity
     #[error("error signing turnkey activity")]
     SigningError,
+}
+
+impl From<siegel_uniffi::SessionError> for TurnkeyError {
+    fn from(e: siegel_uniffi::SessionError) -> Self {
+        Self::SiegelSession(e.to_string())
+    }
 }
 
 impl From<k256::ecdsa::Error> for TurnkeyError {
