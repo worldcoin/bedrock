@@ -57,9 +57,9 @@ jobs:
           cargo install taplo-cli
           taplo fmt --check
 
-  swift-build-and-test:
-    name: Build and Test Swift Bindings
-    runs-on: macos-14
+  swift-build:
+    name: Build Swift
+    runs-on: macos-26
     permissions:
       contents: read
 
@@ -67,19 +67,64 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Ensure a specific Xcode version is selected to match available simulators
-      - name: Select Xcode 16.2
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "16.2"
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
-      - name: Build and test Swift bindings
-        run: cargo xtask swift test
+      - name: Build Swift bindings
+        run: cargo xtask swift build
+
+      - name: Upload Swift build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bedrock-swift-build
+          path: |
+            swift/Bedrock.xcframework
+            swift/Sources/Bedrock
+          retention-days: 1
+
+  swift-test:
+    name: Swift Foreign Binding Tests (Xcode ${{ matrix.xcode-version }})
+    needs: swift-build
+    runs-on: macos-26
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Update as GitHub's runner image adds/drops Xcode versions:
+        # actions/runner-images macos-26-arm64-Readme.md. If a version fails
+        # with a missing-SDK/platform error, just drop it from this list.
+        xcode-version:
+          - "26.2"
+          - "26.3"
+          - "26.4.1"
+          - "26.5"
+          - "26.6"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode ${{ matrix.xcode-version }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ matrix.xcode-version }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Download Swift build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bedrock-swift-build
+          path: swift
+
+      - name: Run Swift foreign binding tests
+        run: cargo xtask swift run-tests
 
       - name: Install SwiftLint
         run: |
@@ -146,7 +191,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
