@@ -16,6 +16,7 @@ const IOS_TARGETS: &[&str] = &[
     "aarch64-apple-ios",
     "x86_64-apple-ios",
 ];
+const FRAMEWORK_NAME: &str = "BedrockFFI";
 
 /// Absolute path to the `swift/` directory inside the workspace.
 fn swift_dir() -> PathBuf {
@@ -66,7 +67,8 @@ pub fn build(out_dir: Option<&Path>) -> Result<()> {
     create_xcframework(
         &root.join("target/aarch64-apple-ios/release/libbedrock.a"),
         &sim_universal,
-        &ios_build.join("Headers"),
+        &headers_dir,
+        &ios_build.join("Frameworks"),
         &framework_out,
     )?;
 
@@ -161,27 +163,79 @@ fn assemble_ffi_module(
     Ok(())
 }
 
-/// Invoke `xcodebuild -create-xcframework` with the device and simulator slices.
+/// Assemble both platform slices as real `BedrockFFI.framework` bundles and hand them to
+/// `xcodebuild -create-xcframework`.
 fn create_xcframework(
     device_lib: &Path,
     sim_lib: &Path,
-    headers: &Path,
+    headers_dir: &Path,
+    frameworks_dir: &Path,
     out: &Path,
 ) -> Result<()> {
     println!("Creating XCFramework...");
+    let device_framework = frameworks_dir
+        .join("ios-arm64")
+        .join(format!("{FRAMEWORK_NAME}.framework"));
+    let sim_framework = frameworks_dir
+        .join("ios-arm64_x86_64-simulator")
+        .join(format!("{FRAMEWORK_NAME}.framework"));
+
+    make_framework(&device_framework, device_lib, "iPhoneOS", headers_dir)?;
+    make_framework(&sim_framework, sim_lib, "iPhoneSimulator", headers_dir)?;
+
     run(Command::new("xcodebuild")
         .arg("-create-xcframework")
-        .arg("-library")
-        .arg(device_lib)
-        .arg("-headers")
-        .arg(headers)
-        .arg("-library")
-        .arg(sim_lib)
-        .arg("-headers")
-        .arg(headers)
+        .arg("-framework")
+        .arg(&device_framework)
+        .arg("-framework")
+        .arg(&sim_framework)
         .arg("-output")
         .arg(out))?;
     Ok(())
+}
+
+/// Assemble one `BedrockFFI.framework` slice from a static library and the umbrella
+/// header/modulemap, as a real framework bundle (`Headers/`, `Modules/module.modulemap`,
+/// `Info.plist`) rather than a flat headers dir.
+fn make_framework(
+    framework_dir: &Path,
+    static_lib: &Path,
+    platform: &str,
+    headers_dir: &Path,
+) -> Result<()> {
+    reset_dir(framework_dir)?;
+    let headers_out = framework_dir.join("Headers");
+    let modules_out = framework_dir.join("Modules");
+    std::fs::create_dir_all(&headers_out)?;
+    std::fs::create_dir_all(&modules_out)?;
+
+    std::fs::copy(static_lib, framework_dir.join(FRAMEWORK_NAME))?;
+
+    for entry in std::fs::read_dir(headers_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension() == Some(OsStr::new("h")) {
+            std::fs::copy(&path, headers_out.join(path.file_name().expect("named")))?;
+        }
+    }
+    std::fs::copy(
+        headers_dir.join("module.modulemap"),
+        modules_out.join("module.modulemap"),
+    )?;
+
+    std::fs::write(
+        framework_dir.join("Info.plist"),
+        framework_info_plist(FRAMEWORK_NAME, platform),
+    )?;
+    Ok(())
+}
+
+/// Render an `Info.plist` for a static-library framework bundle.
+fn framework_info_plist(name: &str, platform: &str) -> String {
+    include_str!("templates/swift_framework_info.plist")
+        .replace("__NAME__", name)
+        .replace("__PLATFORM__", platform)
+        .replace("__IOS_DEPLOYMENT_TARGET__", IOS_DEPLOYMENT_TARGET)
 }
 
 /// Move each generated `.swift` file into `sources_dir`, rewriting the
@@ -209,9 +263,12 @@ fn rewrite_swift_imports(bindings_dir: &Path, sources_dir: &Path) -> Result<()> 
     Ok(())
 }
 
-/// Emit a clang modulemap declaring a single `BedrockFFI` module over all FFI headers.
+/// Emit a clang modulemap declaring a single `BedrockFFI` framework module over all FFI
+/// headers. Declared as a `framework module` (rather than a plain `module`) because this
+/// modulemap is only ever consumed from inside the real `BedrockFFI.framework` bundle built by
+/// `make_framework`.
 fn write_umbrella_modulemap(path: &Path, headers: &[String]) -> Result<()> {
-    let mut out = String::from("module BedrockFFI {\n");
+    let mut out = String::from("framework module BedrockFFI {\n");
     for h in headers {
         writeln!(out, "    header \"{h}\"").expect("writing to String is infallible");
     }
@@ -312,6 +369,13 @@ pub fn archive(asset_url: &str, checksum: &str, release_version: &str) -> Result
 
 /// Build the bindings and run the foreign Swift test suite on an iOS simulator.
 pub fn test() -> Result<()> {
+    println!("🔨 Building Swift bindings");
+    build(None)?;
+    run_tests()
+}
+
+/// Run the foreign Swift test suite against an already-built `Bedrock.xcframework`
+pub fn run_tests() -> Result<()> {
     let swift = swift_dir();
     let tests = swift.join("tests");
 
@@ -320,12 +384,12 @@ pub fn test() -> Result<()> {
         bail!("No iOS Simulator SDK installed. Available SDKs:\n{sdks}");
     }
 
-    println!("🔨 Building Swift bindings");
-    build(None)?;
-
     let framework = swift.join("Bedrock.xcframework");
     if !framework.exists() {
-        bail!("Failed to build XCFramework at {}", framework.display());
+        bail!(
+            "Bedrock.xcframework not found at {} — run `cargo xtask swift build` first",
+            framework.display()
+        );
     }
 
     println!("📦 Copying generated Swift files to test package");
@@ -589,5 +653,35 @@ mod tests {
         let line = "    .package(url: \"https://github.com/worldcoin/bedrock-swift\", exact: \"0.4.0\")\n";
         let out = rewrite_consumer_package(line, Path::new("/tmp/local"));
         assert_eq!(out, "    .package(path: \"/tmp/local\"),\n");
+    }
+
+    #[test]
+    fn umbrella_modulemap_declares_a_framework_module() {
+        let dir = std::env::temp_dir().join("bedrock_swift_test_umbrella_modulemap");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("module.modulemap");
+        write_umbrella_modulemap(
+            &path,
+            &["bedrockFFI.h".to_owned(), "siegel_uniffiFFI.h".to_owned()],
+        )
+        .unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(contents.starts_with("framework module BedrockFFI {\n"));
+        assert!(contents.contains("header \"bedrockFFI.h\"\n"));
+        assert!(contents.contains("header \"siegel_uniffiFFI.h\"\n"));
+    }
+
+    #[test]
+    fn framework_info_plist_sets_executable_and_platform() {
+        let plist = framework_info_plist("BedrockFFI", "iPhoneSimulator");
+        assert!(plist
+            .contains("<key>CFBundleExecutable</key>\n\t<string>BedrockFFI</string>"));
+        assert!(
+            plist.contains("<key>CFBundlePackageType</key>\n\t<string>FMWK</string>")
+        );
+        assert!(plist.contains("<string>iPhoneSimulator</string>"));
+        assert!(plist.contains(&format!("<string>{IOS_DEPLOYMENT_TARGET}</string>")));
     }
 }
