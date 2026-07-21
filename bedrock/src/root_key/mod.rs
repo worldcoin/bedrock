@@ -114,6 +114,18 @@ impl RootKey {
         })
     }
 
+    /// Initialize an existing `RootKey` from JSON bytes
+    #[uniffi::constructor]
+    pub fn from_slice(json_bytes: &[u8]) -> Result<Self, RootKeyError> {
+        // no need to zeroize `key` because it's moved into the `SecretBox`
+        let key: VersionedKey = serde_json::from_slice(json_bytes)
+            .map_err(|_| RootKeyError::KeyParseError)?;
+
+        Ok(Self {
+            inner: SecretBox::new(Box::new(key)),
+        })
+    }
+
     /// Returns `true` if the `RootKey` is a version 0 key.
     pub fn is_v0(&self) -> bool {
         matches!(self.inner.expose_secret(), VersionedKey::V0(_))
@@ -221,6 +233,29 @@ impl RootKey {
         subkey.zeroize();
         Ok(backup_key)
     }
+
+    /// Key derivation. "Public" value.
+    ///
+    /// Derives the deterministic public backup account used to uniquely identify a backup. This
+    /// method returns only the public key (SEC.1 compressesed point, hex-encoded).
+    ///
+    /// The `backup_account_id` is generally used to ensure that only a single backup can exist
+    /// per account, otherwise this could lead to race conditions and undefined behavior with
+    /// the backup (including user confusion).
+    ///
+    /// The `backup_account_id` is the public key of a `secp256k1` key. Public key cryptography is introduced
+    /// so the user can prove ownership of the backup account ID for certain disaster recovery scenarios.
+    ///
+    /// # Errors
+    /// No errors are generally expected, but key derivation may unexpectedly fail.
+    pub(crate) fn derive_public_backup_account_key(
+        &self,
+    ) -> Result<String, RootKeyError> {
+        let backup_key = self.derive_backup_account_key()?;
+        Ok(hex::encode(
+            backup_key.public_key().to_encoded_point(true).as_bytes(),
+        ))
+    }
 }
 
 /// Public key derivation implementations. These are not considered secret and may be exposed. They are also exposed
@@ -228,26 +263,7 @@ impl RootKey {
 ///
 /// Note these values are not returned in a `SecretBox`.
 #[bedrock_export]
-impl RootKey {
-    /// Key derivation. "Public" value.
-    ///
-    /// Derives the deterministic public backup account ID to uniquely identify a backup for an account.
-    ///
-    /// This is used to ensure that only a single backup can exist per account, otherwise this could lead
-    /// to race conditions and undefined behavior with the backup (including user confusion).
-    ///
-    /// The public backup account ID is the public key of a `secp256k1` key. Public key cryptography is introduced
-    /// so the user can prove ownership of the backup account ID for certain disaster recovery scenarios.
-    ///
-    /// # Errors
-    /// No errors are generally expected, but key derivation may unexpectedly fail.
-    pub fn derive_public_backup_account_id(&self) -> Result<String, RootKeyError> {
-        let backup_key = self.derive_backup_account_key()?;
-        let backup_id =
-            hex::encode(backup_key.public_key().to_encoded_point(true).as_bytes());
-        Ok(format!("backup_account_{backup_id}"))
-    }
-}
+impl RootKey {}
 
 #[cfg(test)]
 mod test;

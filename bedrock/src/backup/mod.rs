@@ -23,6 +23,8 @@ pub use client_events::{
 };
 use k256::ecdsa::{signature::Signer, Signature, SigningKey};
 pub use manifest::ManifestManager;
+use siegel_uniffi::SiegelSession;
+use std::sync::Arc;
 
 use crate::backup::backup_format::v0::{
     V0Backup, V0BackupManifest, V0BackupManifestEntry,
@@ -94,17 +96,14 @@ impl BackupManager {
         );
 
         // 1: Decode the root secret from multiple formats
+        // TODO: Migrate to Siegel
         let root_key = RootKey::from_json(root_secret).map_err(|_| {
             BackupError::InvalidRootSecretError(format!(
                 "attempting to add an invalid secret to a new backup: {}",
                 root_secret.chars().next().unwrap_or_default() == '{'
             ))
         })?;
-        let backup_account_id =
-            root_key.derive_public_backup_account_id().map_err(|e| {
-                let msg = format!("Unexpected. Deriving public backup id: {e:?}");
-                BackupError::Generic { error_message: msg }
-            })?;
+        let backup_account_id = Self::backup_account(&root_key)?.id;
 
         // 2.1: Decode factor secret from hex
         let factor_secret_bytes = hex::decode(factor_secret)
@@ -376,6 +375,20 @@ impl BackupManager {
         Ok(STANDARD.encode(sig.to_der()))
     }
 
+    /// Returns the backup account public key and fully qualified id.
+    ///
+    /// # Errors
+    /// * `BackupError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+    ///   root secret cannot be parsed.
+    /// * `BackupError::Generic` - if the Siegel session cannot be read or key derivation
+    ///   fails.
+    pub fn get_backup_account(
+        &self,
+        root_secret: Arc<SiegelSession>,
+    ) -> Result<BackupAccount, BackupError> {
+        Self::with_root_key(root_secret, |root_key| Self::backup_account(root_key))
+    }
+
     /// Should be called after the backup is disabled/deleted.
     ///
     /// It processes local state after the backup is disabled/deleted.
@@ -514,6 +527,46 @@ pub struct ManifestDebug {
 
 // Internal helpers (not exported)
 impl BackupManager {
+    /// Reads the root secret out of a one-shot Siegel session, parses it into a
+    /// [`RootKey`], and hands it to `f`.
+    fn with_root_key<T>(
+        root_secret: Arc<SiegelSession>,
+        f: impl FnOnce(&RootKey) -> Result<T, BackupError>,
+    ) -> Result<T, BackupError> {
+        let result = root_secret.read_once(|bytes| {
+            let root_key = RootKey::from_slice(bytes).map_err(|_| {
+                BackupError::InvalidRootSecretError(
+                    "failed to parse root secret from siegel session".to_string(),
+                )
+            })?;
+            f(&root_key)
+        });
+
+        // `read_once` already wiped the loaded secret; take ownership specifically so we
+        // release the secure-memory session here rather than deferring to the caller.
+        drop(root_secret);
+
+        result.map_err(|e| BackupError::Generic {
+            error_message: format!("siegel session read failed: {e}"),
+        })?
+    }
+
+    /// Computes the backup account id and public key from the [`RootKey`].
+    fn backup_account(root_key: &RootKey) -> Result<BackupAccount, BackupError> {
+        let public_key = root_key.derive_public_backup_account_key().map_err(|e| {
+            BackupError::Generic {
+                error_message: format!(
+                    "unexpected. deriving backup account public key: {e:?}"
+                ),
+            }
+        })?;
+
+        Ok(BackupAccount {
+            id: format!("backup_account_{public_key}"),
+            public_key,
+        })
+    }
+
     fn unpack_backup_to_filesystem(
         unsealed_backup: &BackupFormat,
         current_manifest_hash_hex: &str,
@@ -821,4 +874,16 @@ pub enum FactorType {
     IcloudKeychain,
     /// Generated randomly and stored in Turnkey.
     Turnkey,
+}
+
+/// A representation of the Backup Account and its id.
+#[derive(Debug, uniffi::Record)]
+pub struct BackupAccount {
+    /// The full identifier of the backup account. This is the identifier used with
+    /// the remote backup-service.
+    id: String,
+    /// The underlying public key of the backup account. Hex-encoded SEC.1 compressed point.
+    ///
+    /// This public key can be used to authenticate with a specific backup.
+    public_key: String,
 }
