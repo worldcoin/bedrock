@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/worldcoin/bedrock/compare/0.4.1...0.5.0) - 2026-07-22
+
+### Added
+
+- [**breaking**] stamping with backup account key ([#388](https://github.com/worldcoin/bedrock/pull/388))
+- introduce sandbox environment support ([#385](https://github.com/worldcoin/bedrock/pull/385))
+
+### Other
+
+- *(deps)* bump sha2 from 0.10.9 to 0.11.0 ([#380](https://github.com/worldcoin/bedrock/pull/380))
+- add gzip feature to reqwest ([#377](https://github.com/worldcoin/bedrock/pull/377))
+- remove unused Morpho TransactionTypeId enum ([#376](https://github.com/worldcoin/bedrock/pull/376))
+- *(deps)* bump dryoc from 0.7.2 to 0.8.0 ([#366](https://github.com/worldcoin/bedrock/pull/366))
+
 ## [0.4.1](https://github.com/worldcoin/bedrock/compare/0.4.0...0.4.1) - 2026-06-17
 
 ### Fixed
