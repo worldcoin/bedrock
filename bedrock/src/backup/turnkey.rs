@@ -244,7 +244,7 @@ impl Turnkey {
                 turnkey_user_id,
             )
             .map_err(|err| {
-                log::error!("Failed to encrypt factor secret: {err:?}");
+                tracing::error!("Failed to encrypt factor secret: {err:?}");
                 TurnkeyError::EncryptFactorSecretError
             })?;
 
