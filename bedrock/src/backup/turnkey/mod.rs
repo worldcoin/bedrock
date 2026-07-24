@@ -23,7 +23,7 @@ mod policies;
 #[cfg(test)]
 mod test;
 
-use api::{failure_class, TurnkeyApi, TurnkeyApiClient};
+use api::{failure_class, TurnkeyApiClient};
 use error::{TurnkeyApiError, TurnkeyMigrationError};
 use migrations::{run_migrations, TurnkeyMigrationOutcome};
 

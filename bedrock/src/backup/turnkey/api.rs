@@ -115,46 +115,6 @@ struct AuthProxyAccountResponse {
     organization_id: Option<String>,
 }
 
-/// The set of Turnkey operations used by account management.
-///
-/// Abstracting these behind a trait lets migrations and sub-org resolution be
-/// unit-tested against static payloads without any network access.
-#[async_trait::async_trait]
-pub trait TurnkeyApi: Send + Sync {
-    /// Resolves the sub-organization id owning `public_key_hex` via the public
-    /// auth proxy. Returns `None` when no account matches.
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport or parsing failures.
-    async fn resolve_suborganization_id(
-        &self,
-        auth_proxy_config_id: &str,
-        public_key_hex: &str,
-    ) -> Result<Option<String>, TurnkeyApiError>;
-
-    /// Lists the users of a sub-organization (stamped by the read/query signer).
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
-    async fn get_users(
-        &self,
-        suborganization_id: &str,
-        stamper: Arc<dyn KeypairSigner>,
-    ) -> Result<Vec<User>, TurnkeyApiError>;
-
-    /// Creates OAuth providers on a user (stamped by the write/submit signer).
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
-    async fn create_oauth_providers(
-        &self,
-        suborganization_id: &str,
-        user_id: &str,
-        providers: Vec<OauthProviderParamsV2>,
-        stamper: Arc<dyn KeypairSigner>,
-    ) -> Result<(), TurnkeyApiError>;
-}
-
 /// Bounded retry policy: exponential backoff with full jitter.
 #[derive(Debug, Clone, Copy)]
 struct RetryPolicy {
@@ -294,9 +254,13 @@ impl TurnkeyApiClient {
     }
 }
 
-#[async_trait::async_trait]
-impl TurnkeyApi for TurnkeyApiClient {
-    async fn resolve_suborganization_id(
+impl TurnkeyApiClient {
+    /// Resolves the sub-organization id owning `public_key_hex` via the public
+    /// auth proxy. Returns `None` when no account matches.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport or parsing failures.
+    pub async fn resolve_suborganization_id(
         &self,
         auth_proxy_config_id: &str,
         public_key_hex: &str,
@@ -332,7 +296,13 @@ impl TurnkeyApi for TurnkeyApiClient {
         Ok(response.organization_id.filter(|id| !id.is_empty()))
     }
 
-    async fn get_users(
+    /// Lists the users of a sub-organization (stamped by the read/query signer).
+    ///
+    /// Results are cached for the lifetime of this client.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    pub async fn get_users(
         &self,
         suborganization_id: &str,
         stamper: Arc<dyn KeypairSigner>,
@@ -365,7 +335,11 @@ impl TurnkeyApi for TurnkeyApiClient {
         Ok(users)
     }
 
-    async fn create_oauth_providers(
+    /// Creates OAuth providers on a user (stamped by the write/submit signer).
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn create_oauth_providers(
         &self,
         suborganization_id: &str,
         user_id: &str,
