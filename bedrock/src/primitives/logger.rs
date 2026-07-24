@@ -535,6 +535,20 @@ struct EventVisitor {
 }
 
 impl tracing::field::Visit for EventVisitor {
+    /// Records string fields verbatim. Overriding this (rather than letting the
+    /// default forward to [`Self::record_debug`]) keeps string attribute values
+    /// unquoted, which log backends can filter and aggregate on directly.
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message.push_str(value);
+        } else {
+            self.attributes
+                .insert(field.name().to_owned(), value.to_owned());
+        }
+    }
+
+    /// Fallback for non-string fields (numbers, booleans, and other `Debug`
+    /// types). `Debug` already renders these without surrounding quotes.
     fn record_debug(
         &mut self,
         field: &tracing::field::Field,
@@ -771,5 +785,56 @@ mod tests {
             1,
             "version is the only attribute on a fieldless log"
         );
+    }
+
+    #[test]
+    fn event_visitor_keeps_strings_unquoted() {
+        use std::sync::Mutex;
+
+        // A minimal subscriber that runs a real `tracing` event through
+        // `EventVisitor`, so field recording exercises the same
+        // `record_str`/`record_debug` dispatch as the dependency-log path.
+        struct Capture(Mutex<Vec<(String, HashMap<String, String>)>>);
+
+        impl Subscriber for Capture {
+            fn enabled(&self, _: &Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+                span::Id::from_u64(1)
+            }
+            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+            fn event(&self, event: &Event<'_>) {
+                let mut visitor = EventVisitor::default();
+                event.record(&mut visitor);
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((visitor.message, visitor.attributes));
+            }
+            fn enter(&self, _: &span::Id) {}
+            fn exit(&self, _: &span::Id) {}
+        }
+
+        let capture = Arc::new(Capture(Mutex::new(Vec::new())));
+        tracing::subscriber::with_default(capture.clone(), || {
+            tracing::info!(
+                path = "/foo/bar",
+                attempts = 3,
+                ok = true,
+                "deserialize failed"
+            );
+        });
+
+        let events = capture.0.lock().unwrap().clone();
+        assert_eq!(events.len(), 1);
+        let (message, attrs) = &events[0];
+        assert_eq!(message, "deserialize failed");
+        // String fields are stored without surrounding quotes.
+        assert_eq!(attrs.get("path").map(String::as_str), Some("/foo/bar"));
+        // Numbers and booleans render bare via the `record_debug` fallback.
+        assert_eq!(attrs.get("attempts").map(String::as_str), Some("3"));
+        assert_eq!(attrs.get("ok").map(String::as_str), Some("true"));
     }
 }
