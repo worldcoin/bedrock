@@ -103,9 +103,7 @@ static LOGGER_INSTANCE: OnceLock<Arc<dyn Logger>> = OnceLock::new();
 /// Bedrock's own instrumentation is delivered to `logger` **directly**, so it is
 /// unaffected by whichever Rust library in the process owns the global `tracing`
 /// dispatcher. As a best effort, this also installs a global `tracing` subscriber
-/// (plus a `log` bridge) to forward *dependency* logs — notably siegel's `mlock`
-/// warning — to the same logger; if the global dispatcher is already taken, that
-/// extra capture is skipped and only dependency logs are missed.
+/// to forward relevant *dependency* logs (notably siegel's `mlock` warning).
 ///
 /// # Arguments
 ///
@@ -369,13 +367,10 @@ fn has_long_hex_run(bytes: &[u8]) -> bool {
 
 // SECTION: `tracing` dependency capture
 
-/// Best-effort install of the global `tracing` subscriber and `log` bridge that
+/// Best-effort install of the global `tracing` subscriber and
 /// forward dependency (non-Bedrock) logs to the host logger.
 ///
-/// Bedrock's own logging does not depend on this succeeding. If another global
-/// subscriber already owns the dispatcher, dependency logs (e.g. siegel's `mlock`
-/// warning) are not captured; that degradation is reported once, via the direct
-/// path, so it is not silent.
+/// Bedrock's own logging does not depend on this succeeding.
 fn install_dependency_capture() {
     let subscriber = ForeignLoggerSubscriber {
         next_span_id: AtomicU64::new(1),
@@ -388,19 +383,14 @@ fn install_dependency_capture() {
         return;
     }
 
-    // Bridge dependencies that still use the `log` crate; `INFO`+ only, since the
-    // subscriber drops dependency debug/trace anyway.
     let _ =
-        tracing_log::LogTracer::init_with_filter(tracing_log::log::LevelFilter::Info);
+        tracing_log::LogTracer::init_with_filter(tracing_log::log::LevelFilter::Warn);
 }
 
 /// A best-effort [`tracing::Subscriber`] that forwards **non-Bedrock** events
 /// (siegel, plus dependencies that log via `tracing`/`log`) to the host [`Logger`].
 ///
-/// Bedrock's own logs never flow through here — they are delivered directly by
-/// [`log_message`], so they reach the host even when another Rust library in the
-/// process owns the global `tracing` dispatcher. This subscriber is installed as
-/// that global default only when it is still free. Spans are not recorded.
+/// Spans are not recorded.
 struct ForeignLoggerSubscriber {
     /// Monotonic source of span identifiers, required by the `tracing` contract.
     next_span_id: AtomicU64,
@@ -409,18 +399,17 @@ struct ForeignLoggerSubscriber {
 impl Subscriber for ForeignLoggerSubscriber {
     /// Bedrock's own events use the direct path ([`log_message`]) and are ignored
     /// here to avoid double-forwarding. Dependency (non-Bedrock) events are
-    /// forwarded at `INFO` and above; their debug/trace noise is rejected at the
+    /// forwarded at `WARN` and above; their debug/trace noise is rejected at the
     /// callsite so it is never even formatted.
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
         if is_bedrock_target(metadata) {
             return false;
         }
         let level = *metadata.level();
-        level != Level::DEBUG && level != Level::TRACE
+        level == Level::WARN || level == Level::ERROR
     }
 
     fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
-        // `fetch_add` starts at 1 so the id is never 0 (which `Id::from_u64` rejects).
         let id = self.next_span_id.fetch_add(1, Ordering::Relaxed);
         span::Id::from_u64(id)
     }
