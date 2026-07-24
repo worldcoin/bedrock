@@ -1,6 +1,6 @@
+use crate::info;
 use alloy::primitives::{Address, Bytes, U256};
 use async_trait::async_trait;
-use log::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
