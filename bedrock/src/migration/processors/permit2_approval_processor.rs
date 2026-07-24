@@ -1,8 +1,8 @@
+use crate::info;
 use alloy::primitives::{Address, Bytes, U256};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::info;
 
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};

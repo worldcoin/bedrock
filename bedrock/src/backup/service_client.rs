@@ -127,7 +127,7 @@ impl BackupServiceClient {
                     is_backup_enabled: None,
                 },
             ) {
-                tracing::warn!(
+                crate::warn!(
                     "[ClientEvents] failed to merge retrieve_metadata into base report: {e:?}"
                 );
             }

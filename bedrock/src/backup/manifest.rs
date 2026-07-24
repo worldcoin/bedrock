@@ -84,7 +84,7 @@ impl BackupManifest {
 
                     // Checksum: 32 raw bytes from hex
                     let ck_bytes = hex::decode(&entry.checksum_hex).map_err(|_| {
-                        tracing::error!(
+                        crate::error!(
                             "[Critical] Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
                             entry.designator
                         );
@@ -94,7 +94,7 @@ impl BackupManifest {
                         ))
                     })?;
                     let ck_arr: [u8; 32] = ck_bytes.try_into().map_err(|_| {
-                        tracing::error!(
+                        crate::error!(
                             "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
                             entry.designator
                         );
@@ -208,7 +208,7 @@ impl ManifestManager {
                         .iter()
                         .any(|e| e.file_path == normalized_path)
                     {
-                        tracing::warn!(
+                        crate::warn!(
                             "File already exists in the manifest: {}",
                             normalized_path.get(..14).unwrap_or(&normalized_path)
                         );
@@ -394,7 +394,7 @@ impl ManifestManager {
             let data = fs.read_file(rel.to_string()).map_err(|e| {
                 let msg =
                     format!("Failed to load file from {:?}: {e}", entry.designator);
-                tracing::error!("{msg}");
+                crate::error!("{msg}");
                 BackupError::InvalidFileForBackup(msg)
             })?;
 
@@ -402,7 +402,7 @@ impl ManifestManager {
             let computed_checksum = blake3::hash(&data);
             let expected_checksum: [u8; 32] = hex::decode(&entry.checksum_hex)
                 .map_err(|_| {
-                    tracing::error!(
+                    crate::error!(
                         "[Critical] Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
                         entry.designator
                     );
@@ -413,7 +413,7 @@ impl ManifestManager {
                 })?
                 .try_into()
                 .map_err(|_| {
-                    tracing::error!(
+                    crate::error!(
                         "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
                         entry.designator
                     );
@@ -483,7 +483,7 @@ impl ManifestManager {
             .map(|(checksum, size)| (hex::encode(checksum), size))
             .map_err(|e| {
                 let msg = format!("Failed to load file: {e}");
-                tracing::error!("{msg}");
+                crate::error!("{msg}");
                 BackupError::InvalidFileForBackup(msg)
             })
     }
@@ -536,7 +536,7 @@ impl ManifestManager {
 
         // Refresh backup report from manifest; ignore errors
         if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
-            tracing::warn!(
+            crate::warn!(
                 "[ClientEvents] failed to refresh backup report after manifest update: {e:?}"
             );
         }
@@ -555,7 +555,7 @@ impl ManifestManager {
             )
             .await
         {
-            tracing::warn!("[ClientEvents] failed to send Sync event: {e:?}");
+            crate::warn!("[ClientEvents] failed to send Sync event: {e:?}");
         }
     }
 }

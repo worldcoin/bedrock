@@ -5,12 +5,12 @@ use crate::migration::processors::permit2_approval_processor::Permit2ApprovalPro
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
 use crate::smart_account::SafeSmartAccount;
+use crate::warn;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::warn;
 
 const MIGRATION_KEY_PREFIX: &str = "migration:";
 const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations after 30 days

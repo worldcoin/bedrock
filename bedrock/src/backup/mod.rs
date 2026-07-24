@@ -152,7 +152,7 @@ impl BackupManager {
         // Keep the base report in sync with the freshly initialized (empty) manifest.
         // This ensures we don't keep stale designators (e.g., `orb_pkg`) from a previous state.
         if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
-            tracing::warn!(
+            crate::warn!(
                 "[ClientEvents] failed to refresh backup report after manifest init: {e:?}"
             );
         }
@@ -404,7 +404,7 @@ impl BackupManager {
         // state (designators, size, counters) is fully cleared. It will be recreated
         // automatically if/when backup is enabled again.
         if let Err(e) = ClientEventsReporter::new().delete_base_report() {
-            tracing::warn!(
+            crate::warn!(
                 "[ClientEvents] failed to delete base report after manifest deletion: {e:?}"
             );
         }
@@ -586,21 +586,21 @@ impl BackupManager {
                 Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
                     Ok((local_checksum, _)) => {
                         if local_checksum != file.checksum {
-                            tracing::error!(
+                            crate::error!(
                                     "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
                                     file.designator
                                 );
                         }
                     }
                     Err(e) => {
-                        tracing::error!(
+                        crate::error!(
                                 "[BackupManager] failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
                             );
                     }
                 },
                 Ok(false) => {}
                 Err(e) => {
-                    tracing::error!(
+                    crate::error!(
                         "[BackupManager] failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
                     );
                 }
@@ -637,7 +637,7 @@ impl BackupManager {
         // Refresh the base report to reflect the unpacked manifest contents. This keeps
         // `backup_file_designators` and `backup_size_kb` in sync after a restore.
         if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
-            tracing::warn!(
+            crate::warn!(
                 "[ClientEvents] failed to refresh backup report after unpacking backup: {e:?}"
             );
         }
