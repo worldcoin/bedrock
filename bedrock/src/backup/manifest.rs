@@ -95,6 +95,7 @@ impl BackupManifest {
                     })?;
                     let ck_arr: [u8; 32] = ck_bytes.try_into().map_err(|_| {
                         crate::error!(
+                            designator = entry.designator,
                             "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
                             entry.designator
                         );

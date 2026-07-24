@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -18,14 +19,15 @@ thread_local! {
 /// Implementing the `Logger` trait:
 ///
 /// ```rust
+/// use std::collections::HashMap;
 ///
 /// use bedrock::primitives::logger::{Logger, LogLevel};
 ///
 /// struct MyLogger;
 ///
 /// impl Logger for MyLogger {
-///     fn log(&self, level: LogLevel, message: String) {
-///         println!("[{:?}] {}", level, message);
+///     fn log(&self, level: LogLevel, message: String, attributes: HashMap<String, String>) {
+///         println!("[{:?}] {} {:?}", level, message, attributes);
 ///     }
 /// }
 /// ```
@@ -36,8 +38,8 @@ thread_local! {
 ///class BedrockCoreLoggerBridge: Bedrock.Logger {
 ///    static let shared = BedrockCoreLoggerBridge()
 ///
-///    func log(level: Bedrock.LogLevel, message: String) {
-///        Log.log(level.toCoreLevel(), message)
+///    func log(level: Bedrock.LogLevel, message: String, attributes: [String: String]) {
+///        Log.log(level.toCoreLevel(), message, attributes: attributes)
 ///    }
 ///}
 ///
@@ -74,7 +76,16 @@ pub trait Logger: Sync + Send {
     ///
     /// * `level` - The severity level of the log message.
     /// * `message` - The log message to be recorded.
-    fn log(&self, level: LogLevel, message: String);
+    /// * `attributes` - Structured key/value metadata for the log line. Hosts
+    ///   that support structured logging (e.g. Datadog) should attach these as
+    ///   log attributes rather than folding them into `message`. Every log
+    ///   carries at least the [`VERSION_ATTRIBUTE_KEY`] attribute.
+    fn log(
+        &self,
+        level: LogLevel,
+        message: String,
+        attributes: HashMap<String, String>,
+    );
 }
 
 /// Enumeration of possible log levels.
@@ -122,24 +133,106 @@ pub fn set_logger(logger: Arc<dyn Logger>) {
     install_dependency_capture();
 }
 
+/// Attribute key carrying the running Bedrock version. Attached to every log
+/// line so log backends can attribute records to a specific Bedrock release.
+pub const VERSION_ATTRIBUTE_KEY: &str = "bedrock_version";
+
+/// The Bedrock crate version, attached to every log line under
+/// [`VERSION_ATTRIBUTE_KEY`].
+const BEDROCK_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Delivers a Bedrock-originated log record directly to the host [`Logger`],
 /// bypassing the global `tracing` dispatcher so delivery never depends on Bedrock
 /// owning it. Applies the active [`LogContext`] prefix and hex-secret redaction.
 /// A no-op until [`set_logger`] has been called.
 #[doc(hidden)]
 pub fn log_message(level: LogLevel, args: std::fmt::Arguments<'_>) {
+    log_message_with_attributes(level, args, HashMap::new());
+}
+
+/// Like [`log_message`], but attaches structured `attributes` to the log line.
+///
+/// Attribute values are hex-secret redacted just like the message. The
+/// [`VERSION_ATTRIBUTE_KEY`] attribute is always added by [`deliver`], and takes
+/// precedence over any caller-supplied value for that key.
+#[doc(hidden)]
+pub fn log_message_with_attributes<S: std::hash::BuildHasher>(
+    level: LogLevel,
+    args: std::fmt::Arguments<'_>,
+    attributes: HashMap<String, String, S>,
+) {
     let Some(logger) = LOGGER_INSTANCE.get() else {
         return;
     };
     let message = get_context()
         .map_or_else(|| args.to_string(), |context| format!("{context} {args}"));
-    logger.log(level, sanitize_hex_secrets(message));
+    deliver(logger, level, message, attributes);
+}
+
+/// Redacts hex secrets from the message and attribute values, attaches the
+/// Bedrock version attribute, and forwards the record to the host `logger`.
+///
+/// The single choke point for both delivery paths ([`log_message_with_attributes`]
+/// for Bedrock's own logs and [`ForeignLoggerSubscriber::event`] for dependency
+/// logs), so every emitted line is sanitized and version-stamped.
+fn deliver<S: std::hash::BuildHasher>(
+    logger: &Arc<dyn Logger>,
+    level: LogLevel,
+    message: String,
+    attributes: HashMap<String, String, S>,
+) {
+    let message = sanitize_hex_secrets(message);
+    let mut attributes: HashMap<String, String> = attributes
+        .into_iter()
+        .map(|(key, value)| (key, sanitize_hex_secrets(value)))
+        .collect();
+    attributes.insert(VERSION_ATTRIBUTE_KEY.to_owned(), BEDROCK_VERSION.to_owned());
+    logger.log(level, message, attributes);
+}
+
+/// Internal implementation of the logging macros. Not public API.
+///
+/// Splits a macro invocation into leading `key = value` fields (delivered as
+/// structured attributes) and a trailing `format_args!` message, then routes to
+/// [`log_message`] or [`log_message_with_attributes`] accordingly. Fields must
+/// precede the format string, matching the `tracing` convention.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __bedrock_log {
+    // Munch one `key = value` field into the accumulator.
+    (@acc $level:expr, [$($fields:tt)*] $key:ident = $val:expr, $($rest:tt)*) => {
+        $crate::__bedrock_log!(@acc $level, [$($fields)* ($key = $val)] $($rest)*)
+    };
+    // No fields: use the lightweight path (no attribute map to build).
+    (@acc $level:expr, [] $($fmt:tt)*) => {
+        $crate::primitives::logger::log_message($level, ::core::format_args!($($fmt)*))
+    };
+    // One or more fields: collect them into an attribute map.
+    (@acc $level:expr, [$(($key:ident = $val:expr))+] $($fmt:tt)*) => {{
+        let mut attributes = ::std::collections::HashMap::new();
+        $(
+            attributes.insert(
+                ::core::stringify!($key).to_owned(),
+                ($val).to_string(),
+            );
+        )+
+        $crate::primitives::logger::log_message_with_attributes(
+            $level,
+            ::core::format_args!($($fmt)*),
+            attributes,
+        )
+    }};
+    // Entry point: start munching with an empty accumulator.
+    ($level:expr, $($rest:tt)*) => {
+        $crate::__bedrock_log!(@acc $level, [] $($rest)*)
+    };
 }
 
 /// Context-aware logging macros that automatically use the current logging context.
 ///
-/// These macros allow you to log messages that will be automatically prefixed
-/// with the current logging context if one is set.
+/// These macros prefix messages with the current logging context if one is set.
+/// Leading `key = value` pairs (before the format string) are attached as
+/// structured attributes; each value must implement [`std::fmt::Display`].
 ///
 /// # Examples
 ///
@@ -150,15 +243,13 @@ pub fn log_message(level: LogLevel, args: std::fmt::Arguments<'_>) {
 /// let _bedrock_logger_ctx = LogContext::new("SmartAccount");
 /// info!("This is an info message");
 /// debug!("Debug info: {}", 42);
+/// info!(chain_id = 480, tx_hash = "0xabc", "user operation submitted");
 /// ```
 /// Logs a trace-level message with automatic context prefixing
 #[macro_export]
 macro_rules! trace {
     ($($arg:tt)*) => {
-        $crate::primitives::logger::log_message(
-            $crate::primitives::logger::LogLevel::Trace,
-            format_args!($($arg)*),
-        )
+        $crate::__bedrock_log!($crate::primitives::logger::LogLevel::Trace, $($arg)*)
     };
 }
 
@@ -166,10 +257,7 @@ macro_rules! trace {
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
-        $crate::primitives::logger::log_message(
-            $crate::primitives::logger::LogLevel::Debug,
-            format_args!($($arg)*),
-        )
+        $crate::__bedrock_log!($crate::primitives::logger::LogLevel::Debug, $($arg)*)
     };
 }
 
@@ -177,10 +265,7 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::primitives::logger::log_message(
-            $crate::primitives::logger::LogLevel::Info,
-            format_args!($($arg)*),
-        )
+        $crate::__bedrock_log!($crate::primitives::logger::LogLevel::Info, $($arg)*)
     };
 }
 
@@ -188,10 +273,7 @@ macro_rules! info {
 #[macro_export]
 macro_rules! warn {
     ($($arg:tt)*) => {
-        $crate::primitives::logger::log_message(
-            $crate::primitives::logger::LogLevel::Warn,
-            format_args!($($arg)*),
-        )
+        $crate::__bedrock_log!($crate::primitives::logger::LogLevel::Warn, $($arg)*)
     };
 }
 
@@ -199,10 +281,7 @@ macro_rules! warn {
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
-        $crate::primitives::logger::log_message(
-            $crate::primitives::logger::LogLevel::Error,
-            format_args!($($arg)*),
-        )
+        $crate::__bedrock_log!($crate::primitives::logger::LogLevel::Error, $($arg)*)
     };
 }
 
@@ -418,16 +497,17 @@ impl Subscriber for ForeignLoggerSubscriber {
 
     fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
 
-    /// Forwards a dependency event to the host logger after redacting hex secrets.
+    /// Forwards a dependency event to the host logger. Structured fields are
+    /// forwarded as log attributes; both message and attributes are hex-secret
+    /// redacted and version-stamped by [`deliver`].
     fn event(&self, event: &Event<'_>) {
         let Some(logger) = LOGGER_INSTANCE.get() else {
             return;
         };
         let mut visitor = EventVisitor::default();
         event.record(&mut visitor);
-        let message = sanitize_hex_secrets(visitor.into_message());
         let level = log_level(*event.metadata().level());
-        logger.log(level, message);
+        deliver(logger, level, visitor.message, visitor.attributes);
     }
 
     fn enter(&self, _span: &span::Id) {}
@@ -443,15 +523,15 @@ fn is_bedrock_target(metadata: &Metadata<'_>) -> bool {
             .is_some_and(|module_path| module_path.starts_with("bedrock"))
 }
 
-/// Collects a `tracing` event's fields into a single log line.
+/// Collects a `tracing` event's fields.
 ///
 /// The `message` field (the format string passed to the logging macros) forms
-/// the body; any additional structured fields are appended as ` key=value` so
-/// they are never silently dropped.
+/// the log body; every other structured field is collected into `attributes` so
+/// it is forwarded to the host as a log attribute rather than being dropped.
 #[derive(Default)]
 struct EventVisitor {
     message: String,
-    fields: String,
+    attributes: HashMap<String, String>,
 }
 
 impl tracing::field::Visit for EventVisitor {
@@ -464,16 +544,9 @@ impl tracing::field::Visit for EventVisitor {
         if field.name() == "message" {
             let _ = write!(self.message, "{value:?}");
         } else {
-            let _ = write!(self.fields, " {}={value:?}", field.name());
+            self.attributes
+                .insert(field.name().to_owned(), format!("{value:?}"));
         }
-    }
-}
-
-impl EventVisitor {
-    /// Consumes the visitor, returning the message with structured fields appended.
-    fn into_message(mut self) -> String {
-        self.message.push_str(&self.fields);
-        self.message
     }
 }
 
@@ -583,5 +656,120 @@ mod tests {
         let ptr = input.as_ptr();
         let output = sanitize_hex_secrets(input);
         assert_eq!(output.as_ptr(), ptr, "should return same allocation");
+    }
+
+    /// A single captured log line: level, message, and attributes.
+    type CapturedRecord = (LogLevel, String, HashMap<String, String>);
+
+    /// A [`Logger`] that records every delivered log line for assertions.
+    #[derive(Default)]
+    struct CapturingLogger {
+        records: std::sync::Mutex<Vec<CapturedRecord>>,
+    }
+
+    impl Logger for CapturingLogger {
+        fn log(
+            &self,
+            level: LogLevel,
+            message: String,
+            attributes: HashMap<String, String>,
+        ) {
+            self.records
+                .lock()
+                .unwrap()
+                .push((level, message, attributes));
+        }
+    }
+
+    #[test]
+    fn deliver_attaches_version_and_sanitizes_attributes() {
+        let capturing = Arc::new(CapturingLogger::default());
+        let logger: Arc<dyn Logger> = capturing.clone();
+
+        let secret = "a".repeat(32);
+        let mut attributes = HashMap::new();
+        attributes.insert("factor".to_owned(), secret.clone());
+        attributes.insert("plain".to_owned(), "value".to_owned());
+
+        deliver(
+            &logger,
+            LogLevel::Info,
+            format!("secret={secret}"),
+            attributes,
+        );
+
+        let records = capturing.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1);
+        let (level, message, attrs) = &records[0];
+        assert!(matches!(level, LogLevel::Info));
+        assert_eq!(message, "secret=aa..aa");
+        assert_eq!(attrs.get("factor").map(String::as_str), Some("aa..aa"));
+        assert_eq!(attrs.get("plain").map(String::as_str), Some("value"));
+        assert_eq!(
+            attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
+            Some(env!("CARGO_PKG_VERSION")),
+        );
+    }
+
+    #[test]
+    fn deliver_overrides_caller_supplied_version() {
+        let capturing = Arc::new(CapturingLogger::default());
+        let logger: Arc<dyn Logger> = capturing.clone();
+
+        let mut attributes = HashMap::new();
+        attributes.insert(VERSION_ATTRIBUTE_KEY.to_owned(), "0.0.0-fake".to_owned());
+        deliver(&logger, LogLevel::Warn, "msg".to_owned(), attributes);
+
+        let records = capturing.records.lock().unwrap().clone();
+        let (_, _, attrs) = &records[0];
+        assert_eq!(
+            attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
+            Some(env!("CARGO_PKG_VERSION")),
+        );
+    }
+
+    #[test]
+    fn macros_forward_fields_and_version() {
+        // Owns the process-global logger for this crate's unit-test binary.
+        // Records are matched by unique markers so logs emitted by other tests
+        // sharing the global logger do not affect these assertions.
+        let capturing = Arc::new(CapturingLogger::default());
+        let global: Arc<dyn Logger> = capturing.clone();
+        assert!(
+            LOGGER_INSTANCE.set(global).is_ok(),
+            "no other test may install the global logger",
+        );
+
+        info!(chain_id = 480, tx = "0xabc", "wf-marker-fields submitted");
+        warn!("wf-marker-plain no fields here");
+
+        let records = capturing.records.lock().unwrap().clone();
+
+        let (level, _, attrs) = records
+            .iter()
+            .find(|(_, message, _)| message.contains("wf-marker-fields"))
+            .expect("fielded record captured");
+        assert!(matches!(level, LogLevel::Info));
+        assert_eq!(attrs.get("chain_id").map(String::as_str), Some("480"));
+        assert_eq!(attrs.get("tx").map(String::as_str), Some("0xabc"));
+        assert_eq!(
+            attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
+            Some(env!("CARGO_PKG_VERSION")),
+        );
+
+        let (level, _, attrs) = records
+            .iter()
+            .find(|(_, message, _)| message.contains("wf-marker-plain"))
+            .expect("plain record captured");
+        assert!(matches!(level, LogLevel::Warn));
+        assert_eq!(
+            attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
+            Some(env!("CARGO_PKG_VERSION")),
+        );
+        assert_eq!(
+            attrs.len(),
+            1,
+            "version is the only attribute on a fieldless log"
+        );
     }
 }
