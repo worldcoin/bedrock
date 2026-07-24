@@ -94,118 +94,6 @@ pub enum LogLevel {
     Error,
 }
 
-/// A best-effort [`tracing::Subscriber`] that forwards **non-Bedrock** events
-/// (siegel, plus dependencies that log via `tracing`/`log`) to the host [`Logger`].
-///
-/// Bedrock's own logs never flow through here — they are delivered directly by
-/// [`log_message`], so they reach the host even when another Rust library in the
-/// process owns the global `tracing` dispatcher. This subscriber is installed as
-/// that global default only when it is still free. Spans are not recorded.
-struct ForeignLoggerSubscriber {
-    /// Monotonic source of span identifiers, required by the `tracing` contract.
-    next_span_id: AtomicU64,
-}
-
-impl Subscriber for ForeignLoggerSubscriber {
-    /// Bedrock's own events use the direct path ([`log_message`]) and are ignored
-    /// here to avoid double-forwarding. Dependency (non-Bedrock) events are
-    /// forwarded at `INFO` and above; their debug/trace noise is rejected at the
-    /// callsite so it is never even formatted.
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        if is_bedrock_target(metadata) {
-            return false;
-        }
-        let level = *metadata.level();
-        level != Level::DEBUG && level != Level::TRACE
-    }
-
-    fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
-        // `fetch_add` starts at 1 so the id is never 0 (which `Id::from_u64` rejects).
-        let id = self.next_span_id.fetch_add(1, Ordering::Relaxed);
-        span::Id::from_u64(id)
-    }
-
-    fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
-
-    /// Forwards a dependency event to the host logger after redacting hex secrets.
-    fn event(&self, event: &Event<'_>) {
-        let Some(logger) = LOGGER_INSTANCE.get() else {
-            return;
-        };
-        let mut visitor = EventVisitor::default();
-        event.record(&mut visitor);
-        let message = sanitize_hex_secrets(visitor.into_message());
-        let level = log_level(*event.metadata().level());
-        logger.log(level, message);
-    }
-
-    fn enter(&self, _span: &span::Id) {}
-
-    fn exit(&self, _span: &span::Id) {}
-}
-
-/// Returns `true` when the event originates from the `bedrock` crate.
-fn is_bedrock_target(metadata: &Metadata<'_>) -> bool {
-    metadata.target().starts_with("bedrock")
-        || metadata
-            .module_path()
-            .is_some_and(|module_path| module_path.starts_with("bedrock"))
-}
-
-/// Collects a `tracing` event's fields into a single log line.
-///
-/// The `message` field (the format string passed to the logging macros) forms
-/// the body; any additional structured fields are appended as ` key=value` so
-/// they are never silently dropped.
-#[derive(Default)]
-struct EventVisitor {
-    message: String,
-    fields: String,
-}
-
-impl tracing::field::Visit for EventVisitor {
-    fn record_debug(
-        &mut self,
-        field: &tracing::field::Field,
-        value: &dyn std::fmt::Debug,
-    ) {
-        use std::fmt::Write as _;
-        if field.name() == "message" {
-            let _ = write!(self.message, "{value:?}");
-        } else {
-            let _ = write!(self.fields, " {}={value:?}", field.name());
-        }
-    }
-}
-
-impl EventVisitor {
-    /// Consumes the visitor, returning the message with structured fields appended.
-    fn into_message(mut self) -> String {
-        self.message.push_str(&self.fields);
-        self.message
-    }
-}
-
-/// Converts a [`tracing::Level`] to a [`LogLevel`].
-///
-/// `tracing` levels are associated constants rather than enum variants, so this
-/// uses equality comparisons; the final branch necessarily maps [`Level::TRACE`].
-fn log_level(level: Level) -> LogLevel {
-    if level == Level::ERROR {
-        LogLevel::Error
-    } else if level == Level::WARN {
-        LogLevel::Warn
-    } else if level == Level::INFO {
-        LogLevel::Info
-    } else if level == Level::DEBUG {
-        LogLevel::Debug
-    } else {
-        LogLevel::Trace
-    }
-}
-
 /// The host-provided logger. Bedrock's own logs are delivered here directly by
 /// [`log_message`], independent of the global `tracing` dispatcher.
 static LOGGER_INSTANCE: OnceLock<Arc<dyn Logger>> = OnceLock::new();
@@ -234,31 +122,6 @@ pub fn set_logger(logger: Arc<dyn Logger>) {
         return;
     }
     install_dependency_capture();
-}
-
-/// Best-effort install of the global `tracing` subscriber and `log` bridge that
-/// forward dependency (non-Bedrock) logs to the host logger.
-///
-/// Bedrock's own logging does not depend on this succeeding. If another global
-/// subscriber already owns the dispatcher, dependency logs (e.g. siegel's `mlock`
-/// warning) are not captured; that degradation is reported once, via the direct
-/// path, so it is not silent.
-fn install_dependency_capture() {
-    let subscriber = ForeignLoggerSubscriber {
-        next_span_id: AtomicU64::new(1),
-    };
-    if tracing::subscriber::set_global_default(subscriber).is_err() {
-        crate::warn!(
-            "another global tracing subscriber is already installed; siegel and \
-             dependency logs will not be forwarded (Bedrock's own logs are unaffected)"
-        );
-        return;
-    }
-
-    // Bridge dependencies that still use the `log` crate; `INFO`+ only, since the
-    // subscriber drops dependency debug/trace anyway.
-    let _ =
-        tracing_log::LogTracer::init_with_filter(tracing_log::log::LevelFilter::Info);
 }
 
 /// Delivers a Bedrock-originated log record directly to the host [`Logger`],
@@ -502,6 +365,145 @@ fn has_long_hex_run(bytes: &[u8]) -> bool {
         }
     }
     false
+}
+
+// SECTION: `tracing` dependency capture
+
+/// Best-effort install of the global `tracing` subscriber and `log` bridge that
+/// forward dependency (non-Bedrock) logs to the host logger.
+///
+/// Bedrock's own logging does not depend on this succeeding. If another global
+/// subscriber already owns the dispatcher, dependency logs (e.g. siegel's `mlock`
+/// warning) are not captured; that degradation is reported once, via the direct
+/// path, so it is not silent.
+fn install_dependency_capture() {
+    let subscriber = ForeignLoggerSubscriber {
+        next_span_id: AtomicU64::new(1),
+    };
+    if tracing::subscriber::set_global_default(subscriber).is_err() {
+        crate::warn!(
+            "another global tracing subscriber is already installed; siegel and \
+             dependency logs will not be forwarded (Bedrock's own logs are unaffected)"
+        );
+        return;
+    }
+
+    // Bridge dependencies that still use the `log` crate; `INFO`+ only, since the
+    // subscriber drops dependency debug/trace anyway.
+    let _ =
+        tracing_log::LogTracer::init_with_filter(tracing_log::log::LevelFilter::Info);
+}
+
+/// A best-effort [`tracing::Subscriber`] that forwards **non-Bedrock** events
+/// (siegel, plus dependencies that log via `tracing`/`log`) to the host [`Logger`].
+///
+/// Bedrock's own logs never flow through here — they are delivered directly by
+/// [`log_message`], so they reach the host even when another Rust library in the
+/// process owns the global `tracing` dispatcher. This subscriber is installed as
+/// that global default only when it is still free. Spans are not recorded.
+struct ForeignLoggerSubscriber {
+    /// Monotonic source of span identifiers, required by the `tracing` contract.
+    next_span_id: AtomicU64,
+}
+
+impl Subscriber for ForeignLoggerSubscriber {
+    /// Bedrock's own events use the direct path ([`log_message`]) and are ignored
+    /// here to avoid double-forwarding. Dependency (non-Bedrock) events are
+    /// forwarded at `INFO` and above; their debug/trace noise is rejected at the
+    /// callsite so it is never even formatted.
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        if is_bedrock_target(metadata) {
+            return false;
+        }
+        let level = *metadata.level();
+        level != Level::DEBUG && level != Level::TRACE
+    }
+
+    fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+        // `fetch_add` starts at 1 so the id is never 0 (which `Id::from_u64` rejects).
+        let id = self.next_span_id.fetch_add(1, Ordering::Relaxed);
+        span::Id::from_u64(id)
+    }
+
+    fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+    /// Forwards a dependency event to the host logger after redacting hex secrets.
+    fn event(&self, event: &Event<'_>) {
+        let Some(logger) = LOGGER_INSTANCE.get() else {
+            return;
+        };
+        let mut visitor = EventVisitor::default();
+        event.record(&mut visitor);
+        let message = sanitize_hex_secrets(visitor.into_message());
+        let level = log_level(*event.metadata().level());
+        logger.log(level, message);
+    }
+
+    fn enter(&self, _span: &span::Id) {}
+
+    fn exit(&self, _span: &span::Id) {}
+}
+
+/// Returns `true` when the event originates from the `bedrock` crate.
+fn is_bedrock_target(metadata: &Metadata<'_>) -> bool {
+    metadata.target().starts_with("bedrock")
+        || metadata
+            .module_path()
+            .is_some_and(|module_path| module_path.starts_with("bedrock"))
+}
+
+/// Collects a `tracing` event's fields into a single log line.
+///
+/// The `message` field (the format string passed to the logging macros) forms
+/// the body; any additional structured fields are appended as ` key=value` so
+/// they are never silently dropped.
+#[derive(Default)]
+struct EventVisitor {
+    message: String,
+    fields: String,
+}
+
+impl tracing::field::Visit for EventVisitor {
+    fn record_debug(
+        &mut self,
+        field: &tracing::field::Field,
+        value: &dyn std::fmt::Debug,
+    ) {
+        use std::fmt::Write as _;
+        if field.name() == "message" {
+            let _ = write!(self.message, "{value:?}");
+        } else {
+            let _ = write!(self.fields, " {}={value:?}", field.name());
+        }
+    }
+}
+
+impl EventVisitor {
+    /// Consumes the visitor, returning the message with structured fields appended.
+    fn into_message(mut self) -> String {
+        self.message.push_str(&self.fields);
+        self.message
+    }
+}
+
+/// Converts a [`tracing::Level`] to a [`LogLevel`].
+///
+/// `tracing` levels are associated constants rather than enum variants, so this
+/// uses equality comparisons; the final branch necessarily maps [`Level::TRACE`].
+fn log_level(level: Level) -> LogLevel {
+    if level == Level::ERROR {
+        LogLevel::Error
+    } else if level == Level::WARN {
+        LogLevel::Warn
+    } else if level == Level::INFO {
+        LogLevel::Info
+    } else if level == Level::DEBUG {
+        LogLevel::Debug
+    } else {
+        LogLevel::Trace
+    }
 }
 
 #[cfg(test)]
