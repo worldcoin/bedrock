@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/worldcoin/bedrock/compare/0.5.0...0.5.1) - 2026-07-24
+
+### Added
+
+- move to tracing for logging ([#390](https://github.com/worldcoin/bedrock/pull/390))
+
 ## [0.5.0](https://github.com/worldcoin/bedrock/compare/0.4.1...0.5.0) - 2026-07-22
 
 ### Added
