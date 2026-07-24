@@ -5447,6 +5447,7 @@ dependencies = [
  "getrandom 0.4.1",
  "siegel",
  "thiserror 2.0.18",
+ "tracing",
  "uniffi",
 ]
 

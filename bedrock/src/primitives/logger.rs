@@ -94,15 +94,13 @@ pub enum LogLevel {
     Error,
 }
 
-/// A [`tracing::Subscriber`] that forwards events to the foreign [`Logger`].
+/// A [`tracing::Subscriber`] that forwards events to the foreign-provided [`Logger`].
 ///
 /// This is the internal bridge between Bedrock's `tracing` instrumentation and
-/// the platform-provided logger. Spans are not recorded: Bedrock relies on the
-/// [`LogContext`] thread-local for contextual prefixes rather than span state,
-/// so span callbacks are no-ops.
+/// the Android/iOS logger. Spans are not recorded: Bedrock relies on the
+/// [`LogContext`] thread-local for contextual prefixes.
 struct ForeignLoggerSubscriber {
-    /// Monotonic source of span identifiers. Spans carry no data, but the
-    /// `tracing` contract requires a unique non-zero [`span::Id`] per span.
+    /// Monotonic source of span identifiers. `tracing` requirement
     next_span_id: AtomicU64,
 }
 
