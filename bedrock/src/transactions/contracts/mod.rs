@@ -4,6 +4,7 @@ pub mod erc20;
 pub mod erc4626;
 pub mod multisend;
 pub mod permit2;
+pub mod safe_module;
 pub mod usd_legacy_vault;
 pub mod wld_legacy_vault;
 pub mod world_gift_manager;
