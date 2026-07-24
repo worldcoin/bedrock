@@ -112,7 +112,6 @@ pub(crate) struct ErrorPayload {
     pub code: i64,
     pub message: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub data: Option<Value>,
 }
 
@@ -135,6 +134,13 @@ pub enum RpcError {
         code: i64,
         /// The error message from the RPC response
         error_message: String,
+        /// The optional `data` field from the JSON-RPC error object as a raw
+        /// JSON string. Carries the structured payload of decisions like
+        /// sponsorship declines so callers can route on it; stored as a
+        /// `String` (rather than `serde_json::Value`) so the variant remains
+        /// UniFFI-liftable. Callers parse it on demand — see
+        /// [`RpcError::as_sponsorship_decline`].
+        data: Option<String>,
     },
 
     /// Invalid response format
@@ -266,6 +272,68 @@ impl SponsorshipContext {
     }
 }
 
+/// Server-side decline of a V2 sponsorship request.
+///
+/// When `pm_sponsorUserOperation` is called with protocol context (empty `{}`)
+/// and the server refuses to sponsor, it returns a `-32602` error with this
+/// payload carried in the JSON-RPC `data` field. Bedrock parses it to decide
+/// whether to retry as self-sponsored, and to surface the worst-case cost to
+/// the wallet UI so the user can confirm the WLD spend.
+///
+/// Wire shape (see `bedrock/src/transactions/transaction.md`):
+///
+/// ```json
+/// {
+///   "token": "0x<wld>",
+///   "paymasterAddress": "0x<pimlico-paymaster>",
+///   "costNative": "0x<wei>",
+///   "costToken": "0x<wld-wei>"
+/// }
+/// ```
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SponsorshipDecline {
+    /// ERC-20 token Bedrock should retry against (typically WLD on the network).
+    pub token: Address,
+    /// Pimlico ERC-20 paymaster that will pull the fee at execution time.
+    pub paymaster_address: Address,
+    /// Worst-case gas cost in native wei, for the self-sponsored retry.
+    pub cost_native: U256,
+    /// Worst-case gas cost in the ERC-20 token's smallest unit, for the
+    /// self-sponsored retry.
+    pub cost_token: U256,
+}
+
+/// Sentinel error message returned by the sponsorship endpoint when
+/// declining a sponsorship request.
+const SPONSORSHIP_DECLINED_MESSAGE: &str = "sponsorship declined";
+
+impl RpcError {
+    /// Returns the decline payload when this error is the server's
+    /// "sponsorship declined" signal — `code == -32602`, the canonical
+    /// error message, and a `data` field whose shape matches
+    /// [`SponsorshipDecline`]. Returns `None` for every other error.
+    ///
+    /// This is the entry point callers like `sign_and_execute_v2` use to
+    /// route on decline without pattern-matching the raw error.
+    #[must_use]
+    pub fn as_sponsorship_decline(&self) -> Option<SponsorshipDecline> {
+        let Self::RpcResponseError {
+            code,
+            error_message,
+            data,
+        } = self
+        else {
+            return None;
+        };
+        if *code != -32602 || error_message != SPONSORSHIP_DECLINED_MESSAGE {
+            return None;
+        }
+        let raw = data.as_deref()?;
+        serde_json::from_str(raw).ok()
+    }
+}
+
 /// Response from `wa_getUserOperationReceipt`
 #[derive(Debug, Deserialize, uniffi::Record, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -371,6 +439,9 @@ impl RpcClient {
             return Err(RpcError::RpcResponseError {
                 code: error_payload.code,
                 error_message: error_payload.message,
+                data: error_payload
+                    .data
+                    .and_then(|d| serde_json::to_string(&d).ok()),
             });
         }
 
@@ -703,6 +774,111 @@ mod tests {
 
         assert_eq!(error_payload.code, -32000);
         assert_eq!(error_payload.message, "execution reverted");
+    }
+
+    /// Builds a sponsorship-declined `RpcError` from the four wire fields, mirroring what
+    /// the JSON-RPC layer produces on `-32602 sponsorship declined`. Returns the error so
+    /// each test can inspect `as_sponsorship_decline()`.
+    fn build_declined_error(code: i64, message: &str, data: Option<&str>) -> RpcError {
+        RpcError::RpcResponseError {
+            code,
+            error_message: message.to_string(),
+            data: data.map(str::to_string),
+        }
+    }
+
+    /// Happy path: `-32602` + canonical message + well-formed `data` parses to
+    /// a populated `SponsorshipDecline`.
+    #[test]
+    fn test_sponsorship_decline_parses_happy_path() {
+        let data = json!({
+            "token": "0x2cfC85d8E48F8EAB294be644d9E25C3030863003",
+            "paymasterAddress": "0x00000000000000fB866DaAa79352cC568a005D96",
+            "costNative": "0x16345785d8a0000",
+            "costToken": "0x29a2241af62c0000",
+        });
+        let err = build_declined_error(
+            -32602,
+            "sponsorship declined",
+            Some(&data.to_string()),
+        );
+
+        let decline = err
+            .as_sponsorship_decline()
+            .expect("expected a SponsorshipDecline");
+
+        assert_eq!(
+            decline.token,
+            address!("2cfC85d8E48F8EAB294be644d9E25C3030863003")
+        );
+        assert_eq!(
+            decline.paymaster_address,
+            address!("00000000000000fB866DaAa79352cC568a005D96")
+        );
+        assert_eq!(decline.cost_native, U256::from(0x0163_4578_5d8a_0000u64));
+        assert_eq!(decline.cost_token, U256::from(0x29a2_241a_f62c_0000u64));
+    }
+
+    /// A different JSON-RPC error code with the same shape is not a decline.
+    #[test]
+    fn test_sponsorship_decline_rejects_wrong_code() {
+        let data = json!({
+            "token": "0x2cfC85d8E48F8EAB294be644d9E25C3030863003",
+            "paymasterAddress": "0x00000000000000fB866DaAa79352cC568a005D96",
+            "costNative": "0x1",
+            "costToken": "0x1",
+        });
+        let err = build_declined_error(
+            -32603,
+            "sponsorship declined",
+            Some(&data.to_string()),
+        );
+        assert!(err.as_sponsorship_decline().is_none());
+    }
+
+    /// `-32602` is a generic JSON-RPC code used for many invalid-params errors,
+    /// so the message gate matters.
+    #[test]
+    fn test_sponsorship_decline_rejects_wrong_message() {
+        let data = json!({
+            "token": "0x2cfC85d8E48F8EAB294be644d9E25C3030863003",
+            "paymasterAddress": "0x00000000000000fB866DaAa79352cC568a005D96",
+            "costNative": "0x1",
+            "costToken": "0x1",
+        });
+        let err =
+            build_declined_error(-32602, "invalid params", Some(&data.to_string()));
+        assert!(err.as_sponsorship_decline().is_none());
+    }
+
+    /// Missing `data` (e.g. a malformed server response) is treated as not-a-decline
+    /// rather than panicking.
+    #[test]
+    fn test_sponsorship_decline_rejects_missing_data() {
+        let err = build_declined_error(-32602, "sponsorship declined", None);
+        assert!(err.as_sponsorship_decline().is_none());
+    }
+
+    /// `data` present but not matching the decline shape (e.g. only `token`)
+    /// returns None — we don't half-populate the struct.
+    #[test]
+    fn test_sponsorship_decline_rejects_partial_data() {
+        let data = json!({
+            "token": "0x2cfC85d8E48F8EAB294be644d9E25C3030863003",
+        });
+        let err = build_declined_error(
+            -32602,
+            "sponsorship declined",
+            Some(&data.to_string()),
+        );
+        assert!(err.as_sponsorship_decline().is_none());
+    }
+
+    /// Non-`RpcResponseError` variants never look like a decline.
+    #[test]
+    fn test_sponsorship_decline_rejects_other_error_variants() {
+        let err = RpcError::JsonError;
+        assert!(err.as_sponsorship_decline().is_none());
     }
 
     #[test]

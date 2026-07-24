@@ -113,6 +113,7 @@ fn parse_json_rpc_response(response_bytes: &[u8]) -> Result<Value, RpcError> {
         return Err(RpcError::RpcResponseError {
             code: ep.code,
             error_message: ep.message,
+            data: ep.data.and_then(|d| serde_json::to_string(&d).ok()),
         });
     }
 
