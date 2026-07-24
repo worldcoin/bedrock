@@ -16,6 +16,119 @@ use turnkey_enclave_encrypt::QuorumPublicKey;
 
 use crate::root_key::RootKey;
 
+mod api;
+mod error;
+mod migrations;
+mod policies;
+#[cfg(test)]
+mod test;
+
+use api::{failure_class, TurnkeyApi, TurnkeyApiClient};
+use error::{TurnkeyApiError, TurnkeyMigrationError};
+use migrations::{run_migrations, TurnkeyMigrationOutcome};
+
+use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
+use crate::primitives::KeypairSigner;
+
+/// High level manager to perform Turnkey account operations such as setup and
+/// migration reconciliation.
+#[derive(uniffi::Object, Clone, Debug, Default)]
+pub struct TurnkeyManager;
+
+#[bedrock_export]
+impl TurnkeyManager {
+    /// Creates a new `TurnkeyManager`.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Reviews the Turnkey account state and applies any required migrations to
+    /// bring the user's sub-organization in line with the expected configuration.
+    ///
+    /// Migrations that can run with the `sync_factor` alone run immediately;
+    /// those that require the `main_factor` are deferred and reported via
+    /// [`TurnkeyMigrationOutcome::MainFactorRequired`] when it is absent, so the
+    /// caller can re-invoke with the main factor.
+    ///
+    /// # Arguments
+    /// - `suborganization_id`: the user's Turnkey sub-organization id. When
+    ///   `None`, it is resolved from the sync factor's public key via the public
+    ///   Turnkey auth proxy.
+    /// - `sync_factor`: signer used to stamp read/query requests and to resolve
+    ///   the sub-organization.
+    /// - `main_factor`: signer used to stamp privileged writes; required by
+    ///   migrations that modify account configuration.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyMigrationError`] if the run fails. Diagnostic detail is
+    /// logged inside Bedrock and intentionally not surfaced to the caller.
+    pub async fn check_migrations(
+        &self,
+        suborganization_id: Option<String>,
+        sync_factor: Arc<dyn KeypairSigner>,
+        main_factor: Option<Arc<dyn KeypairSigner>>,
+    ) -> Result<TurnkeyMigrationOutcome, TurnkeyMigrationError> {
+        crate::info!(
+            "turnkey.check_migrations.start suborg_provided={}",
+            suborganization_id.is_some()
+        );
+        let environment = current_environment_or_default();
+        let api = TurnkeyApiClient::new();
+
+        let suborganization_id = match suborganization_id {
+            Some(id) => id,
+            None => match resolve_suborg(&api, &sync_factor, environment).await {
+                Ok(id) => id,
+                Err(error) => {
+                    crate::error!(
+                        "turnkey.check_migrations.resolve_failed class={}",
+                        failure_class(&error)
+                    );
+                    return Err(TurnkeyMigrationError::Failed);
+                }
+            },
+        };
+
+        match run_migrations(
+            &suborganization_id,
+            sync_factor,
+            main_factor,
+            &api,
+            environment,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                crate::info!("turnkey.check_migrations.done");
+                Ok(outcome)
+            }
+            Err(error) => {
+                crate::error!(
+                    "turnkey.check_migrations.failed class={}",
+                    failure_class(&error)
+                );
+                Err(TurnkeyMigrationError::Failed)
+            }
+        }
+    }
+}
+
+/// Resolves the sub-organization id from the sync factor's public key via the
+/// public Turnkey auth proxy.
+async fn resolve_suborg(
+    api: &TurnkeyApiClient,
+    sync_factor: &Arc<dyn KeypairSigner>,
+    environment: BedrockEnvironment,
+) -> Result<String, TurnkeyApiError> {
+    let public_key_hex = hex::encode(sync_factor.public_key()?);
+    let config_id = environment.turnkey_policy().auth_proxy_config_id;
+    api.resolve_suborganization_id(config_id, &public_key_hex)
+        .await?
+        .ok_or(TurnkeyApiError::SubOrgNotFound)
+}
+
 /// Allows interactions with Turnkey API.
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct Turnkey {}

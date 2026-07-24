@@ -659,7 +659,7 @@ dependencies = [
  "async-trait",
  "thiserror 2.0.18",
  "tracing",
- "turnkey_client",
+ "turnkey_client 0.7.0",
 ]
 
 [[package]]
@@ -1711,6 +1711,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
+ "turnkey_api_key_stamper 0.12.0",
+ "turnkey_client 0.12.0",
  "turnkey_enclave_encrypt",
  "uniffi",
  "uuid",
@@ -6080,6 +6082,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "turnkey_api_key_stamper"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16d1f38e134785766a50958cac51e5fc83ee6929e5909a953867dfce100629ae"
+dependencies = [
+ "base64",
+ "hex",
+ "k256",
+ "p256 0.13.2",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "turnkey_client"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6094,7 +6112,25 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.18",
  "tokio",
- "turnkey_api_key_stamper",
+ "turnkey_api_key_stamper 0.7.0",
+]
+
+[[package]]
+name = "turnkey_client"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4572f7db48b5279fffca8522125d23196ba0199c1cbe528debceb8eb16e7f38a"
+dependencies = [
+ "mime",
+ "prost 0.12.6",
+ "prost-types 0.12.6",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.18",
+ "tokio",
+ "turnkey_api_key_stamper 0.12.0",
 ]
 
 [[package]]

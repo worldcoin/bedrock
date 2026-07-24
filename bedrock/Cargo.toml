@@ -90,6 +90,8 @@ zeroize = "1.8"
 hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
 http = "1.4.0"
 siegel-uniffi = "=0.2.0"
+turnkey_client = "0.12.0"
+turnkey_api_key_stamper = "0.12.0"
 
 # TODO: once `rand` can be bumped to 0.9, add the explicit feature flag `os_rng`. this explicitly determines no `thread_rng`;
 # bumping this requires crypto_box to update rand: https://github.com/RustCrypto/nacl-compat/issues/176
