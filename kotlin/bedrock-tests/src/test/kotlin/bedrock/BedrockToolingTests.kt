@@ -1,13 +1,29 @@
 package bedrock
 
 import uniffi.bedrock.DemoException
+import uniffi.bedrock.LogLevel
+import uniffi.bedrock.Logger
 import uniffi.bedrock.ToolingDemo
+import uniffi.bedrock.setLogger
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
+
+// A [Logger] implementation that records every delivered log line so tests can
+// assert on messages and structured attributes. Backed by a thread-safe list
+// since Rust may invoke it from any thread.
+private class CapturingLogger : Logger {
+    val records = CopyOnWriteArrayList<Triple<LogLevel, String, Map<String, String>>>()
+
+    override fun log(level: LogLevel, message: String, attributes: Map<String, String>) {
+        records.add(Triple(level, message, attributes))
+    }
+}
 
 // Foreign Tests for tooling functionality (i.e. logging and error handling)
 // The demo structs are only available in Foreign Tests and are not available in built binaries.
@@ -25,6 +41,37 @@ class BedrockToolingTests {
         val result = demo.getDemoResult()
         assertTrue(result.contains("ToolingDemo"), "Result should contain the demo name")
         assertTrue(result.contains("Demo result"), "Result should contain expected text")
+    }
+
+    // Verifies structured attributes and the always-present bedrock_version
+    // attribute survive the round-trip to a foreign [Logger] implementation.
+    //
+    // setLogger installs a process-global logger exactly once, so this suite is
+    // the sole caller; records are matched by a unique marker to stay robust
+    // against logs emitted by other tests sharing the global logger.
+    @Test
+    fun testForeignLoggerReceivesAttributesAndVersion() {
+        val logger = CapturingLogger()
+        setLogger(logger)
+
+        val demo = ToolingDemo()
+        val marker = "kotlin-attr-${UUID.randomUUID()}"
+        demo.logWithAttributes(marker)
+
+        val attributed = logger.records.firstOrNull { it.third["demo_marker"] == marker }
+        assertNotNull(attributed, "capturing logger should receive the attributed log")
+        assertEquals("ToolingDemo", attributed.third["demo_source"])
+        val version = attributed.third["bedrock_version"]
+        assertNotNull(version, "every log must carry bedrock_version")
+        assertTrue(version.isNotEmpty(), "bedrock_version must not be empty")
+
+        // A fieldless log still carries the version attribute and nothing else.
+        val plainMarker = "kotlin-plain-${UUID.randomUUID()}"
+        demo.logMessage(plainMarker)
+        val plain = logger.records.firstOrNull { it.second.contains(plainMarker) }
+        assertNotNull(plain, "capturing logger should receive the plain log")
+        assertEquals(version, plain.third["bedrock_version"])
+        assertEquals(1, plain.third.size, "version is the only attribute on a fieldless log")
     }
 
     // MARK: - Error Handling Tests

@@ -85,6 +85,19 @@ impl ToolingDemo {
         warn!("This is a warning message from ToolingDemo");
     }
 
+    /// Logs a message with structured attributes to verify attribute delivery
+    /// across the FFI boundary.
+    ///
+    /// `marker` is echoed into the `demo_marker` attribute so foreign tests can
+    /// locate the emitted record unambiguously among logs from other tests.
+    pub fn log_with_attributes(&self, marker: &str) {
+        info!(
+            demo_marker = marker,
+            demo_source = "ToolingDemo",
+            "logging with structured attributes"
+        );
+    }
+
     /// Returns a simple result for testing.
     #[must_use]
     pub fn get_demo_result(&self) -> String {
