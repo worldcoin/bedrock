@@ -115,18 +115,16 @@ impl TurnkeyManager {
     }
 }
 
-/// Resolves the sub-organization id from the sync factor's public key via the
-/// public Turnkey auth proxy.
+/// Resolves the sub-organization id by calling `whoami` stamped with the sync
+/// factor against the environment's parent organization.
 async fn resolve_suborg(
     api: &TurnkeyApiClient,
     sync_factor: &Arc<dyn KeypairSigner>,
     environment: BedrockEnvironment,
 ) -> Result<String, TurnkeyApiError> {
-    let public_key_hex = hex::encode(sync_factor.public_key()?);
-    let config_id = environment.turnkey_policy().auth_proxy_config_id;
-    api.resolve_suborganization_id(config_id, &public_key_hex)
-        .await?
-        .ok_or(TurnkeyApiError::SubOrgNotFound)
+    let parent_organization_id = environment.turnkey_policy().parent_organization_id;
+    api.resolve_suborganization_id(parent_organization_id, sync_factor.clone())
+        .await
 }
 
 /// Allows interactions with Turnkey API.

@@ -16,8 +16,7 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use once_cell::sync::OnceCell;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use turnkey_api_key_stamper::{
     Stamp, StampHeader, StamperError, API_KEY_STAMP_HEADER_NAME, SIGNATURE_SCHEME_P256,
@@ -26,7 +25,9 @@ use turnkey_client::generated::external::data::v1::User;
 use turnkey_client::generated::immutable::activity::v1::{
     CreateOauthProvidersIntentV2, OauthProviderParamsV2,
 };
-use turnkey_client::generated::services::coordinator::public::v1::GetUsersRequest;
+use turnkey_client::generated::services::coordinator::public::v1::{
+    GetUsersRequest, GetWhoamiRequest,
+};
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
 use crate::primitives::ntp::now_with_ntp;
@@ -34,17 +35,6 @@ use crate::primitives::KeypairSigner;
 use crate::warn;
 
 use super::error::TurnkeyApiError;
-
-/// URL of the Turnkey auth proxy account endpoint (public sub-org lookups).
-const AUTH_PROXY_ACCOUNT_URL: &str = "https://authproxy.turnkey.com/v1/account";
-/// Header carrying the public auth-proxy configuration id.
-const AUTH_PROXY_CONFIG_ID_HEADER: &str = "X-Auth-Proxy-Config-Id";
-/// Auth-proxy filter that resolves a sub-org by the credential's public key.
-const AUTH_PROXY_FILTER_PUBLIC_KEY: &str = "PUBLIC_KEY";
-/// Per-attempt request timeout for the auth-proxy call.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-/// Maximum characters of a non-2xx body surfaced in a transport error.
-const MAX_ERROR_BODY_CHARS: usize = 256;
 
 /// Adapts a [`KeypairSigner`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
 /// client can stamp requests with a key held in native secure storage.
@@ -99,22 +89,6 @@ struct ApiStamp {
     scheme: String,
 }
 
-/// Request body for the auth-proxy `/v1/account` lookup.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuthProxyAccountBody<'a> {
-    filter_type: &'a str,
-    filter_value: &'a str,
-}
-
-/// Response body for the auth-proxy `/v1/account` lookup.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AuthProxyAccountResponse {
-    #[serde(default)]
-    organization_id: Option<String>,
-}
-
 /// Bounded retry policy: exponential backoff with full jitter.
 #[derive(Debug, Clone, Copy)]
 struct RetryPolicy {
@@ -145,7 +119,6 @@ const fn is_retryable(error: &TurnkeyApiError) -> bool {
         | TurnkeyApiError::Activity { .. }
         | TurnkeyApiError::Signer(_)
         | TurnkeyApiError::Client(_)
-        | TurnkeyApiError::SubOrgNotFound
         | TurnkeyApiError::MainUserNotFound
         | TurnkeyApiError::Generic { .. }
         | TurnkeyApiError::FileSystem(_) => false,
@@ -164,7 +137,6 @@ pub const fn failure_class(error: &TurnkeyApiError) -> &'static str {
         TurnkeyApiError::Activity { .. } => "activity",
         TurnkeyApiError::Signer(_) => "signer",
         TurnkeyApiError::Client(_) => "client",
-        TurnkeyApiError::SubOrgNotFound => "suborg_not_found",
         TurnkeyApiError::MainUserNotFound => "main_user_not_found",
         TurnkeyApiError::Generic { .. } => "generic",
         TurnkeyApiError::FileSystem(_) => "filesystem",
@@ -255,45 +227,39 @@ impl TurnkeyApiClient {
 }
 
 impl TurnkeyApiClient {
-    /// Resolves the sub-organization id owning `public_key_hex` via the public
-    /// auth proxy. Returns `None` when no account matches.
+    /// Resolves the sub-organization id for `stamper`'s credential via `whoami`.
+    ///
+    /// `parent_organization_id` is the org to query against; Turnkey returns the
+    /// sub-organization that the stamping credential belongs to. Unlike the
+    /// auth-proxy public-key lookup, this works for a credential that has never
+    /// been used before, because the sub-org is derived from the request stamp.
     ///
     /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport or parsing failures.
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
     pub async fn resolve_suborganization_id(
         &self,
-        auth_proxy_config_id: &str,
-        public_key_hex: &str,
-    ) -> Result<Option<String>, TurnkeyApiError> {
-        let body = serde_json::to_vec(&AuthProxyAccountBody {
-            filter_type: AUTH_PROXY_FILTER_PUBLIC_KEY,
-            filter_value: public_key_hex,
-        })
-        .map_err(|e| {
-            TurnkeyApiError::Client(format!("serialize auth-proxy body: {e}"))
-        })?;
+        parent_organization_id: &str,
+        stamper: Arc<dyn KeypairSigner>,
+    ) -> Result<String, TurnkeyApiError> {
+        let client = Self::sdk_client(stamper)?;
+        let request = GetWhoamiRequest {
+            organization_id: parent_organization_id.to_string(),
+        };
 
         let mut attempt: u32 = 0;
-        let bytes = loop {
-            match auth_proxy_post(auth_proxy_config_id, &body).await {
-                Ok(bytes) => break bytes,
+        loop {
+            match client.get_whoami(request.clone()).await {
+                Ok(response) => return Ok(response.organization_id),
                 Err(error) => {
+                    let error = TurnkeyApiError::from(error);
                     attempt += 1;
-                    let Some(delay) =
-                        self.next_delay(attempt, &error, "resolve_suborg")
-                    else {
+                    let Some(delay) = self.next_delay(attempt, &error, "whoami") else {
                         return Err(error);
                     };
                     tokio::time::sleep(delay).await;
                 }
             }
-        };
-
-        let response: AuthProxyAccountResponse = serde_json::from_slice(&bytes)
-            .map_err(|e| {
-                TurnkeyApiError::Client(format!("decode auth-proxy response: {e}"))
-            })?;
-        Ok(response.organization_id.filter(|id| !id.is_empty()))
+        }
     }
 
     /// Lists the users of a sub-organization (stamped by the read/query signer).
@@ -381,77 +347,6 @@ impl TurnkeyApiClient {
     }
 }
 
-/// Shared `reqwest` client for the auth-proxy call.
-static REQWEST_CLIENT: OnceCell<reqwest::Client> = OnceCell::new();
-
-/// Returns the process-wide `reqwest` client, building it on first use.
-fn reqwest_client() -> Result<&'static reqwest::Client, TurnkeyApiError> {
-    REQWEST_CLIENT.get_or_try_init(|| {
-        reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .gzip(true)
-            .build()
-            .map_err(|e| TurnkeyApiError::Transport {
-                message: format!("failed to build HTTP client: {}", e.without_url()),
-            })
-    })
-}
-
-/// POSTs an auth-proxy account lookup and returns the raw response bytes.
-async fn auth_proxy_post(
-    config_id: &str,
-    body: &[u8],
-) -> Result<Vec<u8>, TurnkeyApiError> {
-    let client = reqwest_client()?;
-    let response = client
-        .post(AUTH_PROXY_ACCOUNT_URL)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(AUTH_PROXY_CONFIG_ID_HEADER, config_id)
-        .body(body.to_vec())
-        .send()
-        .await
-        .map_err(map_reqwest_error)?;
-
-    let status = response.status();
-    let bytes = response.bytes().await.map_err(map_reqwest_error)?;
-    if status.is_success() {
-        Ok(bytes.to_vec())
-    } else {
-        Err(map_status(status.as_u16(), &bytes))
-    }
-}
-
-/// Maps a `reqwest` error to a typed transport error, stripping any URL.
-fn map_reqwest_error(error: reqwest::Error) -> TurnkeyApiError {
-    if error.is_timeout() {
-        TurnkeyApiError::Timeout
-    } else {
-        TurnkeyApiError::Transport {
-            message: error.without_url().to_string(),
-        }
-    }
-}
-
-/// Maps a non-2xx HTTP status to a typed error.
-fn map_status(status: u16, body: &[u8]) -> TurnkeyApiError {
-    match status {
-        429 => TurnkeyApiError::RateLimited,
-        401 | 403 => TurnkeyApiError::Unauthorized,
-        404 => TurnkeyApiError::NotFound,
-        500..=599 => TurnkeyApiError::ServerError { status },
-        _ => {
-            let snippet: String = String::from_utf8_lossy(body)
-                .chars()
-                .take(MAX_ERROR_BODY_CHARS)
-                .collect();
-            TurnkeyApiError::Transport {
-                message: format!("HTTP {status}: {snippet}"),
-            }
-        }
-    }
-}
-
 /// Current NTP time in milliseconds, for Turnkey activity timestamps.
 fn ntp_timestamp_ms() -> u128 {
     u128::try_from(now_with_ntp().timestamp_millis()).unwrap_or(0)
@@ -534,7 +429,6 @@ mod tests {
 
         assert!(!is_retryable(&TurnkeyApiError::Unauthorized));
         assert!(!is_retryable(&TurnkeyApiError::NotFound));
-        assert!(!is_retryable(&TurnkeyApiError::SubOrgNotFound));
         assert!(!is_retryable(&TurnkeyApiError::Activity {
             message: "failed".to_string()
         }));
@@ -546,28 +440,6 @@ mod tests {
         for attempt in 1..=8 {
             assert!(backoff_delay(attempt, &policy) <= policy.max_delay);
         }
-    }
-
-    #[test]
-    fn http_status_mapping() {
-        assert!(matches!(map_status(429, b""), TurnkeyApiError::RateLimited));
-        assert!(matches!(
-            map_status(401, b""),
-            TurnkeyApiError::Unauthorized
-        ));
-        assert!(matches!(
-            map_status(403, b""),
-            TurnkeyApiError::Unauthorized
-        ));
-        assert!(matches!(map_status(404, b""), TurnkeyApiError::NotFound));
-        assert!(matches!(
-            map_status(503, b""),
-            TurnkeyApiError::ServerError { status: 503 }
-        ));
-        assert!(matches!(
-            map_status(400, b"bad"),
-            TurnkeyApiError::Transport { .. }
-        ));
     }
 
     #[test]
@@ -591,16 +463,5 @@ mod tests {
             TurnkeyApiError::from(TurnkeyClientError::MissingResult),
             TurnkeyApiError::Activity { .. }
         ));
-    }
-
-    #[test]
-    fn auth_proxy_body_serializes_camel_case() {
-        let body = serde_json::to_value(AuthProxyAccountBody {
-            filter_type: AUTH_PROXY_FILTER_PUBLIC_KEY,
-            filter_value: "abcd",
-        })
-        .unwrap();
-        assert_eq!(body["filterType"], "PUBLIC_KEY");
-        assert_eq!(body["filterValue"], "abcd");
     }
 }

@@ -1,6 +1,7 @@
 //! Per-environment Turnkey policy: the expected users, issuers, and audiences
-//! this account-management reconciles toward, plus the public auth-proxy config
-//! used to resolve a sub-organization when the caller does not supply its id.
+//! this account-management reconciles toward, plus the parent organization id
+//! used to resolve a sub-organization (via `whoami`) when the caller does not
+//! supply its id.
 
 use crate::primitives::config::BedrockEnvironment;
 
@@ -28,18 +29,19 @@ pub struct AppleAudience {
 
 /// The Turnkey configuration for a single [`BedrockEnvironment`].
 pub struct TurnkeyPolicy {
-    /// Public `X-Auth-Proxy-Config-Id` for unauthenticated sub-organization lookups.
-    pub auth_proxy_config_id: &'static str,
+    /// Parent Turnkey organization id, used to resolve a caller's sub-organization
+    /// via `whoami`.
+    pub parent_organization_id: &'static str,
     /// Apple audiences the main user must have an OAuth provider for.
     pub apple_audiences: &'static [AppleAudience],
 }
 
-// NOTE: placeholder values — replace with the real Apple client IDs and
-// auth-proxy config id before enabling in production. Each environment has three
+// NOTE: placeholder values — replace with the real Apple client IDs and parent
+// organization id before enabling in production. Each environment has three
 // audiences (World ID iOS, World App iOS, Android); Sandbox reuses Staging.
 /// Turnkey policy for the Staging (and Sandbox) environment.
 const STAGING_POLICY: TurnkeyPolicy = TurnkeyPolicy {
-    auth_proxy_config_id: "PLACEHOLDER_STAGING_AUTH_PROXY_CONFIG_ID",
+    parent_organization_id: "PLACEHOLDER_STAGING_PARENT_ORG_ID",
     apple_audiences: &[
         AppleAudience {
             label: "world-id-ios",
@@ -58,7 +60,7 @@ const STAGING_POLICY: TurnkeyPolicy = TurnkeyPolicy {
 
 /// Turnkey policy for the Production environment.
 const PRODUCTION_POLICY: TurnkeyPolicy = TurnkeyPolicy {
-    auth_proxy_config_id: "PLACEHOLDER_PROD_AUTH_PROXY_CONFIG_ID",
+    parent_organization_id: "PLACEHOLDER_PROD_PARENT_ORG_ID",
     apple_audiences: &[
         AppleAudience {
             label: "world-id-ios",

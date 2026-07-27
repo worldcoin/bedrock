@@ -48,9 +48,6 @@ pub enum TurnkeyApiError {
     /// Any other Turnkey client error (decoding, serialization, etc.).
     #[error("Turnkey client error: {0}")]
     Client(String),
-    /// The auth proxy returned no sub-organization for the credential.
-    #[error("no sub-organization found for the provided credential")]
-    SubOrgNotFound,
     /// The expected main user (`auth_user_main`) was not found in the sub-organization.
     #[error("main user not found in sub-organization")]
     MainUserNotFound,
