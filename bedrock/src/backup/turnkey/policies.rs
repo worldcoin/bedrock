@@ -1,90 +1,71 @@
-//! Per-environment Turnkey policy: the expected users, issuers, and audiences
-//! this account-management reconciles toward, plus the parent organization id
-//! used to resolve a sub-organization (via `whoami`) when the caller does not
-//! supply its id.
+//! This module contains all policies and configurations for World App's use of Turnkey.
 
 use crate::primitives::config::BedrockEnvironment;
 
-/// Turnkey `userName` of the primary backup user whose OAuth providers the Apple
-/// audience migration reconciles.
+/// Turnkey's `userName` of the primary user who holds all the Main Factors. Sole
+/// member of the root quorum.
 ///
-/// This is a precise `userName` and is also the sole member of the sub-org root
-/// quorum (a cross-check that may be added in a later migration).
+/// MUST be a precise name. Do not change this! Bad things could happen.
 pub const AUTH_USER_MAIN_USERNAME: &str = "auth_user_main";
 
 /// The Apple Sign In OIDC issuer.
 pub const APPLE_ISSUER: &str = "https://appleid.apple.com";
 
-/// Prefix used when naming newly-created Apple OAuth providers.
+/// Prefix used when naming alternative Apple OAuth providers.
 pub const APPLE_PROVIDER_NAME_PREFIX: &str = "apple-";
 
-/// An Apple audience (`aud` / client id) that `auth_user_main` must have a
-/// provider for.
-pub struct AppleAudience {
-    /// Short label identifying the client, used to build the provider name.
-    pub label: &'static str,
-    /// The Apple `aud` (client id / Services ID) value.
-    pub client_id: &'static str,
-}
-
-/// The Turnkey configuration for a single [`BedrockEnvironment`].
-pub struct TurnkeyPolicy {
-    /// Parent Turnkey organization id, used to resolve a caller's sub-organization
-    /// via `whoami`.
-    pub parent_organization_id: &'static str,
-    /// Apple audiences the main user must have an OAuth provider for.
-    pub apple_audiences: &'static [AppleAudience],
-}
-
-// NOTE: placeholder values — replace with the real Apple client IDs and parent
-// organization id before enabling in production. Each environment has three
-// audiences (World ID iOS, World App iOS, Android); Sandbox reuses Staging.
-/// Turnkey policy for the Staging (and Sandbox) environment.
-const STAGING_POLICY: TurnkeyPolicy = TurnkeyPolicy {
-    parent_organization_id: "PLACEHOLDER_STAGING_PARENT_ORG_ID",
-    apple_audiences: &[
-        AppleAudience {
-            label: "world-id-ios",
-            client_id: "PLACEHOLDER_STAGING_WORLD_ID_IOS",
-        },
-        AppleAudience {
-            label: "world-app-ios",
-            client_id: "PLACEHOLDER_STAGING_WORLD_APP_IOS",
-        },
-        AppleAudience {
-            label: "android",
-            client_id: "PLACEHOLDER_STAGING_ANDROID",
-        },
-    ],
-};
-
-/// Turnkey policy for the Production environment.
-const PRODUCTION_POLICY: TurnkeyPolicy = TurnkeyPolicy {
-    parent_organization_id: "PLACEHOLDER_PROD_PARENT_ORG_ID",
-    apple_audiences: &[
-        AppleAudience {
-            label: "world-id-ios",
-            client_id: "PLACEHOLDER_PROD_WORLD_ID_IOS",
-        },
-        AppleAudience {
-            label: "world-app-ios",
-            client_id: "PLACEHOLDER_PROD_WORLD_APP_IOS",
-        },
-        AppleAudience {
-            label: "android",
-            client_id: "PLACEHOLDER_PROD_ANDROID",
-        },
-    ],
-};
-
 impl BedrockEnvironment {
-    /// Returns the Turnkey account-management policy for this environment.
-    ///
-    /// Sandbox shares Staging's policy.
-    pub(crate) const fn turnkey_policy(self) -> &'static TurnkeyPolicy {
+    /// Parent Turnkey organization id (i.e. TFH)
+    pub(super) const fn turnkey_parent_organization_id(self) -> &'static str {
         match self {
-            Self::Staging | Self::Sandbox => &STAGING_POLICY,
-            Self::Production => &PRODUCTION_POLICY,
+            Self::Staging | Self::Sandbox => "72955dee-35e7-48a4-86ac-a8020a87bde8",
+            Self::Production => "2be0b97b-7732-492d-9047-ca14391d24c9",
+        }
+    }
+
+    /// Apple audiences for which the `auth_main_user` should be registered if
+    /// using Sign in with Apple
+    pub(super) const fn turnkey_apple_audiences(self) -> &'static [AppleAudience] {
+        match self {
+            Self::Staging | Self::Sandbox => STAGING_APPLE_AUDIENCES,
+            Self::Production => PRODUCTION_APPLE_AUDIENCES,
         }
     }
 }
+
+pub(super) struct AppleAudience {
+    /// Label used in Turnkey to identify the provider
+    pub(super) label: &'static str,
+    /// The `aud` claim from the OIDC JWT.
+    pub(super) client_id: &'static str,
+}
+
+const STAGING_APPLE_AUDIENCES: &[AppleAudience] = &[
+    AppleAudience {
+        label: "world-id-ios",
+        client_id: "PLACEHOLDER_STAGING_WORLD_ID_IOS",
+    },
+    AppleAudience {
+        label: "world-app-ios",
+        client_id: "PLACEHOLDER_STAGING_WORLD_APP_IOS",
+    },
+    AppleAudience {
+        label: "android",
+        client_id: "PLACEHOLDER_STAGING_ANDROID",
+    },
+];
+
+const PRODUCTION_APPLE_AUDIENCES: &[AppleAudience] = &[
+    AppleAudience {
+        label: "world-id-ios",
+        client_id: "PLACEHOLDER_PROD_WORLD_ID_IOS",
+    },
+    AppleAudience {
+        label: "world-app-ios",
+        client_id: "PLACEHOLDER_PROD_WORLD_APP_IOS",
+    },
+    AppleAudience {
+        label: "android",
+        client_id: "PLACEHOLDER_PROD_ANDROID",
+    },
+];

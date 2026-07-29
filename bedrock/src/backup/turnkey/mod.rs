@@ -1,4 +1,4 @@
-//! This module allows interactions with the Turnkey API for the user's backup.
+//! This module allows interactions with the Turnkey system for the user's backup.
 
 use std::sync::Arc;
 
@@ -23,15 +23,17 @@ mod policies;
 #[cfg(test)]
 mod test;
 
-use api::{failure_class, TurnkeyApiClient};
-use error::{TurnkeyApiError, TurnkeyMigrationError};
+use api::TurnkeyApiClient;
+use error::TurnkeyMigrationError;
 use migrations::{run_migrations, TurnkeyMigrationOutcome};
 
-use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
+use crate::primitives::config::current_environment_or_default;
 use crate::primitives::KeypairSigner;
 
 /// High level manager to perform Turnkey account operations such as setup and
 /// migration reconciliation.
+///
+/// For use from foreign bindings.
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct TurnkeyManager;
 
@@ -54,8 +56,7 @@ impl TurnkeyManager {
     ///
     /// # Arguments
     /// - `suborganization_id`: the user's Turnkey sub-organization id. When
-    ///   `None`, it is resolved from the sync factor's public key via the public
-    ///   Turnkey auth proxy.
+    ///   `None`, it is resolved via Turnkey `whoami` stamped with the sync factor.
     /// - `sync_factor`: signer used to stamp read/query requests and to resolve
     ///   the sub-organization.
     /// - `main_factor`: signer used to stamp privileged writes; required by
@@ -63,32 +64,36 @@ impl TurnkeyManager {
     ///
     /// # Errors
     /// Returns [`TurnkeyMigrationError`] if the run fails. Diagnostic detail is
-    /// logged inside Bedrock and intentionally not surfaced to the caller.
-    pub async fn check_migrations(
+    /// logged inside Bedrock and intentionally not surfaced.
+    pub async fn run_migrations(
         &self,
         suborganization_id: Option<String>,
         sync_factor: Arc<dyn KeypairSigner>,
         main_factor: Option<Arc<dyn KeypairSigner>>,
     ) -> Result<TurnkeyMigrationOutcome, TurnkeyMigrationError> {
-        crate::info!(
-            "turnkey.check_migrations.start suborg_provided={}",
+        crate::debug!(
+            "run_migrations start is_suborg_provided={}",
             suborganization_id.is_some()
         );
         let environment = current_environment_or_default();
         let api = TurnkeyApiClient::new();
 
-        let suborganization_id = match suborganization_id {
-            Some(id) => id,
-            None => match resolve_suborg(&api, &sync_factor, environment).await {
+        let suborganization_id = if let Some(id) = suborganization_id {
+            id
+        } else {
+            let parent = environment.turnkey_parent_organization_id();
+            match api
+                .resolve_suborganization_id(parent, sync_factor.clone())
+                .await
+            {
                 Ok(id) => id,
                 Err(error) => {
                     crate::error!(
-                        "turnkey.check_migrations.resolve_failed class={}",
-                        failure_class(&error)
+                        "run_migrations sub-org resolution failed err={error}"
                     );
                     return Err(TurnkeyMigrationError::Failed);
                 }
-            },
+            }
         };
 
         match run_migrations(
@@ -101,33 +106,22 @@ impl TurnkeyManager {
         .await
         {
             Ok(outcome) => {
-                crate::info!("turnkey.check_migrations.done");
+                // TODO: Downgrade to debug after initial shipping
+                crate::info!("✅ run_migrations completed successfully");
                 Ok(outcome)
             }
             Err(error) => {
-                crate::error!(
-                    "turnkey.check_migrations.failed class={}",
-                    failure_class(&error)
-                );
+                crate::error!("run_migrations failed err={error}");
                 Err(TurnkeyMigrationError::Failed)
             }
         }
     }
 }
 
-/// Resolves the sub-organization id by calling `whoami` stamped with the sync
-/// factor against the environment's parent organization.
-async fn resolve_suborg(
-    api: &TurnkeyApiClient,
-    sync_factor: &Arc<dyn KeypairSigner>,
-    environment: BedrockEnvironment,
-) -> Result<String, TurnkeyApiError> {
-    let parent_organization_id = environment.turnkey_policy().parent_organization_id;
-    api.resolve_suborganization_id(parent_organization_id, sync_factor.clone())
-        .await
-}
-
 /// Allows interactions with Turnkey API.
+///
+/// DEPRECATION NOTICE: Interactions with Turnkey will be migrated to be handled from
+/// within Bedrock. This class should disappear in favor of [`TurnkeyManager`]
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct Turnkey {}
 

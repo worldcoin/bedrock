@@ -11,6 +11,7 @@
 //! The sub-organization id is treated as sensitive and is never logged.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -125,24 +126,6 @@ const fn is_retryable(error: &TurnkeyApiError) -> bool {
     }
 }
 
-/// Short, stable label for the failure class, for structured logs.
-pub const fn failure_class(error: &TurnkeyApiError) -> &'static str {
-    match error {
-        TurnkeyApiError::Timeout => "timeout",
-        TurnkeyApiError::RateLimited => "rate_limited",
-        TurnkeyApiError::ServerError { .. } => "server_error",
-        TurnkeyApiError::Transport { .. } => "transport",
-        TurnkeyApiError::Unauthorized => "unauthorized",
-        TurnkeyApiError::NotFound => "not_found",
-        TurnkeyApiError::Activity { .. } => "activity",
-        TurnkeyApiError::Signer(_) => "signer",
-        TurnkeyApiError::Client(_) => "client",
-        TurnkeyApiError::MainUserNotFound => "main_user_not_found",
-        TurnkeyApiError::Generic { .. } => "generic",
-        TurnkeyApiError::FileSystem(_) => "filesystem",
-    }
-}
-
 /// Computes the backoff delay for `attempt` (1-indexed) with full jitter,
 /// capped at [`RetryPolicy::max_delay`].
 fn backoff_delay(attempt: u32, policy: &RetryPolicy) -> Duration {
@@ -187,28 +170,33 @@ impl TurnkeyApiClient {
             .map_err(TurnkeyApiError::from)
     }
 
-    /// Decides whether to retry after a failed attempt; logs the outcome.
-    /// Returns the delay to wait before retrying, or `None` to give up.
-    fn next_delay(
+    /// Runs `op`, retrying transient failures with bounded backoff and full jitter.
+    async fn with_retry<T, Fut>(
         &self,
-        attempt: u32,
-        error: &TurnkeyApiError,
         operation: &str,
-    ) -> Option<Duration> {
-        if attempt >= self.retry.max_attempts || !is_retryable(error) {
-            warn!(
-                "turnkey.request.failed op={operation} attempts={attempt} class={}",
-                failure_class(error)
-            );
-            None
-        } else {
-            let delay = backoff_delay(attempt, &self.retry);
-            warn!(
-                "turnkey.request.retry op={operation} attempt={attempt} class={} delay_ms={}",
-                failure_class(error),
-                delay.as_millis()
-            );
-            Some(delay)
+        mut op: impl FnMut() -> Fut + Send,
+    ) -> Result<T, TurnkeyApiError>
+    where
+        Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
+    {
+        let mut attempt: u32 = 0;
+        loop {
+            match op().await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    attempt += 1;
+                    if attempt >= self.retry.max_attempts || !is_retryable(&error) {
+                        warn!("turnkey.request.failed op={operation} attempts={attempt} err={error}");
+                        return Err(error);
+                    }
+                    let delay = backoff_delay(attempt, &self.retry);
+                    warn!(
+                        "turnkey.request.retry op={operation} attempt={attempt} delay_ms={} err={error}",
+                        delay.as_millis()
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+            }
         }
     }
 
@@ -245,21 +233,14 @@ impl TurnkeyApiClient {
         let request = GetWhoamiRequest {
             organization_id: parent_organization_id.to_string(),
         };
-
-        let mut attempt: u32 = 0;
-        loop {
-            match client.get_whoami(request.clone()).await {
-                Ok(response) => return Ok(response.organization_id),
-                Err(error) => {
-                    let error = TurnkeyApiError::from(error);
-                    attempt += 1;
-                    let Some(delay) = self.next_delay(attempt, &error, "whoami") else {
-                        return Err(error);
-                    };
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
+        self.with_retry("whoami", || async {
+            client
+                .get_whoami(request.clone())
+                .await
+                .map(|response| response.organization_id)
+                .map_err(TurnkeyApiError::from)
+        })
+        .await
     }
 
     /// Lists the users of a sub-organization (stamped by the read/query signer).
@@ -281,21 +262,15 @@ impl TurnkeyApiClient {
             organization_id: suborganization_id.to_string(),
         };
 
-        let mut attempt: u32 = 0;
-        let users = loop {
-            match client.get_users(request.clone()).await {
-                Ok(response) => break response.users,
-                Err(error) => {
-                    let error = TurnkeyApiError::from(error);
-                    attempt += 1;
-                    let Some(delay) = self.next_delay(attempt, &error, "get_users")
-                    else {
-                        return Err(error);
-                    };
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        };
+        let users = self
+            .with_retry("get_users", || async {
+                client
+                    .get_users(request.clone())
+                    .await
+                    .map(|response| response.users)
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
 
         self.cache_users(suborganization_id, &users);
         Ok(users)
@@ -321,29 +296,18 @@ impl TurnkeyApiClient {
         // submissions (a retry after a timeout must not create duplicates).
         let timestamp_ms = ntp_timestamp_ms();
 
-        let mut attempt: u32 = 0;
-        loop {
-            match client
+        self.with_retry("create_oauth_providers", || async {
+            client
                 .create_oauth_providers(
                     suborganization_id.to_string(),
                     timestamp_ms,
                     intent.clone(),
                 )
                 .await
-            {
-                Ok(_) => return Ok(()),
-                Err(error) => {
-                    let error = TurnkeyApiError::from(error);
-                    attempt += 1;
-                    let Some(delay) =
-                        self.next_delay(attempt, &error, "create_oauth_providers")
-                    else {
-                        return Err(error);
-                    };
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
+                .map(|_| ())
+                .map_err(TurnkeyApiError::from)
+        })
+        .await
     }
 }
 

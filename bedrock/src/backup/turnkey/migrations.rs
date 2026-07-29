@@ -20,11 +20,17 @@ use crate::primitives::config::BedrockEnvironment;
 use crate::primitives::KeypairSigner;
 use crate::{error, info, warn};
 
-use super::api::{failure_class, TurnkeyApiClient};
+use super::api::TurnkeyApiClient;
 use super::error::TurnkeyApiError;
 use super::policies::{
     AppleAudience, APPLE_ISSUER, APPLE_PROVIDER_NAME_PREFIX, AUTH_USER_MAIN_USERNAME,
 };
+
+/// Every Turnkey migration, in the order they are applied.
+///
+/// This is the single source of truth for which migrations exist. To add one,
+/// implement [`TurnkeyMigration`] and append it to this list.
+const MIGRATIONS: &[&dyn TurnkeyMigration] = &[&MigrationAppleAudience];
 
 /// Result of a `check_migrations` run.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -125,8 +131,7 @@ fn plan_apple_audience(
         .collect();
 
     let missing: Vec<&AppleAudience> = environment
-        .turnkey_policy()
-        .apple_audiences
+        .turnkey_apple_audiences()
         .iter()
         .filter(|audience| !existing.contains(audience.client_id))
         .collect();
@@ -219,9 +224,8 @@ pub async fn run_migrations(
     api: &TurnkeyApiClient,
     environment: BedrockEnvironment,
 ) -> Result<TurnkeyMigrationOutcome, TurnkeyApiError> {
-    let migrations: [Box<dyn TurnkeyMigration>; 1] = [Box::new(MigrationAppleAudience)];
     run_migration_list(
-        &migrations,
+        MIGRATIONS,
         suborganization_id,
         sync_factor,
         main_factor,
@@ -235,7 +239,7 @@ pub async fn run_migrations(
 /// signers run in order; those requiring the main factor when it is absent are
 /// deferred and reported. Fails fast on the first error.
 async fn run_migration_list(
-    migrations: &[Box<dyn TurnkeyMigration>],
+    migrations: &[&dyn TurnkeyMigration],
     suborganization_id: &str,
     sync_factor: Arc<dyn KeypairSigner>,
     main_factor: Option<Arc<dyn KeypairSigner>>,
@@ -278,9 +282,8 @@ async fn run_migration_list(
             }
             Err(error) => {
                 error!(
-                    "turnkey.migration.failed migration={} class={}",
-                    migration.id(),
-                    failure_class(&error)
+                    "turnkey.migration.failed migration={} err={error}",
+                    migration.id()
                 );
                 return Err(error);
             }
@@ -316,8 +319,7 @@ mod tests {
 
     fn staging_audiences() -> Vec<&'static str> {
         BedrockEnvironment::Staging
-            .turnkey_policy()
-            .apple_audiences
+            .turnkey_apple_audiences()
             .iter()
             .map(|audience| audience.client_id)
             .collect()
@@ -342,8 +344,6 @@ mod tests {
             "oauthProviders": providers,
         }))
     }
-
-    // ---- Pure planning tests (no async, no I/O) ----
 
     #[test]
     fn plan_skips_when_no_apple_provider() {
@@ -428,8 +428,6 @@ mod tests {
         ));
     }
 
-    // ---- Orchestration tests (fake migrations, no I/O) ----
-
     /// Canned result for a [`FakeMigration`].
     enum FakeResult {
         Applied,
@@ -474,13 +472,13 @@ mod tests {
     }
 
     async fn run_fakes(
-        migrations: Vec<Box<dyn TurnkeyMigration>>,
+        migrations: &[&dyn TurnkeyMigration],
         with_main_factor: bool,
     ) -> Result<TurnkeyMigrationOutcome, TurnkeyApiError> {
         let api = TurnkeyApiClient::new();
         let main_factor = with_main_factor.then(signer);
         run_migration_list(
-            &migrations,
+            migrations,
             "suborg-1",
             signer(),
             main_factor,
@@ -494,22 +492,21 @@ mod tests {
     async fn completes_when_all_migrations_run() {
         let first = Arc::new(AtomicBool::new(false));
         let second = Arc::new(AtomicBool::new(false));
-        let migrations: Vec<Box<dyn TurnkeyMigration>> = vec![
-            Box::new(FakeMigration {
-                id: "a",
-                requires_main: false,
-                result: FakeResult::Applied,
-                ran: first.clone(),
-            }),
-            Box::new(FakeMigration {
-                id: "b",
-                requires_main: true,
-                result: FakeResult::Skipped,
-                ran: second.clone(),
-            }),
-        ];
+        let a = FakeMigration {
+            id: "a",
+            requires_main: false,
+            result: FakeResult::Applied,
+            ran: first.clone(),
+        };
+        let b = FakeMigration {
+            id: "b",
+            requires_main: true,
+            result: FakeResult::Skipped,
+            ran: second.clone(),
+        };
+        let migrations: [&dyn TurnkeyMigration; 2] = [&a, &b];
 
-        let outcome = run_fakes(migrations, true).await.unwrap();
+        let outcome = run_fakes(&migrations, true).await.unwrap();
 
         assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
         assert!(first.load(Ordering::SeqCst));
@@ -519,15 +516,15 @@ mod tests {
     #[tokio::test]
     async fn defers_main_factor_migration_when_absent() {
         let ran = Arc::new(AtomicBool::new(false));
-        let migrations: Vec<Box<dyn TurnkeyMigration>> =
-            vec![Box::new(FakeMigration {
-                id: "needs_main",
-                requires_main: true,
-                result: FakeResult::Applied,
-                ran: ran.clone(),
-            })];
+        let needs_main = FakeMigration {
+            id: "needs_main",
+            requires_main: true,
+            result: FakeResult::Applied,
+            ran: ran.clone(),
+        };
+        let migrations: [&dyn TurnkeyMigration; 1] = [&needs_main];
 
-        let outcome = run_fakes(migrations, false).await.unwrap();
+        let outcome = run_fakes(&migrations, false).await.unwrap();
 
         assert_eq!(
             outcome,
@@ -541,22 +538,21 @@ mod tests {
     #[tokio::test]
     async fn fails_fast_and_skips_remaining() {
         let second = Arc::new(AtomicBool::new(false));
-        let migrations: Vec<Box<dyn TurnkeyMigration>> = vec![
-            Box::new(FakeMigration {
-                id: "boom",
-                requires_main: false,
-                result: FakeResult::Fail,
-                ran: Arc::new(AtomicBool::new(false)),
-            }),
-            Box::new(FakeMigration {
-                id: "after",
-                requires_main: false,
-                result: FakeResult::Applied,
-                ran: second.clone(),
-            }),
-        ];
+        let boom = FakeMigration {
+            id: "boom",
+            requires_main: false,
+            result: FakeResult::Fail,
+            ran: Arc::new(AtomicBool::new(false)),
+        };
+        let after = FakeMigration {
+            id: "after",
+            requires_main: false,
+            result: FakeResult::Applied,
+            ran: second.clone(),
+        };
+        let migrations: [&dyn TurnkeyMigration; 2] = [&boom, &after];
 
-        let result = run_fakes(migrations, true).await;
+        let result = run_fakes(&migrations, true).await;
 
         assert!(matches!(result, Err(TurnkeyApiError::MainUserNotFound)));
         assert!(!second.load(Ordering::SeqCst));
