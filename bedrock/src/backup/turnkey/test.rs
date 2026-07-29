@@ -5,17 +5,27 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 
 use crate::primitives::{KeypairSigner, KeypairSignerError};
 
-/// An in-process [`KeypairSigner`] backed by a known P-256 key, for tests.
+/// A deterministic, obviously-non-secret P-256 private key for tests (all `0x01`
+/// bytes). Never put anything resembling a real key in tests.
+pub const TEST_PRIVATE_KEY: [u8; 32] = [1u8; 32];
+
+/// An in-process [`KeypairSigner`] backed by [`TEST_PRIVATE_KEY`], for tests.
 pub struct TestSigner {
     secret: p256::SecretKey,
 }
 
 impl TestSigner {
-    /// Builds a signer from a 32-byte hex-encoded P-256 private key.
-    pub fn from_hex(hex_key: &str) -> Self {
-        let bytes = hex::decode(hex_key).expect("valid hex key");
-        let secret = p256::SecretKey::from_slice(&bytes).expect("valid p256 key");
+    /// Builds the canonical test signer from [`TEST_PRIVATE_KEY`].
+    pub fn new() -> Self {
+        let secret =
+            p256::SecretKey::from_slice(&TEST_PRIVATE_KEY).expect("valid p256 key");
         Self { secret }
+    }
+}
+
+impl Default for TestSigner {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

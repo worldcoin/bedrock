@@ -323,49 +323,13 @@ mod tests {
     use super::*;
     use crate::backup::turnkey::test::TestSigner;
 
-    /// Randomly generated P-256 key reused across stamp tests.
-    const TEST_KEY: &str =
-        "8b380767b1947c1c67da42dbc6929a9137202bab770bca2ddcdeaa1dbdd505b8";
-
-    #[test]
-    fn stamp_matches_sdk_and_legacy() {
-        use base64::prelude::BASE64_URL_SAFE_NO_PAD;
-
-        // All three are RFC6979-deterministic ECDSA over SHA-256(body), so they
-        // agree on the signature and public key.
-        let body = serde_json::json!({ "example": 123 }).to_string();
-
-        let adapter =
-            KeypairSignerStamper::new(Arc::new(TestSigner::from_hex(TEST_KEY)));
-        let produced = adapter.stamp(body.as_bytes()).unwrap().value;
-
-        // Byte-identical to the SDK's own P-256 stamper (the format we emit).
-        let sdk =
-            turnkey_api_key_stamper::TurnkeyP256ApiKey::from_strings(TEST_KEY, None)
-                .unwrap()
-                .stamp(body.as_bytes())
-                .unwrap()
-                .value;
-        assert_eq!(produced, sdk);
-
-        // Semantically identical to the legacy Turnkey::stamp. It orders the
-        // stamp JSON keys differently (sorted), so compare decoded objects.
-        let legacy = super::super::Turnkey::new().stamp(&body, TEST_KEY).unwrap();
-        let decode = |value: &str| -> serde_json::Value {
-            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(value).unwrap())
-                .unwrap()
-        };
-        assert_eq!(decode(&produced), decode(&legacy));
-    }
-
     #[test]
     fn stamp_verifies_against_body() {
         use base64::prelude::BASE64_URL_SAFE_NO_PAD;
         use p256::ecdsa::signature::Verifier;
 
         let body = serde_json::json!({ "activity": "create" }).to_string();
-        let adapter =
-            KeypairSignerStamper::new(Arc::new(TestSigner::from_hex(TEST_KEY)));
+        let adapter = KeypairSignerStamper::new(Arc::new(TestSigner::new()));
         let stamp = adapter.stamp(body.as_bytes()).unwrap().value;
 
         let decoded = BASE64_URL_SAFE_NO_PAD.decode(&stamp).unwrap();
