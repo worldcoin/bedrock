@@ -1,11 +1,8 @@
-//! Turnkey account migrations.
+//! Turnkey account migrations. The purpose is to check the state of a user's Turnkey account
+//! to ensure its state is correct and up-to-date.
 //!
-//! Each migration's decision logic is a **pure** function (fetched data in, a
-//! plan out) so it can be unit-tested directly with static payloads. The
-//! migration's `run` is thin I/O glue around that pure core. [`run_migrations`]
-//! runs each migration that can run with the available signers; migrations that
-//! require the main factor (when it was not provided) are deferred and reported
-//! so the caller can re-invoke with it. It fails fast on the first error.
+//! Each migration's decision logic MUST be a **pure** function (fetched data in, a
+//! plan out) so it can be unit-tested directly with static payloads.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -31,6 +28,12 @@ use super::policies::{
 /// This is the single source of truth for which migrations exist. To add one,
 /// implement [`TurnkeyMigration`] and append it to this list.
 const MIGRATIONS: &[&dyn TurnkeyMigration] = &[&MigrationAppleAudience];
+
+// TODO Migrations:
+// 1. Ensure `auth_user_main` is the only one in the root quorum (not a migration, just general housekeeping)
+// 2. Ensure break glass user exists and it has the correct policy (introduced around July 2026)
+// 3. Ensure all sync factors have the right deletion policy (changed at some point after shipping)
+// 4. Ensure max number of sync factor users and policies (port over from Android)
 
 /// Result of a `check_migrations` run.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]

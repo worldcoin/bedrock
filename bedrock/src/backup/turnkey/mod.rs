@@ -20,11 +20,12 @@ mod api;
 mod error;
 mod migrations;
 mod policies;
+
 #[cfg(test)]
 mod test;
 
 use api::TurnkeyApiClient;
-use error::TurnkeyMigrationError;
+pub use error::TurnkeyMigrationError;
 use migrations::{run_migrations, TurnkeyMigrationOutcome};
 
 use crate::primitives::config::current_environment_or_default;

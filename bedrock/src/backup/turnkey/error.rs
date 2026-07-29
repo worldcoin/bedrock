@@ -1,16 +1,11 @@
-//! Error types for Turnkey account management.
-//!
-//! [`TurnkeyApiError`] is the rich internal error used for classification and
-//! logging inside Bedrock. [`TurnkeyMigrationError`] is the deliberately opaque
-//! error surfaced to clients — callers only learn that a run failed; all detail
-//! is logged internally.
+//! Internal error types for Turnkey module
 
 use crate::primitives::KeypairSignerError;
 use turnkey_client::TurnkeyClientError;
 
-/// Rich, internal error for Turnkey API operations. Used for retry
-/// classification and structured logging; never returned across the FFI boundary.
-#[crate::bedrock_error]
+/// Rich, internal error for Turnkey API operations. Used for retry classification
+/// and structured logging; never returned across the FFI boundary.
+#[derive(Debug, thiserror::Error)]
 pub enum TurnkeyApiError {
     /// The request timed out.
     #[error("Turnkey request timed out")]
@@ -91,6 +86,7 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
             other @ (TurnkeyClientError::ActivityFailed(_)
             | TurnkeyClientError::UnexpectedActivityStatus(_)
             | TurnkeyClientError::ActivityRequiresApproval(_)
+            | TurnkeyClientError::ExceededRetries(_)
             | TurnkeyClientError::MissingActivity
             | TurnkeyClientError::MissingResult
             | TurnkeyClientError::MissingInnerResult

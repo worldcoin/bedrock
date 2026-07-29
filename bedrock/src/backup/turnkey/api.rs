@@ -2,11 +2,12 @@
 //!
 //! Bedrock never handles the persistent private key: a [`KeypairSigner`] (native
 //! secure enclave) is adapted into the SDK's [`Stamp`] trait, so the SDK client
-//! stamps requests without the key crossing FFI. The SDK's own retry is disabled
-//! in favour of our bounded exponential-backoff-with-jitter policy (org rule:
-//! retries must be bounded with jitter and cover 429/5xx/timeout/connectivity).
-//! Query results are cached in-memory for the lifetime of a single client so that
-//! multiple migrations reading the same data do not issue duplicate calls.
+//! stamps requests without the key crossing FFI. The SDK retries only the polling
+//! of `PENDING` activities to completion; it does not retry transport failures, so
+//! we wrap each call in our own bounded exponential-backoff-with-jitter policy
+//! covering 429/5xx/timeouts/connectivity (org rule). Query results are cached
+//! in-memory for the lifetime of a single client so that multiple migrations
+//! reading the same data do not issue duplicate calls.
 //!
 //! The sub-organization id is treated as sensitive and is never logged.
 
@@ -120,9 +121,7 @@ const fn is_retryable(error: &TurnkeyApiError) -> bool {
         | TurnkeyApiError::Activity { .. }
         | TurnkeyApiError::Signer(_)
         | TurnkeyApiError::Client(_)
-        | TurnkeyApiError::MainUserNotFound
-        | TurnkeyApiError::Generic { .. }
-        | TurnkeyApiError::FileSystem(_) => false,
+        | TurnkeyApiError::MainUserNotFound => false,
     }
 }
 
@@ -159,13 +158,16 @@ impl TurnkeyApiClient {
         }
     }
 
-    /// Builds an SDK client that stamps with `signer`, with SDK retries disabled.
+    /// Builds an SDK client that stamps with `signer`.
+    ///
+    /// Uses the SDK's default retry config so it polls `PENDING` activities to
+    /// completion; transport-level retries are handled by [`Self::with_retry`].
     fn sdk_client(
         signer: Arc<dyn KeypairSigner>,
     ) -> Result<TurnkeyClient<KeypairSignerStamper>, TurnkeyApiError> {
         TurnkeyClient::<KeypairSignerStamper>::builder()
             .api_key(KeypairSignerStamper::new(signer))
-            .retry_config(RetryConfig::none())
+            .retry_config(RetryConfig::default())
             .build()
             .map_err(TurnkeyApiError::from)
     }
