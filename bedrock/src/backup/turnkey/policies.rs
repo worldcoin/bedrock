@@ -12,7 +12,7 @@ pub const AUTH_USER_MAIN_USERNAME: &str = "auth_user_main";
 pub const APPLE_ISSUER: &str = "https://appleid.apple.com";
 
 /// Prefix used when naming alternative Apple OAuth providers.
-pub const APPLE_PROVIDER_NAME_PREFIX: &str = "apple-";
+pub const APPLE_PROVIDER_NAME_PREFIX: &str = "APPLE-";
 
 impl BedrockEnvironment {
     /// Parent Turnkey organization id (i.e. TFH)
@@ -42,30 +42,34 @@ pub(super) struct AppleAudience {
 
 const STAGING_APPLE_AUDIENCES: &[AppleAudience] = &[
     AppleAudience {
-        label: "world-id-ios",
-        client_id: "PLACEHOLDER_STAGING_WORLD_ID_IOS",
+        label: "world-app-ios",
+        client_id: "org.worldcoin.insight.staging",
     },
     AppleAudience {
-        label: "world-app-ios",
-        client_id: "PLACEHOLDER_STAGING_WORLD_APP_IOS",
+        label: "world-id-ios",
+        client_id: "org.world.staging.id",
+    },
+    AppleAudience {
+        label: "world-id-ios-sandbox",
+        client_id: "org.world.sandbox.id",
     },
     AppleAudience {
         label: "android",
-        client_id: "PLACEHOLDER_STAGING_ANDROID",
+        client_id: "app.world.apple.staging",
     },
 ];
 
 const PRODUCTION_APPLE_AUDIENCES: &[AppleAudience] = &[
     AppleAudience {
-        label: "world-id-ios",
-        client_id: "PLACEHOLDER_PROD_WORLD_ID_IOS",
+        label: "world-app-ios",
+        client_id: "org.worldcoin.insight",
     },
     AppleAudience {
-        label: "world-app-ios",
-        client_id: "PLACEHOLDER_PROD_WORLD_APP_IOS",
+        label: "world-id-ios",
+        client_id: "org.world.id",
     },
     AppleAudience {
         label: "android",
-        client_id: "PLACEHOLDER_PROD_ANDROID",
+        client_id: "app.world.apple",
     },
 ];
