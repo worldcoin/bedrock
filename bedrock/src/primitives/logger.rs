@@ -1,5 +1,8 @@
 use std::cell::RefCell;
-use std::{sync::Arc, sync::OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+
+use tracing::{span, Event, Level, Metadata, Subscriber};
 
 thread_local! {
     static LOG_CONTEXT: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -91,134 +94,46 @@ pub enum LogLevel {
     Error,
 }
 
-/// A logger that forwards log messages to a user-provided `Logger` implementation.
-///
-/// This struct implements the `log::Log` trait and integrates with the Rust `log` crate.
-struct ForeignLogger;
-
-impl log::Log for ForeignLogger {
-    /// Determines if a log message with the specified metadata should be logged.
-    ///
-    /// This implementation logs all messages. Modify this method to implement log level filtering.
-    ///
-    /// # Arguments
-    ///
-    /// * `_metadata` - Metadata about the log message.
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        // Currently, we log all messages. Adjust this if you need to filter messages.
-        true
-    }
-
-    /// Logs a record.
-    ///
-    /// This method is called by the `log` crate when a log message needs to be logged.
-    /// It forwards the log message to the user-provided `Logger` implementation if available.
-    ///
-    /// # Arguments
-    ///
-    /// * `record` - The log record containing the message and metadata.
-    fn log(&self, record: &log::Record) {
-        // Determine if the record originates from the "bedrock" module.
-        let is_record_from_bedrock = record
-            .module_path()
-            .is_some_and(|module_path| module_path.starts_with("bedrock"));
-
-        // Determine if the log level is Debug or Trace.
-        let is_debug_or_trace_level =
-            record.level() == log::Level::Debug || record.level() == log::Level::Trace;
-
-        // Skip logging Debug or Trace level messages that are not from the "bedrock" module.
-        if is_debug_or_trace_level && !is_record_from_bedrock {
-            return;
-        }
-
-        // Forward the log message to the user-provided logger if available.
-        if let Some(logger) = LOGGER_INSTANCE.get() {
-            let level = log_level(record.level());
-            let message = sanitize_hex_secrets(format!("{}", record.args()));
-            logger.log(level, message);
-        } else {
-            // Handle the case when the logger is not set.
-            eprintln!("Logger not set: {}", record.args());
-        }
-    }
-
-    /// Flushes any buffered records.
-    ///
-    /// This implementation does nothing because buffering is not used.
-    fn flush(&self) {}
-}
-
-/// Converts a `log::Level` to a `LogLevel`.
-///
-/// This function maps the log levels from the `log` crate to your own `LogLevel` enum.
-///
-/// # Arguments
-///
-/// * `level` - The `log::Level` to convert.
-///
-/// # Returns
-///
-/// A corresponding `LogLevel`.
-const fn log_level(level: log::Level) -> LogLevel {
-    match level {
-        log::Level::Error => LogLevel::Error,
-        log::Level::Warn => LogLevel::Warn,
-        log::Level::Info => LogLevel::Info,
-        log::Level::Debug => LogLevel::Debug,
-        log::Level::Trace => LogLevel::Trace,
-    }
-}
-
-/// A global instance of the user-provided logger.
-///
-/// This static variable holds the logger provided by the user and is accessed by `ForeignLogger` to forward log messages.
+/// The host-provided logger. Bedrock's own logs are delivered here directly by
+/// [`log_message`], independent of the global `tracing` dispatcher.
 static LOGGER_INSTANCE: OnceLock<Arc<dyn Logger>> = OnceLock::new();
 
-/// Sets the global logger.
+/// Sets the logger that receives Bedrock's log messages.
 ///
-/// This function allows you to provide your own implementation of the `Logger` trait.
-/// It initializes the logging system and should be called before any logging occurs.
+/// Bedrock's own instrumentation is delivered to `logger` **directly**, so it is
+/// unaffected by whichever Rust library in the process owns the global `tracing`
+/// dispatcher. As a best effort, this also installs a global `tracing` subscriber
+/// to forward relevant *dependency* logs (notably siegel's `mlock` warning).
 ///
 /// # Arguments
 ///
 /// * `logger` - An `Arc` containing your logger implementation.
 ///
-/// # Panics
-///
-/// Panics if the logger has already been set.
-///
 /// # Note
 ///
-/// If the logger has already been set, this function will print a message and do nothing.
+/// Only the first logger is used; later calls keep the original and are no-ops.
 #[allow(clippy::module_name_repetitions)]
 #[uniffi::export]
 pub fn set_logger(logger: Arc<dyn Logger>) {
-    match LOGGER_INSTANCE.set(logger) {
-        Ok(()) => (),
-        Err(_) => println!("Logger already set"),
+    if LOGGER_INSTANCE.set(logger).is_err() {
+        // Already configured; the first logger stays active.
+        return;
     }
-
-    // Initialize the logger system.
-    init_logger().expect("Failed to set logger");
+    install_dependency_capture();
 }
 
-/// Initializes the logger system.
-///
-/// This function sets up the global logger with the `ForeignLogger` implementation and sets the maximum log level.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-///
-/// # Errors
-///
-/// Returns a `log::SetLoggerError` if the logger could not be set (e.g., if a logger was already set).
-fn init_logger() -> Result<(), log::SetLoggerError> {
-    static LOGGER: ForeignLogger = ForeignLogger;
-    log::set_logger(&LOGGER)?;
-    log::set_max_level(log::LevelFilter::Trace);
-    Ok(())
+/// Delivers a Bedrock-originated log record directly to the host [`Logger`],
+/// bypassing the global `tracing` dispatcher so delivery never depends on Bedrock
+/// owning it. Applies the active [`LogContext`] prefix and hex-secret redaction.
+/// A no-op until [`set_logger`] has been called.
+#[doc(hidden)]
+pub fn log_message(level: LogLevel, args: std::fmt::Arguments<'_>) {
+    let Some(logger) = LOGGER_INSTANCE.get() else {
+        return;
+    };
+    let message = get_context()
+        .map_or_else(|| args.to_string(), |context| format!("{context} {args}"));
+    logger.log(level, sanitize_hex_secrets(message));
 }
 
 /// Context-aware logging macros that automatically use the current logging context.
@@ -240,11 +155,10 @@ fn init_logger() -> Result<(), log::SetLoggerError> {
 #[macro_export]
 macro_rules! trace {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::primitives::logger::get_context() {
-            log::trace!("{} {}", ctx, format_args!($($arg)*))
-        } else {
-            log::trace!($($arg)*)
-        }
+        $crate::primitives::logger::log_message(
+            $crate::primitives::logger::LogLevel::Trace,
+            format_args!($($arg)*),
+        )
     };
 }
 
@@ -252,11 +166,10 @@ macro_rules! trace {
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::primitives::logger::get_context() {
-            log::debug!("{} {}", ctx, format_args!($($arg)*))
-        } else {
-            log::debug!($($arg)*)
-        }
+        $crate::primitives::logger::log_message(
+            $crate::primitives::logger::LogLevel::Debug,
+            format_args!($($arg)*),
+        )
     };
 }
 
@@ -264,11 +177,10 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::primitives::logger::get_context() {
-            log::info!("{} {}", ctx, format_args!($($arg)*))
-        } else {
-            log::info!($($arg)*)
-        }
+        $crate::primitives::logger::log_message(
+            $crate::primitives::logger::LogLevel::Info,
+            format_args!($($arg)*),
+        )
     };
 }
 
@@ -276,11 +188,10 @@ macro_rules! info {
 #[macro_export]
 macro_rules! warn {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::primitives::logger::get_context() {
-            log::warn!("{} {}", ctx, format_args!($($arg)*))
-        } else {
-            log::warn!($($arg)*)
-        }
+        $crate::primitives::logger::log_message(
+            $crate::primitives::logger::LogLevel::Warn,
+            format_args!($($arg)*),
+        )
     };
 }
 
@@ -288,11 +199,10 @@ macro_rules! warn {
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
-        if let Some(ctx) = $crate::primitives::logger::get_context() {
-            log::error!("{} {}", ctx, format_args!($($arg)*))
-        } else {
-            log::error!($($arg)*)
-        }
+        $crate::primitives::logger::log_message(
+            $crate::primitives::logger::LogLevel::Error,
+            format_args!($($arg)*),
+        )
     };
 }
 
@@ -301,12 +211,13 @@ macro_rules! error {
 /// # Examples
 ///
 /// ```rust
+/// use bedrock::{debug, info};
 /// use bedrock::primitives::logger::LogContext;
 ///
 /// {
 ///     let _bedrock_logger_ctx = LogContext::new("SmartAccount");
-///     log::info!("This will be prefixed with [Bedrock][SmartAccount]");
-///     log::debug!("This too!");
+///     info!("This will be prefixed with [Bedrock][SmartAccount]");
+///     debug!("This too!");
 /// } // Context automatically cleared here
 /// ```
 pub struct LogContext {
@@ -349,11 +260,11 @@ pub fn get_context() -> Option<String> {
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::with_log_context;
+/// use bedrock::{debug, info, with_log_context};
 ///
 /// with_log_context!("SmartAccount" => {
-///     log::info!("This will be prefixed with [Bedrock][SmartAccount]");
-///     log::debug!("This too!");
+///     info!("This will be prefixed with [Bedrock][SmartAccount]");
+///     debug!("This too!");
 /// });
 /// ```
 #[macro_export]
@@ -372,10 +283,10 @@ macro_rules! with_log_context {
 /// # Examples
 ///
 /// ```rust
-/// use bedrock::set_log_context;
+/// use bedrock::{info, set_log_context};
 ///
 /// let _bedrock_logger_ctx = set_log_context!("SmartAccount");
-/// log::info!("This will be prefixed with [Bedrock][SmartAccount]");
+/// info!("This will be prefixed with [Bedrock][SmartAccount]");
 /// ```
 #[macro_export]
 macro_rules! set_log_context {
@@ -452,6 +363,136 @@ fn has_long_hex_run(bytes: &[u8]) -> bool {
         }
     }
     false
+}
+
+// SECTION: `tracing` dependency capture
+
+/// Best-effort install of the global `tracing` subscriber and
+/// forward dependency (non-Bedrock) logs to the host logger.
+///
+/// Bedrock's own logging does not depend on this succeeding.
+fn install_dependency_capture() {
+    let subscriber = ForeignLoggerSubscriber {
+        next_span_id: AtomicU64::new(1),
+    };
+    if tracing::subscriber::set_global_default(subscriber).is_err() {
+        crate::warn!(
+            "another global tracing subscriber is already installed; siegel and \
+             dependency logs will not be forwarded (Bedrock's own logs are unaffected)"
+        );
+        return;
+    }
+
+    let _ =
+        tracing_log::LogTracer::init_with_filter(tracing_log::log::LevelFilter::Warn);
+}
+
+/// A best-effort [`tracing::Subscriber`] that forwards **non-Bedrock** events
+/// (siegel, plus dependencies that log via `tracing`/`log`) to the host [`Logger`].
+///
+/// Spans are not recorded.
+struct ForeignLoggerSubscriber {
+    /// Monotonic source of span identifiers, required by the `tracing` contract.
+    next_span_id: AtomicU64,
+}
+
+impl Subscriber for ForeignLoggerSubscriber {
+    /// Bedrock's own events use the direct path ([`log_message`]) and are ignored
+    /// here to avoid double-forwarding. Dependency (non-Bedrock) events are
+    /// forwarded at `WARN` and above; their debug/trace noise is rejected at the
+    /// callsite so it is never even formatted.
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        if is_bedrock_target(metadata) {
+            return false;
+        }
+        let level = *metadata.level();
+        level == Level::WARN || level == Level::ERROR
+    }
+
+    fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+        let id = self.next_span_id.fetch_add(1, Ordering::Relaxed);
+        span::Id::from_u64(id)
+    }
+
+    fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+    /// Forwards a dependency event to the host logger after redacting hex secrets.
+    fn event(&self, event: &Event<'_>) {
+        let Some(logger) = LOGGER_INSTANCE.get() else {
+            return;
+        };
+        let mut visitor = EventVisitor::default();
+        event.record(&mut visitor);
+        let message = sanitize_hex_secrets(visitor.into_message());
+        let level = log_level(*event.metadata().level());
+        logger.log(level, message);
+    }
+
+    fn enter(&self, _span: &span::Id) {}
+
+    fn exit(&self, _span: &span::Id) {}
+}
+
+/// Returns `true` when the event originates from the `bedrock` crate.
+fn is_bedrock_target(metadata: &Metadata<'_>) -> bool {
+    metadata.target().starts_with("bedrock")
+        || metadata
+            .module_path()
+            .is_some_and(|module_path| module_path.starts_with("bedrock"))
+}
+
+/// Collects a `tracing` event's fields into a single log line.
+///
+/// The `message` field (the format string passed to the logging macros) forms
+/// the body; any additional structured fields are appended as ` key=value` so
+/// they are never silently dropped.
+#[derive(Default)]
+struct EventVisitor {
+    message: String,
+    fields: String,
+}
+
+impl tracing::field::Visit for EventVisitor {
+    fn record_debug(
+        &mut self,
+        field: &tracing::field::Field,
+        value: &dyn std::fmt::Debug,
+    ) {
+        use std::fmt::Write as _;
+        if field.name() == "message" {
+            let _ = write!(self.message, "{value:?}");
+        } else {
+            let _ = write!(self.fields, " {}={value:?}", field.name());
+        }
+    }
+}
+
+impl EventVisitor {
+    /// Consumes the visitor, returning the message with structured fields appended.
+    fn into_message(mut self) -> String {
+        self.message.push_str(&self.fields);
+        self.message
+    }
+}
+
+/// Converts a [`tracing::Level`] to a [`LogLevel`].
+///
+/// `tracing` levels are associated constants rather than enum variants, so this
+/// uses equality comparisons; the final branch necessarily maps [`Level::TRACE`].
+fn log_level(level: Level) -> LogLevel {
+    if level == Level::ERROR {
+        LogLevel::Error
+    } else if level == Level::WARN {
+        LogLevel::Warn
+    } else if level == Level::INFO {
+        LogLevel::Info
+    } else if level == Level::DEBUG {
+        LogLevel::Debug
+    } else {
+        LogLevel::Trace
+    }
 }
 
 #[cfg(test)]
