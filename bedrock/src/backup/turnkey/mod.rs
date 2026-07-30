@@ -21,6 +21,9 @@ mod error;
 mod migrations;
 mod policies;
 
+#[expect(unused_imports, reason = "used in docs")]
+use policies::AUTH_USER_MAIN_USERNAME;
+
 #[cfg(test)]
 mod test;
 
@@ -29,7 +32,7 @@ pub use error::TurnkeyMigrationError;
 use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::current_environment_or_default;
-use crate::primitives::KeypairSigner;
+use crate::primitives::P256Signer;
 
 /// High level manager to perform Turnkey account operations such as setup and
 /// migration reconciliation.
@@ -58,10 +61,12 @@ impl TurnkeyManager {
     /// # Arguments
     /// - `suborganization_id`: the user's Turnkey sub-organization id. When
     ///   `None`, it is resolved via Turnkey `whoami` stamped with the sync factor.
-    /// - `sync_factor`: signer used to stamp read/query requests and to resolve
-    ///   the sub-organization.
-    /// - `main_factor`: signer used to stamp privileged writes; required by
-    ///   migrations that modify account configuration.
+    /// - `sync_factor`: a [`P256Signer`] the caller has already constructed — and
+    ///   thereby validated — from its sync signer; stamps read/query requests and
+    ///   resolves the sub-organization.
+    /// - `main_factor`: an optional [`P256Signer`] for privileged writes with
+    ///   [`AUTH_USER_MAIN_USERNAME`], i.e. the ephemeral session key established
+    ///   from a Main Factor.
     ///
     /// # Errors
     /// Returns [`TurnkeyMigrationError`] if the run fails. Diagnostic detail is
@@ -69,8 +74,8 @@ impl TurnkeyManager {
     pub async fn run_migrations(
         &self,
         suborganization_id: Option<String>,
-        sync_factor: Arc<dyn KeypairSigner>,
-        main_factor: Option<Arc<dyn KeypairSigner>>,
+        sync_factor: &P256Signer,
+        main_factor: Option<Arc<P256Signer>>,
     ) -> Result<TurnkeyMigrationOutcome, TurnkeyMigrationError> {
         crate::debug!(
             "run_migrations start is_suborg_provided={}",
@@ -83,10 +88,7 @@ impl TurnkeyManager {
             id
         } else {
             let parent = environment.turnkey_parent_organization_id();
-            match api
-                .resolve_suborganization_id(parent, sync_factor.clone())
-                .await
-            {
+            match api.resolve_suborganization_id(parent, sync_factor).await {
                 Ok(id) => id,
                 Err(error) => {
                     crate::error!(
@@ -101,7 +103,7 @@ impl TurnkeyManager {
             MIGRATIONS,
             &suborganization_id,
             sync_factor,
-            main_factor,
+            main_factor.as_deref(),
             &api,
             environment,
         )

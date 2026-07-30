@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 // Re-export HTTP client types for external use
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
-pub use signer::{KeypairSigner, KeypairSignerError};
+pub use signer::{KeypairSigner, KeypairSignerError, P256Signer};
 pub use user_agent::{UserAgent, UserAgentBuilder};
 
 /// The prefix for Bedrock-generated transactions.

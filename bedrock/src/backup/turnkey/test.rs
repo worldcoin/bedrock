@@ -78,7 +78,7 @@ mod integration_tests {
     use crate::backup::turnkey::TurnkeyManager;
     use crate::primitives::config::{set_config, BedrockEnvironment, Os};
     use crate::primitives::logger::set_logger;
-    use crate::primitives::KeypairSigner;
+    use crate::primitives::P256Signer;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -88,18 +88,21 @@ mod integration_tests {
         set_logger(Arc::new(StdoutLogger));
 
         let sync_key = std::env::var("TURNKEY_SYNC_KEY").unwrap();
-        let sync_factor: Arc<dyn KeypairSigner> =
-            Arc::new(TestSigner::from_hex(&sync_key));
+        let sync_factor =
+            P256Signer::verify(Arc::new(TestSigner::from_hex(&sync_key)))
+                .expect("valid sync factor key");
 
-        let main_factor: Option<Arc<dyn KeypairSigner>> =
-            std::env::var("TURNKEY_MAIN_KEY").ok().map(|key| {
-                Arc::new(TestSigner::from_hex(&key)) as Arc<dyn KeypairSigner>
-            });
+        let main_factor = std::env::var("TURNKEY_MAIN_KEY").ok().map(|key| {
+            Arc::new(
+                P256Signer::verify(Arc::new(TestSigner::from_hex(&key)))
+                    .expect("valid main factor key"),
+            )
+        });
 
         let suborganization_id = std::env::var("TURNKEY_SUBORG_ID").ok();
 
         let outcome = TurnkeyManager::new()
-            .run_migrations(suborganization_id, sync_factor, main_factor)
+            .run_migrations(suborganization_id, &sync_factor, main_factor)
             .await
             .expect("run_migrations should succeed against real Turnkey");
 

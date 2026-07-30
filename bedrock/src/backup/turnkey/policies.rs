@@ -2,6 +2,8 @@
 
 use crate::primitives::config::BedrockEnvironment;
 
+/// Represents the user's primary authentication and holds their Main Factor credentials.
+///
 /// Turnkey's `userName` of the primary user who holds all the Main Factors. Sole
 /// member of the root quorum.
 ///
@@ -20,7 +22,7 @@ impl BedrockEnvironment {
         }
     }
 
-    /// Apple audiences for which the `auth_main_user` should be registered if
+    /// Apple audiences for which the [`AUTH_USER_MAIN_USERNAME`] should be registered if
     /// using Sign in with Apple
     pub(super) const fn turnkey_apple_audiences(self) -> &'static [AppleAudience] {
         match self {

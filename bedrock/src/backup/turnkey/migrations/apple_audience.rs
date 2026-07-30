@@ -48,7 +48,7 @@ impl TurnkeyMigration for MigrationAppleAudience {
     ) -> Result<MigrationOutcome, TurnkeyApiError> {
         let users = ctx
             .api
-            .get_users(ctx.suborganization_id, ctx.sync_factor.clone())
+            .get_users(ctx.suborganization_id, ctx.sync_factor)
             .await?;
 
         let plan = plan(users, ctx.environment)?;
@@ -59,7 +59,7 @@ impl TurnkeyMigration for MigrationAppleAudience {
                 Ok(MigrationOutcome::Skipped)
             }
             Plan::Create { user_id, providers } => {
-                let Some(main_factor) = ctx.main_factor.clone() else {
+                let Some(main_factor) = ctx.main_factor else {
                     return Ok(MigrationOutcome::MainFactorRequired);
                 };
                 let details: Vec<String> =

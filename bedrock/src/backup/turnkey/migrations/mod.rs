@@ -1,10 +1,8 @@
 //! Turnkey account migrations. The purpose is to check the state of a
 //! user's Turnkey account to ensure it is correct and up-to-date.
 
-use std::sync::Arc;
-
 use crate::primitives::config::BedrockEnvironment;
-use crate::primitives::KeypairSigner;
+use crate::primitives::P256Signer;
 use crate::{error, info};
 
 use super::api::TurnkeyApiClient;
@@ -29,7 +27,7 @@ pub(super) const MIGRATIONS: &[&dyn TurnkeyMigration] = &[&MigrationAppleAudienc
 // 3. Ensure all sync factors have the right deletion policy
 // 4. Ensure max number of sync factor users and policies (port over from Android)
 
-/// Result of a `check_migrations` run.
+/// Global result from running the entire set of migrations.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum TurnkeyMigrationOutcome {
     /// Every applicable migration completed (or was already satisfied).
@@ -57,8 +55,8 @@ pub(super) enum MigrationOutcome {
 pub(super) struct MigrationContext<'a> {
     suborganization_id: &'a str,
     environment: BedrockEnvironment,
-    sync_factor: Arc<dyn KeypairSigner>,
-    main_factor: Option<Arc<dyn KeypairSigner>>,
+    sync_factor: &'a P256Signer,
+    main_factor: Option<&'a P256Signer>,
     api: &'a TurnkeyApiClient,
 }
 
@@ -90,8 +88,8 @@ pub(super) trait TurnkeyMigration: Send + Sync {
 pub(super) async fn run_migration_list(
     migrations: &[&dyn TurnkeyMigration],
     suborganization_id: &str,
-    sync_factor: Arc<dyn KeypairSigner>,
-    main_factor: Option<Arc<dyn KeypairSigner>>,
+    sync_factor: &P256Signer,
+    main_factor: Option<&P256Signer>,
     api: &TurnkeyApiClient,
     environment: BedrockEnvironment,
 ) -> Result<TurnkeyMigrationOutcome, TurnkeyApiError> {
@@ -101,8 +99,8 @@ pub(super) async fn run_migration_list(
         let ctx = MigrationContext {
             suborganization_id,
             environment,
-            sync_factor: sync_factor.clone(),
-            main_factor: main_factor.clone(),
+            sync_factor,
+            main_factor,
             api,
         };
 
@@ -146,9 +144,10 @@ mod tests {
     use super::*;
     use crate::backup::turnkey::test::TestSigner;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
-    fn signer() -> Arc<dyn KeypairSigner> {
-        Arc::new(TestSigner::new())
+    fn signer() -> P256Signer {
+        P256Signer::verify(Arc::new(TestSigner::new())).unwrap()
     }
 
     /// What a [`FakeMigration`] pretends its plan is.
@@ -199,12 +198,13 @@ mod tests {
         with_main_factor: bool,
     ) -> Result<TurnkeyMigrationOutcome, TurnkeyApiError> {
         let api = TurnkeyApiClient::new();
+        let sync_factor = signer();
         let main_factor = with_main_factor.then(signer);
         run_migration_list(
             migrations,
             "suborg-1",
-            signer(),
-            main_factor,
+            &sync_factor,
+            main_factor.as_ref(),
             &api,
             BedrockEnvironment::Staging,
         )

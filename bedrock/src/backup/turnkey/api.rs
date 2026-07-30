@@ -1,19 +1,14 @@
 //! Turnkey API access built on the official Turnkey Rust SDK (`turnkey_client`).
 //!
-//! Bedrock never handles the persistent private key: a [`KeypairSigner`] (native
-//! secure enclave) is adapted into the SDK's [`Stamp`] trait, so the SDK client
-//! stamps requests without the key crossing FFI. The SDK retries only the polling
-//! of `PENDING` activities to completion; it does not retry transport failures, so
-//! we wrap each call in our own bounded exponential-backoff-with-jitter policy
-//! covering 429/5xx/timeouts/connectivity (org rule). Query results are cached
+//! The SDK retries only the polling of `PENDING` activities to completion; it does not retry
+//! transport failures, so we wrap each call in our own bounded exponential-backoff-with-jitter policy
+//! covering 429/5xx/timeouts/connectivity. Query results are cached
 //! in-memory for the lifetime of a single client so that multiple migrations
 //! reading the same data do not issue duplicate calls.
-//!
-//! The sub-organization id is treated as sensitive and is never logged.
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -33,40 +28,41 @@ use turnkey_client::generated::services::coordinator::public::v1::{
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::KeypairSigner;
+use crate::primitives::P256Signer;
 use crate::warn;
 
 use super::error::TurnkeyApiError;
 
-/// Adapts a [`KeypairSigner`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
+/// Adapts a [`P256Signer`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
 /// client can stamp requests with a key held in native secure storage.
+///
+/// The public key is validated once when the [`P256Signer`] is built, so
+/// stamping only signs and reuses the cached key.
 ///
 /// Produces byte-for-byte the same `X-Stamp` as the SDK's own `TurnkeyP256ApiKey`.
 pub struct KeypairSignerStamper {
-    signer: Arc<dyn KeypairSigner>,
+    signer: P256Signer,
 }
 
 impl KeypairSignerStamper {
-    /// Wraps a signer for use as a Turnkey stamper.
+    /// Wraps a verified signer for use as a Turnkey stamper.
     #[must_use]
-    pub fn new(signer: Arc<dyn KeypairSigner>) -> Self {
-        Self { signer }
+    pub fn new(signer: &P256Signer) -> Self {
+        Self {
+            signer: signer.clone(),
+        }
     }
 }
 
 impl Stamp for KeypairSignerStamper {
     fn stamp(&self, body: &[u8]) -> Result<StampHeader, StamperError> {
         let digest = Sha256::digest(body);
-        let public_key = self
-            .signer
-            .public_key()
-            .map_err(|e| StamperError::InvalidPublicKeyBytes(e.to_string()))?;
         let signature = self
             .signer
             .sign_digest(digest.to_vec())
             .map_err(|e| StamperError::InvalidPrivateKeyBytes(e.to_string()))?;
         let stamp = ApiStamp {
-            public_key: hex::encode(public_key),
+            public_key: self.signer.public_key_hex().to_string(),
             signature: hex::encode(signature),
             scheme: SIGNATURE_SCHEME_P256.to_string(),
         };
@@ -166,7 +162,7 @@ impl TurnkeyApiClient {
     /// Uses the SDK's default retry config so it polls `PENDING` activities to
     /// completion; transport-level retries are handled by [`Self::with_retry`].
     fn sdk_client(
-        signer: Arc<dyn KeypairSigner>,
+        signer: &P256Signer,
     ) -> Result<TurnkeyClient<KeypairSignerStamper>, TurnkeyApiError> {
         TurnkeyClient::<KeypairSignerStamper>::builder()
             .api_key(KeypairSignerStamper::new(signer))
@@ -220,8 +216,8 @@ impl TurnkeyApiClient {
 }
 
 /// # Warning
-/// For any activities (i.e. requests that change the state) is is imperative that
-/// the `timestamp_ms` is computed once outside any retry looks. Turnkey submissions
+/// For any activities (i.e. requests that change the state) it is imperative that
+/// the `timestamp_ms` is computed once outside any retry loops. Turnkey submissions
 /// are idempotent on a fingerprint, maintaining the same `timestamp_ms` ensures a
 /// request is not executed twice.
 ///
@@ -236,9 +232,9 @@ impl TurnkeyApiClient {
     pub async fn resolve_suborganization_id(
         &self,
         parent_organization_id: &str,
-        stamper: Arc<dyn KeypairSigner>,
+        signer: &P256Signer,
     ) -> Result<String, TurnkeyApiError> {
-        let client = Self::sdk_client(stamper)?;
+        let client = Self::sdk_client(signer)?;
         let request = GetWhoamiRequest {
             organization_id: parent_organization_id.to_string(),
         };
@@ -261,12 +257,12 @@ impl TurnkeyApiClient {
     pub async fn get_users(
         &self,
         suborganization_id: &str,
-        stamper: Arc<dyn KeypairSigner>,
+        signer: &P256Signer,
     ) -> Result<Vec<User>, TurnkeyApiError> {
         if let Some(cached) = self.cached_users(suborganization_id) {
             return Ok(cached);
         }
-        let client = Self::sdk_client(stamper)?;
+        let client = Self::sdk_client(signer)?;
         let request = GetUsersRequest {
             organization_id: suborganization_id.to_string(),
         };
@@ -297,9 +293,9 @@ impl TurnkeyApiClient {
         suborganization_id: &str,
         user_id: &str,
         providers: Vec<OauthProviderParamsV2>,
-        stamper: Arc<dyn KeypairSigner>,
+        signer: &P256Signer,
     ) -> Result<(), TurnkeyApiError> {
-        let client = Self::sdk_client(stamper)?;
+        let client = Self::sdk_client(signer)?;
         let intent = CreateOauthProvidersIntentV2 {
             user_id: user_id.to_string(),
             oauth_providers: providers,
@@ -337,6 +333,7 @@ fn ntp_timestamp_ms() -> u128 {
 mod tests {
     use super::*;
     use crate::backup::turnkey::test::TestSigner;
+    use std::sync::Arc;
 
     #[test]
     fn stamp_verifies_against_body() {
@@ -344,7 +341,8 @@ mod tests {
         use p256::ecdsa::signature::Verifier;
 
         let body = serde_json::json!({ "activity": "create" }).to_string();
-        let adapter = KeypairSignerStamper::new(Arc::new(TestSigner::new()));
+        let verified = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let adapter = KeypairSignerStamper::new(&verified);
         let stamp = adapter.stamp(body.as_bytes()).unwrap().value;
 
         let decoded = BASE64_URL_SAFE_NO_PAD.decode(&stamp).unwrap();

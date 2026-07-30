@@ -107,8 +107,8 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
                 404 => Self::NotFound { body },
                 400..=499 => Self::ClientError { status: code, body },
                 500..=599 => Self::ServerError { status: code, body },
-                // NOTE: Turnkey may ocassionally append public keys or sub-organization IDs to bodies,
-                // which may be ocassionally logged. We're relying on the short TTL of logs for this data
+                // NOTE: Turnkey may occasionally append public keys or sub-organization IDs to bodies,
+                // which would be logged here. We're relying on the short TTL of logs for this data
                 // not to be persisted. Having full errors logs for such a critical system is imperative
                 // for its maintenance.
                 _ => Self::Client(format!("unexpected HTTP status {code}: {body}")),
