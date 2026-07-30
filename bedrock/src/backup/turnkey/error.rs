@@ -85,6 +85,22 @@ impl From<KeypairSignerError> for TurnkeyApiError {
     }
 }
 
+/// Max length (in bytes) of an upstream response body retained on an error, to
+/// bound log volume and limit exposure of non-generic info.
+const MAX_LOGGED_BODY_LEN: usize = 256;
+
+/// Truncates an upstream response body when logging
+fn truncate_body(body: String) -> String {
+    if body.len() <= MAX_LOGGED_BODY_LEN {
+        return body;
+    }
+    let mut end = MAX_LOGGED_BODY_LEN;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…[truncated, {} bytes total]", &body[..end], body.len())
+}
+
 /// Classifies a [`TurnkeyClientError`] from the Turnkey SDK into our internal error.
 impl From<TurnkeyClientError> for TurnkeyApiError {
     fn from(error: TurnkeyClientError) -> Self {
@@ -101,18 +117,21 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
             TurnkeyClientError::ReqwestBuilder(source) => Self::Transport {
                 error_message: source.without_url().to_string(),
             },
-            TurnkeyClientError::UnexpectedHttpStatus(code, body) => match code {
-                429 => Self::RateLimited { body },
-                401 | 403 => Self::Unauthorized { body },
-                404 => Self::NotFound { body },
-                400..=499 => Self::ClientError { status: code, body },
-                500..=599 => Self::ServerError { status: code, body },
+            TurnkeyClientError::UnexpectedHttpStatus(code, body) => {
                 // NOTE: Turnkey may occasionally append public keys or sub-organization IDs to bodies,
-                // which would be logged here. We're relying on the short TTL of logs for this data
-                // not to be persisted. Having full errors logs for such a critical system is imperative
-                // for its maintenance.
-                _ => Self::Client(format!("unexpected HTTP status {code}: {body}")),
-            },
+                // which would be logged here. We rely on the short TTL of logs for this
+                // not to be persisted. These logs are essential to ensure proper functioning of this
+                // mission critical system.
+                let body = truncate_body(body);
+                match code {
+                    429 => Self::RateLimited { body },
+                    401 | 403 => Self::Unauthorized { body },
+                    404 => Self::NotFound { body },
+                    400..=499 => Self::ClientError { status: code, body },
+                    500..=599 => Self::ServerError { status: code, body },
+                    _ => Self::Client(format!("unexpected HTTP status {code}: {body}")),
+                }
+            }
             TurnkeyClientError::StamperError(source) => {
                 Self::Signer(source.to_string())
             }

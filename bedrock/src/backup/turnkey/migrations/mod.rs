@@ -107,9 +107,9 @@ pub(super) async fn run_migration_list(
         match migration.run(&ctx).await {
             Ok(MigrationOutcome::Applied { details }) => {
                 info!(
-                    "turnkey.migration.applied migration={} changes={}",
+                    "turnkey.migration.applied migration={} changes=[{}]",
                     migration.id(),
-                    details.len()
+                    details.join(", ")
                 );
             }
             Ok(MigrationOutcome::Skipped) => {}

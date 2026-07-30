@@ -31,7 +31,7 @@ use api::TurnkeyApiClient;
 pub use error::TurnkeyMigrationError;
 use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
-use crate::primitives::config::current_environment_or_default;
+use crate::primitives::config::get_config;
 use crate::primitives::P256Signer;
 
 /// High level manager to perform Turnkey account operations such as setup and
@@ -68,6 +68,10 @@ impl TurnkeyManager {
     ///   [`AUTH_USER_MAIN_USERNAME`], i.e. the ephemeral session key established
     ///   from a Main Factor.
     ///
+    /// # Threading
+    /// This performs network I/O and may poll Turnkey activities to completion,
+    /// so it can take a while. Callers MUST invoke it off the main thread.
+    ///
     /// # Errors
     /// Returns [`TurnkeyMigrationError`] if the run fails. Diagnostic detail is
     /// logged inside Bedrock and intentionally not surfaced.
@@ -81,7 +85,13 @@ impl TurnkeyManager {
             "run_migrations start is_suborg_provided={}",
             suborganization_id.is_some()
         );
-        let environment = current_environment_or_default();
+        // Turnkey account management is too sensitive to run against a defaulted
+        // environment; require explicit configuration.
+        let Some(config) = get_config() else {
+            crate::error!("run_migrations aborted: Bedrock config not initialized");
+            return Err(TurnkeyMigrationError::Failed);
+        };
+        let environment = config.environment();
         let api = TurnkeyApiClient::new();
 
         let suborganization_id = if let Some(id) = suborganization_id {
@@ -111,7 +121,17 @@ impl TurnkeyManager {
         {
             Ok(outcome) => {
                 // TODO: Downgrade to debug after initial shipping
-                crate::info!("✅ run_migrations completed successfully");
+                match &outcome {
+                    TurnkeyMigrationOutcome::Completed => {
+                        crate::info!("✅ run_migrations completed successfully");
+                    }
+                    TurnkeyMigrationOutcome::MainFactorRequired { pending } => {
+                        crate::info!(
+                            "⏸️ run_migrations deferred {} migration(s) awaiting the main factor",
+                            pending.len()
+                        );
+                    }
+                }
                 Ok(outcome)
             }
             Err(error) => {
