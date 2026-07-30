@@ -27,6 +27,9 @@ use super::{MigrationContext, MigrationOutcome, TurnkeyMigration};
 ///
 /// If the user already has at least one Apple provider, its `subject` is reused
 /// and all remaining providers are created. If the user has no Apple provider at all, this is a no-op.
+///
+/// # Main Factor
+/// If operations need to be executed, this migration REQUIRES a Main Factor.
 pub(super) struct MigrationAppleAudience;
 
 #[async_trait::async_trait]
@@ -37,10 +40,6 @@ impl TurnkeyMigration for MigrationAppleAudience {
 
     fn description(&self) -> &'static str {
         "Enable Sign in with Apple for all iOS and Android apps."
-    }
-
-    fn requires_main_factor(&self) -> bool {
-        true
     }
 
     async fn run(
@@ -60,11 +59,9 @@ impl TurnkeyMigration for MigrationAppleAudience {
                 Ok(MigrationOutcome::Skipped)
             }
             Plan::Create { user_id, providers } => {
-                let main_factor = ctx.main_factor.clone().ok_or_else(|| {
-                    TurnkeyApiError::Client(
-                        "main factor unexpectedly missing".to_string(),
-                    )
-                })?;
+                let Some(main_factor) = ctx.main_factor.clone() else {
+                    return Ok(MigrationOutcome::MainFactorRequired);
+                };
                 let details: Vec<String> =
                     providers.iter().map(|p| p.provider_name.clone()).collect();
                 ctx.api

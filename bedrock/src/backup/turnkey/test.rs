@@ -3,6 +3,7 @@
 use p256::ecdsa::signature::hazmat::PrehashSigner;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 
+use crate::primitives::logger::{LogLevel, Logger};
 use crate::primitives::{KeypairSigner, KeypairSignerError};
 
 /// A deterministic, obviously-non-secret P-256 private key for tests (all `0x01`
@@ -55,5 +56,53 @@ impl KeypairSigner for TestSigner {
             .sign_prehash(&digest)
             .map_err(|_| KeypairSignerError::InvalidKey)?;
         Ok(signature.to_der().as_bytes().to_vec())
+    }
+}
+
+/// A [`Logger`] that prints Bedrock's log records to stdout, so `crate::info!`
+/// and friends are visible when an integration test runs with `--nocapture`.
+/// Install it once per test process via
+/// [`crate::primitives::logger::set_logger`].
+pub struct StdoutLogger;
+
+impl Logger for StdoutLogger {
+    fn log(&self, level: LogLevel, message: String) {
+        println!("[bedrock][{level:?}] {message}");
+    }
+}
+
+/// Integration tests that hit the **real Turnkey API**. Ignored by default; run
+/// explicitly against a real sub-organization with real credentials.
+mod integration_tests {
+    use super::{StdoutLogger, TestSigner};
+    use crate::backup::turnkey::TurnkeyManager;
+    use crate::primitives::config::{set_config, BedrockEnvironment, Os};
+    use crate::primitives::logger::set_logger;
+    use crate::primitives::KeypairSigner;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    #[ignore = "integration: hits the real Turnkey API; requires real credentials"]
+    async fn run_migrations_against_real_turnkey() {
+        set_config(BedrockEnvironment::Staging, Os::Ios);
+        set_logger(Arc::new(StdoutLogger));
+
+        let sync_key = std::env::var("TURNKEY_SYNC_KEY").unwrap();
+        let sync_factor: Arc<dyn KeypairSigner> =
+            Arc::new(TestSigner::from_hex(&sync_key));
+
+        let main_factor: Option<Arc<dyn KeypairSigner>> =
+            std::env::var("TURNKEY_MAIN_KEY").ok().map(|key| {
+                Arc::new(TestSigner::from_hex(&key)) as Arc<dyn KeypairSigner>
+            });
+
+        let suborganization_id = std::env::var("TURNKEY_SUBORG_ID").ok();
+
+        let outcome = TurnkeyManager::new()
+            .run_migrations(suborganization_id, sync_factor, main_factor)
+            .await
+            .expect("run_migrations should succeed against real Turnkey");
+
+        println!("run_migrations outcome: {outcome:?}");
     }
 }

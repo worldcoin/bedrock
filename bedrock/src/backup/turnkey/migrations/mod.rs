@@ -17,9 +17,10 @@ use apple_audience::MigrationAppleAudience;
 /// Every Turnkey migration, in the order they are applied.
 ///
 /// Single source of truth for which migrations exist. To add one, create a
-/// module under `migrations/`, implement [`TurnkeyMigration`], and append it here. It is
-/// recommended to keep migrations that don't require a Main Factor first as migrations are
-/// fail fast.
+/// module under `migrations/`, implement [`TurnkeyMigration`], and append it here.
+///
+/// The list fails fast on the first error, so order first cheaper migrations, more likely
+/// to be skipped, or the ones not requiring a Main Factor.
 pub(super) const MIGRATIONS: &[&dyn TurnkeyMigration] = &[&MigrationAppleAudience];
 
 // TODO Migrations:
@@ -47,6 +48,9 @@ pub(super) enum MigrationOutcome {
     Applied { details: Vec<String> },
     /// The migration was a no-op. This is a success case.
     Skipped,
+    /// Changes are required but the main factor was absent, so nothing was
+    /// applied. Re-invoke with the main factor to apply them.
+    MainFactorRequired,
 }
 
 /// Context passed to each migration.
@@ -65,9 +69,11 @@ pub(super) trait TurnkeyMigration: Send + Sync {
     fn id(&self) -> &'static str;
     /// Human-friendly description of what the migration intends to do.
     fn description(&self) -> &'static str;
-    /// Whether this migration needs the main factor signer to be present.
-    fn requires_main_factor(&self) -> bool;
     /// Runs the migration against `ctx`.
+    ///
+    /// Implementations decide what (if any) work is needed using the sync factor
+    /// (reads). If changes are required but `ctx.main_factor` is absent, return
+    /// [`MigrationOutcome::MainFactorRequired`] instead of applying.
     async fn run(
         &self,
         ctx: &MigrationContext<'_>,
@@ -75,9 +81,7 @@ pub(super) trait TurnkeyMigration: Send + Sync {
 }
 
 /// Runs the given migrations in order and returns the overall
-/// [`TurnkeyMigrationOutcome`]. Migrations that can run with the available signers
-/// run immediately; those requiring the main factor when it is absent are deferred
-/// and reported. Fails fast on the first error.
+/// [`TurnkeyMigrationOutcome`].
 ///
 /// Production callers pass [`MIGRATIONS`]; tests pass a scripted list.
 ///
@@ -94,16 +98,6 @@ pub(super) async fn run_migration_list(
     let mut pending_main_factor: Vec<String> = Vec::new();
 
     for migration in migrations {
-        if migration.requires_main_factor() && main_factor.is_none() {
-            // TODO: downgrade to debug after shipping
-            info!(
-                "turnkey.migration.deferred migration={} reason=main_factor_required",
-                migration.id()
-            );
-            pending_main_factor.push(migration.description().to_string());
-            continue;
-        }
-
         let ctx = MigrationContext {
             suborganization_id,
             environment,
@@ -121,6 +115,13 @@ pub(super) async fn run_migration_list(
                 );
             }
             Ok(MigrationOutcome::Skipped) => {}
+            Ok(MigrationOutcome::MainFactorRequired) => {
+                info!(
+                    "turnkey.migration.deferred migration={} reason=main_factor_required",
+                    migration.id()
+                );
+                pending_main_factor.push(migration.description().to_string());
+            }
             Err(error) => {
                 error!(
                     "turnkey.migration.failed migration={} err={error}",
@@ -150,16 +151,20 @@ mod tests {
         Arc::new(TestSigner::new())
     }
 
-    enum FakeResult {
-        Applied,
-        Skipped,
+    /// What a [`FakeMigration`] pretends its plan is.
+    enum Behavior {
+        /// No changes needed, regardless of the signers present.
+        NoWork,
+        /// Changes needed: applies when the main factor is present, otherwise
+        /// reports [`MigrationOutcome::MainFactorRequired`].
+        NeedsWork,
+        /// Fails while running.
         Fail,
     }
 
     struct FakeMigration {
         id: &'static str,
-        requires_main: bool,
-        result: FakeResult,
+        behavior: Behavior,
         ran: Arc<AtomicBool>,
     }
 
@@ -171,20 +176,20 @@ mod tests {
         fn description(&self) -> &'static str {
             "fake migration"
         }
-        fn requires_main_factor(&self) -> bool {
-            self.requires_main
-        }
         async fn run(
             &self,
-            _ctx: &MigrationContext<'_>,
+            ctx: &MigrationContext<'_>,
         ) -> Result<MigrationOutcome, TurnkeyApiError> {
             self.ran.store(true, Ordering::SeqCst);
-            match self.result {
-                FakeResult::Applied => Ok(MigrationOutcome::Applied {
-                    details: vec!["change".to_string()],
-                }),
-                FakeResult::Skipped => Ok(MigrationOutcome::Skipped),
-                FakeResult::Fail => Err(TurnkeyApiError::MainUserNotFound),
+            match self.behavior {
+                Behavior::NoWork => Ok(MigrationOutcome::Skipped),
+                Behavior::NeedsWork if ctx.main_factor.is_some() => {
+                    Ok(MigrationOutcome::Applied {
+                        details: vec!["change".to_string()],
+                    })
+                }
+                Behavior::NeedsWork => Ok(MigrationOutcome::MainFactorRequired),
+                Behavior::Fail => Err(TurnkeyApiError::MainUserNotFound),
             }
         }
     }
@@ -212,14 +217,12 @@ mod tests {
         let second = Arc::new(AtomicBool::new(false));
         let a = FakeMigration {
             id: "a",
-            requires_main: false,
-            result: FakeResult::Applied,
+            behavior: Behavior::NeedsWork,
             ran: first.clone(),
         };
         let b = FakeMigration {
             id: "b",
-            requires_main: true,
-            result: FakeResult::Skipped,
+            behavior: Behavior::NoWork,
             ran: second.clone(),
         };
         let migrations: [&dyn TurnkeyMigration; 2] = [&a, &b];
@@ -232,12 +235,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn defers_main_factor_migration_when_absent() {
+    async fn no_op_migration_does_not_require_main_factor() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let noop = FakeMigration {
+            id: "noop",
+            behavior: Behavior::NoWork,
+            ran: ran.clone(),
+        };
+        let migrations: [&dyn TurnkeyMigration; 1] = [&noop];
+
+        // No main factor provided, yet a no-op migration must still complete
+        // rather than demand it.
+        let outcome = run_fakes(&migrations, false).await.unwrap();
+
+        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+        assert!(ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn defers_needed_migration_when_main_factor_absent() {
         let ran = Arc::new(AtomicBool::new(false));
         let needs_main = FakeMigration {
             id: "needs_main",
-            requires_main: true,
-            result: FakeResult::Applied,
+            behavior: Behavior::NeedsWork,
             ran: ran.clone(),
         };
         let migrations: [&dyn TurnkeyMigration; 1] = [&needs_main];
@@ -250,7 +270,8 @@ mod tests {
                 pending: vec!["fake migration".to_string()],
             }
         );
-        assert!(!ran.load(Ordering::SeqCst));
+        // The migration still runs so it can decide whether work is needed.
+        assert!(ran.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -258,14 +279,12 @@ mod tests {
         let second = Arc::new(AtomicBool::new(false));
         let boom = FakeMigration {
             id: "boom",
-            requires_main: false,
-            result: FakeResult::Fail,
+            behavior: Behavior::Fail,
             ran: Arc::new(AtomicBool::new(false)),
         };
         let after = FakeMigration {
             id: "after",
-            requires_main: false,
-            result: FakeResult::Applied,
+            behavior: Behavior::NeedsWork,
             ran: second.clone(),
         };
         let migrations: [&dyn TurnkeyMigration; 2] = [&boom, &after];

@@ -45,12 +45,12 @@ const STAGING_APPLE_AUDIENCES: &[AppleAudience] = &[
     },
     // World ID iOS.
     AppleAudience {
-        provider_name: "APPLE-WORLD-ID-APP",
+        provider_name: "APPLE-WID",
         client_id: "org.world.staging.id",
     },
     // World ID iOS (sandbox).
     AppleAudience {
-        provider_name: "APPLE-WORLD-ID-APP-SANDBOX",
+        provider_name: "APPLE-WID-SANDBOX",
         client_id: "org.world.sandbox.id",
     },
     // Android (web-based Sign in with Apple).
