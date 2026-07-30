@@ -201,17 +201,32 @@ impl TurnkeyApiClient {
         }
     }
 
+    /// Locks the users cache, recovering from poisoning.
+    ///
+    /// A poisoned lock means a prior holder panicked and may have left the map
+    /// inconsistent. The cache is always reconstructible so discard and move on.
+    fn lock_cache(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<User>>> {
+        match self.users_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                crate::error!(
+                    "turnkey.cache.poisoned: discarding in-memory user cache and recovering"
+                );
+                self.users_cache.clear_poison();
+                let mut guard = poisoned.into_inner();
+                guard.clear();
+                guard
+            }
+        }
+    }
+
     fn cached_users(&self, suborganization_id: &str) -> Option<Vec<User>> {
-        self.users_cache
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(suborganization_id).cloned())
+        self.lock_cache().get(suborganization_id).cloned()
     }
 
     fn cache_users(&self, suborganization_id: &str, users: &[User]) {
-        if let Ok(mut cache) = self.users_cache.lock() {
-            cache.insert(suborganization_id.to_string(), users.to_vec());
-        }
+        self.lock_cache()
+            .insert(suborganization_id.to_string(), users.to_vec());
     }
 }
 
@@ -301,7 +316,7 @@ impl TurnkeyApiClient {
             oauth_providers: providers,
         };
 
-        let timestamp_ms = ntp_timestamp_ms();
+        let timestamp_ms = ntp_timestamp_ms()?;
         self.with_retry("create_oauth_providers", || async {
             client
                 .create_oauth_providers(
@@ -316,23 +331,37 @@ impl TurnkeyApiClient {
         .await?;
 
         // User has changed, remove the cache
-        self.users_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(suborganization_id);
+        self.lock_cache().remove(suborganization_id);
         Ok(())
     }
 }
 
 /// Current NTP time in milliseconds, for Turnkey activity timestamps.
-fn ntp_timestamp_ms() -> u128 {
-    u128::try_from(now_with_ntp().timestamp_millis()).unwrap_or(0)
+///
+/// # Errors
+/// Returns [`TurnkeyApiError`] if the time source yields a non-positive
+/// timestamp (a broken clock). A zero/negative timestamp is useless to Turnkey,
+/// so we fail fast rather than submit an activity that cannot succeed.
+fn ntp_timestamp_ms() -> Result<u128, TurnkeyApiError> {
+    let millis = now_with_ntp().timestamp_millis();
+    let millis = u128::try_from(millis).map_err(|_| {
+        TurnkeyApiError::Client(format!(
+            "time source returned a pre-epoch timestamp ({millis} ms)"
+        ))
+    })?;
+    if millis == 0 {
+        return Err(TurnkeyApiError::Client(
+            "time source returned a zero timestamp".to_string(),
+        ));
+    }
+    Ok(millis)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backup::turnkey::test::TestSigner;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
 
     #[test]
@@ -447,5 +476,82 @@ mod tests {
         assert_eq!(body, "invalid audience");
         // The body must reach the failure log, which formats via Display.
         assert!(error.to_string().contains("invalid audience"));
+    }
+
+    #[test]
+    fn oversized_body_is_truncated_in_error() {
+        use turnkey_client::TurnkeyClientError;
+        let big = "a".repeat(4096);
+        let error = TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+            500,
+            big.clone(),
+        ));
+        let TurnkeyApiError::ServerError { body, .. } = &error else {
+            panic!("expected ServerError, got {error:?}");
+        };
+        assert!(body.len() < big.len());
+        assert!(body.contains("truncated"));
+    }
+
+    /// Ensures there can be a recovery through retries after transient failures.
+    ///
+    /// Using `start_paused` so backoff sleeps are skipped.
+    #[tokio::test(start_paused = true)]
+    async fn with_retry_recovers_after_transient_failures() {
+        let client = TurnkeyApiClient::new();
+        let calls = AtomicU32::new(0);
+        let result: Result<u32, TurnkeyApiError> = client
+            .with_retry("op", || {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt < 2 {
+                        Err(TurnkeyApiError::Timeout)
+                    } else {
+                        Ok(42)
+                    }
+                }
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn with_retry_gives_up_after_max_attempts() {
+        let client = TurnkeyApiClient::new();
+        let calls = AtomicU32::new(0);
+        let result: Result<(), TurnkeyApiError> = client
+            .with_retry("op", || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Err(TurnkeyApiError::ServerError {
+                        status: 503,
+                        body: String::new(),
+                    })
+                }
+            })
+            .await;
+
+        assert!(matches!(result, Err(TurnkeyApiError::ServerError { .. })));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            RetryPolicy::default().max_attempts
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn with_retry_does_not_retry_non_retryable() {
+        let client = TurnkeyApiClient::new();
+        let calls = AtomicU32::new(0);
+        let result: Result<(), TurnkeyApiError> = client
+            .with_retry("op", || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { Err(TurnkeyApiError::MainUserNotFound) }
+            })
+            .await;
+
+        assert!(matches!(result, Err(TurnkeyApiError::MainUserNotFound)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

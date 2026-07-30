@@ -326,4 +326,45 @@ mod tests {
             Err(TurnkeyApiError::Consistency)
         ));
     }
+
+    /// The `providerName` is a convenience label. This test ensures that the migrations
+    /// are run based on registered `aud`s, and any incorrect labels are ignored.
+    ///
+    /// Every required audience is present by `aud`, but the first provider
+    /// carries a configured name bound to the wrong audience (reused/wrong
+    /// label). The migration must still treat this as ready.
+    #[test]
+    fn completes_when_all_audiences_present_despite_reused_name() {
+        let auds = BedrockEnvironment::Staging.turnkey_apple_audiences();
+        assert!(auds.len() >= 2, "staging needs multiple audiences");
+
+        let providers: Vec<serde_json::Value> = auds
+            .iter()
+            .enumerate()
+            .map(|(i, audience)| {
+                let provider_name = match i {
+                    0 => auds[1].provider_name,   // reused name, wrong audience
+                    1 => "legacy-apple-provider", // unique, non-configured name
+                    _ => audience.provider_name,
+                };
+                json!({
+                    "providerId": format!("p-{i}"),
+                    "providerName": provider_name,
+                    "issuer": APPLE_ISSUER,
+                    "audience": audience.client_id,
+                    "subject": "sub-apple",
+                })
+            })
+            .collect();
+        let users = vec![user_from_json(json!({
+            "userId": "user-main",
+            "userName": AUTH_USER_MAIN_USERNAME,
+            "oauthProviders": providers,
+        }))];
+
+        assert!(matches!(
+            plan(users, BedrockEnvironment::Staging),
+            Ok(Plan::SkipReady)
+        ));
+    }
 }
