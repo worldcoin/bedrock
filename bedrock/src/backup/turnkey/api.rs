@@ -137,8 +137,8 @@ fn backoff_delay(attempt: u32, policy: &RetryPolicy) -> Duration {
     if ceil_ms == 0 {
         return Duration::ZERO;
     }
-    // Full jitter: uniform in [0, ceil_ms]. Randomness need not be secure here.
-    Duration::from_millis(rand::random::<u64>() % (ceil_ms + 1))
+    // Random jitter: uniform in [0, ceil_ms]
+    Duration::from_millis(rand::random::<u64>() % ceil_ms.saturating_add(1))
 }
 
 /// Turnkey API client using the Turnkey SDK plus Bedrock's retry and caching.
@@ -305,7 +305,14 @@ impl TurnkeyApiClient {
                 .map(|_| ())
                 .map_err(TurnkeyApiError::from)
         })
-        .await
+        .await?;
+
+        // User has changed, remove the cache
+        self.users_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(suborganization_id);
+        Ok(())
     }
 }
 
