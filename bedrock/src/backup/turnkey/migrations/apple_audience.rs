@@ -277,7 +277,7 @@ mod tests {
             else {
                 panic!("expected claims-based provider");
             };
-            assert_eq!(claims.sub, "sub-apple");
+            assert_eq!(claims.sub, "sub-apple"); // CRITICAL check
             assert_eq!(claims.iss, APPLE_ISSUER);
             assert!(provider.provider_name.starts_with("APPLE"));
         }

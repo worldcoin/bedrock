@@ -57,6 +57,13 @@ pub enum TurnkeyApiError {
         /// Description of the activity failure.
         error_message: String,
     },
+    /// The SDK exhausted its attempts polling a submitted activity to completion
+    /// (it was still `PENDING`).
+    #[error("Turnkey activity still pending after polling: {error_message}")]
+    ActivityPollingExceeded {
+        /// The SDK's description (includes the retry count).
+        error_message: String,
+    },
     /// Producing a request stamp failed (signing or key retrieval).
     #[error("failed to produce request stamp: {0}")]
     Signer(String),
@@ -109,10 +116,14 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
             TurnkeyClientError::StamperError(source) => {
                 Self::Signer(source.to_string())
             }
+            other @ TurnkeyClientError::ExceededRetries(_) => {
+                Self::ActivityPollingExceeded {
+                    error_message: other.to_string(),
+                }
+            }
             other @ (TurnkeyClientError::ActivityFailed(_)
             | TurnkeyClientError::UnexpectedActivityStatus(_)
             | TurnkeyClientError::ActivityRequiresApproval(_)
-            | TurnkeyClientError::ExceededRetries(_)
             | TurnkeyClientError::MissingActivity
             | TurnkeyClientError::MissingResult
             | TurnkeyClientError::MissingInnerResult

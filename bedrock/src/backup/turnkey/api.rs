@@ -115,6 +115,7 @@ const fn is_retryable(error: &TurnkeyApiError) -> bool {
         TurnkeyApiError::Timeout
         | TurnkeyApiError::RateLimited { .. }
         | TurnkeyApiError::ServerError { .. }
+        | TurnkeyApiError::ActivityPollingExceeded { .. }
         | TurnkeyApiError::Transport { .. } => true,
         TurnkeyApiError::Unauthorized { .. }
         | TurnkeyApiError::NotFound { .. }
@@ -218,6 +219,14 @@ impl TurnkeyApiClient {
     }
 }
 
+/// # Warning
+/// For any activities (i.e. requests that change the state) is is imperative that
+/// the `timestamp_ms` is computed once outside any retry looks. Turnkey submissions
+/// are idempotent on a fingerprint, maintaining the same `timestamp_ms` ensures a
+/// request is not executed twice.
+///
+/// Reference: <https://docs.turnkey.com/api-reference/activities/overview>.
+///
 impl TurnkeyApiClient {
     /// Resolves the sub-organization id for the user based on the public
     /// key provided. Internally uses `whoami`.
@@ -277,6 +286,9 @@ impl TurnkeyApiClient {
     }
 
     /// Creates OAuth providers on a user (stamped by the write/submit signer).
+    ///
+    /// All `providers` are submitted in a **single** `CreateOauthProviders`
+    /// activity, so they are added atomically.
     ///
     /// # Errors
     /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
@@ -363,6 +375,9 @@ mod tests {
         assert!(is_retryable(&TurnkeyApiError::Transport {
             error_message: "reset".to_string()
         }));
+        assert!(is_retryable(&TurnkeyApiError::ActivityPollingExceeded {
+            error_message: "still pending".to_string()
+        }));
 
         assert!(!is_retryable(&TurnkeyApiError::Unauthorized {
             body: body()
@@ -412,6 +427,11 @@ mod tests {
         assert!(matches!(
             TurnkeyApiError::from(TurnkeyClientError::MissingResult),
             TurnkeyApiError::Activity { .. }
+        ));
+        // Polling giving up is transient (retryable), not a rejected activity.
+        assert!(matches!(
+            TurnkeyApiError::from(TurnkeyClientError::ExceededRetries(3)),
+            TurnkeyApiError::ActivityPollingExceeded { .. }
         ));
     }
 

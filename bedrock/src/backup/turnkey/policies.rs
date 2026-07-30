@@ -68,7 +68,7 @@ const PRODUCTION_APPLE_AUDIENCES: &[AppleAudience] = &[
     },
     // World ID iOS.
     AppleAudience {
-        provider_name: "APPLE-WORLD-ID-APP",
+        provider_name: "APPLE-WID",
         client_id: "org.world.id",
     },
     // Android (web-based Sign in with Apple).
