@@ -88,9 +88,8 @@ mod integration_tests {
         set_logger(Arc::new(StdoutLogger));
 
         let sync_key = std::env::var("TURNKEY_SYNC_KEY").unwrap();
-        let sync_factor =
-            P256Signer::verify(Arc::new(TestSigner::from_hex(&sync_key)))
-                .expect("valid sync factor key");
+        let sync_factor = P256Signer::verify(Arc::new(TestSigner::from_hex(&sync_key)))
+            .expect("valid sync factor key");
 
         let main_factor = std::env::var("TURNKEY_MAIN_KEY").ok().map(|key| {
             Arc::new(
