@@ -11,31 +11,51 @@ pub enum TurnkeyApiError {
     #[error("Turnkey request timed out")]
     Timeout,
     /// Turnkey rate-limited the request (HTTP 429).
-    #[error("Turnkey rate limited the request")]
-    RateLimited,
+    #[error("Turnkey rate limited the request: {body}")]
+    RateLimited {
+        /// The upstream response body, for diagnostics.
+        body: String,
+    },
     /// The request was not authorized (HTTP 401/403).
-    #[error("Turnkey request unauthorized")]
-    Unauthorized,
+    #[error("Turnkey request unauthorized: {body}")]
+    Unauthorized {
+        /// The upstream response body, for diagnostics.
+        body: String,
+    },
     /// The requested resource was not found (HTTP 404).
-    #[error("Turnkey resource not found")]
-    NotFound,
+    #[error("Turnkey resource not found: {body}")]
+    NotFound {
+        /// The upstream response body, for diagnostics.
+        body: String,
+    },
     /// Turnkey returned a server error (HTTP 5xx).
-    #[error("Turnkey server error: status {status}")]
+    #[error("Turnkey server error: status {status}: {body}")]
     ServerError {
         /// The HTTP status code returned.
         status: u16,
+        /// The upstream response body, for diagnostics.
+        body: String,
+    },
+    /// The request was rejected with a client error (HTTP 4xx other than
+    /// 401/403/404/429). Permanent; must not be retried.
+    #[error("Turnkey client request rejected: status {status}: {body}")]
+    ClientError {
+        /// The HTTP status code returned.
+        status: u16,
+        /// The upstream response body, for diagnostics.
+        body: String,
     },
     /// A transport-level failure (connectivity, DNS, TLS). Never contains a URL.
-    #[error("Turnkey transport error: {message}")]
+    #[error("Turnkey transport error: {error_message}")]
     Transport {
         /// Description of the transport failure.
-        message: String,
+        error_message: String,
     },
     /// A submitted activity failed, was rejected, or required extra approval.
-    #[error("Turnkey activity error: {message}")]
+    #[error("Turnkey activity error: {error_message}")]
     Activity {
         /// Description of the activity failure.
-        message: String,
+        error_message: String,
     },
     /// Producing a request stamp failed (signing or key retrieval).
     #[error("failed to produce request stamp: {0}")]
@@ -67,21 +87,24 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
                     Self::Timeout
                 } else {
                     Self::Transport {
-                        message: source.without_url().to_string(),
+                        error_message: source.without_url().to_string(),
                     }
                 }
             }
             TurnkeyClientError::ReqwestBuilder(source) => Self::Transport {
-                message: source.without_url().to_string(),
+                error_message: source.without_url().to_string(),
             },
-            TurnkeyClientError::UnexpectedHttpStatus(code, _) => match code {
-                429 => Self::RateLimited,
-                401 | 403 => Self::Unauthorized,
-                404 => Self::NotFound,
-                500..=599 => Self::ServerError { status: code },
-                _ => Self::Transport {
-                    message: format!("unexpected HTTP status {code}"),
-                },
+            TurnkeyClientError::UnexpectedHttpStatus(code, body) => match code {
+                429 => Self::RateLimited { body },
+                401 | 403 => Self::Unauthorized { body },
+                404 => Self::NotFound { body },
+                400..=499 => Self::ClientError { status: code, body },
+                500..=599 => Self::ServerError { status: code, body },
+                // NOTE: Turnkey may ocassionally append public keys or sub-organization IDs to bodies,
+                // which may be ocassionally logged. We're relying on the short TTL of logs for this data
+                // not to be persisted. Having full errors logs for such a critical system is imperative
+                // for its maintenance.
+                _ => Self::Client(format!("unexpected HTTP status {code}: {body}")),
             },
             TurnkeyClientError::StamperError(source) => {
                 Self::Signer(source.to_string())
@@ -94,7 +117,7 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
             | TurnkeyClientError::MissingResult
             | TurnkeyClientError::MissingInnerResult
             | TurnkeyClientError::UnexpectedInnerActivityResult(_)) => Self::Activity {
-                message: other.to_string(),
+                error_message: other.to_string(),
             },
             other => Self::Client(other.to_string()),
         }

@@ -113,11 +113,12 @@ impl Default for RetryPolicy {
 const fn is_retryable(error: &TurnkeyApiError) -> bool {
     match error {
         TurnkeyApiError::Timeout
-        | TurnkeyApiError::RateLimited
+        | TurnkeyApiError::RateLimited { .. }
         | TurnkeyApiError::ServerError { .. }
         | TurnkeyApiError::Transport { .. } => true,
-        TurnkeyApiError::Unauthorized
-        | TurnkeyApiError::NotFound
+        TurnkeyApiError::Unauthorized { .. }
+        | TurnkeyApiError::NotFound { .. }
+        | TurnkeyApiError::ClientError { .. }
         | TurnkeyApiError::Activity { .. }
         | TurnkeyApiError::Signer(_)
         | TurnkeyApiError::Client(_)
@@ -345,17 +346,27 @@ mod tests {
 
     #[test]
     fn retryable_classes_only() {
+        let body = || String::new();
         assert!(is_retryable(&TurnkeyApiError::Timeout));
-        assert!(is_retryable(&TurnkeyApiError::RateLimited));
-        assert!(is_retryable(&TurnkeyApiError::ServerError { status: 503 }));
+        assert!(is_retryable(&TurnkeyApiError::RateLimited { body: body() }));
+        assert!(is_retryable(&TurnkeyApiError::ServerError {
+            status: 503,
+            body: body()
+        }));
         assert!(is_retryable(&TurnkeyApiError::Transport {
-            message: "reset".to_string()
+            error_message: "reset".to_string()
         }));
 
-        assert!(!is_retryable(&TurnkeyApiError::Unauthorized));
-        assert!(!is_retryable(&TurnkeyApiError::NotFound));
+        assert!(!is_retryable(&TurnkeyApiError::Unauthorized {
+            body: body()
+        }));
+        assert!(!is_retryable(&TurnkeyApiError::NotFound { body: body() }));
+        assert!(!is_retryable(&TurnkeyApiError::ClientError {
+            status: 400,
+            body: body()
+        }));
         assert!(!is_retryable(&TurnkeyApiError::Activity {
-            message: "failed".to_string()
+            error_message: "failed".to_string()
         }));
     }
 
@@ -375,18 +386,41 @@ mod tests {
                 429,
                 String::new()
             )),
-            TurnkeyApiError::RateLimited
+            TurnkeyApiError::RateLimited { .. }
         ));
         assert!(matches!(
             TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
                 500,
                 String::new()
             )),
-            TurnkeyApiError::ServerError { status: 500 }
+            TurnkeyApiError::ServerError { status: 500, .. }
+        ));
+        assert!(matches!(
+            TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+                409,
+                String::new()
+            )),
+            TurnkeyApiError::ClientError { status: 409, .. }
         ));
         assert!(matches!(
             TurnkeyApiError::from(TurnkeyClientError::MissingResult),
             TurnkeyApiError::Activity { .. }
         ));
+    }
+
+    #[test]
+    fn http_error_preserves_response_body() {
+        use turnkey_client::TurnkeyClientError;
+        let error = TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+            400,
+            "invalid audience".to_string(),
+        ));
+        let TurnkeyApiError::ClientError { status, body } = &error else {
+            panic!("expected ClientError, got {error:?}");
+        };
+        assert_eq!(*status, 400);
+        assert_eq!(body, "invalid audience");
+        // The body must reach the failure log, which formats via Display.
+        assert!(error.to_string().contains("invalid audience"));
     }
 }
