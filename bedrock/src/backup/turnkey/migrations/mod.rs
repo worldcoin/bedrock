@@ -1,5 +1,5 @@
-//! Turnkey account migrations. The purpose is to check the state of a user's
-//! Turnkey account to ensure it is correct and up-to-date.
+//! Turnkey account migrations. The purpose is to check the state of a
+//! user's Turnkey account to ensure it is correct and up-to-date.
 
 use std::sync::Arc;
 
@@ -17,8 +17,10 @@ use apple_audience::MigrationAppleAudience;
 /// Every Turnkey migration, in the order they are applied.
 ///
 /// Single source of truth for which migrations exist. To add one, create a
-/// module under `migrations/`, implement [`TurnkeyMigration`], and append it here.
-const MIGRATIONS: &[&dyn TurnkeyMigration] = &[&MigrationAppleAudience];
+/// module under `migrations/`, implement [`TurnkeyMigration`], and append it here. It is
+/// recommended to keep migrations that don't require a Main Factor first as migrations are
+/// fail fast.
+pub(super) const MIGRATIONS: &[&dyn TurnkeyMigration] = &[&MigrationAppleAudience];
 
 // TODO Migrations:
 // 1. Ensure `auth_user_main` is the only one in the root quorum (housekeeping)
@@ -40,7 +42,7 @@ pub enum TurnkeyMigrationOutcome {
 }
 
 /// Internal outcome of a single migration run.
-enum MigrationOutcome {
+pub(super) enum MigrationOutcome {
     /// The migration applied changes, described by `details`.
     Applied { details: Vec<String> },
     /// The migration was a no-op for the stated `reason`.
@@ -48,7 +50,7 @@ enum MigrationOutcome {
 }
 
 /// Context passed to each migration.
-struct MigrationContext<'a> {
+pub(super) struct MigrationContext<'a> {
     suborganization_id: &'a str,
     environment: BedrockEnvironment,
     sync_factor: Arc<dyn KeypairSigner>,
@@ -58,7 +60,7 @@ struct MigrationContext<'a> {
 
 /// A single reconciliation step against the Turnkey sub-organization.
 #[async_trait::async_trait]
-trait TurnkeyMigration: Send + Sync {
+pub(super) trait TurnkeyMigration: Send + Sync {
     /// Stable identifier used in logs.
     fn id(&self) -> &'static str;
     /// Human-friendly description of what the migration intends to do.
@@ -72,32 +74,16 @@ trait TurnkeyMigration: Send + Sync {
     ) -> Result<MigrationOutcome, TurnkeyApiError>;
 }
 
-/// Runs all registered migrations and returns the overall [`TurnkeyMigrationOutcome`].
+/// Runs the given migrations in order and returns the overall
+/// [`TurnkeyMigrationOutcome`]. Migrations that can run with the available signers
+/// run immediately; those requiring the main factor when it is absent are deferred
+/// and reported. Fails fast on the first error.
+///
+/// Production callers pass [`MIGRATIONS`]; tests pass a scripted list.
 ///
 /// # Errors
 /// Returns [`TurnkeyApiError`] if a migration fails (transport, activity, parsing).
-pub async fn run_migrations(
-    suborganization_id: &str,
-    sync_factor: Arc<dyn KeypairSigner>,
-    main_factor: Option<Arc<dyn KeypairSigner>>,
-    api: &TurnkeyApiClient,
-    environment: BedrockEnvironment,
-) -> Result<TurnkeyMigrationOutcome, TurnkeyApiError> {
-    run_migration_list(
-        MIGRATIONS,
-        suborganization_id,
-        sync_factor,
-        main_factor,
-        api,
-        environment,
-    )
-    .await
-}
-
-/// Runs a specific list of migrations. Migrations that can run with the available
-/// signers run in order; those requiring the main factor when it is absent are
-/// deferred and reported. Fails fast on the first error.
-async fn run_migration_list(
+pub(super) async fn run_migration_list(
     migrations: &[&dyn TurnkeyMigration],
     suborganization_id: &str,
     sync_factor: Arc<dyn KeypairSigner>,
@@ -109,6 +95,7 @@ async fn run_migration_list(
 
     for migration in migrations {
         if migration.requires_main_factor() && main_factor.is_none() {
+            // TODO: downgrade to debug after shipping
             info!(
                 "turnkey.migration.deferred migration={} reason=main_factor_required",
                 migration.id()
@@ -168,14 +155,12 @@ mod tests {
         Arc::new(TestSigner::new())
     }
 
-    /// Canned result for a [`FakeMigration`].
     enum FakeResult {
         Applied,
         Skipped,
         Fail,
     }
 
-    /// A migration with scripted behaviour that records whether it ran.
     struct FakeMigration {
         id: &'static str,
         requires_main: bool,

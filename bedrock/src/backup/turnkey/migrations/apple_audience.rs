@@ -17,9 +17,7 @@ use crate::primitives::config::BedrockEnvironment;
 use crate::warn;
 
 use super::super::error::TurnkeyApiError;
-use super::super::policies::{
-    AppleAudience, APPLE_ISSUER, APPLE_PROVIDER_NAME_PREFIX, AUTH_USER_MAIN_USERNAME,
-};
+use super::super::policies::{AppleAudience, APPLE_ISSUER, AUTH_USER_MAIN_USERNAME};
 use super::{MigrationContext, MigrationOutcome, TurnkeyMigration};
 
 /// Ensures `auth_user_main` has an Apple OAuth provider for every required
@@ -135,7 +133,7 @@ fn plan(
     let providers = missing
         .iter()
         .map(|audience| OauthProviderParamsV2 {
-            provider_name: format!("{APPLE_PROVIDER_NAME_PREFIX}{}", audience.label),
+            provider_name: audience.provider_name.to_string(),
             token_or_claims: Some(TokenOrClaims::OidcClaims(OidcClaims {
                 iss: APPLE_ISSUER.to_string(),
                 sub: subject.clone(),
@@ -251,9 +249,7 @@ mod tests {
             };
             assert_eq!(claims.sub, "sub-apple");
             assert_eq!(claims.iss, APPLE_ISSUER);
-            assert!(provider
-                .provider_name
-                .starts_with(APPLE_PROVIDER_NAME_PREFIX));
+            assert!(provider.provider_name.starts_with("APPLE"));
         }
     }
 

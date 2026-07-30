@@ -21,6 +21,16 @@ impl TestSigner {
             p256::SecretKey::from_slice(&TEST_PRIVATE_KEY).expect("valid p256 key");
         Self { secret }
     }
+
+    /// Builds a signer from a hex-encoded P-256 private key.
+    ///
+    /// For integration tests that load a real key from the environment — do not
+    /// hardcode real key material in source.
+    pub fn from_hex(hex_key: &str) -> Self {
+        let bytes = hex::decode(hex_key).expect("valid hex key");
+        let secret = p256::SecretKey::from_slice(&bytes).expect("valid p256 key");
+        Self { secret }
+    }
 }
 
 impl Default for TestSigner {
