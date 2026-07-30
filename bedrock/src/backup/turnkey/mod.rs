@@ -21,9 +21,6 @@ mod error;
 mod migrations;
 mod policies;
 
-#[expect(unused_imports, reason = "used in docs")]
-use policies::AUTH_USER_MAIN_USERNAME;
-
 #[cfg(test)]
 mod test;
 
@@ -65,7 +62,7 @@ impl TurnkeyManager {
     ///   thereby validated — from its sync signer; stamps read/query requests and
     ///   resolves the sub-organization.
     /// - `main_factor`: an optional [`P256Signer`] for privileged writes with
-    ///   [`AUTH_USER_MAIN_USERNAME`], i.e. the ephemeral session key established
+    ///   [`policies::AUTH_USER_MAIN_USERNAME`], i.e. the ephemeral session key established
     ///   from a Main Factor.
     ///
     /// # Threading
