@@ -121,7 +121,8 @@ const fn is_retryable(error: &TurnkeyApiError) -> bool {
         | TurnkeyApiError::Activity { .. }
         | TurnkeyApiError::Signer(_)
         | TurnkeyApiError::Client(_)
-        | TurnkeyApiError::MainUserNotFound => false,
+        | TurnkeyApiError::MainUserNotFound
+        | TurnkeyApiError::Consistency => false,
     }
 }
 
@@ -172,7 +173,7 @@ impl TurnkeyApiClient {
             .map_err(TurnkeyApiError::from)
     }
 
-    /// Runs `op`, retrying transient failures with bounded backoff and full jitter.
+    /// Runs `op`, retrying transient failures with bounded backoff and jitter.
     async fn with_retry<T, Fut>(
         &self,
         operation: &str,
@@ -217,12 +218,8 @@ impl TurnkeyApiClient {
 }
 
 impl TurnkeyApiClient {
-    /// Resolves the sub-organization id for `stamper`'s credential via `whoami`.
-    ///
-    /// `parent_organization_id` is the org to query against; Turnkey returns the
-    /// sub-organization that the stamping credential belongs to. Unlike the
-    /// auth-proxy public-key lookup, this works for a credential that has never
-    /// been used before, because the sub-org is derived from the request stamp.
+    /// Resolves the sub-organization id for the user based on the public
+    /// key provided. Internally uses `whoami`.
     ///
     /// # Errors
     /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
@@ -294,10 +291,8 @@ impl TurnkeyApiClient {
             user_id: user_id.to_string(),
             oauth_providers: providers,
         };
-        // Fixed timestamp across retries so Turnkey de-duplicates identical
-        // submissions (a retry after a timeout must not create duplicates).
-        let timestamp_ms = ntp_timestamp_ms();
 
+        let timestamp_ms = ntp_timestamp_ms();
         self.with_retry("create_oauth_providers", || async {
             client
                 .create_oauth_providers(

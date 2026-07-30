@@ -26,7 +26,7 @@ mod test;
 
 use api::TurnkeyApiClient;
 pub use error::TurnkeyMigrationError;
-use migrations::{run_migrations, TurnkeyMigrationOutcome};
+use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::current_environment_or_default;
 use crate::primitives::KeypairSigner;
@@ -97,7 +97,8 @@ impl TurnkeyManager {
             }
         };
 
-        match run_migrations(
+        match run_migration_list(
+            MIGRATIONS,
             &suborganization_id,
             sync_factor,
             main_factor,

@@ -46,6 +46,9 @@ pub enum TurnkeyApiError {
     /// The expected main user (`auth_user_main`) was not found in the sub-organization.
     #[error("main user not found in sub-organization")]
     MainUserNotFound,
+    /// The account shows a data consistency error which cannot be automatically resolved. Treat as critical.
+    #[error("critical consistency error")]
+    Consistency,
 }
 
 /// Maps a signer failure to [`TurnkeyApiError::Signer`], preserving its message.

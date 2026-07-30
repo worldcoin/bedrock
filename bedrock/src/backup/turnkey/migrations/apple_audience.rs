@@ -1,9 +1,4 @@
-//! Migration: ensure `auth_user_main` has an Apple OAuth provider for every
-//! required audience.
-//!
-//! If the user already has at least one Apple provider, its `subject` is reused
-//! and providers are created (claims-based) for any missing required audiences.
-//! If the user has no Apple provider at all, this is a no-op.
+//! See [`MigrationAppleAudience`]
 
 use std::collections::HashSet;
 
@@ -14,14 +9,24 @@ use turnkey_client::generated::immutable::activity::v1::{
 };
 
 use crate::primitives::config::BedrockEnvironment;
-use crate::warn;
 
 use super::super::error::TurnkeyApiError;
 use super::super::policies::{AppleAudience, APPLE_ISSUER, AUTH_USER_MAIN_USERNAME};
 use super::{MigrationContext, MigrationOutcome, TurnkeyMigration};
 
-/// Ensures `auth_user_main` has an Apple OAuth provider for every required
-/// audience via claims-based `create_oauth_providers`.
+/// If the user has a "Sign in with Apple" configured, ensure `auth_user_main` has
+/// an Apple OAuth provider for every required audience.
+///
+/// The reason why multiple audiences must exist for Apple OIDC is because each client
+/// has its own audience. World App has the iOS App, the World ID App and the Android App,
+/// each with its own `aud`. Particularly for the Android App, the login is done via a webview
+/// as there's no native SDK. This means that all Android clients use the same audience.
+///
+/// NOTE that Apple assigns the same `sub` to all Apple OIDC tokens under the same developer
+/// account.
+///
+/// If the user already has at least one Apple provider, its `subject` is reused
+/// and all remaining providers are created. If the user has no Apple provider at all, this is a no-op.
 pub(super) struct MigrationAppleAudience;
 
 #[async_trait::async_trait]
@@ -31,7 +36,7 @@ impl TurnkeyMigration for MigrationAppleAudience {
     }
 
     fn description(&self) -> &'static str {
-        "Register Sign in with Apple for the main user across all World app audiences"
+        "Enable Sign in with Apple for all iOS and Android apps."
     }
 
     fn requires_main_factor(&self) -> bool {
@@ -47,10 +52,13 @@ impl TurnkeyMigration for MigrationAppleAudience {
             .get_users(ctx.suborganization_id, ctx.sync_factor.clone())
             .await?;
 
-        match plan(users, ctx.environment)? {
-            Plan::Skip(reason) => Ok(MigrationOutcome::Skipped {
-                reason: reason.to_string(),
-            }),
+        let plan = plan(users, ctx.environment)?;
+
+        match plan {
+            Plan::SkipNoAppleProvider | Plan::SkipReady => {
+                crate::info!("apple_audience skipped: {plan}");
+                Ok(MigrationOutcome::Skipped)
+            }
             Plan::Create { user_id, providers } => {
                 let main_factor = ctx.main_factor.clone().ok_or_else(|| {
                     TurnkeyApiError::Client(
@@ -75,8 +83,10 @@ impl TurnkeyMigration for MigrationAppleAudience {
 
 /// The action to take, computed purely from the sub-organization's users.
 enum Plan {
-    /// Nothing to do; carries the reason.
-    Skip(&'static str),
+    /// Nothing to do; the user has no Apple provider.
+    SkipNoAppleProvider,
+    /// Nothing to do; all providers already set.
+    SkipReady,
     /// Create these OAuth providers on the given user.
     Create {
         user_id: String,
@@ -84,7 +94,26 @@ enum Plan {
     },
 }
 
-/// Computes the plan from the sub-org's users (pure; no I/O).
+impl std::fmt::Display for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SkipNoAppleProvider => {
+                f.write_str("skip: user has no Apple provider")
+            }
+            Self::SkipReady => {
+                f.write_str("skip: all providers are already configured")
+            }
+            Self::Create {
+                user_id: _,
+                providers,
+            } => {
+                write!(f, "create {} OAuth provider(s)", providers.len())
+            }
+        }
+    }
+}
+
+/// Computes the plan from the sub-org's users (pure function).
 ///
 /// # Errors
 /// Returns [`TurnkeyApiError::MainUserNotFound`] if `auth_user_main` is absent.
@@ -104,15 +133,19 @@ fn plan(
         .collect();
 
     let Some(first) = apple_providers.first() else {
-        return Ok(Plan::Skip("no Apple OAuth provider present"));
+        return Ok(Plan::SkipNoAppleProvider);
     };
+
     let subject = first.subject.clone();
 
     if apple_providers
         .iter()
         .any(|provider| provider.subject != subject)
     {
-        warn!("turnkey.apple_audience.subject_mismatch");
+        crate::error!(
+            "critical consistency error. user has Apple OIDCs with different `sub`s"
+        );
+        return Err(TurnkeyApiError::Consistency);
     }
 
     let existing: HashSet<&str> = apple_providers
@@ -127,7 +160,7 @@ fn plan(
         .collect();
 
     if missing.is_empty() {
-        return Ok(Plan::Skip("all required Apple audiences present"));
+        return Ok(Plan::SkipReady);
     }
 
     let providers = missing
@@ -201,7 +234,7 @@ mod tests {
 
         assert!(matches!(
             plan(users, BedrockEnvironment::Staging),
-            Ok(Plan::Skip(_))
+            Ok(Plan::SkipNoAppleProvider)
         ));
     }
 
@@ -212,7 +245,7 @@ mod tests {
 
         assert!(matches!(
             plan(users, BedrockEnvironment::Staging),
-            Ok(Plan::Skip(_))
+            Ok(Plan::SkipReady)
         ));
     }
 
@@ -264,6 +297,36 @@ mod tests {
         assert!(matches!(
             plan(users, BedrockEnvironment::Staging),
             Err(TurnkeyApiError::MainUserNotFound)
+        ));
+    }
+
+    #[test]
+    fn errors_when_account_has_multiple_apple_providers_with_different_sub() {
+        let auds = staging_audiences();
+        let users = vec![user_from_json(json!({
+            "userId": "user-main",
+            "userName": AUTH_USER_MAIN_USERNAME,
+            "oauthProviders": [
+                {
+                    "providerId": "p-0",
+                    "providerName": "apple",
+                    "issuer": APPLE_ISSUER,
+                    "audience": auds[0],
+                    "subject": "sub-a",
+                },
+                {
+                    "providerId": "p-1",
+                    "providerName": "apple",
+                    "issuer": APPLE_ISSUER,
+                    "audience": auds[1],
+                    "subject": "sub-b",
+                },
+            ],
+        }))];
+
+        assert!(matches!(
+            plan(users, BedrockEnvironment::Staging),
+            Err(TurnkeyApiError::Consistency)
         ));
     }
 }

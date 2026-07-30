@@ -45,8 +45,8 @@ pub enum TurnkeyMigrationOutcome {
 pub(super) enum MigrationOutcome {
     /// The migration applied changes, described by `details`.
     Applied { details: Vec<String> },
-    /// The migration was a no-op for the stated `reason`.
-    Skipped { reason: String },
+    /// The migration was a no-op. This is a success case.
+    Skipped,
 }
 
 /// Context passed to each migration.
@@ -120,12 +120,7 @@ pub(super) async fn run_migration_list(
                     details.len()
                 );
             }
-            Ok(MigrationOutcome::Skipped { reason }) => {
-                info!(
-                    "turnkey.migration.skipped migration={} reason={reason}",
-                    migration.id()
-                );
-            }
+            Ok(MigrationOutcome::Skipped) => {}
             Err(error) => {
                 error!(
                     "turnkey.migration.failed migration={} err={error}",
@@ -188,9 +183,7 @@ mod tests {
                 FakeResult::Applied => Ok(MigrationOutcome::Applied {
                     details: vec!["change".to_string()],
                 }),
-                FakeResult::Skipped => Ok(MigrationOutcome::Skipped {
-                    reason: "noop".to_string(),
-                }),
+                FakeResult::Skipped => Ok(MigrationOutcome::Skipped),
                 FakeResult::Fail => Err(TurnkeyApiError::MainUserNotFound),
             }
         }
