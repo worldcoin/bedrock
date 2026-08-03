@@ -78,6 +78,40 @@ pub enum TurnkeyApiError {
     Consistency,
 }
 
+impl TurnkeyApiError {
+    /// Whether this error is worth retrying (transient classes only).
+    ///
+    /// `ActivityPollingExceeded` is deliberately **not** retryable: the activity
+    /// is already submitted. If execution fails at the TEE, the next migration will pick it up.
+    pub(super) const fn is_retryable(&self) -> bool {
+        match self {
+            Self::Timeout
+            | Self::RateLimited { .. }
+            | Self::ServerError { .. }
+            | Self::Transport { .. } => true,
+            Self::Unauthorized { .. }
+            | Self::NotFound { .. }
+            | Self::ClientError { .. }
+            | Self::Activity { .. }
+            | Self::ActivityPollingExceeded { .. }
+            | Self::Signer(_)
+            | Self::Client(_)
+            | Self::MainUserNotFound
+            | Self::Consistency => false,
+        }
+    }
+
+    /// Collapses this rich internal error into the opaque client-facing
+    /// [`TurnkeyMigrationError`], preserving only the coarse retry classification.
+    pub(super) const fn to_migration_error(&self) -> TurnkeyMigrationError {
+        if self.is_retryable() {
+            TurnkeyMigrationError::Retryable
+        } else {
+            TurnkeyMigrationError::Failed
+        }
+    }
+}
+
 /// Maps a signer failure to [`TurnkeyApiError::Signer`], preserving its message.
 impl From<KeypairSignerError> for TurnkeyApiError {
     fn from(error: KeypairSignerError) -> Self {
@@ -149,6 +183,13 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
             | TurnkeyClientError::UnexpectedInnerActivityResult(_)) => Self::Activity {
                 error_message: other.to_string(),
             },
+            // Response-header parsing fails before the SDK inspects the status, so
+            // an error response missing Content-Type surfaces here (e.g. CloudFlare's default error page)
+            other @ (TurnkeyClientError::MissingContentTypeHeader
+            | TurnkeyClientError::HeaderToStrError(_)
+            | TurnkeyClientError::HeaderFromStrError(_)) => Self::Transport {
+                error_message: other.to_string(),
+            },
             other => Self::Client(other.to_string()),
         }
     }
@@ -160,7 +201,12 @@ impl From<TurnkeyClientError> for TurnkeyApiError {
 /// client only learns that the run did not succeed.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum TurnkeyMigrationError {
-    /// A migration run failed. See the Bedrock logs for details.
+    /// The run failed fairly permanent; retrying will not help. Typically a
+    /// misconfiguration, a consistency error, or an unauthorized signer.
     #[error("turnkey migration run failed")]
     Failed,
+    /// The run failed transiently (timeout, connectivity, rate limiting, an
+    /// overall deadline, or a concurrent run). A later retry may succeed.
+    #[error("turnkey migration run failed transiently; a retry may succeed")]
+    Retryable,
 }

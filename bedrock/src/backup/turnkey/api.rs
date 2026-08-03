@@ -33,6 +33,17 @@ use crate::warn;
 
 use super::error::TurnkeyApiError;
 
+/// A read/query signer — a **sync factor**. Stamps `whoami` and `get_users`,
+/// never privileged writes. A newtype so the split can't be crossed by accident.
+#[derive(Clone, Copy)]
+pub(super) struct SyncFactor<'a>(pub(super) &'a P256Signer);
+
+/// A write/submit signer — a **main factor**. Stamps privileged activities such
+/// as `create_oauth_providers`. A newtype so it can't be passed where a sync
+/// factor is expected (or vice versa).
+#[derive(Clone, Copy)]
+pub(super) struct MainFactor<'a>(pub(super) &'a P256Signer);
+
 /// Adapts a [`P256Signer`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
 /// client can stamp requests with a key held in native secure storage.
 ///
@@ -105,25 +116,6 @@ impl Default for RetryPolicy {
     }
 }
 
-/// Returns whether an error is worth retrying (transient classes only).
-const fn is_retryable(error: &TurnkeyApiError) -> bool {
-    match error {
-        TurnkeyApiError::Timeout
-        | TurnkeyApiError::RateLimited { .. }
-        | TurnkeyApiError::ServerError { .. }
-        | TurnkeyApiError::ActivityPollingExceeded { .. }
-        | TurnkeyApiError::Transport { .. } => true,
-        TurnkeyApiError::Unauthorized { .. }
-        | TurnkeyApiError::NotFound { .. }
-        | TurnkeyApiError::ClientError { .. }
-        | TurnkeyApiError::Activity { .. }
-        | TurnkeyApiError::Signer(_)
-        | TurnkeyApiError::Client(_)
-        | TurnkeyApiError::MainUserNotFound
-        | TurnkeyApiError::Consistency => false,
-    }
-}
-
 /// Computes the backoff delay for `attempt` (1-indexed) with full jitter,
 /// capped at [`RetryPolicy::max_delay`].
 fn backoff_delay(attempt: u32, policy: &RetryPolicy) -> Duration {
@@ -186,7 +178,7 @@ impl TurnkeyApiClient {
                 Ok(value) => return Ok(value),
                 Err(error) => {
                     attempt += 1;
-                    if attempt >= self.retry.max_attempts || !is_retryable(&error) {
+                    if attempt >= self.retry.max_attempts || !error.is_retryable() {
                         warn!("turnkey.request.failed op={operation} attempts={attempt} err={error}");
                         return Err(error);
                     }
@@ -247,9 +239,9 @@ impl TurnkeyApiClient {
     pub async fn resolve_suborganization_id(
         &self,
         parent_organization_id: &str,
-        signer: &P256Signer,
+        signer: SyncFactor<'_>,
     ) -> Result<String, TurnkeyApiError> {
-        let client = Self::sdk_client(signer)?;
+        let client = Self::sdk_client(signer.0)?;
         let request = GetWhoamiRequest {
             organization_id: parent_organization_id.to_string(),
         };
@@ -272,12 +264,12 @@ impl TurnkeyApiClient {
     pub async fn get_users(
         &self,
         suborganization_id: &str,
-        signer: &P256Signer,
+        signer: SyncFactor<'_>,
     ) -> Result<Vec<User>, TurnkeyApiError> {
         if let Some(cached) = self.cached_users(suborganization_id) {
             return Ok(cached);
         }
-        let client = Self::sdk_client(signer)?;
+        let client = Self::sdk_client(signer.0)?;
         let request = GetUsersRequest {
             organization_id: suborganization_id.to_string(),
         };
@@ -308,27 +300,37 @@ impl TurnkeyApiClient {
         suborganization_id: &str,
         user_id: &str,
         providers: Vec<OauthProviderParamsV2>,
-        signer: &P256Signer,
+        signer: MainFactor<'_>,
     ) -> Result<(), TurnkeyApiError> {
-        let client = Self::sdk_client(signer)?;
+        let client = Self::sdk_client(signer.0)?;
+        let requested = providers.len();
         let intent = CreateOauthProvidersIntentV2 {
             user_id: user_id.to_string(),
             oauth_providers: providers,
         };
 
         let timestamp_ms = ntp_timestamp_ms()?;
-        self.with_retry("create_oauth_providers", || async {
-            client
-                .create_oauth_providers(
-                    suborganization_id.to_string(),
-                    timestamp_ms,
-                    intent.clone(),
-                )
-                .await
-                .map(|_| ())
-                .map_err(TurnkeyApiError::from)
-        })
-        .await?;
+        let created = self
+            .with_retry("create_oauth_providers", || async {
+                client
+                    .create_oauth_providers(
+                        suborganization_id.to_string(),
+                        timestamp_ms,
+                        intent.clone(),
+                    )
+                    .await
+                    .map(|activity| activity.result.provider_ids.len())
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        if created != requested {
+            // If Turnkey's activity succeeded but the created count is mismatched, this is surfacing
+            // a major consistency problem with Turnkey. Requires immediate attention.
+            crate::error!(
+                "CRITICAL. turnkey.create_oauth_providers.count_mismatch requested={requested} created={created}"
+            );
+        }
 
         // User has changed, remove the cache
         self.lock_cache().remove(suborganization_id);
@@ -393,30 +395,35 @@ mod tests {
     #[test]
     fn retryable_classes_only() {
         let body = || String::new();
-        assert!(is_retryable(&TurnkeyApiError::Timeout));
-        assert!(is_retryable(&TurnkeyApiError::RateLimited { body: body() }));
-        assert!(is_retryable(&TurnkeyApiError::ServerError {
+        assert!(TurnkeyApiError::Timeout.is_retryable());
+        assert!(TurnkeyApiError::RateLimited { body: body() }.is_retryable());
+        assert!(TurnkeyApiError::ServerError {
             status: 503,
             body: body()
-        }));
-        assert!(is_retryable(&TurnkeyApiError::Transport {
+        }
+        .is_retryable());
+        assert!(TurnkeyApiError::Transport {
             error_message: "reset".to_string()
-        }));
-        assert!(is_retryable(&TurnkeyApiError::ActivityPollingExceeded {
-            error_message: "still pending".to_string()
-        }));
+        }
+        .is_retryable());
 
-        assert!(!is_retryable(&TurnkeyApiError::Unauthorized {
-            body: body()
-        }));
-        assert!(!is_retryable(&TurnkeyApiError::NotFound { body: body() }));
-        assert!(!is_retryable(&TurnkeyApiError::ClientError {
+        // Already-submitted activity: a retry would restart polling, not observe
+        // it. Non-retryable by design.
+        assert!(!TurnkeyApiError::ActivityPollingExceeded {
+            error_message: "still pending".to_string()
+        }
+        .is_retryable());
+        assert!(!TurnkeyApiError::Unauthorized { body: body() }.is_retryable());
+        assert!(!TurnkeyApiError::NotFound { body: body() }.is_retryable());
+        assert!(!TurnkeyApiError::ClientError {
             status: 400,
             body: body()
-        }));
-        assert!(!is_retryable(&TurnkeyApiError::Activity {
+        }
+        .is_retryable());
+        assert!(!TurnkeyApiError::Activity {
             error_message: "failed".to_string()
-        }));
+        }
+        .is_retryable());
     }
 
     #[test]
@@ -460,6 +467,12 @@ mod tests {
             TurnkeyApiError::from(TurnkeyClientError::ExceededRetries(3)),
             TurnkeyApiError::ActivityPollingExceeded { .. }
         ));
+        // Response-header parse failures are transport-class (retryable), not the
+        // permanent `Client` catch-all.
+        let header_err =
+            TurnkeyApiError::from(TurnkeyClientError::MissingContentTypeHeader);
+        assert!(matches!(header_err, TurnkeyApiError::Transport { .. }));
+        assert!(header_err.is_retryable());
     }
 
     #[test]
