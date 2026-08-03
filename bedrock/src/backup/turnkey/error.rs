@@ -209,4 +209,7 @@ pub enum TurnkeyMigrationError {
     /// overall deadline, or a concurrent run). A later retry may succeed.
     #[error("turnkey migration run failed transiently; a retry may succeed")]
     Retryable,
+    /// A migration is already in progress. Only one migration can be running at a time.
+    #[error("a migration is already in progress")]
+    AlreadyInProgress,
 }

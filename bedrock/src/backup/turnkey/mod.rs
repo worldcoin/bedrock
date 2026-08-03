@@ -24,12 +24,21 @@ mod policies;
 #[cfg(test)]
 mod test;
 
-use api::TurnkeyApiClient;
+use api::{MainFactor, SyncFactor, TurnkeyApiClient};
 pub use error::TurnkeyMigrationError;
 use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::get_config;
 use crate::primitives::P256Signer;
+
+/// Only one migration running at a time.
+static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// Hard ceiling on a full migration run. A degraded Turnkey (repeated timeouts
+/// plus retry backoff) must not block the caller indefinitely, and iOS cannot
+/// cancel a uniffi async call, so the deadline lives here.
+const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// High level manager to perform Turnkey account operations such as setup and
 /// migration reconciliation.
@@ -82,6 +91,16 @@ impl TurnkeyManager {
             "run_migrations start is_suborg_provided={}",
             suborganization_id.is_some()
         );
+
+        let Ok(_guard) = TURNKEY_MIGRATION_LOCK.try_lock() else {
+            // A warning is logged because the native client should be aware of the
+            // migrations it's triggering and triggering duplicates is a native bug.
+            crate::warn!(
+                "run_migrations skipped: another migration run is already in progress"
+            );
+            return Err(TurnkeyMigrationError::AlreadyInProgress);
+        };
+
         // Turnkey account management is too sensitive to run against a defaulted
         // environment; require explicit configuration.
         let Some(config) = get_config() else {
@@ -90,6 +109,7 @@ impl TurnkeyManager {
         };
         let environment = config.environment();
         let api = TurnkeyApiClient::new();
+        let sync_factor = SyncFactor(sync_factor);
 
         let suborganization_id = if let Some(id) = suborganization_id {
             id
@@ -101,41 +121,46 @@ impl TurnkeyManager {
                     crate::error!(
                         "run_migrations sub-org resolution failed err={error}"
                     );
-                    return Err(TurnkeyMigrationError::Failed);
+                    return Err(error.to_migration_error());
                 }
             }
         };
 
-        match run_migration_list(
+        let run = run_migration_list(
             MIGRATIONS,
             &suborganization_id,
             sync_factor,
-            main_factor.as_deref(),
+            main_factor.as_deref().map(MainFactor),
             &api,
             environment,
-        )
-        .await
-        {
-            Ok(outcome) => {
-                // TODO: Downgrade to debug after initial shipping
-                match &outcome {
-                    TurnkeyMigrationOutcome::Completed => {
-                        crate::info!("✅ run_migrations completed successfully");
-                    }
-                    TurnkeyMigrationOutcome::MainFactorRequired { pending } => {
-                        crate::info!(
-                            "⏸️ run_migrations deferred {} migration(s) awaiting the main factor",
-                            pending.len()
-                        );
-                    }
-                }
-                Ok(outcome)
-            }
-            Err(error) => {
+        );
+        let outcome = match tokio::time::timeout(MIGRATION_RUN_TIMEOUT, run).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => {
                 crate::error!("run_migrations failed err={error}");
-                Err(TurnkeyMigrationError::Failed)
+                return Err(error.to_migration_error());
+            }
+            Err(_elapsed) => {
+                crate::error!(
+                    "run_migrations timed out after {}s",
+                    MIGRATION_RUN_TIMEOUT.as_secs()
+                );
+                return Err(TurnkeyMigrationError::Retryable);
+            }
+        };
+
+        match &outcome {
+            TurnkeyMigrationOutcome::Completed => {
+                crate::debug!("run_migrations completed successfully");
+            }
+            TurnkeyMigrationOutcome::MainFactorRequired { pending } => {
+                crate::debug!(
+                    "run_migrations deferred {} migration(s) awaiting the main factor",
+                    pending.len()
+                );
             }
         }
+        Ok(outcome)
     }
 }
 

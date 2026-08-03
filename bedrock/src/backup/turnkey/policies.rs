@@ -39,6 +39,11 @@ pub(super) struct AppleAudience {
     pub(super) client_id: &'static str,
 }
 
+/// The list of `aud` claims for staging environment.
+///
+/// # Warning
+/// Audiences (i.e. `client_id`) MUST be unique. The `apple_audience_tables_have_no_duplicates`
+/// enforces this.
 const STAGING_APPLE_AUDIENCES: &[AppleAudience] = &[
     // World App iOS — the pre-existing provider; keep the name "APPLE".
     AppleAudience {
@@ -119,5 +124,33 @@ mod tests {
                 ("APPLE-WEB", "app.world.apple"),
             ]
         );
+    }
+
+    #[test]
+    fn apple_audience_tables_have_no_duplicates() {
+        use std::collections::HashSet;
+        for environment in [
+            BedrockEnvironment::Staging,
+            BedrockEnvironment::Sandbox,
+            BedrockEnvironment::Production,
+        ] {
+            let table = environment.turnkey_apple_audiences();
+            let client_ids: HashSet<&str> =
+                table.iter().map(|audience| audience.client_id).collect();
+            let provider_names: HashSet<&str> = table
+                .iter()
+                .map(|audience| audience.provider_name)
+                .collect();
+            assert_eq!(
+                client_ids.len(),
+                table.len(),
+                "duplicate client_id in {environment:?} audiences"
+            );
+            assert_eq!(
+                provider_names.len(),
+                table.len(),
+                "duplicate provider_name in {environment:?} audiences"
+            );
+        }
     }
 }
