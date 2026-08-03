@@ -2,10 +2,9 @@
 //! user's Turnkey account to ensure it is correct and up-to-date.
 
 use crate::primitives::config::BedrockEnvironment;
-use crate::primitives::P256Signer;
 use crate::{error, info};
 
-use super::api::TurnkeyApiClient;
+use super::api::{MainFactor, SyncFactor, TurnkeyApiClient};
 use super::error::TurnkeyApiError;
 
 mod apple_audience;
@@ -55,8 +54,8 @@ pub(super) enum MigrationOutcome {
 pub(super) struct MigrationContext<'a> {
     suborganization_id: &'a str,
     environment: BedrockEnvironment,
-    sync_factor: &'a P256Signer,
-    main_factor: Option<&'a P256Signer>,
+    sync_factor: SyncFactor<'a>,
+    main_factor: Option<MainFactor<'a>>,
     api: &'a TurnkeyApiClient,
 }
 
@@ -88,8 +87,8 @@ pub(super) trait TurnkeyMigration: Send + Sync {
 pub(super) async fn run_migration_list(
     migrations: &[&dyn TurnkeyMigration],
     suborganization_id: &str,
-    sync_factor: &P256Signer,
-    main_factor: Option<&P256Signer>,
+    sync_factor: SyncFactor<'_>,
+    main_factor: Option<MainFactor<'_>>,
     api: &TurnkeyApiClient,
     environment: BedrockEnvironment,
 ) -> Result<TurnkeyMigrationOutcome, TurnkeyApiError> {
@@ -143,6 +142,7 @@ pub(super) async fn run_migration_list(
 mod tests {
     use super::*;
     use crate::backup::turnkey::test::TestSigner;
+    use crate::primitives::P256Signer;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -203,8 +203,8 @@ mod tests {
         run_migration_list(
             migrations,
             "suborg-1",
-            &sync_factor,
-            main_factor.as_ref(),
+            SyncFactor(&sync_factor),
+            main_factor.as_ref().map(MainFactor),
             &api,
             BedrockEnvironment::Staging,
         )
@@ -272,6 +272,37 @@ mod tests {
         );
         // The migration still runs so it can decide whether work is needed.
         assert!(ran.load(Ordering::SeqCst));
+    }
+
+    /// Tests that even if two migrations require Main Factor but another one doesn't,
+    /// the one requiring a Sync Factor still runs.
+    #[tokio::test]
+    async fn accumulates_all_deferrals_and_continues() {
+        let after_ran = Arc::new(AtomicBool::new(false));
+        let first = FakeMigration {
+            id: "first",
+            behavior: Behavior::NeedsWork,
+            ran: Arc::new(AtomicBool::new(false)),
+        };
+        let second = FakeMigration {
+            id: "second",
+            behavior: Behavior::NeedsWork,
+            ran: Arc::new(AtomicBool::new(false)),
+        };
+        let after = FakeMigration {
+            id: "after",
+            behavior: Behavior::NoWork,
+            ran: after_ran.clone(),
+        };
+        let migrations: [&dyn TurnkeyMigration; 3] = [&first, &second, &after];
+
+        let outcome = run_fakes(&migrations, false).await.unwrap();
+
+        let TurnkeyMigrationOutcome::MainFactorRequired { pending } = outcome else {
+            panic!("expected MainFactorRequired, got {outcome:?}");
+        };
+        assert_eq!(pending.len(), 2);
+        assert!(after_ran.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

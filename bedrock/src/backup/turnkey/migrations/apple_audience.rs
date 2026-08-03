@@ -145,13 +145,27 @@ fn plan(
         return Err(TurnkeyApiError::Consistency);
     }
 
+    let audiences = environment.turnkey_apple_audiences();
+    let configured: HashSet<&str> = audiences
+        .iter()
+        .map(|audience| audience.client_id)
+        .collect();
+
     let existing: HashSet<&str> = apple_providers
         .iter()
         .map(|provider| provider.audience.as_str())
         .collect();
 
-    let missing: Vec<&AppleAudience> = environment
-        .turnkey_apple_audiences()
+    // TODO: remove unrecognized audiences
+    let unrecognized: Vec<&str> = existing.difference(&configured).copied().collect();
+    if !unrecognized.is_empty() {
+        crate::warn!(
+            "auth_user_main has unrecognized Apple aduences: {}",
+            unrecognized.join(", ")
+        );
+    }
+
+    let missing: Vec<&AppleAudience> = audiences
         .iter()
         .filter(|audience| !existing.contains(audience.client_id))
         .collect();
