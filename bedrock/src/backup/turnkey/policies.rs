@@ -79,3 +79,45 @@ const PRODUCTION_APPLE_AUDIENCES: &[AppleAudience] = &[
         client_id: "app.world.apple",
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hardcoded literal explicit matching
+    #[test]
+    fn apple_audience_tables_are_pinned() {
+        fn pairs(environment: BedrockEnvironment) -> Vec<(&'static str, &'static str)> {
+            environment
+                .turnkey_apple_audiences()
+                .iter()
+                .map(|audience| (audience.provider_name, audience.client_id))
+                .collect()
+        }
+
+        assert_eq!(
+            pairs(BedrockEnvironment::Staging),
+            vec![
+                ("APPLE", "org.worldcoin.insight.staging"),
+                ("APPLE-WID", "org.world.staging.id"),
+                ("APPLE-WID-SANDBOX", "org.world.sandbox.id"),
+                ("APPLE-WEB", "app.world.apple.staging"),
+            ]
+        );
+
+        // Sandbox intentionally shares the staging table.
+        assert_eq!(
+            pairs(BedrockEnvironment::Sandbox),
+            pairs(BedrockEnvironment::Staging)
+        );
+
+        assert_eq!(
+            pairs(BedrockEnvironment::Production),
+            vec![
+                ("APPLE", "org.worldcoin.insight"),
+                ("APPLE-WID", "org.world.id"),
+                ("APPLE-WEB", "app.world.apple"),
+            ]
+        );
+    }
+}

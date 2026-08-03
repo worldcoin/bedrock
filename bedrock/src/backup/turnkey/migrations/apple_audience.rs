@@ -246,6 +246,27 @@ mod tests {
         ));
     }
 
+    /// Tests against explicitly hardcoded values
+    #[test]
+    fn production_plan_uses_production_audiences() {
+        let users = vec![main_user_with_apple(&["org.worldcoin.insight"], "sub-prod")];
+
+        let Plan::Create { providers, .. } =
+            plan(users, BedrockEnvironment::Production).unwrap()
+        else {
+            panic!("expected Create plan");
+        };
+
+        let created: HashSet<&str> = providers
+            .iter()
+            .filter_map(|provider| match &provider.token_or_claims {
+                Some(TokenOrClaims::OidcClaims(claims)) => Some(claims.aud.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(created, HashSet::from(["org.world.id", "app.world.apple"]));
+    }
+
     #[test]
     fn creates_only_missing_audiences() {
         let auds = staging_audiences();
