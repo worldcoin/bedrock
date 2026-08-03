@@ -1,0 +1,587 @@
+//! Turnkey API access built on the official Turnkey Rust SDK (`turnkey_client`).
+//!
+//! The SDK retries only the polling of `PENDING` activities to completion; it does not retry
+//! transport failures, so we wrap each call in our own bounded exponential-backoff-with-jitter policy
+//! covering 429/5xx/timeouts/connectivity. Query results are cached
+//! in-memory for the lifetime of a single client so that multiple migrations
+//! reading the same data do not issue duplicate calls.
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use turnkey_api_key_stamper::{
+    Stamp, StampHeader, StamperError, API_KEY_STAMP_HEADER_NAME, SIGNATURE_SCHEME_P256,
+};
+use turnkey_client::generated::external::data::v1::User;
+use turnkey_client::generated::immutable::activity::v1::{
+    CreateOauthProvidersIntentV2, OauthProviderParamsV2,
+};
+use turnkey_client::generated::services::coordinator::public::v1::{
+    GetUsersRequest, GetWhoamiRequest,
+};
+use turnkey_client::{RetryConfig, TurnkeyClient};
+
+use crate::primitives::ntp::now_with_ntp;
+use crate::primitives::P256Signer;
+use crate::warn;
+
+use super::error::TurnkeyApiError;
+
+/// A read/query signer — a **sync factor**. Stamps `whoami` and `get_users`,
+/// never privileged writes. A newtype so the split can't be crossed by accident.
+#[derive(Clone, Copy)]
+pub(super) struct SyncFactor<'a>(pub(super) &'a P256Signer);
+
+/// A write/submit signer — a **main factor**. Stamps privileged activities such
+/// as `create_oauth_providers`. A newtype so it can't be passed where a sync
+/// factor is expected (or vice versa).
+#[derive(Clone, Copy)]
+pub(super) struct MainFactor<'a>(pub(super) &'a P256Signer);
+
+/// Adapts a [`P256Signer`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
+/// client can stamp requests with a key held in native secure storage.
+///
+/// The public key is validated once when the [`P256Signer`] is built, so
+/// stamping only signs and reuses the cached key.
+///
+/// Produces byte-for-byte the same `X-Stamp` as the SDK's own `TurnkeyP256ApiKey`.
+pub struct KeypairSignerStamper {
+    signer: P256Signer,
+}
+
+impl KeypairSignerStamper {
+    /// Wraps a verified signer for use as a Turnkey stamper.
+    #[must_use]
+    pub fn new(signer: &P256Signer) -> Self {
+        Self {
+            signer: signer.clone(),
+        }
+    }
+}
+
+impl Stamp for KeypairSignerStamper {
+    fn stamp(&self, body: &[u8]) -> Result<StampHeader, StamperError> {
+        let digest = Sha256::digest(body);
+        let signature = self
+            .signer
+            .sign_digest(digest.to_vec())
+            .map_err(|e| StamperError::InvalidPrivateKeyBytes(e.to_string()))?;
+        let stamp = ApiStamp {
+            public_key: self.signer.public_key_hex().to_string(),
+            signature: hex::encode(signature),
+            scheme: SIGNATURE_SCHEME_P256.to_string(),
+        };
+        let json = serde_json::to_string(&stamp).map_err(|e| {
+            StamperError::InvalidPrivateKeyBytes(format!(
+                "stamp serialization failed: {e}"
+            ))
+        })?;
+        Ok(StampHeader {
+            name: API_KEY_STAMP_HEADER_NAME.to_string(),
+            value: URL_SAFE_NO_PAD.encode(json.as_bytes()),
+        })
+    }
+}
+
+/// Turnkey API stamp payload (mirrors the SDK's internal stamp shape).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiStamp {
+    public_key: String,
+    signature: String,
+    scheme: String,
+}
+
+/// Bounded retry policy: exponential backoff with full jitter.
+#[derive(Debug, Clone, Copy)]
+struct RetryPolicy {
+    max_attempts: u32,
+    base_delay: Duration,
+    max_delay: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            base_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(2),
+        }
+    }
+}
+
+/// Computes the backoff delay for `attempt` (1-indexed) with full jitter,
+/// capped at [`RetryPolicy::max_delay`].
+fn backoff_delay(attempt: u32, policy: &RetryPolicy) -> Duration {
+    let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
+    let exp = policy.base_delay.saturating_mul(factor);
+    let capped = exp.min(policy.max_delay);
+    let ceil_ms = u64::try_from(capped.as_millis()).unwrap_or(u64::MAX);
+    if ceil_ms == 0 {
+        return Duration::ZERO;
+    }
+    // Random jitter: uniform in [0, ceil_ms]
+    Duration::from_millis(rand::random::<u64>() % ceil_ms.saturating_add(1))
+}
+
+/// Turnkey API client using the Turnkey SDK plus Bedrock's retry and caching.
+///
+/// `get_users` responses are cached for the lifetime of the client (a single
+/// `check_migrations` run), keyed by sub-organization id.
+pub struct TurnkeyApiClient {
+    retry: RetryPolicy,
+    users_cache: Mutex<HashMap<String, Vec<User>>>,
+    /// Overrides the SDK's default Turnkey base URL. `None` in production; set
+    /// only in tests to point the real client at a mock HTTP server.
+    base_url: Option<String>,
+}
+
+impl TurnkeyApiClient {
+    /// Creates a client with the default retry policy and an empty cache.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            retry: RetryPolicy::default(),
+            users_cache: Mutex::new(HashMap::new()),
+            base_url: None,
+        }
+    }
+
+    /// Creates a client that targets `base_url` instead of Turnkey's default,
+    /// for driving the real client against a mock HTTP server in tests.
+    #[cfg(test)]
+    pub(super) fn with_base_url(base_url: String) -> Self {
+        Self {
+            base_url: Some(base_url),
+            ..Self::new()
+        }
+    }
+
+    /// Builds an SDK client that stamps with `signer`.
+    ///
+    /// Uses the SDK's default retry config so it polls `PENDING` activities to
+    /// completion; transport-level retries are handled by [`Self::with_retry`].
+    fn sdk_client(
+        &self,
+        signer: &P256Signer,
+    ) -> Result<TurnkeyClient<KeypairSignerStamper>, TurnkeyApiError> {
+        let mut builder = TurnkeyClient::<KeypairSignerStamper>::builder()
+            .api_key(KeypairSignerStamper::new(signer))
+            .retry_config(RetryConfig::default());
+        if let Some(base_url) = &self.base_url {
+            builder = builder.base_url(base_url.clone());
+        }
+        builder.build().map_err(TurnkeyApiError::from)
+    }
+
+    /// Runs `op`, retrying transient failures with bounded backoff and jitter.
+    async fn with_retry<T, Fut>(
+        &self,
+        operation: &str,
+        mut op: impl FnMut() -> Fut + Send,
+    ) -> Result<T, TurnkeyApiError>
+    where
+        Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
+    {
+        let mut attempt: u32 = 0;
+        loop {
+            match op().await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    attempt += 1;
+                    if attempt >= self.retry.max_attempts || !error.is_retryable() {
+                        warn!("turnkey.request.failed op={operation} attempts={attempt} err={error}");
+                        return Err(error);
+                    }
+                    let delay = backoff_delay(attempt, &self.retry);
+                    warn!(
+                        "turnkey.request.retry op={operation} attempt={attempt} delay_ms={} err={error}",
+                        delay.as_millis()
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    }
+
+    /// Locks the users cache, recovering from poisoning.
+    ///
+    /// A poisoned lock means a prior holder panicked and may have left the map
+    /// inconsistent. The cache is always reconstructible so discard and move on.
+    fn lock_cache(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<User>>> {
+        match self.users_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                crate::error!(
+                    "turnkey.cache.poisoned: discarding in-memory user cache and recovering"
+                );
+                self.users_cache.clear_poison();
+                let mut guard = poisoned.into_inner();
+                guard.clear();
+                guard
+            }
+        }
+    }
+
+    fn cached_users(&self, suborganization_id: &str) -> Option<Vec<User>> {
+        self.lock_cache().get(suborganization_id).cloned()
+    }
+
+    fn cache_users(&self, suborganization_id: &str, users: &[User]) {
+        self.lock_cache()
+            .insert(suborganization_id.to_string(), users.to_vec());
+    }
+}
+
+/// # Warning
+/// For any activities (i.e. requests that change the state) it is imperative that
+/// the `timestamp_ms` is computed once outside any retry loops. Turnkey submissions
+/// are idempotent on a fingerprint, maintaining the same `timestamp_ms` ensures a
+/// request is not executed twice.
+///
+/// Reference: <https://docs.turnkey.com/api-reference/activities/overview>.
+///
+impl TurnkeyApiClient {
+    /// Resolves the sub-organization id for the user based on the public
+    /// key provided. Internally uses `whoami`.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    pub async fn resolve_suborganization_id(
+        &self,
+        parent_organization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<String, TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let request = GetWhoamiRequest {
+            organization_id: parent_organization_id.to_string(),
+        };
+        self.with_retry("whoami", || async {
+            client
+                .get_whoami(request.clone())
+                .await
+                .map(|response| response.organization_id)
+                .map_err(TurnkeyApiError::from)
+        })
+        .await
+    }
+
+    /// Lists the users of a sub-organization (stamped by the read/query signer).
+    ///
+    /// Results are cached for the lifetime of this client.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    pub async fn get_users(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<Vec<User>, TurnkeyApiError> {
+        if let Some(cached) = self.cached_users(suborganization_id) {
+            return Ok(cached);
+        }
+        let client = self.sdk_client(signer.0)?;
+        let request = GetUsersRequest {
+            organization_id: suborganization_id.to_string(),
+        };
+
+        let users = self
+            .with_retry("get_users", || async {
+                client
+                    .get_users(request.clone())
+                    .await
+                    .map(|response| response.users)
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        self.cache_users(suborganization_id, &users);
+        Ok(users)
+    }
+
+    /// Creates OAuth providers on a user (stamped by the write/submit signer).
+    ///
+    /// All `providers` are submitted in a **single** `CreateOauthProviders`
+    /// activity, so they are added atomically.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn create_oauth_providers(
+        &self,
+        suborganization_id: &str,
+        user_id: &str,
+        providers: Vec<OauthProviderParamsV2>,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let requested = providers.len();
+        let intent = CreateOauthProvidersIntentV2 {
+            user_id: user_id.to_string(),
+            oauth_providers: providers,
+        };
+
+        let timestamp_ms = ntp_timestamp_ms()?;
+        let created = self
+            .with_retry("create_oauth_providers", || async {
+                client
+                    .create_oauth_providers(
+                        suborganization_id.to_string(),
+                        timestamp_ms,
+                        intent.clone(),
+                    )
+                    .await
+                    .map(|activity| activity.result.provider_ids.len())
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        if created != requested {
+            // If Turnkey's activity succeeded but the created count is mismatched, this is surfacing
+            // a major consistency problem with Turnkey. Requires immediate attention.
+            crate::error!(
+                "CRITICAL. turnkey.create_oauth_providers.count_mismatch requested={requested} created={created}"
+            );
+        }
+
+        // User has changed, remove the cache
+        self.lock_cache().remove(suborganization_id);
+        Ok(())
+    }
+}
+
+/// Current NTP time in milliseconds, for Turnkey activity timestamps.
+///
+/// # Errors
+/// Returns [`TurnkeyApiError`] if the time source yields a non-positive
+/// timestamp (a broken clock). A zero/negative timestamp is useless to Turnkey,
+/// so we fail fast rather than submit an activity that cannot succeed.
+fn ntp_timestamp_ms() -> Result<u128, TurnkeyApiError> {
+    let millis = now_with_ntp().timestamp_millis();
+    let millis = u128::try_from(millis).map_err(|_| {
+        TurnkeyApiError::Client(format!(
+            "time source returned a pre-epoch timestamp ({millis} ms)"
+        ))
+    })?;
+    if millis == 0 {
+        return Err(TurnkeyApiError::Client(
+            "time source returned a zero timestamp".to_string(),
+        ));
+    }
+    Ok(millis)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backup::turnkey::test::TestSigner;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn stamp_verifies_against_body() {
+        use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+        use p256::ecdsa::signature::Verifier;
+
+        let body = serde_json::json!({ "activity": "create" }).to_string();
+        let verified = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let adapter = KeypairSignerStamper::new(&verified);
+        let stamp = adapter.stamp(body.as_bytes()).unwrap().value;
+
+        let decoded = BASE64_URL_SAFE_NO_PAD.decode(&stamp).unwrap();
+        let stamp_json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(stamp_json["scheme"], SIGNATURE_SCHEME_P256);
+
+        let signature = p256::ecdsa::Signature::from_der(
+            &hex::decode(stamp_json["signature"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let public_key = p256::PublicKey::from_sec1_bytes(
+            &hex::decode(stamp_json["publicKey"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let verifying_key = p256::ecdsa::VerifyingKey::from(public_key);
+        assert!(verifying_key.verify(body.as_bytes(), &signature).is_ok());
+    }
+
+    #[test]
+    fn retryable_classes_only() {
+        let body = || String::new();
+        assert!(TurnkeyApiError::Timeout.is_retryable());
+        assert!(TurnkeyApiError::RateLimited { body: body() }.is_retryable());
+        assert!(TurnkeyApiError::ServerError {
+            status: 503,
+            body: body()
+        }
+        .is_retryable());
+        assert!(TurnkeyApiError::Transport {
+            error_message: "reset".to_string()
+        }
+        .is_retryable());
+
+        // Already-submitted activity: a retry would restart polling, not observe
+        // it. Non-retryable by design.
+        assert!(!TurnkeyApiError::ActivityPollingExceeded {
+            error_message: "still pending".to_string()
+        }
+        .is_retryable());
+        assert!(!TurnkeyApiError::Unauthorized { body: body() }.is_retryable());
+        assert!(!TurnkeyApiError::NotFound { body: body() }.is_retryable());
+        assert!(!TurnkeyApiError::ClientError {
+            status: 400,
+            body: body()
+        }
+        .is_retryable());
+        assert!(!TurnkeyApiError::Activity {
+            error_message: "failed".to_string()
+        }
+        .is_retryable());
+    }
+
+    #[test]
+    fn backoff_is_bounded_by_max_delay() {
+        let policy = RetryPolicy::default();
+        for attempt in 1..=8 {
+            assert!(backoff_delay(attempt, &policy) <= policy.max_delay);
+        }
+    }
+
+    #[test]
+    fn sdk_error_status_classification() {
+        use turnkey_client::TurnkeyClientError;
+        assert!(matches!(
+            TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+                429,
+                String::new()
+            )),
+            TurnkeyApiError::RateLimited { .. }
+        ));
+        assert!(matches!(
+            TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+                500,
+                String::new()
+            )),
+            TurnkeyApiError::ServerError { status: 500, .. }
+        ));
+        assert!(matches!(
+            TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+                409,
+                String::new()
+            )),
+            TurnkeyApiError::ClientError { status: 409, .. }
+        ));
+        assert!(matches!(
+            TurnkeyApiError::from(TurnkeyClientError::MissingResult),
+            TurnkeyApiError::Activity { .. }
+        ));
+        // Polling giving up is transient (retryable), not a rejected activity.
+        assert!(matches!(
+            TurnkeyApiError::from(TurnkeyClientError::ExceededRetries(3)),
+            TurnkeyApiError::ActivityPollingExceeded { .. }
+        ));
+        // Response-header parse failures are transport-class (retryable), not the
+        // permanent `Client` catch-all.
+        let header_err =
+            TurnkeyApiError::from(TurnkeyClientError::MissingContentTypeHeader);
+        assert!(matches!(header_err, TurnkeyApiError::Transport { .. }));
+        assert!(header_err.is_retryable());
+    }
+
+    #[test]
+    fn http_error_preserves_response_body() {
+        use turnkey_client::TurnkeyClientError;
+        let error = TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+            400,
+            "invalid audience".to_string(),
+        ));
+        let TurnkeyApiError::ClientError { status, body } = &error else {
+            panic!("expected ClientError, got {error:?}");
+        };
+        assert_eq!(*status, 400);
+        assert_eq!(body, "invalid audience");
+        // The body must reach the failure log, which formats via Display.
+        assert!(error.to_string().contains("invalid audience"));
+    }
+
+    #[test]
+    fn oversized_body_is_truncated_in_error() {
+        use turnkey_client::TurnkeyClientError;
+        let big = "a".repeat(4096);
+        let error = TurnkeyApiError::from(TurnkeyClientError::UnexpectedHttpStatus(
+            500,
+            big.clone(),
+        ));
+        let TurnkeyApiError::ServerError { body, .. } = &error else {
+            panic!("expected ServerError, got {error:?}");
+        };
+        assert!(body.len() < big.len());
+        assert!(body.contains("truncated"));
+    }
+
+    /// Ensures there can be a recovery through retries after transient failures.
+    ///
+    /// Using `start_paused` so backoff sleeps are skipped.
+    #[tokio::test(start_paused = true)]
+    async fn with_retry_recovers_after_transient_failures() {
+        let client = TurnkeyApiClient::new();
+        let calls = AtomicU32::new(0);
+        let result: Result<u32, TurnkeyApiError> = client
+            .with_retry("op", || {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt < 2 {
+                        Err(TurnkeyApiError::Timeout)
+                    } else {
+                        Ok(42)
+                    }
+                }
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn with_retry_gives_up_after_max_attempts() {
+        let client = TurnkeyApiClient::new();
+        let calls = AtomicU32::new(0);
+        let result: Result<(), TurnkeyApiError> = client
+            .with_retry("op", || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Err(TurnkeyApiError::ServerError {
+                        status: 503,
+                        body: String::new(),
+                    })
+                }
+            })
+            .await;
+
+        assert!(matches!(result, Err(TurnkeyApiError::ServerError { .. })));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            RetryPolicy::default().max_attempts
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn with_retry_does_not_retry_non_retryable() {
+        let client = TurnkeyApiClient::new();
+        let calls = AtomicU32::new(0);
+        let result: Result<(), TurnkeyApiError> = client
+            .with_retry("op", || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { Err(TurnkeyApiError::MainUserNotFound) }
+            })
+            .await;
+
+        assert!(matches!(result, Err(TurnkeyApiError::MainUserNotFound)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
