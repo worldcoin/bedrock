@@ -137,6 +137,9 @@ fn backoff_delay(attempt: u32, policy: &RetryPolicy) -> Duration {
 pub struct TurnkeyApiClient {
     retry: RetryPolicy,
     users_cache: Mutex<HashMap<String, Vec<User>>>,
+    /// Overrides the SDK's default Turnkey base URL. `None` in production; set
+    /// only in tests to point the real client at a mock HTTP server.
+    base_url: Option<String>,
 }
 
 impl TurnkeyApiClient {
@@ -146,6 +149,17 @@ impl TurnkeyApiClient {
         Self {
             retry: RetryPolicy::default(),
             users_cache: Mutex::new(HashMap::new()),
+            base_url: None,
+        }
+    }
+
+    /// Creates a client that targets `base_url` instead of Turnkey's default,
+    /// for driving the real client against a mock HTTP server in tests.
+    #[cfg(test)]
+    pub(super) fn with_base_url(base_url: String) -> Self {
+        Self {
+            base_url: Some(base_url),
+            ..Self::new()
         }
     }
 
@@ -154,13 +168,16 @@ impl TurnkeyApiClient {
     /// Uses the SDK's default retry config so it polls `PENDING` activities to
     /// completion; transport-level retries are handled by [`Self::with_retry`].
     fn sdk_client(
+        &self,
         signer: &P256Signer,
     ) -> Result<TurnkeyClient<KeypairSignerStamper>, TurnkeyApiError> {
-        TurnkeyClient::<KeypairSignerStamper>::builder()
+        let mut builder = TurnkeyClient::<KeypairSignerStamper>::builder()
             .api_key(KeypairSignerStamper::new(signer))
-            .retry_config(RetryConfig::default())
-            .build()
-            .map_err(TurnkeyApiError::from)
+            .retry_config(RetryConfig::default());
+        if let Some(base_url) = &self.base_url {
+            builder = builder.base_url(base_url.clone());
+        }
+        builder.build().map_err(TurnkeyApiError::from)
     }
 
     /// Runs `op`, retrying transient failures with bounded backoff and jitter.
@@ -241,7 +258,7 @@ impl TurnkeyApiClient {
         parent_organization_id: &str,
         signer: SyncFactor<'_>,
     ) -> Result<String, TurnkeyApiError> {
-        let client = Self::sdk_client(signer.0)?;
+        let client = self.sdk_client(signer.0)?;
         let request = GetWhoamiRequest {
             organization_id: parent_organization_id.to_string(),
         };
@@ -269,7 +286,7 @@ impl TurnkeyApiClient {
         if let Some(cached) = self.cached_users(suborganization_id) {
             return Ok(cached);
         }
-        let client = Self::sdk_client(signer.0)?;
+        let client = self.sdk_client(signer.0)?;
         let request = GetUsersRequest {
             organization_id: suborganization_id.to_string(),
         };
@@ -302,7 +319,7 @@ impl TurnkeyApiClient {
         providers: Vec<OauthProviderParamsV2>,
         signer: MainFactor<'_>,
     ) -> Result<(), TurnkeyApiError> {
-        let client = Self::sdk_client(signer.0)?;
+        let client = self.sdk_client(signer.0)?;
         let requested = providers.len();
         let intent = CreateOauthProvidersIntentV2 {
             user_id: user_id.to_string(),

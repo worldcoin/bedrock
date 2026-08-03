@@ -108,3 +108,206 @@ mod integration_tests {
         println!("run_migrations outcome: {outcome:?}");
     }
 }
+
+/// Full coverage of the entire migration run process (`run_migration_list`) with
+/// mocked API calls to Turnkey (follows same mocking patterns as Turnkey's SDK).
+mod migration_functional_tests {
+    use super::TestSigner;
+    use crate::backup::turnkey::api::{MainFactor, SyncFactor, TurnkeyApiClient};
+    use crate::backup::turnkey::migrations::{
+        run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS,
+    };
+    use crate::backup::turnkey::policies::{APPLE_ISSUER, AUTH_USER_MAIN_USERNAME};
+    use crate::primitives::config::BedrockEnvironment;
+    use crate::primitives::P256Signer;
+    use serde_json::json;
+    use std::sync::Arc;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const LIST_USERS_PATH: &str = "/public/v1/query/list_users";
+    const CREATE_OAUTH_PATH: &str = "/public/v1/submit/create_oauth_providers";
+
+    fn signer() -> P256Signer {
+        P256Signer::verify(Arc::new(TestSigner::new())).expect("valid test signer")
+    }
+
+    /// `auth_user_main` carrying an Apple provider for each `audiences` entry.
+    fn main_user(audiences: &[&str], subject: &str) -> serde_json::Value {
+        let providers: Vec<serde_json::Value> = audiences
+            .iter()
+            .map(|aud| {
+                json!({
+                    "providerId": format!("p-{aud}"),
+                    "providerName": "apple",
+                    "issuer": APPLE_ISSUER,
+                    "audience": aud,
+                    "subject": subject,
+                })
+            })
+            .collect();
+        json!({
+            "userId": "user-main",
+            "userName": AUTH_USER_MAIN_USERNAME,
+            "oauthProviders": providers,
+        })
+    }
+
+    async fn mount_list_users(server: &MockServer, user: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path(LIST_USERS_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "users": [user] })),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// A minimal COMPLETED `CreateOauthProviders` activity response.
+    fn completed_create(provider_ids: &[&str]) -> serde_json::Value {
+        json!({
+            "activity": {
+                "id": "act-1",
+                "organizationId": "suborg-1",
+                "status": "ACTIVITY_STATUS_COMPLETED",
+                "type": "ACTIVITY_TYPE_CREATE_OAUTH_PROVIDERS_V2",
+                "fingerprint": "fp-1",
+                "result": {
+                    "createOauthProvidersResultV2": { "providerIds": provider_ids }
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn apple_audiences_creates_missing_audiences_with_main_factor() {
+        let server = MockServer::start().await;
+        // Only the first staging audience present → the other three missing.
+        mount_list_users(
+            &server,
+            main_user(&["org.worldcoin.insight.staging"], "sub-apple"),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(CREATE_OAUTH_PATH))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(completed_create(&["n1", "n2", "n3"])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = TurnkeyApiClient::with_base_url(server.uri());
+        let sync = signer();
+        let main = signer();
+        let outcome = run_migration_list(
+            MIGRATIONS,
+            "suborg-1",
+            SyncFactor(&sync),
+            Some(MainFactor(&main)),
+            &api,
+            BedrockEnvironment::Staging,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+
+        // The create request carried exactly the missing staging audiences and
+        // reused the existing subject.
+        let requests = server.received_requests().await.unwrap();
+        let create = requests
+            .iter()
+            .find(|request| request.url.path() == CREATE_OAUTH_PATH)
+            .expect("create request was sent");
+        let body = String::from_utf8_lossy(&create.body);
+        for aud in [
+            "org.world.staging.id",
+            "org.world.sandbox.id",
+            "app.world.apple.staging",
+        ] {
+            assert!(body.contains(aud), "create body missing audience {aud}");
+        }
+        assert!(body.contains("sub-apple"), "create body missing subject");
+        assert!(
+            !body.contains("org.worldcoin.insight.staging"),
+            "create body should not re-add the already-present audience"
+        );
+    }
+
+    #[tokio::test]
+    async fn apple_audiences_skips_when_all_audiences_present() {
+        let server = MockServer::start().await;
+        mount_list_users(
+            &server,
+            main_user(
+                &[
+                    "org.worldcoin.insight.staging",
+                    "org.world.staging.id",
+                    "org.world.sandbox.id",
+                    "app.world.apple.staging",
+                ],
+                "sub-apple",
+            ),
+        )
+        .await;
+        // Any create call is a bug.
+        Mock::given(method("POST"))
+            .and(path(CREATE_OAUTH_PATH))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let api = TurnkeyApiClient::with_base_url(server.uri());
+        let sync = signer();
+        let main = signer();
+        let outcome = run_migration_list(
+            MIGRATIONS,
+            "suborg-1",
+            SyncFactor(&sync),
+            Some(MainFactor(&main)),
+            &api,
+            BedrockEnvironment::Staging,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+    }
+
+    #[tokio::test]
+    async fn apple_audiences_defers_without_main_factor_and_never_writes() {
+        let server = MockServer::start().await;
+        mount_list_users(
+            &server,
+            main_user(&["org.worldcoin.insight.staging"], "sub-apple"),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(CREATE_OAUTH_PATH))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let api = TurnkeyApiClient::with_base_url(server.uri());
+        let sync = signer();
+        let outcome = run_migration_list(
+            MIGRATIONS,
+            "suborg-1",
+            SyncFactor(&sync),
+            None,
+            &api,
+            BedrockEnvironment::Staging,
+        )
+        .await
+        .unwrap();
+
+        let TurnkeyMigrationOutcome::MainFactorRequired { pending } = outcome else {
+            panic!("expected MainFactorRequired, got {outcome:?}");
+        };
+        assert_eq!(pending.len(), 1);
+    }
+}
