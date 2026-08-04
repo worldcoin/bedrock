@@ -1388,9 +1388,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-kms"
-version = "1.72.0"
+version = "1.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eef6a94141a43ee28404bf135828ad9bdd4936bfa2a84ad8dea355c94646a35"
+checksum = "15e7ef7189e532a6d7654befd668b535d31f261c61342397da47ccfa3fb0505a"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -4515,7 +4515,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.0",
+ "socket2 0.5.9",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
