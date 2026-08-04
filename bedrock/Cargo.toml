@@ -65,7 +65,7 @@ p256 = { version = "0.13.2", default-features = false, features = [
 ] }
 p384 = { version = "0.13", default-features = false, features = ["ecdsa", "sha384"] }
 rand = { version = "0.8.5", default-features = false, features = ["std"] }
-reqwest = { version = "0.13", default-features = false, features = ["gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["default-tls", "json", "gzip", "http2"] }
 ruint = { version = "1.20.0", default-features = false, features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
 serde = "1.0.219"
