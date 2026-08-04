@@ -65,8 +65,15 @@ p256 = { version = "0.13.2", default-features = false, features = [
 ] }
 p384 = { version = "0.13", default-features = false, features = ["ecdsa", "sha384"] }
 rand = { version = "0.8.5", default-features = false, features = ["std"] }
-reqwest = { version = "0.13", default-features = false, features = ["default-tls", "json", "gzip", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "default-tls",
+  "json",
+  "gzip",
+  "http2",
+] }
 ruint = { version = "1.20.0", default-features = false, features = ["serde"] }
+rustls = "0.23" # used for Android (see primitives/tls.rs)
+webpki-roots = "1" # used for Android (see primitives/tls.rs)
 secrecy = { version = "0.10", features = ["serde"] }
 serde = "1.0.219"
 serde_json = "1.0"
@@ -85,7 +92,7 @@ uuid = { version = "1.23.0", features = ["v4"], default-features = false }
 webpki = "0.22"
 x509-cert = { version = "0.2.5", features = ["pem"] }
 zeroize = "1.8"
-hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
+hex-literal = "1.1.0"                                                      # Provides the `hex!` macro for compile-time hex decoding
 http = "1.4.0"
 siegel-uniffi = { version = "=0.3.0", features = ["tracing"] }
 turnkey_client = "0.12.0"
