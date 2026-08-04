@@ -310,6 +310,12 @@ impl TurnkeyApiClient {
     /// All `providers` are submitted in a **single** `CreateOauthProviders`
     /// activity, so they are added atomically.
     ///
+    /// Please note this activity only adds new providers, it does not replace or upsert. If
+    /// the same (aud,sub,iss) combination for an existing login method is used for a new one,
+    /// it will be rejected by the API.
+    ///
+    /// Reference: <https://docs.turnkey.com/features/authentication/social-logins>
+    ///
     /// # Errors
     /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
     pub async fn create_oauth_providers(

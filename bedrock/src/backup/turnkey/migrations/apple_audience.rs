@@ -160,7 +160,7 @@ fn plan(
     let unrecognized: Vec<&str> = existing.difference(&configured).copied().collect();
     if !unrecognized.is_empty() {
         crate::warn!(
-            "auth_user_main has unrecognized Apple aduences: {}",
+            "auth_user_main has unrecognized Apple audiences: {}",
             unrecognized.join(", ")
         );
     }
@@ -174,6 +174,8 @@ fn plan(
         return Ok(Plan::SkipReady);
     }
 
+    // Please note that the [`TurnkeyApiClient::create_oauth_providers`] activity
+    // that this will result into is ADDITIVE. It doesn't replace or upsert existing configuration.
     let providers = missing
         .iter()
         .map(|audience| OauthProviderParamsV2 {
