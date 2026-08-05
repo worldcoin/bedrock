@@ -105,7 +105,7 @@ enum PolicyAction {
     /// A policy exists but its condition/effect drifted; update it.
     ///
     /// This is the expected "happy path". Before ~Aug 2026, Sync Factor
-    /// user were created with a different policy.
+    /// users were created with a different policy.
     Update {
         user_name: String,
         intent: UpdatePolicyIntentV2,
@@ -168,29 +168,31 @@ fn plan_for_sync_factor(user: &User, policies: &[Policy]) -> Option<PolicyAction
         .filter(|policy| is_policy_for(policy, &user.user_id))
         .collect();
 
-    if bound.len() > 1 {
-        // Sync Factor Users should never have more than one policy assigned, this is
-        // a soft consistency issue.
-        crate::warn!(
-            "sync_factor_policy: sync factor has multiple policies; keeping all"
-        );
-    }
+    // A sync factor must have exactly one policy. With more than one we cannot effectively
+    // tell which is the managed policy, so we make no changes
+    let policy = match bound.as_slice() {
+        [] => {
+            return Some(PolicyAction::Create {
+                user_name: user.user_name.clone(),
+                intent: create_intent(&user.user_id, &consensus),
+            });
+        }
+        [policy] => *policy,
+        _ => {
+            crate::warn!(
+                "Consistency Warning! sync factor has multiple bound policies; skipping to avoid overwriting"
+            );
+            return None;
+        }
+    };
 
-    if bound.iter().any(|policy| is_up_to_date(policy)) {
+    if is_up_to_date(policy) {
         return None;
     }
-
-    let action = bound.first().map_or_else(
-        || PolicyAction::Create {
-            user_name: user.user_name.clone(),
-            intent: create_intent(&user.user_id, &consensus),
-        },
-        |policy| PolicyAction::Update {
-            user_name: user.user_name.clone(),
-            intent: update_intent(&policy.policy_id, &user.user_id, &consensus),
-        },
-    );
-    Some(action)
+    Some(PolicyAction::Update {
+        user_name: user.user_name.clone(),
+        intent: update_intent(&policy.policy_id, &user.user_id, &consensus),
+    })
 }
 
 /// Whether `policy` is the policy bound to `user_id`.
@@ -375,6 +377,21 @@ mod tests {
 
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PolicyAction::Update { .. }));
+    }
+
+    /// More than one policy bound to a live sync factor is an unexpected
+    /// state. We don't overwrite in this case.
+    #[test]
+    fn skips_update_when_sync_factor_has_multiple_policies() {
+        let consensus = sync_factor_policy_consensus(SYNC_USER_ID).unwrap();
+        let users = vec![sync_user(SYNC_USER_ID)];
+        // Two policies bound to the same user, neither up to date.
+        let policies = vec![
+            policy_with_consensus("policy-a", &consensus),
+            policy_with_consensus("policy-b", &consensus),
+        ];
+
+        assert!(plan(&users, &policies).is_empty());
     }
 
     #[test]

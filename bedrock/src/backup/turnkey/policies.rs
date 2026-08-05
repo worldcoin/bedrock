@@ -95,13 +95,12 @@ pub(super) fn sync_factor_policy_consensus(user_id: &str) -> Option<String> {
         .then(|| format!("approvers.any(user, user.id == '{user_id}')"))
 }
 
-/// Whether `user_id` is a well-formed Turnkey identifier (UUID characters only),
-/// so it is safe to embed inside a policy-language string literal.
-fn is_turnkey_user_id(user_id: &str) -> bool {
-    !user_id.is_empty()
-        && user_id
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+/// Whether `user_id` is a well-formed Turnkey identifier (a UUID).
+///
+/// Turnkey ids are always UUIDs. Validating the shape ensures there
+/// aren't extraneous characters that could change the policy's effect.
+const fn is_turnkey_user_id(user_id: &str) -> bool {
+    uuid::Uuid::try_parse(user_id).is_ok()
 }
 
 /// Deterministic, human-readable name for a sync factor's policy.
@@ -255,7 +254,8 @@ mod tests {
         assert_eq!(UserRole::classify("something_else"), UserRole::Unexpected);
     }
 
-    /// Important to prevent breaking out of the policy syntax
+    /// Important to prevent breaking out of the policy syntax, and to reject ids
+    /// that are not real Turnkey UUIDs.
     #[test]
     fn sync_factor_policy_consensus_rejects_malformed_user_id() {
         assert_eq!(sync_factor_policy_consensus(""), None);
@@ -264,6 +264,18 @@ mod tests {
             None
         );
         assert_eq!(sync_factor_policy_consensus("has space"), None);
+        // Hex/hyphen characters but not a UUID layout.
+        assert_eq!(sync_factor_policy_consensus("deadbeef"), None);
+        assert_eq!(sync_factor_policy_consensus("----"), None);
+        assert_eq!(
+            sync_factor_policy_consensus("11111111-2222-3333-4444-5555555555"),
+            None
+        );
+        // A well-formed UUID is accepted.
+        assert!(
+            sync_factor_policy_consensus("11111111-2222-3333-4444-555555555555")
+                .is_some()
+        );
     }
 
     #[test]
