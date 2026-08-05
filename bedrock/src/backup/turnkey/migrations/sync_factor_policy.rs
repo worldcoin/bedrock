@@ -16,11 +16,12 @@ use super::super::policies::{
 use super::{MigrationContext, MigrationOutcome, TurnkeyMigration};
 
 /// Ensures every sync factor user in the Turnkey account has an up-to-date and
-/// correct policy, as defined in <https://docs.toolsforhumanity.com/world-app/backup/components#turnkey-user-setup>.
+/// correct policy (as defined in <https://docs.toolsforhumanity.com/world-app/backup/components#turnkey-user-setup>). This
+/// migration will also delete **ANY** stale policies.
 ///
 /// This migration will:
 /// 1. identify all sync factor users and ensure they have the right policy (either create or update).
-/// 2. identify stale sync factor policies assigned to orphaned users and remove them.
+/// 2. identify stale policies assigned to orphaned users and remove them. Targets **ALL** policies, not only Sync Factors.
 ///
 /// # Why?
 /// This migration is necessary because in the past Sync Factors were registered with
@@ -139,6 +140,7 @@ fn plan(users: &[User], policies: &[Policy]) -> Vec<PolicyAction> {
     }
 
     // Delete stale policies, i.e. policies bound to a user that no longer exists in the org
+    // NOTE: This deliberately targets all policies, orphaned policies aren't useful.
     let current_user_ids: HashSet<&str> =
         users.iter().map(|user| user.user_id.as_str()).collect();
     for policy in policies {

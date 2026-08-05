@@ -78,6 +78,8 @@ pub(super) const SYNC_FACTOR_POLICY_NOTES: &str =
 /// # Historical Considerations
 /// The initial policy targeted `activity.type` but this was updated because those are version
 /// sensitive. Further, not all resources were covered in initial policies.
+/// - The permission to delete the sub-org was added in #4485 on iOS and #5743 on Android.
+/// - the permission to delete users was addedin #4692 on iOS.
 pub(super) const SYNC_FACTOR_POLICY_CONDITION: &str = concat!(
     "activity.action == 'DELETE' && (",
     "activity.resource == 'CREDENTIAL' || ",
