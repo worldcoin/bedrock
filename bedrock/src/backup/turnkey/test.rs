@@ -111,7 +111,7 @@ mod integration_tests {
 
 /// Full coverage of the entire migration run process (`run_migration_list`) with
 /// mocked API calls to Turnkey (follows same mocking patterns as Turnkey's SDK).
-mod migration_functional_tests {
+mod functional_tests {
     use super::TestSigner;
     use crate::backup::turnkey::api::{MainFactor, SyncFactor, TurnkeyApiClient};
     use crate::backup::turnkey::migrations::{
@@ -283,447 +283,459 @@ mod migration_functional_tests {
         })
     }
 
-    #[tokio::test]
-    async fn apple_audiences_creates_missing_audiences_with_main_factor() {
-        let server = MockServer::start().await;
-        // Only the first staging audience present → the other three missing.
-        mount_reads(
-            &server,
-            vec![main_user(&["org.worldcoin.insight.staging"], "sub-apple")],
-            vec![],
-        )
-        .await;
-        Mock::given(method("POST"))
-            .and(path(CREATE_OAUTH_PATH))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(completed_create(&["n1", "n2", "n3"])),
+    /// Functional tests for the `apple_audience` migration.
+    mod apple_audiences {
+        use super::*;
+
+        #[tokio::test]
+        async fn apple_audiences_creates_missing_audiences_with_main_factor() {
+            let server = MockServer::start().await;
+            // Only the first staging audience present → the other three missing.
+            mount_reads(
+                &server,
+                vec![main_user(&["org.worldcoin.insight.staging"], "sub-apple")],
+                vec![],
             )
-            .expect(1)
-            .mount(&server)
             .await;
-
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let main = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            Some(MainFactor(&main)),
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
-
-        // The create request carried exactly the missing staging audiences and
-        // reused the existing subject.
-        let requests = server.received_requests().await.unwrap();
-        let create = requests
-            .iter()
-            .find(|request| request.url.path() == CREATE_OAUTH_PATH)
-            .expect("create request was sent");
-        let body = String::from_utf8_lossy(&create.body);
-        for aud in [
-            "org.world.staging.id",
-            "org.world.sandbox.id",
-            "app.world.apple.staging",
-        ] {
-            assert!(body.contains(aud), "create body missing audience {aud}");
-        }
-        assert!(body.contains("sub-apple"), "create body missing subject");
-        assert!(
-            !body.contains("org.worldcoin.insight.staging"),
-            "create body should not re-add the already-present audience"
-        );
-    }
-
-    #[tokio::test]
-    async fn apple_audiences_skips_when_all_audiences_present() {
-        let server = MockServer::start().await;
-        mount_reads(
-            &server,
-            vec![main_user(
-                &[
-                    "org.worldcoin.insight.staging",
-                    "org.world.staging.id",
-                    "org.world.sandbox.id",
-                    "app.world.apple.staging",
-                ],
-                "sub-apple",
-            )],
-            vec![],
-        )
-        .await;
-        // Any create call is a bug.
-        Mock::given(method("POST"))
-            .and(path(CREATE_OAUTH_PATH))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let main = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            Some(MainFactor(&main)),
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
-    }
-
-    #[tokio::test]
-    async fn apple_audiences_defers_without_main_factor_and_never_writes() {
-        let server = MockServer::start().await;
-        mount_reads(
-            &server,
-            vec![main_user(&["org.worldcoin.insight.staging"], "sub-apple")],
-            vec![],
-        )
-        .await;
-        Mock::given(method("POST"))
-            .and(path(CREATE_OAUTH_PATH))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            None,
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
-
-        let TurnkeyMigrationOutcome::MainFactorRequired { pending } = outcome else {
-            panic!("expected MainFactorRequired, got {outcome:?}");
-        };
-        assert_eq!(pending.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn sync_factor_policy_creates_policy_when_missing() {
-        let server = MockServer::start().await;
-        mount_reads(
-            &server,
-            vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
-            vec![],
-        )
-        .await;
-        Mock::given(method("POST"))
-            .and(path(CREATE_POLICY_PATH))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(completed_create_policy("new-policy")),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let main = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            Some(MainFactor(&main)),
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
-
-        // The create request carried the canonical condition bound to this user.
-        let requests = server.received_requests().await.unwrap();
-        let create = requests
-            .iter()
-            .find(|request| request.url.path() == CREATE_POLICY_PATH)
-            .expect("create_policy request was sent");
-        let body = String::from_utf8_lossy(&create.body);
-        assert!(
-            body.contains(SYNC_FACTOR_POLICY_CONDITION),
-            "create body missing the canonical condition"
-        );
-        let consensus =
-            sync_factor_policy_consensus(SYNC_ID).expect("SYNC_ID is valid");
-        assert!(
-            body.contains(&consensus),
-            "create body missing the per-user consensus"
-        );
-    }
-
-    #[tokio::test]
-    async fn sync_factor_policy_updates_outdated_policy() {
-        let server = MockServer::start().await;
-        // A narrower condition from before ORGANIZATION/USER deletions were granted.
-        let outdated =
-            "activity.action == 'DELETE' && (activity.resource == 'CREDENTIAL')";
-        mount_reads(
-            &server,
-            vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
-            vec![user_policy_record("policy-old", SYNC_ID, outdated)],
-        )
-        .await;
-        Mock::given(method("POST"))
-            .and(path(UPDATE_POLICY_PATH))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(completed_update_policy("policy-old")),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        // Creating a fresh policy would be a bug: the existing one must be updated.
-        Mock::given(method("POST"))
-            .and(path(CREATE_POLICY_PATH))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let main = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            Some(MainFactor(&main)),
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
-
-        let requests = server.received_requests().await.unwrap();
-        let update = requests
-            .iter()
-            .find(|request| request.url.path() == UPDATE_POLICY_PATH)
-            .expect("update_policy request was sent");
-        let body = String::from_utf8_lossy(&update.body);
-        assert!(
-            body.contains("policy-old"),
-            "update targeted the wrong policy"
-        );
-        assert!(
-            body.contains(SYNC_FACTOR_POLICY_CONDITION),
-            "update body missing the canonical condition"
-        );
-    }
-
-    #[tokio::test]
-    async fn sync_factor_policy_defers_without_main_factor() {
-        let server = MockServer::start().await;
-        mount_reads(
-            &server,
-            vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
-            vec![],
-        )
-        .await;
-        Mock::given(method("POST"))
-            .and(path(CREATE_POLICY_PATH))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            None,
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
-
-        // Apple skips (no provider); only the policy migration defers.
-        let TurnkeyMigrationOutcome::MainFactorRequired { pending } = outcome else {
-            panic!("expected MainFactorRequired, got {outcome:?}");
-        };
-        assert_eq!(pending.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn sync_factor_policy_skips_when_policy_correct() {
-        let server = MockServer::start().await;
-        mount_reads(
-            &server,
-            vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
-            vec![user_policy_record(
-                "policy-ok",
-                SYNC_ID,
-                SYNC_FACTOR_POLICY_CONDITION,
-            )],
-        )
-        .await;
-        // Any write is a bug when the policy already matches.
-        for write_path in [CREATE_POLICY_PATH, UPDATE_POLICY_PATH] {
             Mock::given(method("POST"))
-                .and(path(write_path))
+                .and(path(CREATE_OAUTH_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(completed_create(&["n1", "n2", "n3"])),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let main = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                Some(MainFactor(&main)),
+                &api,
+                BedrockEnvironment::Staging,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+
+            // The create request carried exactly the missing staging audiences and
+            // reused the existing subject.
+            let requests = server.received_requests().await.unwrap();
+            let create = requests
+                .iter()
+                .find(|request| request.url.path() == CREATE_OAUTH_PATH)
+                .expect("create request was sent");
+            let body = String::from_utf8_lossy(&create.body);
+            for aud in [
+                "org.world.staging.id",
+                "org.world.sandbox.id",
+                "app.world.apple.staging",
+            ] {
+                assert!(body.contains(aud), "create body missing audience {aud}");
+            }
+            assert!(body.contains("sub-apple"), "create body missing subject");
+            assert!(
+                !body.contains("org.worldcoin.insight.staging"),
+                "create body should not re-add the already-present audience"
+            );
+        }
+
+        #[tokio::test]
+        async fn apple_audiences_skips_when_all_audiences_present() {
+            let server = MockServer::start().await;
+            mount_reads(
+                &server,
+                vec![main_user(
+                    &[
+                        "org.worldcoin.insight.staging",
+                        "org.world.staging.id",
+                        "org.world.sandbox.id",
+                        "app.world.apple.staging",
+                    ],
+                    "sub-apple",
+                )],
+                vec![],
+            )
+            .await;
+            // Any create call is a bug.
+            Mock::given(method("POST"))
+                .and(path(CREATE_OAUTH_PATH))
                 .respond_with(ResponseTemplate::new(500))
                 .expect(0)
                 .mount(&server)
                 .await;
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let main = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                Some(MainFactor(&main)),
+                &api,
+                BedrockEnvironment::Staging,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
         }
 
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let main = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            Some(MainFactor(&main)),
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
-    }
-
-    #[tokio::test]
-    async fn get_policies_is_cached_within_a_client() {
-        let server = MockServer::start().await;
-        // `.expect(1)` fails if a second call reaches the server instead of the cache.
-        Mock::given(method("POST"))
-            .and(path(LIST_POLICIES_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({ "policies": [] })),
+        #[tokio::test]
+        async fn apple_audiences_defers_without_main_factor_and_never_writes() {
+            let server = MockServer::start().await;
+            mount_reads(
+                &server,
+                vec![main_user(&["org.worldcoin.insight.staging"], "sub-apple")],
+                vec![],
             )
-            .expect(1)
-            .mount(&server)
             .await;
+            Mock::given(method("POST"))
+                .and(path(CREATE_OAUTH_PATH))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
 
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        api.get_policies("suborg-1", SyncFactor(&sync))
-            .await
-            .unwrap();
-        api.get_policies("suborg-1", SyncFactor(&sync))
-            .await
-            .unwrap();
-    }
-
-    /// A client serves exactly one sub-organization. Querying a second one is a
-    /// consistency violation, caught from the cache without a second network call.
-    #[tokio::test]
-    async fn get_policies_rejects_a_second_sub_org() {
-        use crate::backup::turnkey::error::TurnkeyApiError;
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path(LIST_POLICIES_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({ "policies": [] })),
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                None,
+                &api,
+                BedrockEnvironment::Staging,
             )
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        api.get_policies("suborg-1", SyncFactor(&sync))
             .await
             .unwrap();
-        let error = api
-            .get_policies("suborg-2", SyncFactor(&sync))
-            .await
-            .expect_err("a different sub-org must be rejected");
-        assert!(matches!(error, TurnkeyApiError::Consistency));
+
+            let TurnkeyMigrationOutcome::MainFactorRequired { pending } = outcome
+            else {
+                panic!("expected MainFactorRequired, got {outcome:?}");
+            };
+            assert_eq!(pending.len(), 1);
+        }
     }
 
-    #[tokio::test]
-    async fn sync_factor_policy_prunes_stale_policy() {
-        let server = MockServer::start().await;
-        let gone_user = "99999999-9999-9999-9999-999999999999";
-        mount_reads(
-            &server,
-            vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
-            vec![
-                // The live sync factor's policy is already correct.
-                user_policy_record(
-                    "policy-live",
+    /// Functional tests for the `sync_factor` migration.
+    mod sync_factor {
+        use super::*;
+
+        #[tokio::test]
+        async fn sync_factor_policy_creates_policy_when_missing() {
+            let server = MockServer::start().await;
+            mount_reads(
+                &server,
+                vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
+                vec![],
+            )
+            .await;
+            Mock::given(method("POST"))
+                .and(path(CREATE_POLICY_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(completed_create_policy("new-policy")),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let main = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                Some(MainFactor(&main)),
+                &api,
+                BedrockEnvironment::Staging,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+
+            // The create request carried the canonical condition bound to this user.
+            let requests = server.received_requests().await.unwrap();
+            let create = requests
+                .iter()
+                .find(|request| request.url.path() == CREATE_POLICY_PATH)
+                .expect("create_policy request was sent");
+            let body = String::from_utf8_lossy(&create.body);
+            assert!(
+                body.contains(SYNC_FACTOR_POLICY_CONDITION),
+                "create body missing the canonical condition"
+            );
+            let consensus =
+                sync_factor_policy_consensus(SYNC_ID).expect("SYNC_ID is valid");
+            assert!(
+                body.contains(&consensus),
+                "create body missing the per-user consensus"
+            );
+        }
+
+        #[tokio::test]
+        async fn sync_factor_policy_updates_outdated_policy() {
+            let server = MockServer::start().await;
+            // A narrower condition from before ORGANIZATION/USER deletions were granted.
+            let outdated =
+                "activity.action == 'DELETE' && (activity.resource == 'CREDENTIAL')";
+            mount_reads(
+                &server,
+                vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
+                vec![user_policy_record("policy-old", SYNC_ID, outdated)],
+            )
+            .await;
+            Mock::given(method("POST"))
+                .and(path(UPDATE_POLICY_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(completed_update_policy("policy-old")),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            // Creating a fresh policy would be a bug: the existing one must be updated.
+            Mock::given(method("POST"))
+                .and(path(CREATE_POLICY_PATH))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let main = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                Some(MainFactor(&main)),
+                &api,
+                BedrockEnvironment::Staging,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+
+            let requests = server.received_requests().await.unwrap();
+            let update = requests
+                .iter()
+                .find(|request| request.url.path() == UPDATE_POLICY_PATH)
+                .expect("update_policy request was sent");
+            let body = String::from_utf8_lossy(&update.body);
+            assert!(
+                body.contains("policy-old"),
+                "update targeted the wrong policy"
+            );
+            assert!(
+                body.contains(SYNC_FACTOR_POLICY_CONDITION),
+                "update body missing the canonical condition"
+            );
+        }
+
+        #[tokio::test]
+        async fn sync_factor_policy_defers_without_main_factor() {
+            let server = MockServer::start().await;
+            mount_reads(
+                &server,
+                vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
+                vec![],
+            )
+            .await;
+            Mock::given(method("POST"))
+                .and(path(CREATE_POLICY_PATH))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                None,
+                &api,
+                BedrockEnvironment::Staging,
+            )
+            .await
+            .unwrap();
+
+            // Apple skips (no provider); only the policy migration defers.
+            let TurnkeyMigrationOutcome::MainFactorRequired { pending } = outcome
+            else {
+                panic!("expected MainFactorRequired, got {outcome:?}");
+            };
+            assert_eq!(pending.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn sync_factor_policy_skips_when_policy_correct() {
+            let server = MockServer::start().await;
+            mount_reads(
+                &server,
+                vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
+                vec![user_policy_record(
+                    "policy-ok",
                     SYNC_ID,
                     SYNC_FACTOR_POLICY_CONDITION,
-                ),
-                // A leftover policy bound to a user no longer in the org.
-                user_policy_record(
-                    "policy-stale",
-                    gone_user,
-                    SYNC_FACTOR_POLICY_CONDITION,
-                ),
-            ],
-        )
-        .await;
-        Mock::given(method("POST"))
-            .and(path(DELETE_POLICY_PATH))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(completed_delete_policy("policy-stale")),
+                )],
             )
-            .expect(1)
-            .mount(&server)
             .await;
-        // No create/update: the live sync factor is already correct.
-        for write_path in [CREATE_POLICY_PATH, UPDATE_POLICY_PATH] {
-            Mock::given(method("POST"))
-                .and(path(write_path))
-                .respond_with(ResponseTemplate::new(500))
-                .expect(0)
-                .mount(&server)
-                .await;
+            // Any write is a bug when the policy already matches.
+            for write_path in [CREATE_POLICY_PATH, UPDATE_POLICY_PATH] {
+                Mock::given(method("POST"))
+                    .and(path(write_path))
+                    .respond_with(ResponseTemplate::new(500))
+                    .expect(0)
+                    .mount(&server)
+                    .await;
+            }
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let main = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                Some(MainFactor(&main)),
+                &api,
+                BedrockEnvironment::Staging,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
         }
 
-        let api = TurnkeyApiClient::with_base_url(server.uri());
-        let sync = signer();
-        let main = signer();
-        let outcome = run_migration_list(
-            MIGRATIONS,
-            "suborg-1",
-            SyncFactor(&sync),
-            Some(MainFactor(&main)),
-            &api,
-            BedrockEnvironment::Staging,
-        )
-        .await
-        .unwrap();
+        #[tokio::test]
+        async fn get_policies_is_cached_within_a_client() {
+            let server = MockServer::start().await;
+            // `.expect(1)` fails if a second call reaches the server instead of the cache.
+            Mock::given(method("POST"))
+                .and(path(LIST_POLICIES_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({ "policies": [] })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
 
-        assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            api.get_policies("suborg-1", SyncFactor(&sync))
+                .await
+                .unwrap();
+            api.get_policies("suborg-1", SyncFactor(&sync))
+                .await
+                .unwrap();
+        }
 
-        let requests = server.received_requests().await.unwrap();
-        let delete = requests
-            .iter()
-            .find(|request| request.url.path() == DELETE_POLICY_PATH)
-            .expect("delete_policy request was sent");
-        let body = String::from_utf8_lossy(&delete.body);
-        assert!(body.contains("policy-stale"), "deleted the wrong policy");
+        /// A client serves exactly one sub-organization. Querying a second one is a
+        /// consistency violation, caught from the cache without a second network call.
+        #[tokio::test]
+        async fn get_policies_rejects_a_second_sub_org() {
+            use crate::backup::turnkey::error::TurnkeyApiError;
+
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path(LIST_POLICIES_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({ "policies": [] })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            api.get_policies("suborg-1", SyncFactor(&sync))
+                .await
+                .unwrap();
+            let error = api
+                .get_policies("suborg-2", SyncFactor(&sync))
+                .await
+                .expect_err("a different sub-org must be rejected");
+            assert!(matches!(error, TurnkeyApiError::Consistency));
+        }
+
+        #[tokio::test]
+        async fn sync_factor_policy_prunes_stale_policy() {
+            let server = MockServer::start().await;
+            let gone_user = "99999999-9999-9999-9999-999999999999";
+            mount_reads(
+                &server,
+                vec![main_user_without_apple(), sync_factor_user(SYNC_ID)],
+                vec![
+                    // The live sync factor's policy is already correct.
+                    user_policy_record(
+                        "policy-live",
+                        SYNC_ID,
+                        SYNC_FACTOR_POLICY_CONDITION,
+                    ),
+                    // A leftover policy bound to a user no longer in the org.
+                    user_policy_record(
+                        "policy-stale",
+                        gone_user,
+                        SYNC_FACTOR_POLICY_CONDITION,
+                    ),
+                ],
+            )
+            .await;
+            Mock::given(method("POST"))
+                .and(path(DELETE_POLICY_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(completed_delete_policy("policy-stale")),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            // No create/update: the live sync factor is already correct.
+            for write_path in [CREATE_POLICY_PATH, UPDATE_POLICY_PATH] {
+                Mock::given(method("POST"))
+                    .and(path(write_path))
+                    .respond_with(ResponseTemplate::new(500))
+                    .expect(0)
+                    .mount(&server)
+                    .await;
+            }
+
+            let api = TurnkeyApiClient::with_base_url(server.uri());
+            let sync = signer();
+            let main = signer();
+            let outcome = run_migration_list(
+                MIGRATIONS,
+                "suborg-1",
+                SyncFactor(&sync),
+                Some(MainFactor(&main)),
+                &api,
+                BedrockEnvironment::Staging,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, TurnkeyMigrationOutcome::Completed);
+
+            let requests = server.received_requests().await.unwrap();
+            let delete = requests
+                .iter()
+                .find(|request| request.url.path() == DELETE_POLICY_PATH)
+                .expect("delete_policy request was sent");
+            let body = String::from_utf8_lossy(&delete.body);
+            assert!(body.contains("policy-stale"), "deleted the wrong policy");
+        }
     }
 }
