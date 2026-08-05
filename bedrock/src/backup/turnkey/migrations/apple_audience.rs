@@ -25,8 +25,12 @@ use super::{MigrationContext, MigrationOutcome, TurnkeyMigration};
 /// NOTE that Apple assigns the same `sub` to all Apple OIDC tokens under the same developer
 /// account.
 ///
-/// If the user already has at least one Apple provider, its `subject` is reused
-/// and all remaining providers are created. If the user has no Apple provider at all, this is a no-op.
+/// If the user already has at least one Apple provider, its `subject` is reused and all remaining
+/// providers are created. If the user has no Apple provider at all, this is a no-op.
+///
+/// # Why?
+/// This migration is necessary because initially only a single client was used (World App iOS),
+/// so when registering an Apple OIDC factor only one audience was registered.
 ///
 /// # Main Factor
 /// If operations need to be executed, this migration REQUIRES a Main Factor.

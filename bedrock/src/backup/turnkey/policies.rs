@@ -23,11 +23,42 @@ pub(super) const BREAK_GLASS_USERNAME: &str = "break_glass_user";
 /// `userName` starts with this prefix is a device-local sync factor.
 pub(super) const SYNC_FACTOR_USERNAME_PREFIX: &str = "sync_factor_user_";
 
+/// The typed role of each user in a user's Turnkey account (sub-organization). We
+/// rely on the user name to determine it.
+///
+/// Reference: <https://docs.toolsforhumanity.com/world-app/backup/components#turnkey-user-setup>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UserRole {
+    /// The main user ([`AUTH_USER_MAIN_USERNAME`]), holder of the root quorum.
+    Main,
+    /// A device-local sync factor ([`SYNC_FACTOR_USERNAME_PREFIX`]).
+    SyncFactor,
+    /// The break-glass recovery user ([`BREAK_GLASS_USERNAME`]).
+    BreakGlass,
+    /// A `userName` matching none of the known roles. This is unexpected behavior.
+    Unexpected,
+}
+
+impl UserRole {
+    /// Classifies a Turnkey user by its `user_name`.
+    pub(super) fn classify(user_name: &str) -> Self {
+        if user_name == AUTH_USER_MAIN_USERNAME {
+            Self::Main
+        } else if user_name.starts_with(SYNC_FACTOR_USERNAME_PREFIX) {
+            Self::SyncFactor
+        } else if user_name == BREAK_GLASS_USERNAME {
+            Self::BreakGlass
+        } else {
+            Self::Unexpected
+        }
+    }
+}
+
 /// The Apple Sign In OIDC issuer.
 pub const APPLE_ISSUER: &str = "https://appleid.apple.com";
 
-/// Notes stored on the sync factor deletion policy
-pub(super) const SYNC_FACTOR_DELETION_POLICY_NOTES: &str =
+/// Notes stored on the sync factor policy
+pub(super) const SYNC_FACTOR_POLICY_NOTES: &str =
     "Allows a sync factor to perform deletion operations. Configured by Bedrock.";
 
 /// The conditions on the policy assigned to all Sync Factors.
@@ -47,7 +78,7 @@ pub(super) const SYNC_FACTOR_DELETION_POLICY_NOTES: &str =
 /// # Historical Considerations
 /// The initial policy targeted `activity.type` but this was updated because those are version
 /// sensitive. Further, not all resources were covered in initial policies.
-pub(super) const SYNC_FACTOR_DELETION_POLICY_CONDITION: &str = concat!(
+pub(super) const SYNC_FACTOR_POLICY_CONDITION: &str = concat!(
     "activity.action == 'DELETE' && (",
     "activity.resource == 'CREDENTIAL' || ",
     "activity.resource == 'PRIVATE_KEY' || ",
@@ -55,19 +86,27 @@ pub(super) const SYNC_FACTOR_DELETION_POLICY_CONDITION: &str = concat!(
     "activity.resource == 'USER')"
 );
 
-/// The consensus expression binding a sync factor deletion policy to exactly one
-/// user (the sync factor itself, identified by its Turnkey `user_id`).
+/// Builds the consensus expression binding a sync factor policy to
+/// exactly one user (the sync factor itself).
 ///
-/// `user_id` is a Turnkey UUID; callers MUST validate it contains no quote
-/// characters before building the expression, so it cannot break out of the
-/// policy-language string literal.
-pub(super) fn sync_factor_deletion_consensus(user_id: &str) -> String {
-    format!("approvers.any(user, user.id == '{user_id}')")
+/// Returns `None` if `user_id` is NOT a well-formed identifier.
+pub(super) fn sync_factor_policy_consensus(user_id: &str) -> Option<String> {
+    is_turnkey_user_id(user_id)
+        .then(|| format!("approvers.any(user, user.id == '{user_id}')"))
 }
 
-/// Deterministic, human-readable name for a sync factor's deletion policy.
-pub(super) fn sync_factor_deletion_policy_name(user_id: &str) -> String {
-    format!("sync_factor_deletion_{user_id}")
+/// Whether `user_id` is a well-formed Turnkey identifier (UUID characters only),
+/// so it is safe to embed inside a policy-language string literal.
+fn is_turnkey_user_id(user_id: &str) -> bool {
+    !user_id.is_empty()
+        && user_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+}
+
+/// Deterministic, human-readable name for a sync factor's policy.
+pub(super) fn sync_factor_policy_name(user_id: &str) -> String {
+    format!("sync_factor_policy_{user_id}")
 }
 
 impl BedrockEnvironment {
@@ -187,9 +226,9 @@ mod tests {
     /// pin its exact text. Update deliberately if the policy scope changes.
     #[test]
     fn sync_factor_deletion_condition_is_pinned() {
-        // The parenthesis is particularly critical here!
+        // The parentheses is particularly critical here!
         assert_eq!(
-            SYNC_FACTOR_DELETION_POLICY_CONDITION,
+            SYNC_FACTOR_POLICY_CONDITION,
             "activity.action == 'DELETE' && (activity.resource == 'CREDENTIAL' || \
              activity.resource == 'PRIVATE_KEY' || activity.resource == 'ORGANIZATION' \
              || activity.resource == 'USER')"
@@ -197,11 +236,34 @@ mod tests {
     }
 
     #[test]
-    fn sync_factor_deletion_consensus_binds_single_user() {
+    fn sync_factor_policy_consensus_binds_single_user() {
         assert_eq!(
-            sync_factor_deletion_consensus("11111111-2222-3333-4444-555555555555"),
-            "approvers.any(user, user.id == '11111111-2222-3333-4444-555555555555')"
+            sync_factor_policy_consensus("11111111-2222-3333-4444-555555555555")
+                .as_deref(),
+            Some("approvers.any(user, user.id == '11111111-2222-3333-4444-555555555555')")
         );
+    }
+
+    #[test]
+    fn user_role_classify_maps_each_known_username() {
+        assert_eq!(UserRole::classify("auth_user_main"), UserRole::Main);
+        assert_eq!(UserRole::classify("break_glass_user"), UserRole::BreakGlass);
+        assert_eq!(
+            UserRole::classify("sync_factor_user_abc123"),
+            UserRole::SyncFactor
+        );
+        assert_eq!(UserRole::classify("something_else"), UserRole::Unexpected);
+    }
+
+    /// Important to prevent breaking out of the policy syntax
+    #[test]
+    fn sync_factor_policy_consensus_rejects_malformed_user_id() {
+        assert_eq!(sync_factor_policy_consensus(""), None);
+        assert_eq!(
+            sync_factor_policy_consensus("bad' || approvers.any(user, true) || 'x"),
+            None
+        );
+        assert_eq!(sync_factor_policy_consensus("has space"), None);
     }
 
     #[test]
