@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/worldcoin/bedrock/compare/0.5.0...0.5.1) - 2026-08-03
+
+### Added
+
+- introduce turnkey migration engine and apple audiences migration ([#392](https://github.com/worldcoin/bedrock/pull/392))
+- move to tracing for logging ([#390](https://github.com/worldcoin/bedrock/pull/390))
+
 ## [0.5.0](https://github.com/worldcoin/bedrock/compare/0.4.1...0.5.0) - 2026-07-22
 
 ### Added
