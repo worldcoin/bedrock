@@ -6,9 +6,8 @@
 //! in-memory for the lifetime of a single client so that multiple migrations
 //! reading the same data do not issue duplicate calls.
 
-use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -18,12 +17,13 @@ use sha2::{Digest, Sha256};
 use turnkey_api_key_stamper::{
     Stamp, StampHeader, StamperError, API_KEY_STAMP_HEADER_NAME, SIGNATURE_SCHEME_P256,
 };
-use turnkey_client::generated::external::data::v1::User;
+use turnkey_client::generated::external::data::v1::{Policy, User};
 use turnkey_client::generated::immutable::activity::v1::{
-    CreateOauthProvidersIntentV2, OauthProviderParamsV2,
+    CreateOauthProvidersIntentV2, CreatePolicyIntentV3, DeletePolicyIntent,
+    OauthProviderParamsV2, UpdatePolicyIntentV2,
 };
 use turnkey_client::generated::services::coordinator::public::v1::{
-    GetUsersRequest, GetWhoamiRequest,
+    GetPoliciesRequest, GetUsersRequest, GetWhoamiRequest,
 };
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
@@ -130,13 +130,83 @@ fn backoff_delay(attempt: u32, policy: &RetryPolicy) -> Duration {
     Duration::from_millis(rand::random::<u64>() % ceil_ms.saturating_add(1))
 }
 
+/// A cache of one query result for a **single** sub-organization.
+///
+/// A [`TurnkeyApiClient`] serves exactly one sub-organization for its lifetime (a
+/// user has exactly one), so the cache holds at most one entry. Reading it for a
+/// different sub-org is a consistency violation.
+struct OrgCache<T> {
+    /// The cached `(suborganization_id, value)`, or `None` when empty. The value is
+    /// held behind an [`Arc`] so reads share one allocation rather than deep-copying.
+    entry: Mutex<Option<(String, Arc<T>)>>,
+    /// Names this cache in the poison-recovery log.
+    label: &'static str,
+}
+
+impl<T> OrgCache<T> {
+    const fn new(label: &'static str) -> Self {
+        Self {
+            entry: Mutex::new(None),
+            label,
+        }
+    }
+
+    /// Locks the entry, recovering from poisoning by discarding its (always
+    /// reconstructible) contents.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<(String, Arc<T>)>> {
+        match self.entry.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                crate::warn!(
+                    "turnkey.cache.poisoned: discarding in-memory {} cache and recovering",
+                    self.label
+                );
+                self.entry.clear_poison();
+                let mut guard = poisoned.into_inner();
+                *guard = None;
+                guard
+            }
+        }
+    }
+
+    /// Returns a shared handle to the cached value for `suborganization_id`, if any.
+    ///
+    /// # Errors
+    /// [`TurnkeyApiError::Consistency`] if a *different* sub-organization is
+    /// cached. A client only ever serves one sub-org, so this must never happen;
+    /// it signals a critical consistency problem.
+    fn get(&self, suborganization_id: &str) -> Result<Option<Arc<T>>, TurnkeyApiError> {
+        match &*self.lock() {
+            Some((cached, value)) if cached == suborganization_id => {
+                Ok(Some(Arc::clone(value)))
+            }
+            Some(_) => Err(TurnkeyApiError::Consistency),
+            None => Ok(None),
+        }
+    }
+
+    /// Caches `value` for `suborganization_id` (replacing any previous entry) and
+    /// returns the shared handle, so the caller reuses the same allocation.
+    fn store(&self, suborganization_id: &str, value: T) -> Arc<T> {
+        let value = Arc::new(value);
+        *self.lock() = Some((suborganization_id.to_string(), Arc::clone(&value)));
+        value
+    }
+
+    /// Drops the cached entry (e.g. after a write changes the underlying data).
+    fn clear(&self) {
+        *self.lock() = None;
+    }
+}
+
 /// Turnkey API client using the Turnkey SDK plus Bedrock's retry and caching.
 ///
-/// `get_users` responses are cached for the lifetime of the client (a single
-/// `check_migrations` run), keyed by sub-organization id.
+/// Unless otherwise noted, all read operations are cached in-memory for the
+/// lifetime of this client.
 pub struct TurnkeyApiClient {
     retry: RetryPolicy,
-    users_cache: Mutex<HashMap<String, Vec<User>>>,
+    users_cache: OrgCache<Vec<User>>,
+    policies_cache: OrgCache<Vec<Policy>>,
     /// Overrides the SDK's default Turnkey base URL. `None` in production; set
     /// only in tests to point the real client at a mock HTTP server.
     base_url: Option<String>,
@@ -148,7 +218,8 @@ impl TurnkeyApiClient {
     pub fn new() -> Self {
         Self {
             retry: RetryPolicy::default(),
-            users_cache: Mutex::new(HashMap::new()),
+            users_cache: OrgCache::new("user"),
+            policies_cache: OrgCache::new("policy"),
             base_url: None,
         }
     }
@@ -209,34 +280,6 @@ impl TurnkeyApiClient {
             }
         }
     }
-
-    /// Locks the users cache, recovering from poisoning.
-    ///
-    /// A poisoned lock means a prior holder panicked and may have left the map
-    /// inconsistent. The cache is always reconstructible so discard and move on.
-    fn lock_cache(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<User>>> {
-        match self.users_cache.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                crate::error!(
-                    "turnkey.cache.poisoned: discarding in-memory user cache and recovering"
-                );
-                self.users_cache.clear_poison();
-                let mut guard = poisoned.into_inner();
-                guard.clear();
-                guard
-            }
-        }
-    }
-
-    fn cached_users(&self, suborganization_id: &str) -> Option<Vec<User>> {
-        self.lock_cache().get(suborganization_id).cloned()
-    }
-
-    fn cache_users(&self, suborganization_id: &str, users: &[User]) {
-        self.lock_cache()
-            .insert(suborganization_id.to_string(), users.to_vec());
-    }
 }
 
 /// # Warning
@@ -272,7 +315,7 @@ impl TurnkeyApiClient {
         .await
     }
 
-    /// Lists the users of a sub-organization (stamped by the read/query signer).
+    /// Lists the users of a sub-organization.
     ///
     /// Results are cached for the lifetime of this client.
     ///
@@ -282,8 +325,8 @@ impl TurnkeyApiClient {
         &self,
         suborganization_id: &str,
         signer: SyncFactor<'_>,
-    ) -> Result<Vec<User>, TurnkeyApiError> {
-        if let Some(cached) = self.cached_users(suborganization_id) {
+    ) -> Result<Arc<Vec<User>>, TurnkeyApiError> {
+        if let Some(cached) = self.users_cache.get(suborganization_id)? {
             return Ok(cached);
         }
         let client = self.sdk_client(signer.0)?;
@@ -301,11 +344,10 @@ impl TurnkeyApiClient {
             })
             .await?;
 
-        self.cache_users(suborganization_id, &users);
-        Ok(users)
+        Ok(self.users_cache.store(suborganization_id, users))
     }
 
-    /// Creates OAuth providers on a user (stamped by the write/submit signer).
+    /// Creates OAuth providers on a user (needs a [`MainFactor`] signer).
     ///
     /// All `providers` are submitted in a **single** `CreateOauthProviders`
     /// activity, so they are added atomically.
@@ -356,7 +398,135 @@ impl TurnkeyApiClient {
         }
 
         // User has changed, remove the cache
-        self.lock_cache().remove(suborganization_id);
+        self.users_cache.clear();
+        Ok(())
+    }
+
+    /// Lists the policies of a sub-organization.
+    ///
+    /// Results are cached for the lifetime of this client; the policy writes
+    /// ([`Self::create_policy`], [`Self::update_policy`]) invalidate the cache.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    pub async fn get_policies(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<Arc<Vec<Policy>>, TurnkeyApiError> {
+        if let Some(cached) = self.policies_cache.get(suborganization_id)? {
+            return Ok(cached);
+        }
+        let client = self.sdk_client(signer.0)?;
+        let request = GetPoliciesRequest {
+            organization_id: suborganization_id.to_string(),
+        };
+
+        let policies = self
+            .with_retry("get_policies", || async {
+                client
+                    .get_policies(request.clone())
+                    .await
+                    .map(|response| response.policies)
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        Ok(self.policies_cache.store(suborganization_id, policies))
+    }
+
+    /// Creates a policy on the sub-organization (needs a [`MainFactor`] signer).
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn create_policy(
+        &self,
+        suborganization_id: &str,
+        policy: CreatePolicyIntentV3,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let timestamp_ms = ntp_timestamp_ms()?;
+        self.with_retry("create_policy", || async {
+            client
+                .create_policy(
+                    suborganization_id.to_string(),
+                    timestamp_ms,
+                    policy.clone(),
+                )
+                .await
+                .map(|_activity| ())
+                .map_err(TurnkeyApiError::from)
+        })
+        .await?;
+
+        // Policies have changed; drop the stale cache entry.
+        self.policies_cache.clear();
+        Ok(())
+    }
+
+    /// Updates an existing policy (needs a [`MainFactor`] signer).
+    ///
+    /// Only the fields set on `params` are changed; a `None` field is left as-is.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn update_policy(
+        &self,
+        suborganization_id: &str,
+        params: UpdatePolicyIntentV2,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let timestamp_ms = ntp_timestamp_ms()?;
+        self.with_retry("update_policy", || async {
+            client
+                .update_policy(
+                    suborganization_id.to_string(),
+                    timestamp_ms,
+                    params.clone(),
+                )
+                .await
+                .map(|_activity| ())
+                .map_err(TurnkeyApiError::from)
+        })
+        .await?;
+
+        // Policies have changed; drop the stale cache entry.
+        self.policies_cache.clear();
+        Ok(())
+    }
+
+    /// Deletes a policy from the sub-organization (needs a [`MainFactor`] signer).
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn delete_policy(
+        &self,
+        suborganization_id: &str,
+        policy_id: &str,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let intent = DeletePolicyIntent {
+            policy_id: policy_id.to_string(),
+        };
+        let timestamp_ms = ntp_timestamp_ms()?;
+        self.with_retry("delete_policy", || async {
+            client
+                .delete_policy(
+                    suborganization_id.to_string(),
+                    timestamp_ms,
+                    intent.clone(),
+                )
+                .await
+                .map(|_activity| ())
+                .map_err(TurnkeyApiError::from)
+        })
+        .await?;
+
+        // Policies have changed; drop the stale cache entry.
+        self.policies_cache.clear();
         Ok(())
     }
 }
