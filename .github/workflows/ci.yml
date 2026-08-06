@@ -22,7 +22,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/version-alignment
         with:
@@ -37,9 +39,11 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
           toolchain: stable
 
@@ -57,29 +61,78 @@ jobs:
           cargo install taplo-cli
           taplo fmt --check
 
-  swift-build-and-test:
-    name: Build and Test Swift Bindings
-    runs-on: macos-14
+  swift-build:
+    name: Build Swift
+    runs-on: macos-26
     permissions:
       contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      # Ensure a specific Xcode version is selected to match available simulators
-      - name: Select Xcode 16.2
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
         with:
-          xcode-version: "16.2"
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
           toolchain: stable
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
-      - name: Build and test Swift bindings
-        run: ./swift/test_swift.sh
+      - name: Build Swift bindings
+        run: cargo xtask swift build
+
+      - name: Upload Swift build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 https://github.com/actions/upload-artifact/releases/tag/v7.0.1
+        with:
+          name: bedrock-swift-build
+          path: |
+            swift/Bedrock.xcframework
+            swift/Sources/Bedrock
+          retention-days: 1
+
+  swift-test:
+    name: Swift Foreign Binding Tests (Xcode ${{ matrix.xcode-version }})
+    needs: swift-build
+    runs-on: macos-26
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Update as GitHub's runner image adds/drops Xcode versions:
+        # actions/runner-images macos-26-arm64-Readme.md. If a version fails
+        # with a missing-SDK/platform error, just drop it from this list.
+        xcode-version:
+          - "26.2"
+          - "26.3"
+          - "26.4.1"
+          - "26.5"
+          - "26.6"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode ${{ matrix.xcode-version }}
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0 https://github.com/maxim-lobanov/setup-xcode/releases/tag/v1.7.0
+        with:
+          xcode-version: ${{ matrix.xcode-version }}
+
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
+        with:
+          toolchain: stable
+
+      - name: Download Swift build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 https://github.com/actions/download-artifact/releases/tag/v8.0.1
+        with:
+          name: bedrock-swift-build
+          path: swift
+
+      - name: Run Swift foreign binding tests
+        run: cargo xtask swift run-tests
 
       - name: Install SwiftLint
         run: |
@@ -96,20 +149,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
           toolchain: stable
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1 https://github.com/foundry-rs/foundry-toolchain/releases/tag/v1.9.1
 
       - name: Add forge to PATH
-        run: echo "FORGE_BIN=$(which forge)" >> $GITHUB_ENV
+        run: echo "FORGE_BIN=$(which forge)" >> "$GITHUB_ENV"
 
       - name: Run tests
         env:
+          # Details in http://go/rpc-ci-account (`bedrock` app)
           WORLDCHAIN_RPC_URL: ${{ secrets.WORLDCHAIN_RPC_URL || 'https://worldchain-mainnet.g.alchemy.com/public' }}
         run: |
           cp .env.example .env
@@ -130,9 +186,11 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1 https://github.com/EmbarkStudios/cargo-deny-action/releases/tag/v2.1.1
         with:
           command: check ${{ matrix.checks }}
           rust-version: stable
@@ -145,14 +203,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
           toolchain: stable
 
       - name: Build and test Kotlin bindings
-        run: ./kotlin/test_kotlin.sh
+        run: cargo xtask kotlin test
 
       - name: Install ktlint
         run: |

@@ -23,8 +23,9 @@ def find_uniffi_version(content: str) -> Optional[str]:
     #   plain string:   uniffi = "0.31.0"
     #   inline table:   uniffi = { version = "0.31.0", ... }
     match = re.search(
-        r'uniffi\s*=\s*(?:"([^"]+)"|\{[^}]*version\s*=\s*"([^"]+)")',
+        r'^\s*uniffi\s*=\s*(?:"([^"]+)"|\{[^}]*version\s*=\s*"([^"]+)")',
         content,
+        re.MULTILINE,
     )
     if not match:
         return None
@@ -121,6 +122,13 @@ uniffi = "0.31.0"
         cargo_toml = """
 [workspace.dependencies]
 uniffi = { git = "https://github.com/mozilla/uniffi-rs" }
+"""
+        self.assertIsNone(find_uniffi_version(cargo_toml))
+
+    def test_ignores_dependency_names_ending_in_uniffi(self):
+        cargo_toml = """
+[workspace.dependencies]
+ruint-uniffi = "0.1"
 """
         self.assertIsNone(find_uniffi_version(cargo_toml))
 

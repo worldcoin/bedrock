@@ -23,6 +23,8 @@ pub use client_events::{
 };
 use k256::ecdsa::{signature::Signer, Signature, SigningKey};
 pub use manifest::ManifestManager;
+use siegel_uniffi::SiegelSession;
+use std::sync::Arc;
 
 use crate::backup::backup_format::v0::{
     V0Backup, V0BackupManifest, V0BackupManifestEntry,
@@ -94,17 +96,14 @@ impl BackupManager {
         );
 
         // 1: Decode the root secret from multiple formats
+        // TODO: Migrate to Siegel
         let root_key = RootKey::from_json(root_secret).map_err(|_| {
             BackupError::InvalidRootSecretError(format!(
                 "attempting to add an invalid secret to a new backup: {}",
                 root_secret.chars().next().unwrap_or_default() == '{'
             ))
         })?;
-        let backup_account_id =
-            root_key.derive_public_backup_account_id().map_err(|e| {
-                let msg = format!("Unexpected. Deriving public backup id: {e:?}");
-                BackupError::Generic { error_message: msg }
-            })?;
+        let backup_account_id = Self::backup_account(&root_key)?.id;
 
         // 2.1: Decode factor secret from hex
         let factor_secret_bytes = hex::decode(factor_secret)
@@ -153,7 +152,7 @@ impl BackupManager {
         // Keep the base report in sync with the freshly initialized (empty) manifest.
         // This ensures we don't keep stale designators (e.g., `orb_pkg`) from a previous state.
         if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
-            log::warn!(
+            crate::warn!(
                 "[ClientEvents] failed to refresh backup report after manifest init: {e:?}"
             );
         }
@@ -182,8 +181,6 @@ impl BackupManager {
     /// * `factor_secret` - is the factor secret that was used to encrypt the backup keypair. Hex encoded.
     /// * `factor_type` - is the type of factor that was used to encrypt the backup keypair.
     ///   It should mark what kind of key `factor_secret` is.
-    /// * `current_manifest_hash` - hex-encoded 32-byte blake3 hash of the manifest head at the time
-    ///   the fetched backup was created (returned by the remote and provided by the native layer).
     ///
     /// # Errors
     /// * `BackupError::DecodeFactorSecretError` - if the factor secret is invalid, e.g. not hex encoded.
@@ -205,7 +202,6 @@ impl BackupManager {
         encrypted_backup_keypair: String,
         factor_secret: String,
         factor_type: FactorType,
-        current_manifest_hash: &str,
     ) -> Result<DecryptedBackup, BackupError> {
         crate::info!("Decrypting sealed backup with factor: {factor_type:?}");
 
@@ -240,7 +236,7 @@ impl BackupManager {
 
         crate::info!("Backup successfully decrypted, initiating unpacking.");
 
-        Self::unpack_backup_to_filesystem(&unsealed_backup, current_manifest_hash)?;
+        Self::unpack_backup_to_filesystem(&unsealed_backup)?;
 
         crate::info!("Backup successfully unpacked to filesystem.");
 
@@ -376,6 +372,20 @@ impl BackupManager {
         Ok(STANDARD.encode(sig.to_der()))
     }
 
+    /// Returns the backup account public key and fully qualified id.
+    ///
+    /// # Errors
+    /// * `BackupError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+    ///   root secret cannot be parsed.
+    /// * `BackupError::Generic` - if the Siegel session cannot be read or key derivation
+    ///   fails.
+    pub fn get_backup_account(
+        &self,
+        root_secret: Arc<SiegelSession>,
+    ) -> Result<BackupAccount, BackupError> {
+        Self::with_root_key(root_secret, Self::backup_account)
+    }
+
     /// Should be called after the backup is disabled/deleted.
     ///
     /// It processes local state after the backup is disabled/deleted.
@@ -394,7 +404,7 @@ impl BackupManager {
         // state (designators, size, counters) is fully cleared. It will be recreated
         // automatically if/when backup is enabled again.
         if let Err(e) = ClientEventsReporter::new().delete_base_report() {
-            log::warn!(
+            crate::warn!(
                 "[ClientEvents] failed to delete base report after manifest deletion: {e:?}"
             );
         }
@@ -514,9 +524,48 @@ pub struct ManifestDebug {
 
 // Internal helpers (not exported)
 impl BackupManager {
+    /// Reads the root secret out of a one-shot Siegel session, parses it into a
+    /// [`RootKey`], and hands it to `f`.
+    fn with_root_key<T>(
+        root_secret: Arc<SiegelSession>,
+        f: impl FnOnce(&RootKey) -> Result<T, BackupError>,
+    ) -> Result<T, BackupError> {
+        let result = root_secret.read_once(|bytes| {
+            let root_key = RootKey::from_slice(bytes).map_err(|_| {
+                BackupError::InvalidRootSecretError(
+                    "failed to parse root secret from siegel session".to_string(),
+                )
+            })?;
+            f(&root_key)
+        });
+
+        // `read_once` already wiped the loaded secret; take ownership specifically so we
+        // release the secure-memory session here rather than deferring to the caller.
+        drop(root_secret);
+
+        result.map_err(|e| BackupError::Generic {
+            error_message: format!("siegel session read failed: {e}"),
+        })?
+    }
+
+    /// Computes the backup account id and public key from the [`RootKey`].
+    fn backup_account(root_key: &RootKey) -> Result<BackupAccount, BackupError> {
+        let public_key = root_key.derive_public_backup_account_key().map_err(|e| {
+            BackupError::Generic {
+                error_message: format!(
+                    "unexpected. deriving backup account public key: {e:?}"
+                ),
+            }
+        })?;
+
+        Ok(BackupAccount {
+            id: format!("backup_account_{public_key}"),
+            public_key,
+        })
+    }
+
     fn unpack_backup_to_filesystem(
         unsealed_backup: &BackupFormat,
-        current_manifest_hash_hex: &str,
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
 
@@ -537,21 +586,21 @@ impl BackupManager {
                 Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
                     Ok((local_checksum, _)) => {
                         if local_checksum != file.checksum {
-                            log::error!(
+                            crate::error!(
                                     "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
                                     file.designator
                                 );
                         }
                     }
                     Err(e) => {
-                        log::error!(
+                        crate::error!(
                                 "[BackupManager] failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
                             );
                     }
                 },
                 Ok(false) => {}
                 Err(e) => {
-                    log::error!(
+                    crate::error!(
                         "[BackupManager] failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
                     );
                 }
@@ -577,10 +626,9 @@ impl BackupManager {
             files: manifest_entries,
         });
 
-        crate::info!(
-            "Saving manifest file with {} files and hash: {} (current hash: {current_manifest_hash_hex})",
+        crate::debug!(
+            "Saving manifest file with {} files",
             manifest.entries_length(),
-            hex::encode(manifest.to_hash()?)
         );
 
         let manifest_manager = ManifestManager::new();
@@ -589,7 +637,7 @@ impl BackupManager {
         // Refresh the base report to reflect the unpacked manifest contents. This keeps
         // `backup_file_designators` and `backup_size_kb` in sync after a restore.
         if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
-            log::warn!(
+            crate::warn!(
                 "[ClientEvents] failed to refresh backup report after unpacking backup: {e:?}"
             );
         }
@@ -821,4 +869,16 @@ pub enum FactorType {
     IcloudKeychain,
     /// Generated randomly and stored in Turnkey.
     Turnkey,
+}
+
+/// A representation of the Backup Account and its id.
+#[derive(Debug, uniffi::Record)]
+pub struct BackupAccount {
+    /// The full identifier of the backup account. This is the identifier used with
+    /// the remote backup-service.
+    id: String,
+    /// The underlying public key of the backup account. Hex-encoded SEC.1 compressed point.
+    ///
+    /// This public key can be used to authenticate with a specific backup.
+    public_key: String,
 }

@@ -13,13 +13,29 @@ use crate::primitives::filesystem::{
 };
 use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use crypto_box::{PublicKey, SecretKey};
 use k256::ecdsa::signature::Verifier;
 use k256::ecdsa::{Signature, VerifyingKey};
 use serial_test::serial;
+use siegel_uniffi::{siegel_fill, SiegelSession, FILL_OK};
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
+
+/// Wraps a string in a one-shot [`SiegelSession`], mirroring how the foreign key store
+/// delivers the root secret to `BackupManager` at runtime.
+fn siegel_from_str(secret: &str) -> Arc<SiegelSession> {
+    let bytes = secret.as_bytes();
+    let len = u32::try_from(bytes.len()).expect("secret len must fit in u32");
+    let session = SiegelSession::new(len).expect("failed to create siegel session");
+    // SAFETY: `session` was just allocated with capacity `len == bytes.len()`, `bytes`
+    // is owned by the caller and valid for `len` reads for the duration of this call.
+    let rc = unsafe { siegel_fill(session.handle_id(), bytes.as_ptr(), bytes.len()) };
+    assert_eq!(rc, FILL_OK, "siegel_fill failed with code {rc}");
+    session
+}
 
 fn ensure_fs_initialized() {
     if crate::primitives::filesystem::get_filesystem_raw().is_err() {
@@ -924,7 +940,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             prf_result.clone(),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 
@@ -951,7 +966,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             create_result.encrypted_backup_keypair.clone(),
             incorrect_factor_secret,
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .expect_err("Expected decryption to fail with incorrect factor secret");
     assert_eq!(
@@ -972,7 +986,6 @@ fn test_decrypt_sealed_backup_with_prf() {
             incorrect_encrypted_backup_keypair,
             prf_result,
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .expect_err(
             "Expected decryption to fail with incorrect encrypted backup keypair",
@@ -1012,7 +1025,6 @@ async fn test_decrypt_and_unpack_default_manifest_hash() {
             create_result.encrypted_backup_keypair.clone(),
             prf_result,
             FactorType::Prf,
-            &create_result.manifest_hash,
         )
         .unwrap();
 
@@ -1074,7 +1086,6 @@ fn test_unpack_writes_files_and_manifest() {
             hex::encode(encrypted_backup_keypair),
             hex::encode(factor_sk.to_bytes()),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 
@@ -1158,7 +1169,6 @@ fn test_unpack_writes_files_and_manifest_unicode() {
             hex::encode(encrypted_backup_keypair),
             hex::encode(factor_sk.to_bytes()),
             FactorType::Prf,
-            BackupManifest::default_hash_hex(),
         )
         .unwrap();
 
@@ -1316,5 +1326,118 @@ fn test_sign_with_backup_account_key_invalid_root_secret() {
         .sign_with_backup_account_key("not json", b"challenge")
         .expect_err("should fail with invalid root secret");
 
+    assert!(err.to_string().contains("Invalid root secret"));
+}
+
+// SECTION: Turnkey backup-account stamp tests
+
+fn known_root_secret() -> String {
+    format!("{{\"version\":\"V1\",\"key\":\"{}\"}}", "1".repeat(64))
+}
+
+/// Compressed SEC1 hex of the backup-account public key derived from
+/// [`known_root_secret`]. Cross-checked against `test_derive_public_backup_account_key`.
+///
+/// NOTE this is **NOT** a sensitive value, it's a public key for a test key.
+const KNOWN_BACKUP_ACCOUNT_PUBLIC_KEY: &str =
+    "039797dc9fec4e3d3f2f27173ba0faac160ee2f803954e8552c308da22ab40ab5c";
+
+#[test]
+fn test_get_backup_account_returns_public_key() {
+    let manager = BackupManager::new();
+    let root_secret = known_root_secret();
+
+    let account = manager
+        .get_backup_account(siegel_from_str(&root_secret))
+        .expect("deriving backup account should succeed");
+
+    // Turnkey's `API_KEY_CURVE_SECP256K1` expects compressed SEC1 hex: 66 chars, no `0x`,
+    // leading `02`/`03` parity byte.
+    assert_eq!(account.public_key.len(), 66);
+    assert!(
+        account.public_key.starts_with("02") || account.public_key.starts_with("03")
+    );
+    assert!(account.public_key.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_eq!(account.public_key, KNOWN_BACKUP_ACCOUNT_PUBLIC_KEY);
+
+    // The remote-service id is the same key with the `backup_account_` prefix.
+    assert_eq!(
+        account.id,
+        format!("backup_account_{KNOWN_BACKUP_ACCOUNT_PUBLIC_KEY}")
+    );
+
+    // Cross-check against the underlying `RootKey` derivation.
+    let derived = RootKey::from_json(&root_secret)
+        .unwrap()
+        .derive_public_backup_account_key()
+        .unwrap();
+    assert_eq!(derived, account.public_key);
+}
+
+#[test]
+fn test_stamp_with_backup_account_key_produces_valid_secp256k1_stamp() {
+    let turnkey = crate::backup::turnkey::Turnkey::new();
+    let manager = BackupManager::new();
+    let root_secret = known_root_secret();
+    let body = serde_json::json!({"example": 123}).to_string();
+
+    let stamp = turnkey
+        .stamp_with_backup_account_key(siegel_from_str(&root_secret), body.clone())
+        .expect("stamping should succeed");
+
+    // Decode and inspect the stamp.
+    let decoded = URL_SAFE_NO_PAD.decode(&stamp).unwrap();
+    let decoded: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+
+    assert_eq!(
+        decoded["scheme"].as_str().unwrap(),
+        "SIGNATURE_SCHEME_TK_API_SECP256K1"
+    );
+
+    // The stamped public key must be the same key the reset_user is registered with.
+    let public_key_hex = decoded["publicKey"].as_str().unwrap();
+    let registered = manager
+        .get_backup_account(siegel_from_str(&root_secret))
+        .unwrap()
+        .public_key;
+    assert_eq!(public_key_hex, registered);
+    assert_eq!(public_key_hex, KNOWN_BACKUP_ACCOUNT_PUBLIC_KEY);
+
+    // The signature is a valid ECDSA-secp256k1 signature of SHA256(body) under that key.
+    // `Verifier::verify` hashes the message with SHA256 internally, and k256 rejects
+    // high-S signatures, so a successful verify also proves low-S normalization.
+    let sig_der = hex::decode(decoded["signature"].as_str().unwrap()).unwrap();
+    let signature = Signature::from_der(&sig_der).unwrap();
+    let verifying_key =
+        VerifyingKey::from_sec1_bytes(&hex::decode(public_key_hex).unwrap()).unwrap();
+    verifying_key
+        .verify(body.as_bytes(), &signature)
+        .expect("stamp signature must verify against the backup-account public key");
+}
+
+#[test]
+fn test_stamp_with_backup_account_key_rejects_invalid_body() {
+    let turnkey = crate::backup::turnkey::Turnkey::new();
+    let root_secret = known_root_secret();
+
+    let err = turnkey
+        .stamp_with_backup_account_key(
+            siegel_from_str(&root_secret),
+            "not json".to_string(),
+        )
+        .expect_err("should fail with invalid stamp body");
+    assert_eq!(err.to_string(), "Failed to decode request body as JSON");
+}
+
+#[test]
+fn test_stamp_with_backup_account_key_rejects_invalid_root_secret() {
+    let turnkey = crate::backup::turnkey::Turnkey::new();
+
+    let err = turnkey
+        .stamp_with_backup_account_key(
+            siegel_from_str("not json"),
+            serde_json::json!({"example": 123}).to_string(),
+        )
+        .expect_err("should fail with invalid root secret");
     assert!(err.to_string().contains("Invalid root secret"));
 }

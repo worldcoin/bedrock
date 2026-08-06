@@ -15,7 +15,7 @@ use crate::primitives::config::{get_config, BedrockEnvironment};
 /// Constants for enclave verification
 pub mod constants;
 
-/// Types for enclave verification  
+/// Types for enclave verification
 pub mod types;
 
 #[cfg(test)]
@@ -37,7 +37,7 @@ use constants::{
 /// This class performs comprehensive verification of attestation documents including:
 /// - COSE Sign1 signature verification
 /// - Certificate chain validation against AWS Nitro root certificates
-/// - PCR (Platform Configuration Register) value validation  
+/// - PCR (Platform Configuration Register) value validation
 /// - Attestation document freshness checks
 /// - Public key extraction
 #[derive(Debug, uniffi::Object)]
@@ -78,14 +78,16 @@ impl EnclaveAttestationVerifier {
             BedrockEnvironment::Production => {
                 production_pcr_configs(&EnclaveApplication::WorldChatNotifications)
             }
-            BedrockEnvironment::Staging => {
+            BedrockEnvironment::Staging | BedrockEnvironment::Sandbox => {
                 staging_pcr_configs(&EnclaveApplication::WorldChatNotifications)
             }
         };
 
         let root_certificate = match env {
             BedrockEnvironment::Production => AWS_NITRO_ROOT_CERT_PROD.to_vec(),
-            BedrockEnvironment::Staging => AWS_NITRO_ROOT_CERT_STAGING.to_vec(),
+            BedrockEnvironment::Staging | BedrockEnvironment::Sandbox => {
+                AWS_NITRO_ROOT_CERT_STAGING.to_vec()
+            }
         };
 
         Self {

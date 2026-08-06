@@ -24,7 +24,7 @@ use crate::{
 #[must_use]
 pub fn world_gift_manager_address() -> Address {
     match current_environment_or_default() {
-        BedrockEnvironment::Staging => {
+        BedrockEnvironment::Staging | BedrockEnvironment::Sandbox => {
             address!("0x91479943841A4350f614Abb9745314F262F45b2e")
         }
         BedrockEnvironment::Production => {

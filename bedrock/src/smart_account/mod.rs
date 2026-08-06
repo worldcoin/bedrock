@@ -126,7 +126,6 @@ impl From<SessionError> for SafeSmartAccountError {
             SessionError::Consumed => "consumed",
             SessionError::AllocationFailed { .. } => "allocation_failed",
             SessionError::ProtectionFailed { .. } => "protection_failed",
-            SessionError::LockFailed { .. } => "lock_failed",
             SessionError::CanaryCorrupted => "canary_corrupted",
             SessionError::TooManyActiveSessions => "too_many_active_sessions",
             SessionError::HandleAllocationFailed { .. } => "handle_allocation_failed",

@@ -1,4 +1,6 @@
-//! This module allows interactions with the Turnkey API for the user's backup.
+//! This module allows interactions with the Turnkey system for the user's backup.
+
+use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -6,13 +8,166 @@ use bedrock_macros::{bedrock_error, bedrock_export};
 use hpke::kem::DhP256HkdfSha256;
 use hpke::{Deserializable, Kem as KemTrait};
 use p256::ecdsa::signature::Signer;
-use p256::ecdsa::Signature;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use serde_json::json;
+use siegel_uniffi::SiegelSession;
 use turnkey_enclave_encrypt::client::EnclaveEncryptClient;
 use turnkey_enclave_encrypt::QuorumPublicKey;
 
+use crate::root_key::RootKey;
+
+mod api;
+mod error;
+mod migrations;
+mod policies;
+
+#[cfg(test)]
+mod test;
+
+use api::{MainFactor, SyncFactor, TurnkeyApiClient};
+pub use error::TurnkeyMigrationError;
+use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
+
+use crate::primitives::config::get_config;
+use crate::primitives::P256Signer;
+
+/// Only one migration running at a time.
+static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// Hard ceiling on a full migration run. A degraded Turnkey (repeated timeouts
+/// plus retry backoff) must not block the caller indefinitely, and iOS cannot
+/// cancel a uniffi async call, so the deadline lives here.
+const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// High level manager to perform Turnkey account operations such as setup and
+/// migration reconciliation.
+///
+/// For use from foreign bindings.
+#[derive(uniffi::Object, Clone, Debug, Default)]
+pub struct TurnkeyManager;
+
+#[bedrock_export]
+impl TurnkeyManager {
+    /// Creates a new `TurnkeyManager`.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Reviews the Turnkey account state and applies any required migrations to
+    /// bring the user's sub-organization in line with the expected configuration.
+    ///
+    /// Migrations that can run with the `sync_factor` alone run immediately;
+    /// those that require the `main_factor` are deferred and reported via
+    /// [`TurnkeyMigrationOutcome::MainFactorRequired`] when it is absent, so the
+    /// caller can re-invoke with the main factor.
+    ///
+    /// # Arguments
+    /// - `suborganization_id`: the user's Turnkey sub-organization id. When
+    ///   `None`, it is resolved via Turnkey `whoami` stamped with the sync factor.
+    /// - `sync_factor`: a [`P256Signer`] the caller has already constructed — and
+    ///   thereby validated — from its sync signer; stamps read/query requests and
+    ///   resolves the sub-organization.
+    /// - `main_factor`: an optional [`P256Signer`] for privileged writes with
+    ///   [`policies::AUTH_USER_MAIN_USERNAME`], i.e. the ephemeral session key established
+    ///   from a Main Factor.
+    ///
+    /// # Threading
+    /// This performs network I/O and may poll Turnkey activities to completion,
+    /// so it can take a while. Callers MUST invoke it off the main thread.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyMigrationError`] if the run fails. Diagnostic detail is
+    /// logged inside Bedrock and intentionally not surfaced.
+    pub async fn run_migrations(
+        &self,
+        suborganization_id: Option<String>,
+        sync_factor: &P256Signer,
+        main_factor: Option<Arc<P256Signer>>,
+    ) -> Result<TurnkeyMigrationOutcome, TurnkeyMigrationError> {
+        crate::debug!(
+            "run_migrations start is_suborg_provided={}",
+            suborganization_id.is_some()
+        );
+
+        let Ok(_guard) = TURNKEY_MIGRATION_LOCK.try_lock() else {
+            // A warning is logged because the native client should be aware of the
+            // migrations it's triggering and triggering duplicates is a native bug.
+            crate::warn!(
+                "run_migrations skipped: another migration run is already in progress"
+            );
+            return Err(TurnkeyMigrationError::AlreadyInProgress);
+        };
+
+        // Turnkey account management is too sensitive to run against a defaulted
+        // environment; require explicit configuration.
+        let Some(config) = get_config() else {
+            crate::error!("run_migrations aborted: Bedrock config not initialized");
+            return Err(TurnkeyMigrationError::Failed);
+        };
+        let environment = config.environment();
+        let api = TurnkeyApiClient::new();
+        let sync_factor = SyncFactor(sync_factor);
+
+        let suborganization_id = if let Some(id) = suborganization_id {
+            id
+        } else {
+            let parent = environment.turnkey_parent_organization_id();
+            match api.resolve_suborganization_id(parent, sync_factor).await {
+                Ok(id) => id,
+                Err(error) => {
+                    crate::error!(
+                        "run_migrations sub-org resolution failed err={error}"
+                    );
+                    return Err(error.to_migration_error());
+                }
+            }
+        };
+
+        let run = run_migration_list(
+            MIGRATIONS,
+            &suborganization_id,
+            sync_factor,
+            main_factor.as_deref().map(MainFactor),
+            &api,
+            environment,
+        );
+        let outcome = match tokio::time::timeout(MIGRATION_RUN_TIMEOUT, run).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => {
+                crate::error!("run_migrations failed err={error}");
+                return Err(error.to_migration_error());
+            }
+            Err(_elapsed) => {
+                crate::error!(
+                    "run_migrations timed out after {}s",
+                    MIGRATION_RUN_TIMEOUT.as_secs()
+                );
+                return Err(TurnkeyMigrationError::Retryable);
+            }
+        };
+
+        match &outcome {
+            TurnkeyMigrationOutcome::Completed => {
+                crate::debug!("run_migrations completed successfully");
+            }
+            TurnkeyMigrationOutcome::MainFactorRequired { pending } => {
+                crate::debug!(
+                    "run_migrations deferred {} migration(s) awaiting the main factor",
+                    pending.len()
+                );
+            }
+        }
+        Ok(outcome)
+    }
+}
+
 /// Allows interactions with Turnkey API.
+///
+/// DEPRECATION NOTICE: Interactions with Turnkey will be migrated to be handled from
+/// within Bedrock. This class should disappear in favor of [`TurnkeyManager`]
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct Turnkey {}
 
@@ -96,13 +251,82 @@ impl Turnkey {
             serde_json::from_str(body).map_err(|_| TurnkeyError::DecodeBodyError)?;
 
         // Sign the body with the private key
-        let signature: Signature = signing_key.sign(body.as_bytes());
+        let signature: p256::ecdsa::Signature = signing_key.sign(body.as_bytes());
 
         // Convert the signature to the expected header format
         let json_stamp = json!({
             "publicKey": hex::encode(private_key.public_key().to_encoded_point(true).as_bytes()),
             "signature": hex::encode(signature.to_der()),
             "scheme": "SIGNATURE_SCHEME_TK_API_P256",
+        });
+        let json_stamp = serde_json::to_string(&json_stamp)
+            .map_err(|_| TurnkeyError::SerializeStampError)?;
+
+        Ok(URL_SAFE_NO_PAD.encode(json_stamp.as_bytes()))
+    }
+
+    /// Stamps a JSON activity with the backup account key. See [`Self::stamp`] for
+    /// more details on stamping.
+    ///
+    /// This should only be used for disaster recovery (`/reset`) to clear the Turnkey
+    /// account that will go out of use.
+    ///
+    /// # Errors
+    /// * `TurnkeyError::InvalidRootSecretError` - if the session is not valid UTF-8 or the
+    ///   root secret cannot be parsed.
+    /// * `TurnkeyError::DecodeBodyError` - if `body` is not valid JSON.
+    /// * `TurnkeyError::SigningError` - if signing fails.
+    /// * `TurnkeyError::Generic` - if the Siegel session cannot be read, key derivation
+    ///   fails, or the stamp cannot be serialized.
+    #[expect(
+        clippy::unused_self,
+        reason = "uniffi doesn't support associated functions"
+    )]
+    pub fn stamp_with_backup_account_key(
+        &self,
+        root_secret: Arc<SiegelSession>,
+        body: String,
+    ) -> Result<String, TurnkeyError> {
+        // Validate JSON body, but raw bytes are signed
+        let _json: serde_json::Value =
+            serde_json::from_str(&body).map_err(|_| TurnkeyError::DecodeBodyError)?;
+
+        let (signature, public_key) = root_secret.read_once(
+            move |bytes| -> Result<
+                (k256::ecdsa::Signature, k256::EncodedPoint),
+                TurnkeyError,
+            > {
+                let root_key = RootKey::from_slice(bytes)
+                    .map_err(|_| TurnkeyError::InvalidRootSecretError)?;
+                let key = root_key.derive_backup_account_key().map_err(|_| {
+                    TurnkeyError::Generic {
+                        error_message: "unexpected kdf failure".to_string(),
+                    }
+                })?;
+
+                // the backup account is `secp256k1`; zeroized on drop
+                let signing_key = k256::ecdsa::SigningKey::from(key);
+
+                // note: k256 already normalizes to low-S
+                let signature: k256::ecdsa::Signature =
+                    signing_key.try_sign(body.as_bytes())?;
+
+                // Return the (public) compressed point so no reference to the local
+                // signing key escapes the closure.
+                Ok((
+                    signature,
+                    signing_key.verifying_key().to_encoded_point(true),
+                ))
+            },
+        )??;
+
+        // release the session explicitly
+        drop(root_secret);
+
+        let json_stamp = json!({
+            "publicKey": hex::encode(public_key.as_bytes()),
+            "signature": hex::encode(signature.to_der()),
+            "scheme": "SIGNATURE_SCHEME_TK_API_SECP256K1",
         });
         let json_stamp = serde_json::to_string(&json_stamp)
             .map_err(|_| TurnkeyError::SerializeStampError)?;
@@ -131,7 +355,10 @@ impl Turnkey {
     /// - `InvalidFactorSecret`: The factor secret is not a valid hex-encoded 32-byte string.
     /// - `EncryptFactorSecretError`: Failed to encrypt the factor secret using the import bundle.
     /// - `SerializeEncryptedBundleError`: Failed to serialize the encrypted bundle to a JSON string.
-    #[allow(clippy::unused_self)] // Uniffi doesn't support associated functions
+    #[expect(
+        clippy::unused_self,
+        reason = "uniffi doesn't support associated functions"
+    )]
     pub fn generate_import_bundle_for_factor_secret(
         &self,
         factor_secret: &str,
@@ -168,7 +395,7 @@ impl Turnkey {
                 turnkey_user_id,
             )
             .map_err(|err| {
-                log::error!("Failed to encrypt factor secret: {err:?}");
+                crate::error!("Failed to encrypt factor secret: {err:?}");
                 TurnkeyError::EncryptFactorSecretError
             })?;
 
@@ -293,6 +520,29 @@ pub enum TurnkeyError {
     ConvertP256KeypairToHpkeKeypairError,
     #[error("Failed to convert enclave public key to verifying key")]
     ConvertEnclavePublicKeyToVerifyingKeyError,
+    /// Errors propagated from a Siegel session
+    #[error("siegel session error: {0}")]
+    SiegelSession(String),
+    /// Root secret is invalid.
+    #[error("Invalid root secret provided in Siegel session")]
+    InvalidRootSecretError,
+    /// Unexpected error signing Turnkey activity
+    #[error("error signing turnkey activity")]
+    SigningError,
+}
+
+impl From<siegel_uniffi::SessionError> for TurnkeyError {
+    fn from(e: siegel_uniffi::SessionError) -> Self {
+        Self::SiegelSession(e.to_string())
+    }
+}
+
+impl From<k256::ecdsa::Error> for TurnkeyError {
+    fn from(_e: k256::ecdsa::Error) -> Self {
+        // while `e` is already opaque, the source could leak some privacy info, and it's generally
+        // not very useful anyway, so it's not logged
+        Self::SigningError
+    }
 }
 
 #[cfg(test)]

@@ -9,8 +9,16 @@ static CONFIG_INSTANCE: OnceLock<Arc<BedrockConfig>> = OnceLock::new();
 /// Represents the environment for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum BedrockEnvironment {
-    /// Staging environment  
+    /// Staging environment
     Staging,
+    /// The sandbox environment is an externally available and reliable environment,
+    /// and with a set of tools that allows breaking boxes and testing anything.
+    ///
+    /// The sandbox environment is available for TFH Apps (World App, World ID), and uses
+    /// the `staging` environment of the World ID Protocol.
+    ///
+    /// Reference: <http://go/sandbox>
+    Sandbox,
     /// Production environment
     Production,
 }
@@ -43,6 +51,7 @@ impl BedrockEnvironment {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Staging => "staging",
+            Self::Sandbox => "sandbox",
             Self::Production => "production",
         }
     }
