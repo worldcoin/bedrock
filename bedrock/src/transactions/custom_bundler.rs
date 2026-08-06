@@ -28,7 +28,24 @@ use crate::{
 /// Global reqwest client for direct HTTP requests to bundler endpoints.
 static REQWEST_CLIENT: OnceCell<reqwest::Client> = OnceCell::new();
 
-// ── URL validation ────────────────────────────────────────────────────────────
+/// Builds the shared bundler HTTP client.
+///
+/// # Errors
+/// Returns [`RpcError::HttpError`] if the TLS config or the client cannot be built.
+fn build_bundler_client() -> Result<reqwest::Client, RpcError> {
+    crate::primitives::tls::client_builder()
+        .map_err(|e| RpcError::HttpError(format!("Failed to configure TLS: {e}")))?
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .gzip(true)
+        .build()
+        .map_err(|e| {
+            RpcError::HttpError(format!(
+                "Failed to build HTTP client: {}",
+                e.without_url()
+            ))
+        })
+}
 
 /// Validates that the given URL is safe to use as an RPC endpoint.
 ///
@@ -62,19 +79,7 @@ fn validate_rpc_url(url: &str) -> Result<(), RpcError> {
 ///
 /// The client is configured with a 15 s timeout to prevent indefinitely hanging requests.
 async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-    let client = REQWEST_CLIENT.get_or_try_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::none())
-            .gzip(true)
-            .build()
-            .map_err(|e| {
-                RpcError::HttpError(format!(
-                    "Failed to build HTTP client: {}",
-                    e.without_url()
-                ))
-            })
-    })?;
+    let client = REQWEST_CLIENT.get_or_try_init(build_bundler_client)?;
     let response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -287,6 +292,11 @@ impl SafeSmartAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn build_bundler_client_succeeds() {
+        build_bundler_client().expect("bundler client should build");
+    }
 
     #[test]
     fn test_validate_rpc_url_accepts_https() {
