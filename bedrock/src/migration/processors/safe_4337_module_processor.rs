@@ -6,7 +6,6 @@ use std::sync::Arc;
 use alloy::primitives::{Address, U256};
 use alloy::sol_types::SolCall;
 use async_trait::async_trait;
-use log::info;
 
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
@@ -192,7 +191,7 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
                 ))
             })?;
 
-        info!(
+        crate::info!(
             "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={})",
             repairs.enable_module, repairs.set_fallback_handler
         );
