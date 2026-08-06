@@ -46,6 +46,8 @@ impl TurnkeyMigration for MigrationAppleAudience {
         "Enable Sign in with Apple for all iOS and Android apps."
     }
 
+    /// Every observed state this reconciles, and the plan for each, is tabulated
+    /// in `migrations/README.md` (rendered in the [`migrations`](super) module docs).
     async fn run(
         &self,
         ctx: &MigrationContext<'_>,
