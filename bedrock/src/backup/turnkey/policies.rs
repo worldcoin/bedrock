@@ -70,8 +70,9 @@ pub(super) const SYNC_FACTOR_POLICY_NOTES: &str =
 /// # Resources
 /// - `USER` allows the sync factor to remove itself (e.g. on logout) and
 ///   other stale Sync Factor users. It cannot remove [`AUTH_USER_MAIN_USERNAME`] because of Root Quorum validation.
-/// - `CREDENTIAL` allows removal of OIDC providers, authenticators, API keys, lets the user
-///   delete factors without needing to do a full re-authentication flow.
+/// - `CREDENTIAL` allows removal of OIDC providers, authenticators, API keys, would let the user
+///   conceptually delete factors without needing to do a full re-authentication flow. Currently not in active use,
+///   as Turnkey has a restriction on non-root users updating root users, even if they have the right policy.
 /// - `ORGANIZATION` allows removal of the entire sub-org (e.g. when deleting the entire backup).
 /// - `PRIVATE_KEY` allows removing the imported factor secret. Currently not in active use.
 ///
