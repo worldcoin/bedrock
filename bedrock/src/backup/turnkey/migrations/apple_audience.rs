@@ -25,8 +25,12 @@ use super::{MigrationContext, MigrationOutcome, TurnkeyMigration};
 /// NOTE that Apple assigns the same `sub` to all Apple OIDC tokens under the same developer
 /// account.
 ///
-/// If the user already has at least one Apple provider, its `subject` is reused
-/// and all remaining providers are created. If the user has no Apple provider at all, this is a no-op.
+/// If the user already has at least one Apple provider, its `subject` is reused and all remaining
+/// providers are created. If the user has no Apple provider at all, this is a no-op.
+///
+/// # Why?
+/// This migration is necessary because initially only a single client was used (World App iOS),
+/// so when registering an Apple OIDC factor only one audience was registered.
 ///
 /// # Main Factor
 /// If operations need to be executed, this migration REQUIRES a Main Factor.
@@ -51,7 +55,7 @@ impl TurnkeyMigration for MigrationAppleAudience {
             .get_users(ctx.suborganization_id, ctx.sync_factor)
             .await?;
 
-        let plan = plan(users, ctx.environment)?;
+        let plan = plan(&users, ctx.environment)?;
 
         match plan {
             Plan::SkipNoAppleProvider | Plan::SkipReady => {
@@ -115,11 +119,11 @@ impl std::fmt::Display for Plan {
 /// # Errors
 /// Returns [`TurnkeyApiError::MainUserNotFound`] if `auth_user_main` is absent.
 fn plan(
-    users: Vec<User>,
+    users: &[User],
     environment: BedrockEnvironment,
 ) -> Result<Plan, TurnkeyApiError> {
     let user = users
-        .into_iter()
+        .iter()
         .find(|user| user.user_name == AUTH_USER_MAIN_USERNAME)
         .ok_or(TurnkeyApiError::MainUserNotFound)?;
 
@@ -160,7 +164,7 @@ fn plan(
     let unrecognized: Vec<&str> = existing.difference(&configured).copied().collect();
     if !unrecognized.is_empty() {
         crate::warn!(
-            "auth_user_main has unrecognized Apple aduences: {}",
+            "auth_user_main has unrecognized Apple audiences: {}",
             unrecognized.join(", ")
         );
     }
@@ -174,6 +178,8 @@ fn plan(
         return Ok(Plan::SkipReady);
     }
 
+    // Please note that the [`TurnkeyApiClient::create_oauth_providers`] activity
+    // that this will result into is ADDITIVE. It doesn't replace or upsert existing configuration.
     let providers = missing
         .iter()
         .map(|audience| OauthProviderParamsV2 {
@@ -187,7 +193,7 @@ fn plan(
         .collect();
 
     Ok(Plan::Create {
-        user_id: user.user_id,
+        user_id: user.user_id.clone(),
         providers,
     })
 }
@@ -244,7 +250,7 @@ mod tests {
         }))];
 
         assert!(matches!(
-            plan(users, BedrockEnvironment::Staging),
+            plan(&users, BedrockEnvironment::Staging),
             Ok(Plan::SkipNoAppleProvider)
         ));
     }
@@ -255,7 +261,7 @@ mod tests {
         let users = vec![main_user_with_apple(&auds, "sub-1")];
 
         assert!(matches!(
-            plan(users, BedrockEnvironment::Staging),
+            plan(&users, BedrockEnvironment::Staging),
             Ok(Plan::SkipReady)
         ));
     }
@@ -266,7 +272,7 @@ mod tests {
         let users = vec![main_user_with_apple(&["org.worldcoin.insight"], "sub-prod")];
 
         let Plan::Create { providers, .. } =
-            plan(users, BedrockEnvironment::Production).unwrap()
+            plan(&users, BedrockEnvironment::Production).unwrap()
         else {
             panic!("expected Create plan");
         };
@@ -288,7 +294,7 @@ mod tests {
         let users = vec![main_user_with_apple(&auds[..1], "sub-apple")];
 
         let Plan::Create { user_id, providers } =
-            plan(users, BedrockEnvironment::Staging).unwrap()
+            plan(&users, BedrockEnvironment::Staging).unwrap()
         else {
             panic!("expected Create plan");
         };
@@ -327,7 +333,7 @@ mod tests {
         }))];
 
         assert!(matches!(
-            plan(users, BedrockEnvironment::Staging),
+            plan(&users, BedrockEnvironment::Staging),
             Err(TurnkeyApiError::MainUserNotFound)
         ));
     }
@@ -357,7 +363,7 @@ mod tests {
         }))];
 
         assert!(matches!(
-            plan(users, BedrockEnvironment::Staging),
+            plan(&users, BedrockEnvironment::Staging),
             Err(TurnkeyApiError::Consistency)
         ));
     }
@@ -398,7 +404,7 @@ mod tests {
         }))];
 
         assert!(matches!(
-            plan(users, BedrockEnvironment::Staging),
+            plan(&users, BedrockEnvironment::Staging),
             Ok(Plan::SkipReady)
         ));
     }

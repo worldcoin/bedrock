@@ -8,8 +8,10 @@ use super::api::{MainFactor, SyncFactor, TurnkeyApiClient};
 use super::error::TurnkeyApiError;
 
 mod apple_audience;
+mod sync_factor_policy;
 
 use apple_audience::MigrationAppleAudience;
+use sync_factor_policy::MigrationSyncFactorPolicy;
 
 /// Every Turnkey migration, in the order they are applied.
 ///
@@ -18,13 +20,13 @@ use apple_audience::MigrationAppleAudience;
 ///
 /// The list fails fast on the first error, so order first cheaper migrations, more likely
 /// to be skipped, or the ones not requiring a Main Factor.
-pub(super) const MIGRATIONS: &[&dyn TurnkeyMigration] = &[&MigrationAppleAudience];
+pub(super) const MIGRATIONS: &[&dyn TurnkeyMigration] =
+    &[&MigrationAppleAudience, &MigrationSyncFactorPolicy];
 
 // TODO Migrations:
 // 1. Ensure `auth_user_main` is the only one in the root quorum (housekeeping)
 // 2. Ensure break glass user exists and has the correct policy
-// 3. Ensure all sync factors have the right deletion policy
-// 4. Ensure max number of sync factor users and policies (port over from Android)
+// 3. Ensure max number of sync factor users and policies (port over from Android)
 
 /// Global result from running the entire set of migrations.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
