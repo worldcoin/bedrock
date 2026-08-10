@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/worldcoin/bedrock/compare/0.5.1...0.5.2) - 2026-08-10
+
+### Added
+
+- improved migration docs & state ([#402](https://github.com/worldcoin/bedrock/pull/402))
+- turnkey migration - sync factor policy  ([#401](https://github.com/worldcoin/bedrock/pull/401))
+- migration to repair ERC-4337 config on Safes ([#375](https://github.com/worldcoin/bedrock/pull/375))
+
+### Fixed
+
+- normalize low-s signature for KeypairSigner ([#404](https://github.com/worldcoin/bedrock/pull/404))
+
+### Other
+
+- bump reqwest & serde_with ([#399](https://github.com/worldcoin/bedrock/pull/399))
+
 ## [0.5.1](https://github.com/worldcoin/bedrock/compare/0.5.0...0.5.1) - 2026-08-03
 
 ### Added
