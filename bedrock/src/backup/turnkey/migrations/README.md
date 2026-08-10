@@ -3,7 +3,7 @@
 Migrations reconcile a user's Turnkey account (i.e. sub-organization) against the configuration World App expects (see [Turnkey user setup](https://docs.toolsforhumanity.com/world-app/backup/components#turnkey-user-setup)). They run from `TurnkeyManager::run_migrations`, invoked by the native clients.
 
 > [!NOTE]
-> Unrelated to the [General migration engine](../../../migration/README.md), which is a generic migration mechanism usually for wallet state. Turnkey migrations have no state machine and no persistence, they're pure functions running on observed state.
+> Unrelated to the [General migration engine](../../../migration/README.md), which is a generic migration mechanism usually for wallet state. Turnkey migrations have no state machine and no persistence.
 
 `MIGRATIONS` in `mod.rs` is the single source of truth for which migrations exist and the order they run in.
 
