@@ -42,6 +42,8 @@ impl TurnkeyMigration for MigrationSyncFactorPolicy {
         "Ensure every sync factor has the correct policy to perform all housekeeping operations."
     }
 
+    /// Every observed state this reconciles, and the action for each, is tabulated
+    /// in `migrations/README.md` (rendered in the [`migrations`](super) module docs).
     async fn run(
         &self,
         ctx: &MigrationContext<'_>,
