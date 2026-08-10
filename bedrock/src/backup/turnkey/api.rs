@@ -74,7 +74,7 @@ impl Stamp for KeypairSignerStamper {
             .map_err(|e| StamperError::InvalidPrivateKeyBytes(e.to_string()))?;
         let stamp = ApiStamp {
             public_key: self.signer.public_key_hex().to_string(),
-            signature: hex::encode(signature),
+            signature: hex::encode(signature.to_der()),
             scheme: SIGNATURE_SCHEME_P256.to_string(),
         };
         let json = serde_json::to_string(&stamp).map_err(|e| {
