@@ -30,7 +30,7 @@ pub trait KeypairSigner: Send + Sync {
     /// Returns [`KeypairSignerError`] if the key material is unavailable or invalid.
     fn public_key(&self) -> Result<Vec<u8>, KeypairSignerError>;
 
-    /// Signs a pre-computed digest with the private key. Signature MUST be normalized (low S).
+    /// Signs a pre-computed digest with the private key.
     ///
     /// # Errors
     /// Returns [`KeypairSignerError`] if signing is rejected or the key is unavailable.
