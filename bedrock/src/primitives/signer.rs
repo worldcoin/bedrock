@@ -47,6 +47,9 @@ pub enum KeypairSignerError {
     /// The key material is malformed or of an unexpected type.
     #[error("invalid signing key material")]
     InvalidKey,
+    /// The trait implementation provided an invalid signature for the specific curve.
+    #[error("invalid signature received")]
+    InvalidSignature,
     /// The public key returned by the signer is malformed: wrong length, not a
     /// valid compressed SEC1 encoding, or not a point on the P-256 curve.
     #[error("invalid public key: {error_message}")]
@@ -126,25 +129,37 @@ impl P256Signer {
         &self.public_key_hex
     }
 
-    /// Signs a pre-computed 32-byte digest with the underlying signer.
+    /// Signs a pre-computed 32-byte digest with the underlying signer. Will
+    /// perform low-s normalization on all signatures.
     ///
     /// # Errors
-    /// Returns [`KeypairSignerError`] if signing is rejected or the key is
-    /// unavailable.
-    pub fn sign_digest(&self, digest: Vec<u8>) -> Result<Vec<u8>, KeypairSignerError> {
-        self.signer.sign_digest(digest)
+    /// Returns [`KeypairSignerError`] if signing is rejected, an invalid signature
+    /// is provided by the implementer, or the key is unavailable.
+    pub fn sign_digest(
+        &self,
+        digest: Vec<u8>,
+    ) -> Result<p256::ecdsa::Signature, KeypairSignerError> {
+        let signature = self.signer.sign_digest(digest)?;
+        let signature = p256::ecdsa::Signature::from_der(&signature)
+            .map_err(|_| KeypairSignerError::InvalidSignature)?;
+
+        Ok(signature.normalize_s().unwrap_or(signature))
     }
 }
 
 #[cfg(test)]
 mod p256_signer_tests {
     use super::*;
+    use p256::ecdsa::signature::hazmat::PrehashSigner;
     use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::PrimeField;
 
-    /// A signer that returns canned public-key bytes, for exercising validation
-    /// paths. `None` makes [`KeypairSigner::public_key`] fail.
+    const DIGEST: [u8; 32] = [0x42; 32];
+
+    #[derive(Default)]
     struct MockSigner {
         public_key: Option<Vec<u8>>,
+        signature: Vec<u8>,
     }
 
     impl KeypairSigner for MockSigner {
@@ -154,7 +169,7 @@ mod p256_signer_tests {
                 .ok_or(KeypairSignerError::Unavailable)
         }
         fn sign_digest(&self, _digest: Vec<u8>) -> Result<Vec<u8>, KeypairSignerError> {
-            Ok(Vec::new())
+            Ok(self.signature.clone())
         }
     }
 
@@ -167,11 +182,34 @@ mod p256_signer_tests {
             .to_vec()
     }
 
+    /// A [`P256Signer`] whose underlying signer always returns `signature`.
+    fn signer_returning(signature: Vec<u8>) -> P256Signer {
+        P256Signer::verify(Arc::new(MockSigner {
+            public_key: Some(valid_compressed_key()),
+            signature,
+        }))
+        .unwrap()
+    }
+
+    /// A valid, low-S signature over [`DIGEST`].
+    fn low_s_signature() -> p256::ecdsa::Signature {
+        let key = p256::ecdsa::SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let signature: p256::ecdsa::Signature = key.sign_prehash(&DIGEST).unwrap();
+        signature.normalize_s().unwrap_or(signature)
+    }
+
+    fn to_high_s(signature: &p256::ecdsa::Signature) -> p256::ecdsa::Signature {
+        let (r, _) = signature.split_bytes();
+        let s = -*signature.s().as_ref();
+        p256::ecdsa::Signature::from_scalars(r, s.to_repr()).expect("non-zero scalars")
+    }
+
     #[test]
     fn accepts_valid_compressed_key() {
         let key = valid_compressed_key();
         let verified = P256Signer::verify(Arc::new(MockSigner {
             public_key: Some(key.clone()),
+            ..MockSigner::default()
         }))
         .unwrap();
         assert_eq!(verified.public_key_hex(), hex::encode(&key));
@@ -181,6 +219,7 @@ mod p256_signer_tests {
     fn rejects_wrong_length_key() {
         let result = P256Signer::verify(Arc::new(MockSigner {
             public_key: Some(vec![0x02; 32]),
+            ..MockSigner::default()
         }));
         assert!(matches!(
             result,
@@ -195,6 +234,7 @@ mod p256_signer_tests {
         key[0] = 0x01;
         let result = P256Signer::verify(Arc::new(MockSigner {
             public_key: Some(key),
+            ..MockSigner::default()
         }));
         assert!(matches!(
             result,
@@ -204,7 +244,40 @@ mod p256_signer_tests {
 
     #[test]
     fn propagates_public_key_error() {
-        let result = P256Signer::verify(Arc::new(MockSigner { public_key: None }));
+        let result = P256Signer::verify(Arc::new(MockSigner::default()));
         assert!(matches!(result, Err(KeypairSignerError::Unavailable)));
+    }
+
+    #[test]
+    fn normalizes_high_s_signature() {
+        let expected = low_s_signature();
+        let high_s = to_high_s(&expected);
+        assert_ne!(high_s, expected);
+
+        let signature = signer_returning(high_s.to_der().as_bytes().to_vec())
+            .sign_digest(DIGEST.to_vec())
+            .unwrap();
+
+        assert_eq!(signature, expected);
+        assert!(signature.normalize_s().is_none());
+    }
+
+    #[test]
+    fn preserves_low_s_signature() {
+        let expected = low_s_signature();
+
+        let signature = signer_returning(expected.to_der().as_bytes().to_vec())
+            .sign_digest(DIGEST.to_vec())
+            .unwrap();
+
+        assert_eq!(signature, expected);
+    }
+
+    #[test]
+    fn rejects_non_der_signature() {
+        // Raw 64-byte concatenated (r, s) instead of the required DER encoding.
+        let raw = low_s_signature().to_bytes().to_vec();
+        let result = signer_returning(raw).sign_digest(DIGEST.to_vec());
+        assert!(matches!(result, Err(KeypairSignerError::InvalidSignature)));
     }
 }

@@ -193,7 +193,8 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
 
         crate::info!(
             "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={})",
-            repairs.enable_module, repairs.set_fallback_handler
+            repairs.enable_module,
+            repairs.set_fallback_handler
         );
 
         // Not done yet: the relayed transaction may not have mined. Stay
