@@ -150,6 +150,7 @@ impl P256Signer {
 #[cfg(test)]
 mod p256_signer_tests {
     use super::*;
+    use hex_literal::hex;
     use p256::ecdsa::signature::hazmat::PrehashSigner;
     use p256::elliptic_curve::sec1::ToEncodedPoint;
     use p256::elliptic_curve::PrimeField;
@@ -260,6 +261,30 @@ mod p256_signer_tests {
 
         assert_eq!(signature, expected);
         assert!(signature.normalize_s().is_none());
+    }
+
+    /// Tests the low-s normalization with a static test vector for a signature.
+    ///
+    /// The test vector is obtained from [RFC 6979](https://datatracker.ietf.org/doc/html/rfc6979) §A.2.5
+    /// (With SHA-256, message = "sample")
+    #[test]
+    fn normalizes_deterministic_high_s_signature() {
+        let s =
+            hex!("F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8");
+        let r =
+            hex!("EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716");
+        let signature = p256::ecdsa::Signature::from_scalars(r, s).unwrap();
+        let sig_der = signature.to_der().as_bytes().to_vec();
+
+        let signature = signer_returning(sig_der.clone())
+            .sign_digest(DIGEST.to_vec())
+            .unwrap();
+
+        assert_ne!(
+            signature.to_der().as_bytes(),
+            &sig_der,
+            "normalized signature MUST differ"
+        );
     }
 
     #[test]
