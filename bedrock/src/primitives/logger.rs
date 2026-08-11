@@ -215,11 +215,10 @@ macro_rules! error {
 }
 
 /// Logs an error-level message tagged `[Critical]`, for state that needs immediate
-/// attention rather than an ordinary failure: a corrupt local backup, an inconsistent
-/// remote account, a broken invariant.
+/// attention. There's usually very low alerting threshold for these.
 ///
 /// The tag is added by the logger, so do not repeat it in the message. Records land as
-/// `[Bedrock][<module>] [Critical] <message>`, which is what a paging alert matches on.
+/// `[Bedrock][<module>] [Critical] <message>`
 #[macro_export]
 macro_rules! critical {
     ($($arg:tt)*) => {
@@ -257,8 +256,7 @@ pub struct LogContext {
 /// worker resumed it). Re-applying the context per poll keeps the prefix on
 /// everything the future logs, nested synchronous calls included.
 ///
-/// [`bedrock_export`](crate::bedrock_export) wraps every exported `async` method in
-/// this. Call it directly to narrow the context for part of a call tree.
+/// [`bedrock_export`](crate::bedrock_export) wraps every exported `async` method in it.
 pub async fn in_log_context<F>(module: &str, future: F) -> F::Output
 where
     F: Future + Send,

@@ -346,9 +346,7 @@ fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &st
     };
 
     if method.sig.asyncness.is_some() {
-        // The context is thread-local, so a guard would be dropped from the record
-        // the moment the future resumes on another runtime worker. Running the body
-        // inside `in_log_context` re-applies it on every poll instead.
+        // The context is thread-local, so a guard would be dropped. `in_log_context` re-applies it on every poll
         let body = method.block.clone();
         method.block = syn::parse_quote! {{
             crate::primitives::logger::in_log_context(#type_name, async move {
@@ -388,7 +386,7 @@ fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &st
 ///         address token;
 ///         uint256 amount;
 ///     }
-///     
+///
 ///     #[unparsed]
 ///     struct PermitTransferFrom {
 ///         TokenPermissions permitted;
