@@ -54,17 +54,23 @@ pub trait MigrationProcessor: Send + Sync {
     /// the desired end state does **not** yet hold. This ensures the system is
     /// truly idempotent and handles edge cases gracefully.
     ///
-    /// Returning `Ok(false)` means the desired end state already holds,
-    /// regardless of how it was reached: the controller settles the migration
-    /// as `Succeeded` and skips it until the TTL recheck. In particular, a
-    /// migration whose effect landed *after* a failed attempt (e.g. a
-    /// transaction submitted by [`execute`](Self::execute) that mined after
-    /// that run gave up on it) converges to `Succeeded` this way.
+    /// For a migration that has already been attempted (`InProgress` or
+    /// `FailedRetryable`), returning `Ok(false)` means the desired end state
+    /// now holds, regardless of how it was reached: the controller settles the
+    /// migration as `Succeeded` and skips it until the TTL recheck. In
+    /// particular, a migration whose effect landed *after* a failed attempt
+    /// (e.g. a transaction submitted by [`execute`](Self::execute) that mined
+    /// after that run gave up on it) converges to `Succeeded` this way.
+    ///
+    /// For a migration that has never been attempted (`NotStarted`),
+    /// `Ok(false)` may also mean "not applicable *yet*" (e.g. a feature flag
+    /// is off, or the migration's source data is absent), so the controller
+    /// leaves the record untouched and re-checks on the next run.
     ///
     /// # Returns
     /// - `Ok(true)` if the migration should run
-    /// - `Ok(false)` if the desired end state already holds (recorded as
-    ///   `Succeeded` and skipped until the TTL recheck)
+    /// - `Ok(false)` if the migration should not run now (settled as
+    ///   `Succeeded` if previously attempted; otherwise re-checked next run)
     /// - `Err(_)` if unable to determine (migration is skipped for this run
     ///   with the error logged; its stored record is not modified)
     async fn is_applicable(&self) -> Result<bool, MigrationError>;

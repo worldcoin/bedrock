@@ -399,38 +399,71 @@ impl MigrationController {
                     e,
                     Utc::now().to_rfc3339()
                 );
-                false
+                // Unable to determine applicability: skip this run without
+                // modifying the stored record so the next run re-checks.
+                return MigrationRunSummary {
+                    skipped: 1,
+                    ..MigrationRunSummary::default()
+                };
             }
         };
 
         if !is_applicable {
-            // The desired end state already holds, however it was reached.
-            // Settle the record as `Succeeded` so future runs skip it until
-            // the TTL recheck instead of re-running `is_applicable` on every
-            // app open. This also converges migrations whose effect landed
-            // after a failed attempt (e.g. a transaction submitted by
-            // `execute` that only mined after that run gave up on it).
-            if !matches!(record.status, MigrationStatus::Succeeded) {
-                crate::info!(
-                    "migration.settled_not_applicable id={} previous_status={:?} timestamp={}",
-                    migration_id,
-                    record.status,
-                    Utc::now().to_rfc3339()
-                );
-                record.status = MigrationStatus::Succeeded;
-                record.completed_at = Some(Utc::now());
-                record.last_error_code = None;
-                record.last_error_message = None;
-            }
-            record.recheck_at =
-                Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
-            if let Err(e) = self.save_record(&migration_id, &record) {
-                crate::error!(
-                    "migration.storage_error id={} error={:?} timestamp={}",
-                    migration_id,
-                    e,
-                    Utc::now().to_rfc3339()
-                );
+            match record.status {
+                // TTL recheck of an already-succeeded migration: renew
+                // recheck_at so is_applicable isn't re-run on every app open.
+                MigrationStatus::Succeeded => {
+                    record.recheck_at =
+                        Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+                    if let Err(e) = self.save_record(&migration_id, &record) {
+                        crate::error!(
+                            "migration.storage_error id={} error={:?} timestamp={}",
+                            migration_id,
+                            e,
+                            Utc::now().to_rfc3339()
+                        );
+                    }
+                }
+
+                // The migration was attempted before and the desired end state
+                // now holds, however it was reached. Settle the record as
+                // `Succeeded` so future runs skip it until the TTL recheck.
+                // This converges migrations whose effect landed after a failed
+                // attempt (e.g. a transaction submitted by `execute` that only
+                // mined after that run gave up on it).
+                MigrationStatus::InProgress | MigrationStatus::FailedRetryable => {
+                    crate::info!(
+                        "migration.settled_not_applicable id={} previous_status={:?} timestamp={}",
+                        migration_id,
+                        record.status,
+                        Utc::now().to_rfc3339()
+                    );
+                    record.status = MigrationStatus::Succeeded;
+                    record.completed_at = Some(Utc::now());
+                    record.last_error_code = None;
+                    record.last_error_message = None;
+                    record.recheck_at =
+                        Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+                    if let Err(e) = self.save_record(&migration_id, &record) {
+                        crate::error!(
+                            "migration.storage_error id={} error={:?} timestamp={}",
+                            migration_id,
+                            e,
+                            Utc::now().to_rfc3339()
+                        );
+                        return MigrationRunSummary {
+                            failed_retryable: 1,
+                            ..MigrationRunSummary::default()
+                        };
+                    }
+                }
+
+                // Never attempted: `false` may mean "not applicable yet"
+                // (e.g. feature flag off, migration source data absent), so
+                // leave the record untouched and re-check on the next run.
+                // (`FailedTerminal` never reaches here; it is filtered out by
+                // `should_attempt` above.)
+                MigrationStatus::NotStarted | MigrationStatus::FailedTerminal => {}
             }
             return MigrationRunSummary {
                 skipped: 1,
@@ -715,6 +748,43 @@ mod tests {
             self.applicability_check_count
                 .fetch_add(1, Ordering::SeqCst);
             Ok(false)
+        }
+
+        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+            self.execution_count.fetch_add(1, Ordering::SeqCst);
+            Ok(ProcessorResult::Success)
+        }
+    }
+
+    /// Test processor where `is_applicable` returns an error
+    struct ApplicabilityErrorProcessor {
+        id: String,
+        execution_count: Arc<AtomicU32>,
+    }
+
+    impl ApplicabilityErrorProcessor {
+        fn new(id: &str) -> Self {
+            Self {
+                id: id.to_string(),
+                execution_count: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        fn execution_count(&self) -> u32 {
+            self.execution_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl MigrationProcessor for ApplicabilityErrorProcessor {
+        fn migration_id(&self) -> String {
+            self.id.clone()
+        }
+
+        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+            Err(MigrationError::InvalidOperation(
+                "RPC unavailable".to_string(),
+            ))
         }
 
         async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
@@ -1611,7 +1681,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_not_applicable_processor_is_skipped_and_settled() {
+    async fn test_not_started_not_applicable_skips_without_settling() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
 
@@ -1627,15 +1697,14 @@ mod tests {
         assert_eq!(summary.succeeded, 0);
         assert_eq!(processor.execution_count(), 0);
 
-        // A NotStarted migration whose end state already holds settles as
-        // Succeeded so it isn't re-checked on every app open.
+        // A never-attempted migration is NOT settled: `false` may mean "not
+        // applicable yet" (feature flag off, source data absent), so nothing
+        // is persisted and the next run re-checks.
         let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
-        let record_json = kv_store.get(key).expect("Record should exist");
-        let record: MigrationRecord =
-            serde_json::from_str(&record_json).expect("Should deserialize");
-        assert!(matches!(record.status, MigrationStatus::Succeeded));
-        assert!(record.completed_at.is_some());
-        assert!(record.recheck_at.is_some());
+        assert!(matches!(
+            kv_store.get(key),
+            Err(KeyValueStoreError::KeyNotFound)
+        ));
     }
 
     #[tokio::test]
@@ -1683,6 +1752,87 @@ mod tests {
         assert!(updated_record.last_error_message.is_none());
         // Settling is not an execution attempt.
         assert_eq!(updated_record.attempts, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_in_progress_not_applicable_settles_as_succeeded() {
+        // An InProgress record (e.g. app crashed mid-migration) whose desired
+        // end state now holds also converges to Succeeded.
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 1,
+            last_attempted_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().skipped, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
+        assert!(updated_record.recheck_at.is_some());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_applicability_error_skips_without_modifying_record() {
+        // An `is_applicable` error (e.g. transient RPC failure) must not
+        // settle the migration as Succeeded — the stored record stays
+        // untouched so the next run re-checks.
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(ApplicabilityErrorProcessor::new("test.migration.v1"));
+
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 2,
+            last_error_code: Some("PENDING_TIMEOUT".to_string()),
+            last_error_message: Some("still pending after polling".to_string()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().skipped, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(matches!(
+            updated_record.status,
+            MigrationStatus::FailedRetryable
+        ));
+        assert_eq!(updated_record.attempts, 2);
+        assert_eq!(
+            updated_record.last_error_code.as_deref(),
+            Some("PENDING_TIMEOUT")
+        );
     }
 
     #[tokio::test]
