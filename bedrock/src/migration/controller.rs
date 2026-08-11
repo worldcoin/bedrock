@@ -793,6 +793,26 @@ mod tests {
         }
     }
 
+    /// Test key-value store that serves reads from an inner store but fails
+    /// all writes
+    struct ReadOnlyKvStore {
+        inner: InMemoryDeviceKeyValueStore,
+    }
+
+    impl DeviceKeyValueStore for ReadOnlyKvStore {
+        fn get(&self, key: String) -> Result<String, KeyValueStoreError> {
+            self.inner.get(key)
+        }
+
+        fn set(&self, _key: String, _value: String) -> Result<(), KeyValueStoreError> {
+            Err(KeyValueStoreError::UpdateFailure)
+        }
+
+        fn delete(&self, _key: String) -> Result<(), KeyValueStoreError> {
+            Err(KeyValueStoreError::UpdateFailure)
+        }
+    }
+
     /// Test key-value store that fails on all operations
     struct FailingKvStore;
 
@@ -1788,6 +1808,38 @@ mod tests {
             serde_json::from_str(&record_json).expect("Should deserialize");
         assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
         assert!(updated_record.recheck_at.is_some());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_settle_save_failure_counts_as_failed_retryable() {
+        // If persisting the settled record fails, the run must report a
+        // retryable failure (consistent with the other save_record sites),
+        // not a successful skip.
+        let inner = InMemoryDeviceKeyValueStore::new();
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 1,
+            ..MigrationRecord::default()
+        };
+        inner
+            .set(
+                format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
+                serde_json::to_string(&record).unwrap(),
+            )
+            .unwrap();
+        let kv_store = Arc::new(ReadOnlyKvStore { inner });
+
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+        assert_eq!(summary.failed_retryable, 1);
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(processor.execution_count(), 0);
     }
 
     #[tokio::test]

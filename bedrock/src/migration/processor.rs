@@ -67,6 +67,14 @@ pub trait MigrationProcessor: Send + Sync {
     /// is off, or the migration's source data is absent), so the controller
     /// leaves the record untouched and re-checks on the next run.
     ///
+    /// Prefer reserving `Ok(false)` for "the desired end state holds". If a
+    /// transient condition (a feature flag, source data that may appear later)
+    /// is checked here, be aware that once the migration has been attempted,
+    /// `Ok(false)` settles it as `Succeeded` and it is not re-checked until
+    /// the TTL recheck. If the migration must resume promptly when the
+    /// condition clears, gate inside [`execute`](Self::execute) and return
+    /// `Retryable` instead.
+    ///
     /// # Returns
     /// - `Ok(true)` if the migration should run
     /// - `Ok(false)` if the migration should not run now (settled as
