@@ -3,11 +3,9 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse::Parser as _;
-use syn::punctuated::Punctuated;
 use syn::{
-    parse_macro_input, Data, DeriveInput, Expr, ExprLit, ImplItem, ImplItemFn,
-    ItemImpl, Lit, Meta, Stmt, Token, Variant, Visibility,
+    parse_macro_input, Data, DeriveInput, ImplItem, ImplItemFn, ItemImpl, Stmt,
+    Variant, Visibility,
 };
 
 /// Procedural macro that enhances error enums with generic error handling
@@ -194,27 +192,20 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// This macro automatically:
 /// 1. Forwards the attribute to `#[uniffi::export]`
 /// 2. Wraps every `pub fn` in a `LogContext`, so every record it logs (nested calls
-///    included) is prefixed with `[Bedrock][<tag>]`. `async` methods are wrapped in
-///    `in_log_context` instead, which keeps the prefix across `.await` points
+///    included) is prefixed with `[Bedrock][StructName]`. `async` methods are wrapped
+///    in `in_log_context` instead, which keeps the prefix across `.await` points
 /// 3. Injects a private `_bedrock_fs` field of type FileSystemMiddleware to the struct
 /// 4. Extracts the struct/trait name from the impl block for context
 /// 5. Automatically adds `async_runtime = "tokio"` if any async functions are detected
 ///
-/// # Log tag
-///
-/// The prefix defaults to the struct name. Pass `log_tag = "…"` to use a stable
-/// subsystem name instead, which is what monitors and alerts match on: it does not
-/// move when a struct is renamed or split. `log_tag` is consumed here and not
-/// forwarded to `uniffi::export`.
-///
 /// # Usage
 ///
 /// ```rust,ignore
-/// #[bedrock_export(log_tag = "Backup")]
+/// #[bedrock_export]
 /// impl MyStruct {
 ///     pub fn some_method(&self) -> String {
 ///         // _bedrock_logger_ctx and _bedrock_fs are automatically injected here
-///         debug!("This will be prefixed with [Bedrock][Backup]");
+///         debug!("This will be prefixed with [Bedrock][MyStruct]");
 ///
 ///         // Use the filesystem with automatic path prefixing
 ///         let data = _bedrock_fs.read_file("config.json").unwrap();
@@ -237,13 +228,7 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
     let input_impl = parse_macro_input!(input as ItemImpl);
 
-    let (forwarded_args, log_tag) = match split_log_tag(args) {
-        Ok(split) => split,
-        Err(error) => return error.to_compile_error().into(),
-    };
-
-    // Extract the struct/trait name for the filesystem prefix and as the default
-    // logging context.
+    // Extract the struct/trait name for logging context
     let type_name = match &*input_impl.self_ty {
         syn::Type::Path(type_path) => type_path.path.segments.last().map_or_else(
             || "Unknown".to_string(),
@@ -251,7 +236,6 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
         ),
         _ => "Unknown".to_string(),
     };
-    let log_tag = log_tag.unwrap_or_else(|| type_name.clone());
 
     // Check if any public functions in the impl block are async
     let has_async_functions = has_async_functions_in_impl(&input_impl.items);
@@ -266,11 +250,7 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
                 if matches!(method.vis, Visibility::Public(_)) {
                     // Inject logging context at the start of the function body
                     let mut new_method = method.clone();
-                    inject_logging_and_filesystem_context(
-                        &mut new_method,
-                        &type_name,
-                        &log_tag,
-                    );
+                    inject_logging_and_filesystem_context(&mut new_method, &type_name);
                     new_items.push(ImplItem::Fn(new_method));
                 } else {
                     // Keep private methods unchanged
@@ -291,7 +271,7 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // Generate the output with uniffi::export attribute
-    let mut args = forwarded_args;
+    let mut args = proc_macro2::TokenStream::from(args);
 
     // If we have async functions, add async_runtime = "tokio" to the attributes
     if has_async_functions {
@@ -309,44 +289,6 @@ pub fn bedrock_export(args: TokenStream, input: TokenStream) -> TokenStream {
         #new_impl
     }
     .into()
-}
-
-/// How `log_tag` must be written, quoted back to the caller on a malformed value.
-const LOG_TAG_USAGE: &str = "expected a string literal, e.g. log_tag = \"Backup\"";
-
-/// Splits `log_tag = "…"` out of the attribute arguments.
-///
-/// Returns the remaining arguments, which are forwarded to `uniffi::export` verbatim,
-/// and the tag if one was given.
-fn split_log_tag(
-    args: TokenStream,
-) -> syn::Result<(proc_macro2::TokenStream, Option<String>)> {
-    if args.is_empty() {
-        return Ok((proc_macro2::TokenStream::new(), None));
-    }
-
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse(args)?;
-    let mut log_tag = None;
-    let mut forwarded = Vec::new();
-
-    for meta in metas {
-        if !meta.path().is_ident("log_tag") {
-            forwarded.push(meta);
-            continue;
-        }
-        let Meta::NameValue(name_value) = &meta else {
-            return Err(syn::Error::new_spanned(&meta, LOG_TAG_USAGE));
-        };
-        let Expr::Lit(ExprLit {
-            lit: Lit::Str(tag), ..
-        }) = &name_value.value
-        else {
-            return Err(syn::Error::new_spanned(&name_value.value, LOG_TAG_USAGE));
-        };
-        log_tag = Some(tag.value());
-    }
-
-    Ok((quote! { #(#forwarded),* }, log_tag))
 }
 
 /// Check if any public functions in the impl items are async
@@ -394,13 +336,8 @@ fn to_snake_case(s: &str) -> String {
 }
 
 /// Inject logging context and filesystem middleware into a function body
-fn inject_logging_and_filesystem_context(
-    method: &mut ImplItemFn,
-    type_name: &str,
-    log_tag: &str,
-) {
-    // The filesystem prefix stays derived from the type name: it is part of the
-    // on-disk path, so it must not follow the (renameable) log tag.
+fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &str) {
+    // Convert type name to snake_case for filesystem prefix
     let snake_case_name = to_snake_case(type_name);
 
     // Create the filesystem middleware statement with snake_case name
@@ -414,7 +351,7 @@ fn inject_logging_and_filesystem_context(
         // inside `in_log_context` re-applies it on every poll instead.
         let body = method.block.clone();
         method.block = syn::parse_quote! {{
-            crate::primitives::logger::in_log_context(#log_tag, async move {
+            crate::primitives::logger::in_log_context(#type_name, async move {
                 #fs_stmt
                 #body
             })
@@ -425,7 +362,7 @@ fn inject_logging_and_filesystem_context(
 
     // Create the logging context statement
     let context_stmt: Stmt = syn::parse_quote! {
-        let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new(#log_tag);
+        let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new(#type_name);
     };
 
     // Insert both at the beginning of the function body

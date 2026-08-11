@@ -41,7 +41,7 @@ flowchart TD
 
 `MIGRATION_RUN_TIMEOUT` (180s) bounds the whole run: a degraded Turnkey plus retry backoff must not block the caller forever, and iOS cannot cancel a uniffi async call.
 
-Diagnostic detail never crosses the FFI boundary. It is logged inside Bedrock, prefixed `[Bedrock][TurnkeyMigration]` (from the `log_tag` on the `TurnkeyManager` export, which covers the whole run including the Turnkey API calls) so alerts can key off it. See the log tag table in `AGENTS.md`.
+Diagnostic detail never crosses the FFI boundary. It is logged inside Bedrock.
 
 ## Per-migration loop
 

@@ -47,7 +47,7 @@ const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct TurnkeyManager;
 
-#[bedrock_export(log_tag = "TurnkeyMigration")]
+#[bedrock_export]
 impl TurnkeyManager {
     /// Creates a new `TurnkeyManager`.
     #[uniffi::constructor]
@@ -171,7 +171,7 @@ impl TurnkeyManager {
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct Turnkey {}
 
-#[bedrock_export(log_tag = "Turnkey")]
+#[bedrock_export]
 impl Turnkey {
     #[uniffi::constructor]
     #[must_use]

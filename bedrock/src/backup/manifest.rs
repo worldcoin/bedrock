@@ -151,7 +151,7 @@ pub struct ManifestManager {
     file_system: FileSystemMiddleware,
 }
 
-#[bedrock_export(log_tag = "Backup")]
+#[bedrock_export]
 impl ManifestManager {
     #[uniffi::constructor]
     /// Constructs a new `ManifestManager` instance with a file system middleware scoped to backups.

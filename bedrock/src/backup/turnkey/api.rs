@@ -158,7 +158,7 @@ impl<T> OrgCache<T> {
             Ok(guard) => guard,
             Err(poisoned) => {
                 crate::warn!(
-                    "cache.poisoned: discarding in-memory {} cache and recovering",
+                    "turnkey.cache.poisoned: discarding in-memory {} cache and recovering",
                     self.label
                 );
                 self.entry.clear_poison();
@@ -267,12 +267,12 @@ impl TurnkeyApiClient {
                 Err(error) => {
                     attempt += 1;
                     if attempt >= self.retry.max_attempts || !error.is_retryable() {
-                        warn!("request.failed op={operation} attempts={attempt} err={error}");
+                        warn!("turnkey.request.failed op={operation} attempts={attempt} err={error}");
                         return Err(error);
                     }
                     let delay = backoff_delay(attempt, &self.retry);
                     warn!(
-                        "request.retry op={operation} attempt={attempt} delay_ms={} err={error}",
+                        "turnkey.request.retry op={operation} attempt={attempt} delay_ms={} err={error}",
                         delay.as_millis()
                     );
                     tokio::time::sleep(delay).await;
@@ -393,7 +393,7 @@ impl TurnkeyApiClient {
             // If Turnkey's activity succeeded but the created count is mismatched, this is surfacing
             // a major consistency problem with Turnkey. Requires immediate attention.
             crate::critical!(
-                "create_oauth_providers.count_mismatch requested={requested} created={created}"
+                "turnkey.create_oauth_providers.count_mismatch requested={requested} created={created}"
             );
         }
 

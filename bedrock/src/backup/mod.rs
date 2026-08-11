@@ -13,8 +13,6 @@ mod service_client;
 mod turnkey;
 
 #[cfg(test)]
-mod log_tag_test;
-#[cfg(test)]
 mod test;
 
 use base64::Engine;
@@ -62,7 +60,7 @@ use std::str::FromStr;
 #[derive(uniffi::Object, Clone, Debug, Default)]
 pub struct BackupManager {}
 
-#[bedrock_export(log_tag = "Backup")]
+#[bedrock_export]
 impl BackupManager {
     #[uniffi::constructor]
     #[must_use]
@@ -589,21 +587,21 @@ impl BackupManager {
                     Ok((local_checksum, _)) => {
                         if local_checksum != file.checksum {
                             crate::error!(
-                                    "checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
+                                    "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
                                     file.designator
                                 );
                         }
                     }
                     Err(e) => {
                         crate::error!(
-                                "failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
+                                "[BackupManager] failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
                             );
                     }
                 },
                 Ok(false) => {}
                 Err(e) => {
                     crate::error!(
-                        "failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
+                        "[BackupManager] failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
                     );
                 }
             }
