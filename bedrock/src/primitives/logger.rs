@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -208,6 +209,10 @@ macro_rules! error {
 
 /// A scope guard that sets a logging context and automatically clears it when dropped.
 ///
+/// The context is thread-local, so a guard is only valid for synchronous code. Held
+/// across an `.await` it is silently lost as soon as the future resumes on another
+/// runtime worker; use [`in_log_context`] for anything `async`.
+///
 /// # Examples
 ///
 /// ```rust
@@ -222,6 +227,29 @@ macro_rules! error {
 /// ```
 pub struct LogContext {
     previous: Option<String>,
+}
+
+/// Runs `future` in the [`LogContext`] of `module`, re-applying it on every poll.
+///
+/// The context is thread-local while a future may resume on any runtime worker, so a
+/// single guard held across an `.await` would drop the prefix from every record
+/// emitted after the first suspension (and restore a stale context onto whichever
+/// worker resumed it). Re-applying the context per poll keeps the prefix on
+/// everything the future logs, nested synchronous calls included.
+///
+/// [`bedrock_export`](crate::bedrock_export) wraps every exported `async` method in
+/// this. Call it directly to narrow the context for part of a call tree.
+pub async fn in_log_context<F>(module: &str, future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(move |cx| {
+        let _bedrock_logger_ctx = LogContext::new(module);
+        future.as_mut().poll(cx)
+    })
+    .await
 }
 
 impl LogContext {
@@ -492,6 +520,89 @@ fn log_level(level: Level) -> LogLevel {
         LogLevel::Debug
     } else {
         LogLevel::Trace
+    }
+}
+
+/// The log context is what makes every record alertable, so its scoping is tested
+/// directly: a lost context means logs a monitor can no longer match.
+#[cfg(test)]
+mod context_tests {
+    use super::{get_context, in_log_context, LogContext};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    /// Returns `Pending` on the first poll only, so the caller has to poll twice.
+    #[derive(Default)]
+    struct YieldOnce(bool);
+
+    impl Future for YieldOnce {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.0 {
+                return Poll::Ready(());
+            }
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+
+    #[test]
+    fn guard_scopes_the_context_to_its_lifetime() {
+        assert!(get_context().is_none());
+        {
+            let _bedrock_logger_ctx = LogContext::new("Backup");
+            assert_eq!(get_context().as_deref(), Some("[Bedrock][Backup]"));
+        }
+        assert!(get_context().is_none());
+    }
+
+    /// A runtime may resume a task on any worker. The context must be re-applied by
+    /// whichever thread polls the future, otherwise every record after the first
+    /// `.await` loses its tag.
+    #[test]
+    fn context_is_reapplied_when_a_future_resumes_on_another_thread() {
+        let mut future = Box::pin(in_log_context("TurnkeyMigration", async {
+            let on_first_poll = get_context();
+            YieldOnce::default().await;
+            (on_first_poll, get_context())
+        }));
+
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending(),
+            "the future must suspend once for this test to be meaningful"
+        );
+
+        let (first, second) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let polled = future
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()));
+                    let Poll::Ready(observed) = polled else {
+                        panic!("future should have completed on its second poll");
+                    };
+                    observed
+                })
+                .join()
+                .expect("polling thread panicked")
+        });
+
+        assert_eq!(first.as_deref(), Some("[Bedrock][TurnkeyMigration]"));
+        assert_eq!(
+            second.as_deref(),
+            Some("[Bedrock][TurnkeyMigration]"),
+            "the resuming thread must see the context"
+        );
+        assert!(
+            get_context().is_none(),
+            "the context must not outlive the future"
+        );
     }
 }
 

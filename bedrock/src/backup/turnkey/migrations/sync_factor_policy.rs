@@ -130,7 +130,7 @@ fn plan(users: &[User], policies: &[Policy]) -> Vec<PolicyAction> {
             UserRole::Main | UserRole::BreakGlass => continue,
             UserRole::Unexpected => {
                 crate::warn!(
-                    "Consistency Warning! sub-org has a user that is not main, sync, or break-glass"
+                    "sync_factor_policy consistency warning! sub-org has a user that is not main, sync, or break-glass"
                 );
                 continue;
             }
@@ -184,7 +184,7 @@ fn plan_for_sync_factor(user: &User, policies: &[Policy]) -> Option<PolicyAction
         [policy] => *policy,
         _ => {
             crate::warn!(
-                "Consistency Warning! sync factor has multiple bound policies; skipping to avoid overwriting"
+                "sync_factor_policy consistency warning! sync factor has multiple bound policies; skipping to avoid overwriting"
             );
             return None;
         }

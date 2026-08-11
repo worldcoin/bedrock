@@ -146,7 +146,7 @@ fn plan(
         .any(|provider| provider.subject != subject)
     {
         crate::error!(
-            "critical consistency error. user has Apple OIDCs with different `sub`s"
+            "[Critical] apple_audience: user has Apple OIDCs with different `sub`s"
         );
         return Err(TurnkeyApiError::Consistency);
     }
@@ -166,7 +166,7 @@ fn plan(
     let unrecognized: Vec<&str> = existing.difference(&configured).copied().collect();
     if !unrecognized.is_empty() {
         crate::warn!(
-            "auth_user_main has unrecognized Apple audiences: {}",
+            "apple_audience: auth_user_main has unrecognized Apple audiences: {}",
             unrecognized.join(", ")
         );
     }

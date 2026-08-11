@@ -107,7 +107,7 @@ pub(super) async fn run_migration_list(
         match migration.run(&ctx).await {
             Ok(MigrationOutcome::Applied { details }) => {
                 info!(
-                    "turnkey.migration.applied migration={} changes=[{}]",
+                    "applied migration={} changes=[{}]",
                     migration.id(),
                     details.join(", ")
                 );
@@ -115,16 +115,13 @@ pub(super) async fn run_migration_list(
             Ok(MigrationOutcome::Skipped) => {}
             Ok(MigrationOutcome::MainFactorRequired) => {
                 info!(
-                    "turnkey.migration.deferred migration={} reason=main_factor_required",
+                    "deferred migration={} reason=main_factor_required",
                     migration.id()
                 );
                 pending_main_factor.push(migration.description().to_string());
             }
             Err(error) => {
-                error!(
-                    "turnkey.migration.failed migration={} err={error}",
-                    migration.id()
-                );
+                error!("failed migration={} err={error}", migration.id());
                 return Err(error);
             }
         }
