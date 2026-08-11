@@ -63,17 +63,14 @@ pub trait MigrationProcessor: Send + Sync {
     /// after that run gave up on it) converges to `Succeeded` this way.
     ///
     /// For a migration that has never been attempted (`NotStarted`),
-    /// `Ok(false)` may also mean "not applicable *yet*" (e.g. a feature flag
-    /// is off, or the migration's source data is absent), so the controller
-    /// leaves the record untouched and re-checks on the next run.
+    /// `Ok(false)` may also mean "not applicable *yet*" (e.g. the migration's
+    /// source data has not appeared yet), so the controller leaves the record
+    /// untouched and re-checks on the next run.
     ///
-    /// Prefer reserving `Ok(false)` for "the desired end state holds". If a
-    /// transient condition (a feature flag, source data that may appear later)
-    /// is checked here, be aware that once the migration has been attempted,
-    /// `Ok(false)` settles it as `Succeeded` and it is not re-checked until
-    /// the TTL recheck. If the migration must resume promptly when the
-    /// condition clears, gate inside [`execute`](Self::execute) and return
-    /// `Retryable` instead.
+    /// Do **not** use `Ok(false)` for transient eligibility conditions such
+    /// as feature flags — gate rollout at registration time instead, by only
+    /// registering the processor with the `MigrationController` when the
+    /// migration should run.
     ///
     /// # Returns
     /// - `Ok(true)` if the migration should run

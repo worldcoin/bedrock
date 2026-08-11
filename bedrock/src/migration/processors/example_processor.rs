@@ -67,19 +67,15 @@ impl MigrationProcessor for ExampleProcessor {
         //     return Ok(false);
         // }
 
-        // 3. Check feature flags if applicable
-        // NOTE: once a migration has been attempted, returning `Ok(false)`
-        // settles it as `Succeeded` and it is not re-checked until the TTL
-        // recheck (~30 days). Only gate on transient conditions (feature
-        // flags, data that may appear later) here if that delay is
-        // acceptable; otherwise check the condition in `execute` and return
-        // `ProcessorResult::Retryable` while it blocks the migration.
-        // if !self.config.is_migration_enabled() {
-        //     return Ok(false);
-        // }
-
-        // 4. All checks passed - migration is needed
+        // 3. All checks passed - migration is needed
         // Ok(true)
+
+        // NOTE: do NOT gate on feature flags or other transient conditions
+        // here — `Ok(false)` means "the desired end state holds" and, once
+        // the migration has been attempted, settles it as `Succeeded` until
+        // the TTL recheck. Gate rollout at registration time instead: only
+        // register the processor with the `MigrationController`
+        // (`additional_processors`) when the flag is enabled.
 
         // Placeholder: skip this example processor
         Ok(false)
