@@ -137,6 +137,13 @@ pub fn log_message(level: LogLevel, args: std::fmt::Arguments<'_>) {
     logger.log(level, sanitize_hex_secrets(message));
 }
 
+/// Delivers an `ERROR` record tagged `[Critical]`, after the active [`LogContext`]
+/// prefix. See [`critical`](crate::critical).
+#[doc(hidden)]
+pub fn log_critical(args: std::fmt::Arguments<'_>) {
+    log_message(LogLevel::Error, format_args!("[Critical] {args}"));
+}
+
 /// Context-aware logging macros that automatically use the current logging context.
 ///
 /// These macros allow you to log messages that will be automatically prefixed
@@ -204,6 +211,19 @@ macro_rules! error {
             $crate::primitives::logger::LogLevel::Error,
             format_args!($($arg)*),
         )
+    };
+}
+
+/// Logs an error-level message tagged `[Critical]`, for state that needs immediate
+/// attention rather than an ordinary failure: a corrupt local backup, an inconsistent
+/// remote account, a broken invariant.
+///
+/// The tag is added by the logger, so do not repeat it in the message. Records land as
+/// `[Bedrock][<module>] [Critical] <message>`, which is what a paging alert matches on.
+#[macro_export]
+macro_rules! critical {
+    ($($arg:tt)*) => {
+        $crate::primitives::logger::log_critical(format_args!($($arg)*))
     };
 }
 
@@ -527,10 +547,48 @@ fn log_level(level: Level) -> LogLevel {
 /// directly: a lost context means logs a monitor can no longer match.
 #[cfg(test)]
 mod context_tests {
-    use super::{get_context, in_log_context, LogContext};
+    use super::{
+        get_context, in_log_context, set_logger, LogContext, LogLevel, Logger,
+    };
+    use serial_test::serial;
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
+
+    /// Records delivered to [`CapturingLogger`].
+    static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Captures the fully formatted records, i.e. what the host logger receives.
+    struct CapturingLogger;
+
+    impl Logger for CapturingLogger {
+        fn log(&self, _level: LogLevel, message: String) {
+            CAPTURED.lock().expect("captured lock").push(message);
+        }
+    }
+
+    /// Installs [`CapturingLogger`] and drops records left by an earlier test.
+    ///
+    /// [`set_logger`] keeps the first logger for the whole process, so tests that use
+    /// this must be `#[serial]` and must assert on the records they recognize: other
+    /// tests logging in parallel land in the same sink.
+    fn capture_records() {
+        set_logger(Arc::new(CapturingLogger));
+        CAPTURED.lock().expect("captured lock").clear();
+    }
+
+    /// The record containing `needle`, or a panic naming everything captured.
+    fn captured_record(needle: &str) -> String {
+        let captured = CAPTURED.lock().expect("captured lock");
+        captured
+            .iter()
+            .find(|record| record.contains(needle))
+            .unwrap_or_else(|| {
+                panic!("no record containing {needle:?} in {captured:?}")
+            })
+            .clone()
+    }
 
     /// Returns `Pending` on the first poll only, so the caller has to poll twice.
     #[derive(Default)]
@@ -602,6 +660,42 @@ mod context_tests {
         assert!(
             get_context().is_none(),
             "the context must not outlive the future"
+        );
+    }
+
+    /// End to end: an exported `async` method logs on both sides of an `.await`, and
+    /// both records have to reach the host logger tagged.
+    #[cfg(feature = "tooling_tests")]
+    #[tokio::test]
+    #[serial]
+    async fn exported_async_method_tags_records_around_an_await() {
+        capture_records();
+
+        crate::primitives::tooling_tests::ToolingDemo::new()
+            .demo_async_operation(1)
+            .await
+            .expect("the demo operation succeeds under 5s");
+
+        for needle in ["Starting async operation", "Async operation successful"] {
+            let record = captured_record(needle);
+            assert!(
+                record.starts_with("[Bedrock][ToolingDemo] "),
+                "untagged record: {record}"
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn critical_records_are_tagged_after_the_context() {
+        capture_records();
+
+        let _bedrock_logger_ctx = LogContext::new("Backup");
+        crate::critical!("checksum for {} is unreadable", "orb_pkg");
+
+        assert_eq!(
+            captured_record("is unreadable"),
+            "[Bedrock][Backup] [Critical] checksum for orb_pkg is unreadable"
         );
     }
 }

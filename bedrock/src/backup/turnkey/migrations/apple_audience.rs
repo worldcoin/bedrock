@@ -145,9 +145,7 @@ fn plan(
         .iter()
         .any(|provider| provider.subject != subject)
     {
-        crate::error!(
-            "[Critical] apple_audience: user has Apple OIDCs with different `sub`s"
-        );
+        crate::critical!("apple_audience: user has Apple OIDCs with different `sub`s");
         return Err(TurnkeyApiError::Consistency);
     }
 

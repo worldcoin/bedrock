@@ -392,8 +392,8 @@ impl TurnkeyApiClient {
         if created != requested {
             // If Turnkey's activity succeeded but the created count is mismatched, this is surfacing
             // a major consistency problem with Turnkey. Requires immediate attention.
-            crate::error!(
-                "[Critical] create_oauth_providers.count_mismatch requested={requested} created={created}"
+            crate::critical!(
+                "create_oauth_providers.count_mismatch requested={requested} created={created}"
             );
         }
 

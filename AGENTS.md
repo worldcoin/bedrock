@@ -19,7 +19,7 @@
 - The tag defaults to the struct name. Pass `log_tag = "…"` (e.g. `#[bedrock_export(log_tag = "Backup")]`) to log under a stable subsystem name instead. Monitors match on the tag, so it must not move when a struct is renamed or split.
 - The context is thread-local. Never hold a `LogContext` guard across an `.await`: the prefix is lost as soon as the future resumes on another worker. Use `primitives::logger::in_log_context` for futures, which `#[bedrock_export]` already does for exported `async` methods.
 - Keep the event token at the start of the message stable (`request.failed`, `applied migration=…`) and pass context as `key=value` pairs. Renaming a token silently breaks the monitor built on it.
-- Prefix a message with `[Critical]` for state that needs immediate attention, e.g. a corrupt manifest entry or an inconsistent Turnkey account.
+- Use `crate::critical!` instead of `crate::error!` for state that needs immediate attention (a corrupt manifest entry, an inconsistent Turnkey account) rather than an ordinary failure. It logs at error level and adds the `[Critical]` tag after the context, giving `[Bedrock][Backup] [Critical] …`. Never write `[Critical]` into a message by hand.
 
 ### Backup & Turnkey
 
