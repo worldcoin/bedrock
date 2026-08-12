@@ -1,6 +1,8 @@
 use crate::bedrock_export;
 use crate::migration::error::MigrationError;
-use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::processor::{
+    MigrationProcessor, PendingWorkStatus, ProcessorResult,
+};
 use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
 use crate::migration::processors::safe_4337_module_processor::Safe4337ModuleProcessor;
 use crate::migration::state::{MigrationRecord, MigrationStatus};
@@ -15,6 +17,15 @@ use tokio::sync::Mutex;
 
 const MIGRATION_KEY_PREFIX: &str = "migration:";
 const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations after 30 days
+
+/// Short retry TTL used when a succeeded migration's TTL recheck cannot run
+/// because `is_applicable` errored (e.g. RPC outage). Prevents re-checking on
+/// every app open without deferring the recheck a full success TTL.
+const MIGRATION_RECHECK_ERROR_RETRY_DAYS: i64 = 1;
+
+/// Maximum number of on-chain reverts of fire-and-forget work before the
+/// migration is marked `FailedTerminal` instead of resubmitting indefinitely.
+const MAX_MINED_REVERTS: i32 = 3;
 
 /// Global lock to prevent concurrent migration runs across all controller instances.
 /// This is a process-wide coordination mechanism that ensures only one migration
@@ -51,6 +62,8 @@ pub struct MigrationRecordEntry {
     pub last_error_message: Option<String>,
     /// ISO 8601 timestamp when the migration completed successfully, if any.
     pub completed_at: Option<String>,
+    /// Reference to outstanding fire-and-forget work (e.g. a userOp hash), if any.
+    pub pending_user_op_hash: Option<String>,
 }
 
 /// Summary of a migration run
@@ -66,6 +79,9 @@ pub struct MigrationRunSummary {
     pub failed_terminal: i32,
     /// Number of migrations that were skipped (already completed or not applicable)
     pub skipped: i32,
+    /// Number of migrations that submitted fire-and-forget work and remain in
+    /// progress; completion is verified via `is_applicable` on the next run
+    pub pending: i32,
 }
 
 /// Controller that orchestrates migration execution
@@ -225,6 +241,7 @@ impl MigrationController {
                 last_error_code: record.last_error_code,
                 last_error_message: record.last_error_message,
                 completed_at: record.completed_at.map(|t| t.to_rfc3339()),
+                pending_user_op_hash: record.pending_user_op_hash,
             });
         }
 
@@ -289,25 +306,30 @@ impl MigrationController {
             failed_retryable: 0,
             failed_terminal: 0,
             skipped: 0,
+            pending: 0,
         };
         for s in results {
             summary.succeeded += s.succeeded;
             summary.failed_retryable += s.failed_retryable;
             summary.failed_terminal += s.failed_terminal;
             summary.skipped += s.skipped;
+            summary.pending += s.pending;
         }
 
         let run_duration_ms = (Utc::now() - run_start_time).num_milliseconds();
 
+        // Note: pending= is appended after the pre-existing fields so log parsers
+        // keyed on the original field positions keep working.
         crate::info!(
-            "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={}",
+            "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={} pending={}",
             summary.total,
             summary.succeeded,
             summary.failed_retryable,
             summary.failed_terminal,
             summary.skipped,
             run_duration_ms,
-            Utc::now().to_rfc3339()
+            Utc::now().to_rfc3339(),
+            summary.pending
         );
 
         Ok(summary)
@@ -389,8 +411,97 @@ impl MigrationController {
             };
         }
 
+        // If a fire-and-forget submission is outstanding, resolve its outcome first
+        // so we neither double-submit while it is still mining nor lose the revert
+        // signal when it failed on-chain.
+        if matches!(record.status, MigrationStatus::InProgress) {
+            if let Some(user_op_hash) = record.pending_user_op_hash.clone() {
+                match processor.check_pending_work(user_op_hash.clone()).await {
+                    Ok(PendingWorkStatus::StillPending) => {
+                        crate::info!(
+                            "migration.still_pending id={} user_op_hash={} timestamp={}",
+                            migration_id,
+                            user_op_hash,
+                            Utc::now().to_rfc3339()
+                        );
+                        // Do not re-execute: the submitted work may still land.
+                        return MigrationRunSummary {
+                            pending: 1,
+                            ..MigrationRunSummary::default()
+                        };
+                    }
+                    Ok(PendingWorkStatus::Reverted) => {
+                        record.revert_count += 1;
+                        record.pending_user_op_hash = None;
+                        record.last_error_code = Some("MINED_REVERT".to_string());
+
+                        // Cap resubmissions of persistently reverting work: after
+                        // MAX_MINED_REVERTS the migration is terminal instead of
+                        // burning gas on every app open.
+                        if record.revert_count >= MAX_MINED_REVERTS {
+                            crate::error!(
+                                "migration.pending_work_reverted_terminal id={} user_op_hash={} revert_count={} timestamp={}",
+                                migration_id,
+                                user_op_hash,
+                                record.revert_count,
+                                Utc::now().to_rfc3339()
+                            );
+                            record.status = MigrationStatus::FailedTerminal;
+                            record.last_error_message = Some(format!(
+                                "Fire-and-forget work reverted on-chain {} times (last: {user_op_hash}), giving up",
+                                record.revert_count
+                            ));
+                            let _ = self.save_record(&migration_id, &record);
+                            return MigrationRunSummary {
+                                failed_terminal: 1,
+                                ..MigrationRunSummary::default()
+                            };
+                        }
+
+                        crate::warn!(
+                            "migration.pending_work_reverted id={} user_op_hash={} revert_count={} attempts={} timestamp={}",
+                            migration_id,
+                            user_op_hash,
+                            record.revert_count,
+                            record.attempts,
+                            Utc::now().to_rfc3339()
+                        );
+                        record.status = MigrationStatus::FailedRetryable;
+                        record.last_error_message = Some(format!(
+                            "Fire-and-forget work {user_op_hash} reverted on-chain (revert {}/{MAX_MINED_REVERTS})",
+                            record.revert_count
+                        ));
+                        let _ = self.save_record(&migration_id, &record);
+                        return MigrationRunSummary {
+                            failed_retryable: 1,
+                            ..MigrationRunSummary::default()
+                        };
+                    }
+                    Ok(PendingWorkStatus::Mined) => {
+                        // Work landed; fall through to the is_applicable recheck,
+                        // which promotes to Succeeded if the end state holds.
+                        record.pending_user_op_hash = None;
+                    }
+                    Ok(PendingWorkStatus::Unknown) => {
+                        // Processor cannot resolve the submission; fall back to the
+                        // is_applicable end-state recheck.
+                    }
+                    Err(e) => {
+                        crate::error!(
+                            "migration.check_pending_work_error id={} user_op_hash={} error={:?} timestamp={}",
+                            migration_id,
+                            user_op_hash,
+                            e,
+                            Utc::now().to_rfc3339()
+                        );
+                        // Fall back to the is_applicable end-state recheck.
+                    }
+                }
+            }
+        }
+
         // Check if migration is applicable based on actual state (e.g., on-chain allowances).
-        let is_applicable = match processor.is_applicable().await {
+        let applicable = match processor.is_applicable().await {
             Ok(applicable) => applicable,
             Err(e) => {
                 crate::error!(
@@ -399,17 +510,52 @@ impl MigrationController {
                     e,
                     Utc::now().to_rfc3339()
                 );
-                false
+                // Unable to determine applicability - skip. An error is not proof
+                // of completion, so no status change. For TTL-expired succeeded
+                // migrations, renew recheck_at with a short retry TTL so an RPC
+                // outage does not trigger a recheck on every app open.
+                if matches!(record.status, MigrationStatus::Succeeded) {
+                    record.recheck_at = Some(
+                        Utc::now()
+                            + Duration::days(MIGRATION_RECHECK_ERROR_RETRY_DAYS),
+                    );
+                    let _ = self.save_record(&migration_id, &record);
+                }
+                return MigrationRunSummary {
+                    skipped: 1,
+                    ..MigrationRunSummary::default()
+                };
             }
         };
 
-        if !is_applicable {
-            // For TTL-expired succeeded migrations, renew recheck_at to avoid
-            // calling is_applicable on every app open.
-            if matches!(record.status, MigrationStatus::Succeeded) {
-                record.recheck_at =
-                    Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
-                let _ = self.save_record(&migration_id, &record);
+        if !applicable {
+            match record.status {
+                // For TTL-expired succeeded migrations, renew recheck_at to avoid
+                // calling is_applicable on every app open.
+                MigrationStatus::Succeeded => {
+                    record.recheck_at =
+                        Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+                    let _ = self.save_record(&migration_id, &record);
+                }
+                // A previously attempted migration whose desired end state now
+                // holds (e.g. a fire-and-forget transaction got mined) is
+                // promoted to Succeeded here, since execute() no longer waits
+                // for completion.
+                MigrationStatus::InProgress | MigrationStatus::FailedRetryable => {
+                    crate::info!(
+                        "migration.succeeded_via_recheck id={} attempts={} timestamp={}",
+                        migration_id,
+                        record.attempts,
+                        Utc::now().to_rfc3339()
+                    );
+                    Self::mark_succeeded(&mut record);
+                    let _ = self.save_record(&migration_id, &record);
+                    return MigrationRunSummary {
+                        succeeded: 1,
+                        ..MigrationRunSummary::default()
+                    };
+                }
+                MigrationStatus::NotStarted | MigrationStatus::FailedTerminal => {}
             }
             return MigrationRunSummary {
                 skipped: 1,
@@ -460,14 +606,31 @@ impl MigrationController {
                     duration_ms,
                     Utc::now().to_rfc3339()
                 );
-                record.status = MigrationStatus::Succeeded;
-                record.completed_at = Some(Utc::now());
-                record.recheck_at =
-                    Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
-                record.last_error_code = None;
-                record.last_error_message = None;
+                Self::mark_succeeded(&mut record);
                 MigrationRunSummary {
                     succeeded: 1,
+                    ..MigrationRunSummary::default()
+                }
+            }
+            Ok(ProcessorResult::Pending { user_op_hash }) => {
+                let duration_ms = (Utc::now() - execute_start).num_milliseconds();
+                crate::info!(
+                    "migration.pending id={} attempt={} user_op_hash={} duration_ms={} timestamp={}",
+                    migration_id,
+                    record.attempts,
+                    user_op_hash.as_deref().unwrap_or("none"),
+                    duration_ms,
+                    Utc::now().to_rfc3339()
+                );
+                // Stay InProgress: the next run resolves the submission via
+                // check_pending_work (using the stored hash) and/or re-checks
+                // is_applicable, promoting to Succeeded once the work has landed.
+                record.status = MigrationStatus::InProgress;
+                record.last_error_code = None;
+                record.last_error_message = None;
+                record.pending_user_op_hash = user_op_hash;
+                MigrationRunSummary {
+                    pending: 1,
                     ..MigrationRunSummary::default()
                 }
             }
@@ -484,6 +647,7 @@ impl MigrationController {
                 record.status = MigrationStatus::FailedRetryable;
                 record.last_error_code = Some(error_code);
                 record.last_error_message = Some(error_message);
+                record.pending_user_op_hash = None;
                 MigrationRunSummary {
                     failed_retryable: 1,
                     ..MigrationRunSummary::default()
@@ -501,6 +665,7 @@ impl MigrationController {
                 record.status = MigrationStatus::FailedTerminal;
                 record.last_error_code = Some(error_code);
                 record.last_error_message = Some(error_message);
+                record.pending_user_op_hash = None;
                 MigrationRunSummary {
                     failed_terminal: 1,
                     ..MigrationRunSummary::default()
@@ -515,6 +680,7 @@ impl MigrationController {
                 record.status = MigrationStatus::FailedRetryable;
                 record.last_error_code = Some("UNEXPECTED_ERROR".to_string());
                 record.last_error_message = Some(format!("{e:?}"));
+                record.pending_user_op_hash = None;
                 MigrationRunSummary {
                     failed_retryable: 1,
                     ..MigrationRunSummary::default()
@@ -575,6 +741,21 @@ impl MigrationController {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Mark a record as successfully completed: sets `Succeeded`, stamps
+    /// `completed_at`, schedules the TTL recheck, and clears error/pending state.
+    /// Used by both the `execute()` success path and the recheck promotion path
+    /// so the two stay in lockstep.
+    fn mark_succeeded(record: &mut MigrationRecord) {
+        record.status = MigrationStatus::Succeeded;
+        record.completed_at = Some(Utc::now());
+        record.recheck_at =
+            Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+        record.last_error_code = None;
+        record.last_error_message = None;
+        record.pending_user_op_hash = None;
+        record.revert_count = 0;
     }
 
     /// Save a single migration record to persistent storage
@@ -657,6 +838,13 @@ mod tests {
                 Ok(ProcessorResult::Success)
             }
         }
+
+        async fn check_pending_work(
+            &self,
+            _user_op_hash: String,
+        ) -> Result<PendingWorkStatus, MigrationError> {
+            Ok(PendingWorkStatus::Unknown)
+        }
     }
 
     /// Test processor where `is_applicable` returns false
@@ -691,6 +879,13 @@ mod tests {
         async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
             self.execution_count.fetch_add(1, Ordering::SeqCst);
             Ok(ProcessorResult::Success)
+        }
+
+        async fn check_pending_work(
+            &self,
+            _user_op_hash: String,
+        ) -> Result<PendingWorkStatus, MigrationError> {
+            Ok(PendingWorkStatus::Unknown)
         }
     }
 
@@ -1578,6 +1773,496 @@ mod tests {
             recheck_at > expected_min,
             "recheck_at should be ~{MIGRATION_SUCCESS_TTL_DAYS} days in the future"
         );
+    }
+
+    /// Test processor that always returns `Pending` (fire-and-forget submission)
+    struct PendingProcessor {
+        id: String,
+        execution_count: Arc<AtomicU32>,
+    }
+
+    impl PendingProcessor {
+        fn new(id: &str) -> Self {
+            Self {
+                id: id.to_string(),
+                execution_count: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        fn execution_count(&self) -> u32 {
+            self.execution_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl MigrationProcessor for PendingProcessor {
+        fn migration_id(&self) -> String {
+            self.id.clone()
+        }
+
+        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+            Ok(true)
+        }
+
+        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+            self.execution_count.fetch_add(1, Ordering::SeqCst);
+            Ok(ProcessorResult::Pending {
+                user_op_hash: Some("0xabc123".to_string()),
+            })
+        }
+
+        async fn check_pending_work(
+            &self,
+            _user_op_hash: String,
+        ) -> Result<PendingWorkStatus, MigrationError> {
+            Ok(PendingWorkStatus::Unknown)
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_pending_result_keeps_migration_in_progress() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(PendingProcessor::new("test.migration.v1"));
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.succeeded, 0);
+        assert_eq!(processor.execution_count(), 1);
+
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let record: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(record.status, MigrationStatus::InProgress));
+        assert!(record.last_error_code.is_none());
+        assert!(record.completed_at.is_none());
+        // The submission reference must be persisted for the next run's
+        // check_pending_work resolution.
+        assert_eq!(record.pending_user_op_hash.as_deref(), Some("0xabc123"));
+    }
+
+    /// Test processor with controllable `check_pending_work` and `is_applicable`
+    struct PendingCheckProcessor {
+        id: String,
+        pending_status: PendingWorkStatus,
+        applicable: bool,
+        execution_count: Arc<AtomicU32>,
+    }
+
+    impl PendingCheckProcessor {
+        fn new(id: &str, pending_status: PendingWorkStatus, applicable: bool) -> Self {
+            Self {
+                id: id.to_string(),
+                pending_status,
+                applicable,
+                execution_count: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        fn execution_count(&self) -> u32 {
+            self.execution_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl MigrationProcessor for PendingCheckProcessor {
+        fn migration_id(&self) -> String {
+            self.id.clone()
+        }
+
+        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+            Ok(self.applicable)
+        }
+
+        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+            self.execution_count.fetch_add(1, Ordering::SeqCst);
+            Ok(ProcessorResult::Pending {
+                user_op_hash: Some("0xnew".to_string()),
+            })
+        }
+
+        async fn check_pending_work(
+            &self,
+            _user_op_hash: String,
+        ) -> Result<PendingWorkStatus, MigrationError> {
+            Ok(self.pending_status)
+        }
+    }
+
+    fn seed_in_progress_record(
+        kv_store: &InMemoryDeviceKeyValueStore,
+        migration_id: &str,
+        user_op_hash: &str,
+    ) -> String {
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 1,
+            last_attempted_at: Some(Utc::now()),
+            pending_user_op_hash: Some(user_op_hash.to_string()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+        key
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_still_pending_work_skips_reexecution() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(PendingCheckProcessor::new(
+            "test.migration.v1",
+            PendingWorkStatus::StillPending,
+            true, // allowances not yet set - would re-execute without the guard
+        ));
+        let key = seed_in_progress_record(&kv_store, "test.migration.v1", "0xabc");
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.pending, 1);
+        // No duplicate submission while the previous userOp is still mining.
+        assert_eq!(processor.execution_count(), 0);
+
+        let record: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(record.status, MigrationStatus::InProgress));
+        assert_eq!(record.pending_user_op_hash.as_deref(), Some("0xabc"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_reverted_pending_work_marks_failed_retryable() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(PendingCheckProcessor::new(
+            "test.migration.v1",
+            PendingWorkStatus::Reverted,
+            true,
+        ));
+        let key = seed_in_progress_record(&kv_store, "test.migration.v1", "0xabc");
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.failed_retryable, 1);
+        // The revert is recorded this run; re-execution happens on the next run.
+        assert_eq!(processor.execution_count(), 0);
+
+        let record: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(record.status, MigrationStatus::FailedRetryable));
+        assert_eq!(record.last_error_code.as_deref(), Some("MINED_REVERT"));
+        assert!(record.pending_user_op_hash.is_none());
+        assert_eq!(record.revert_count, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_revert_cap_marks_failed_terminal() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(PendingCheckProcessor::new(
+            "test.migration.v1",
+            PendingWorkStatus::Reverted,
+            true,
+        ));
+
+        // Two reverts already recorded; this run's revert is the third and final.
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 3,
+            revert_count: MAX_MINED_REVERTS - 1,
+            pending_user_op_hash: Some("0xabc".to_string()),
+            last_attempted_at: Some(Utc::now()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.failed_terminal, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let updated: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key.clone()).unwrap()).unwrap();
+        assert!(matches!(updated.status, MigrationStatus::FailedTerminal));
+        assert_eq!(updated.last_error_code.as_deref(), Some("MINED_REVERT"));
+        assert_eq!(updated.revert_count, MAX_MINED_REVERTS);
+        assert!(updated.pending_user_op_hash.is_none());
+
+        // Terminal is permanent: the next run skips without executing.
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(processor.execution_count(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_succeeded_recheck_error_renews_short_ttl() {
+        /// Processor whose `is_applicable` always errors
+        struct RecheckErroringProcessor;
+
+        #[async_trait]
+        impl MigrationProcessor for RecheckErroringProcessor {
+            fn migration_id(&self) -> String {
+                "test.migration.v1".to_string()
+            }
+
+            async fn is_applicable(&self) -> Result<bool, MigrationError> {
+                Err(MigrationError::InvalidOperation("rpc down".to_string()))
+            }
+
+            async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+                Ok(ProcessorResult::Success)
+            }
+
+            async fn check_pending_work(
+                &self,
+                _user_op_hash: String,
+            ) -> Result<PendingWorkStatus, MigrationError> {
+                Ok(PendingWorkStatus::Unknown)
+            }
+        }
+
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        // Succeeded migration whose TTL recheck is due.
+        let record = MigrationRecord {
+            status: MigrationStatus::Succeeded,
+            attempts: 1,
+            completed_at: Some(Utc::now() - chrono::Duration::days(40)),
+            recheck_at: Some(Utc::now() - chrono::Duration::days(10)),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![Arc::new(RecheckErroringProcessor)],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.skipped, 1);
+
+        let updated: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        // Still Succeeded (an error is not proof of anything) but recheck_at is
+        // renewed with the short retry TTL so the recheck does not fire on every
+        // app open during an RPC outage.
+        assert!(matches!(updated.status, MigrationStatus::Succeeded));
+        let recheck_at = updated.recheck_at.unwrap();
+        assert!(recheck_at > Utc::now());
+        assert!(
+            recheck_at
+                <= Utc::now()
+                    + chrono::Duration::days(MIGRATION_RECHECK_ERROR_RETRY_DAYS)
+                    + chrono::Duration::minutes(1)
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_mined_pending_work_promotes_via_recheck() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(PendingCheckProcessor::new(
+            "test.migration.v1",
+            PendingWorkStatus::Mined,
+            false, // end state holds after mining
+        ));
+        let key = seed_in_progress_record(&kv_store, "test.migration.v1", "0xabc");
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.succeeded, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let record: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(record.status, MigrationStatus::Succeeded));
+        assert!(record.pending_user_op_hash.is_none());
+        assert!(record.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_mined_but_still_applicable_reexecutes() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        // Mined but end state does not hold (e.g. partial effect) - re-execute.
+        let processor = Arc::new(PendingCheckProcessor::new(
+            "test.migration.v1",
+            PendingWorkStatus::Mined,
+            true,
+        ));
+        let key = seed_in_progress_record(&kv_store, "test.migration.v1", "0xabc");
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.pending, 1);
+        assert_eq!(processor.execution_count(), 1);
+
+        let record: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(record.status, MigrationStatus::InProgress));
+        // The new submission's reference replaces the resolved one.
+        assert_eq!(record.pending_user_op_hash.as_deref(), Some("0xnew"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_in_progress_not_applicable_promoted_to_succeeded() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+
+        // Simulate a fire-and-forget tx that has since been mined: migration is
+        // InProgress but is_applicable now returns false.
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 1,
+            last_attempted_at: Some(Utc::now()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+        assert_eq!(summary.succeeded, 1);
+        assert_eq!(summary.skipped, 0);
+        // execute() must not run - promotion happens purely via is_applicable
+        assert_eq!(processor.execution_count(), 0);
+
+        let updated: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(updated.status, MigrationStatus::Succeeded));
+        assert!(updated.completed_at.is_some());
+        assert!(updated.recheck_at.is_some());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_failed_retryable_not_applicable_promoted_to_succeeded() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 2,
+            last_error_code: Some("RPC_ERROR".to_string()),
+            last_error_message: Some("boom".to_string()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.succeeded, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let updated: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(updated.status, MigrationStatus::Succeeded));
+        assert!(updated.last_error_code.is_none());
+        assert!(updated.last_error_message.is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_is_applicable_error_does_not_promote_to_succeeded() {
+        /// Processor whose `is_applicable` always errors
+        struct ErroringProcessor;
+
+        #[async_trait]
+        impl MigrationProcessor for ErroringProcessor {
+            fn migration_id(&self) -> String {
+                "test.migration.v1".to_string()
+            }
+
+            async fn is_applicable(&self) -> Result<bool, MigrationError> {
+                Err(MigrationError::InvalidOperation("rpc down".to_string()))
+            }
+
+            async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+                Ok(ProcessorResult::Success)
+            }
+
+            async fn check_pending_work(
+                &self,
+                _user_op_hash: String,
+            ) -> Result<PendingWorkStatus, MigrationError> {
+                Ok(PendingWorkStatus::Unknown)
+            }
+        }
+
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 1,
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![Arc::new(ErroringProcessor)],
+        );
+
+        let summary = controller.run_migrations().await.unwrap();
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.succeeded, 0);
+
+        // Status must stay InProgress - an is_applicable error is not proof
+        // that the desired end state holds.
+        let updated: MigrationRecord =
+            serde_json::from_str(&kv_store.get(key).unwrap()).unwrap();
+        assert!(matches!(updated.status, MigrationStatus::InProgress));
     }
 
     #[tokio::test]
