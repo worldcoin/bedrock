@@ -79,5 +79,5 @@ pub mod processors;
 // Public API exports
 pub use controller::{MigrationController, MigrationRecordEntry, MigrationRunSummary};
 pub use error::MigrationError;
-pub use processor::{MigrationProcessor, ProcessorResult};
+pub use processor::{MigrationProcessor, PendingWorkStatus, ProcessorResult};
 pub use state::{MigrationRecord, MigrationStatus};

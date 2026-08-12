@@ -59,13 +59,13 @@ pub trait DeviceKeyValueStore: Send + Sync {
     fn delete(&self, key: String) -> Result<(), KeyValueStoreError>;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 /// In-memory implementation of `DeviceKeyValueStore` for testing purposes
 pub struct InMemoryDeviceKeyValueStore {
     store: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 impl InMemoryDeviceKeyValueStore {
     /// Creates a new empty in-memory key-value store
     #[must_use]
@@ -74,7 +74,7 @@ impl InMemoryDeviceKeyValueStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 impl Default for InMemoryDeviceKeyValueStore {
     fn default() -> Self {
         Self {
@@ -83,7 +83,7 @@ impl Default for InMemoryDeviceKeyValueStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 impl DeviceKeyValueStore for InMemoryDeviceKeyValueStore {
     fn get(&self, key: String) -> Result<String, KeyValueStoreError> {
         let value = self.store.lock().unwrap().get(&key).cloned();

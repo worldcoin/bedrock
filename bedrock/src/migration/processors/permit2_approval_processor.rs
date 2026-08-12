@@ -5,7 +5,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::migration::error::MigrationError;
-use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::processor::{
+    MigrationProcessor, PendingWorkStatus, ProcessorResult,
+};
 use crate::primitives::Network;
 use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
 use crate::transactions::contracts::erc20::Erc20;
@@ -125,7 +127,12 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
         let names: Vec<&str> = tokens.iter().map(|(_, name)| *name).collect();
         let batch = BatchPermit2Approval::new(&addresses);
 
-        let user_op_hash = match batch
+        // Fire-and-forget: submit the userOp and return Pending without waiting
+        // for it to be mined. The userOp hash is persisted on the migration record;
+        // on the next run the controller resolves it via check_pending_work (skip
+        // while still mining, surface MINED_REVERT on revert) and re-checks
+        // on-chain allowances via is_applicable to promote to Succeeded.
+        match batch
             .sign_and_execute(
                 &self.safe_account,
                 Network::WorldChain,
@@ -139,66 +146,41 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
                 info!(
                     "Submitted Permit2 approvals for {names:?}, userOpHash: {hash:?}"
                 );
-                hash
+                Ok(ProcessorResult::Pending {
+                    user_op_hash: Some(format!("{hash:#x}")),
+                })
             }
-            Err(e) => {
-                return Ok(ProcessorResult::Retryable {
-                    error_code: "RPC_ERROR".to_string(),
-                    error_message: format!(
-                        "Failed to submit batched ERC20 approvals to Permit2: {e}"
-                    ),
-                });
-            }
-        };
+            Err(e) => Ok(ProcessorResult::Retryable {
+                error_code: "RPC_ERROR".to_string(),
+                error_message: format!(
+                    "Failed to submit batched ERC20 approvals to Permit2: {e}"
+                ),
+            }),
+        }
+    }
 
-        // Wait for the user operation to be mined before marking as success.
+    async fn check_pending_work(
+        &self,
+        user_op_hash: String,
+    ) -> Result<PendingWorkStatus, MigrationError> {
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
 
-        let user_op_hash_hex = format!("{user_op_hash:#x}");
-        let delay_ms = 4000u64;
+        let response = rpc_client
+            .wa_get_user_operation_receipt(Network::WorldChain, &user_op_hash)
+            .await
+            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
 
-        for attempt in 0..5 {
-            let response = rpc_client
-                .wa_get_user_operation_receipt(Network::WorldChain, &user_op_hash_hex)
-                .await
-                .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-
-            match response.status.as_str() {
-                "mined_success" => {
-                    info!(
-                        "Permit2 approvals mined successfully for {names:?}, txHash: {:?}",
-                        response.transaction_hash
-                    );
-                    return Ok(ProcessorResult::Success);
-                }
-                "mined_revert" | "error" => {
-                    return Ok(ProcessorResult::Retryable {
-                        error_code: "MINED_REVERT".to_string(),
-                        error_message: format!(
-                            "Permit2 approval transaction failed for {names:?}, txHash: {:?}",
-                            response.transaction_hash
-                        ),
-                        });
-                }
-                _ => {
-                    // Still pending — keep polling unless this is the last attempt
-                    if attempt < 4 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(
-                            delay_ms,
-                        ))
-                        .await;
-                    }
-                }
+        match response.status.as_str() {
+            "mined_success" => {
+                info!(
+                    "Permit2 approval userOp {user_op_hash} mined successfully, txHash: {:?}",
+                    response.transaction_hash
+                );
+                Ok(PendingWorkStatus::Mined)
             }
+            "mined_revert" | "error" => Ok(PendingWorkStatus::Reverted),
+            _ => Ok(PendingWorkStatus::StillPending),
         }
-
-        // Still pending after all polling attempts — retry the whole migration later
-        Ok(ProcessorResult::Retryable {
-            error_code: "PENDING_TIMEOUT".to_string(),
-            error_message: format!(
-                "Permit2 approval for {names:?} still pending after polling, will retry"
-            ),
-        })
     }
 }
