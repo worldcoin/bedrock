@@ -191,7 +191,9 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// This macro automatically:
 /// 1. Forwards the attribute to `#[uniffi::export]`
-/// 2. Injects `let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new("StructName");` at the start of every `pub fn`
+/// 2. Wraps every `pub fn` in a `LogContext`, so every record it logs (nested calls
+///    included) is prefixed with `[Bedrock][StructName]`. `async` methods are wrapped
+///    in `in_log_context` instead, which keeps the prefix across `.await` points
 /// 3. Injects a private `_bedrock_fs` field of type FileSystemMiddleware to the struct
 /// 4. Extracts the struct/trait name from the impl block for context
 /// 5. Automatically adds `async_runtime = "tokio"` if any async functions are detected
@@ -204,16 +206,16 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///     pub fn some_method(&self) -> String {
 ///         // _bedrock_logger_ctx and _bedrock_fs are automatically injected here
 ///         debug!("This will be prefixed with [Bedrock][MyStruct]");
-///         
+///
 ///         // Use the filesystem with automatic path prefixing
 ///         let data = _bedrock_fs.read_file("config.json").unwrap();
-///         
+///
 ///         "result".to_string()
 ///     }
-///     
+///
 ///     pub async fn async_method(&self) -> String {
 ///         // async_runtime = "tokio" is automatically added to uniffi::export
-///         // _bedrock_fs is available here too
+///         // the prefix holds across every `.await`, and _bedrock_fs is available here too
 ///         _bedrock_fs.write_file("output.txt", b"data".to_vec()).unwrap();
 ///         "async result".to_string()
 ///     }
@@ -333,7 +335,7 @@ fn to_snake_case(s: &str) -> String {
     result
 }
 
-/// Inject logging context and filesystem middleware at the start of a function body
+/// Inject logging context and filesystem middleware into a function body
 fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &str) {
     // Convert type name to snake_case for filesystem prefix
     let snake_case_name = to_snake_case(type_name);
@@ -343,7 +345,20 @@ fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &st
         let _bedrock_fs = crate::primitives::filesystem::create_middleware(#snake_case_name);
     };
 
-    // Create the logging context statement (keep original PascalCase for logging)
+    if method.sig.asyncness.is_some() {
+        // The context is thread-local, so a guard would be dropped. `in_log_context` re-applies it on every poll
+        let body = method.block.clone();
+        method.block = syn::parse_quote! {{
+            crate::primitives::logger::in_log_context(#type_name, async move {
+                #fs_stmt
+                #body
+            })
+            .await
+        }};
+        return;
+    }
+
+    // Create the logging context statement
     let context_stmt: Stmt = syn::parse_quote! {
         let _bedrock_logger_ctx = crate::primitives::logger::LogContext::new(#type_name);
     };
@@ -371,7 +386,7 @@ fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &st
 ///         address token;
 ///         uint256 amount;
 ///     }
-///     
+///
 ///     #[unparsed]
 ///     struct PermitTransferFrom {
 ///         TokenPermissions permitted;

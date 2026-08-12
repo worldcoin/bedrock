@@ -49,7 +49,7 @@ fn webpki_root_store() -> rustls::RootCertStore {
 fn android_webpki_tls_config() -> Result<rustls::ClientConfig, PrimitiveError> {
     let roots = webpki_root_store();
     if roots.is_empty() {
-        crate::error!("Critical. No bundled webkpi root store found on Bedrock");
+        crate::critical!("No bundled webkpi root store found on Bedrock");
         return Err(PrimitiveError::Generic {
             error_message:
                 "bundled webpki root store is empty; refusing to build TLS client"
