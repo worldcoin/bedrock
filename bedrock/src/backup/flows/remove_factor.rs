@@ -835,6 +835,10 @@ mod tests {
 
         assert!(matches!(outcome, RemoveFactorOutcome::BackupDeleted));
         assert!(delete_factor_body(&server).await.contains("prf-ek"));
+        let paths = called_paths(&server).await;
+        assert!(!paths.contains(&LIST_USERS.to_string()));
+        assert!(!paths.contains(&DELETE_OAUTH.to_string()));
+        assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
     }
 
     /// More than one passkey: Bedrock can't tell which PRF key backs the target, so
