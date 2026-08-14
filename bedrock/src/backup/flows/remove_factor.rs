@@ -24,20 +24,13 @@ pub enum RemoveFactorOutcome {
     /// deleted (the user had confirmed).
     ///
     /// # Native responsibilities
-    /// Bedrock has already cleared the state it owns (the local manifest and the
-    /// backup event report). The sync factor, however, lives in native secure
-    /// storage, and the backup it authenticated no longer exists, so on receiving
-    /// this the caller MUST:
+    /// Bedrock clears the state it owns (the local manifest and the backup event
+    /// report). The sync factor lives in native secure storage and the backup it
+    /// authenticated is gone, so on receiving this the caller MUST:
     /// 1. Delete its stored sync-factor keypair (iOS `keyManagementService`, Android
-    ///    `LocalSyncFactorStore`). Keeping it strands a credential that every
-    ///    subsequent backup call would fail against.
+    ///    `LocalSyncFactorStore`). Keeping it strands a credential every subsequent
+    ///    backup call would fail against.
     /// 2. Update whatever "backup enabled" state it shows the user.
-    ///
-    /// The caller MUST NOT call [`BackupManager::post_delete_backup`] afterwards:
-    /// Bedrock already did, and it is not needed on this path.
-    ///
-    /// [`BackupManager`]: crate::backup::BackupManager
-    /// [`BackupManager::post_delete_backup`]: crate::backup::BackupManager::post_delete_backup
     BackupDeleted,
 }
 

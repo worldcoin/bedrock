@@ -1,11 +1,13 @@
+use chrono::Utc;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use std::time::Duration;
 use strum::Display;
 
 use super::manifest::ManifestManager;
 use crate::backup::manifest::BackupManifest;
-use crate::backup::BackupFileDesignator;
+use crate::backup::{BackupFileDesignator, BackupOperationError, RemoveFactorOutcome};
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
     create_middleware, get_filesystem_raw, FileSystemError, FileSystemExt,
@@ -471,5 +473,122 @@ impl ClientEventsReporter {
 
         self.write_base_report(&base)?;
         Ok(())
+    }
+}
+
+/// Deadline for the detached `RemoveMainFactor` send. Bounds how long a hung foreign
+/// HTTP client can occupy the shared runtime thread.
+const REMOVE_FACTOR_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Whether a `remove_factor` outcome represents a completed attempt worth reporting.
+///
+/// [`BackupOperationError::WouldDeleteBackup`] and
+/// [`BackupOperationError::NeedsReauth`] are preconditions asking the caller for
+/// confirmation or a signer -- the removal has not been attempted yet, so counting
+/// them would inflate the failure rate this event feeds.
+const fn is_reportable_remove_outcome(
+    result: &Result<RemoveFactorOutcome, BackupOperationError>,
+) -> bool {
+    !matches!(
+        result,
+        Err(BackupOperationError::WouldDeleteBackup
+            | BackupOperationError::NeedsReauth { .. })
+    )
+}
+
+/// Reports the outcome of `BackupManager::remove_factor` as a `RemoveMainFactor`
+/// event. Native MUST NOT also send one, or every removal is double-counted.
+///
+/// Fire-and-forget: the user is already waiting on the result this merely describes,
+/// so the send is detached and the caller returns without it.
+///
+/// # Spawning
+/// `bedrock_export` wraps every exported async fn in `async_compat::Compat`, which
+/// enters a process-global runtime handle on each poll, so the task outlives this
+/// call. (Distinct from the no-spawn rule on `MigrationProcessor`, which is about
+/// cancellation safety — there, work outliving the future is the bug.) That runtime is
+/// single-threaded, hence the deadline: a hung foreign HTTP client would otherwise pin
+/// the thread every other detached task shares.
+pub(super) fn send_remove_factor_event(
+    result: &Result<RemoveFactorOutcome, BackupOperationError>,
+) {
+    if !is_reportable_remove_outcome(result) {
+        return;
+    }
+
+    let success = result.is_ok();
+    let error_message = result.as_ref().err().map(ToString::to_string);
+    let timestamp = Utc::now().to_rfc3339();
+
+    tokio::spawn(async move {
+        let reporter = ClientEventsReporter::new();
+        let send = reporter.send_event(
+            BackupReportEventKind::RemoveMainFactor,
+            success,
+            error_message,
+            timestamp,
+            false,
+        );
+        match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, send).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                crate::warn!(
+                    "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
+                );
+            }
+            Err(_elapsed) => {
+                crate::warn!(
+                    "[ClientEvents] RemoveMainFactor event timed out after {}s",
+                    REMOVE_FACTOR_EVENT_TIMEOUT.as_secs()
+                );
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod remove_factor_event_tests {
+    use super::*;
+    use crate::backup::NeedsReauthReason;
+
+    /// Every confirmation prompt raises `WouldDeleteBackup`, so reporting the
+    /// precondition signals would swamp the failure-rate metric with non-failures.
+    #[test]
+    fn preconditions_are_not_reported_as_attempts() {
+        for error in [
+            BackupOperationError::WouldDeleteBackup,
+            BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::MainFactorRequired,
+            },
+            BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::SyncFactorInvalid,
+            },
+        ] {
+            assert!(
+                !is_reportable_remove_outcome(&Err(error)),
+                "preconditions must not count as attempts"
+            );
+        }
+    }
+
+    #[test]
+    fn completed_attempts_are_reported() {
+        assert!(is_reportable_remove_outcome(&Ok(
+            RemoveFactorOutcome::BackupDeleted
+        )));
+        for error in [
+            BackupOperationError::Network { retryable: true },
+            BackupOperationError::Turnkey {
+                code: "turnkey_user_not_found".to_string(),
+            },
+            BackupOperationError::BackupService {
+                code: "factor_not_found".to_string(),
+            },
+        ] {
+            assert!(
+                is_reportable_remove_outcome(&Err(error)),
+                "a real failure must be reported"
+            );
+        }
     }
 }

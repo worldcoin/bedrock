@@ -25,7 +25,6 @@ pub use flows::RemoveFactorOutcome;
 
 use base64::Engine;
 use bedrock_macros::bedrock_export;
-use chrono::Utc;
 pub use client_events::{
     BackupReportEncryptionKeyKind, BackupReportEventKind, BackupReportMainFactor,
     BaseReport, ClientEventsError, ClientEventsReporter,
@@ -61,10 +60,6 @@ use crate::primitives::{KeypairSignerError, P256Signer};
 /// Overall deadline for a single `remove_factor` run. It is a foreground,
 /// UI-blocking operation. Deadline for iOS which can't cancel uniffi async.
 const REMOVE_FACTOR_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Deadline for the detached `RemoveMainFactor` event send. Bounds how long a hung
-/// foreign HTTP client can occupy the shared runtime thread.
-const REMOVE_FACTOR_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -415,37 +410,6 @@ impl BackupManager {
         Self::with_root_key(root_secret, Self::backup_account)
     }
 
-    /// Clears the local state that a deleted/disabled backup leaves stale: the
-    /// manifest file and the backup base report.
-    ///
-    /// # When to call it
-    /// Only for backup teardowns Bedrock does not itself drive:
-    /// - a standalone "delete my backup" action (BF-8 invoked directly),
-    /// - sync-factor deletion on logout,
-    /// - reconciliation, when the service reports the backup no longer exists.
-    ///
-    /// Do NOT call it after [`Self::remove_factor`] returns
-    /// [`RemoveFactorOutcome::BackupDeleted`] — that flow already does.
-    ///
-    /// # Errors
-    /// - Returns an error if the post-processing fails.
-    pub fn post_delete_backup(&self) -> Result<(), BackupError> {
-        crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
-        let manifest = ManifestManager::new();
-        manifest.danger_delete_manifest()?;
-
-        // After deleting the manifest, delete the base report so any backup-related
-        // state (designators, size, counters) is fully cleared. It will be recreated
-        // automatically if/when backup is enabled again.
-        if let Err(e) = ClientEventsReporter::new().delete_base_report() {
-            crate::warn!(
-                "[ClientEvents] failed to delete base report after manifest deletion: {e:?}"
-            );
-        }
-
-        Ok(())
-    }
-
     /// **Client Event Streams**. Set the base report attributes for event reports.
     pub fn set_backup_report_attributes(&self, input: BackupReportInput) {
         let client_events = ClientEventsReporter::new();
@@ -576,7 +540,7 @@ impl BackupManager {
     ///   sync-factor keypair and refresh its "backup enabled" state. See that
     ///   variant's docs.
     /// - The caller MUST NOT send its own `RemoveMainFactor` client event for this
-    ///   attempt, nor call [`Self::post_delete_backup`] afterwards. Bedrock does both.
+    ///   attempt. Bedrock sends it, and clears its own local state.
     ///
     /// # Errors
     /// Returns [`BackupOperationError`]. Two variants are signals native clients must
@@ -616,14 +580,14 @@ impl BackupManager {
                 }
             };
 
-        send_remove_factor_event(&result);
+        client_events::send_remove_factor_event(&result);
 
         let outcome = result?;
 
         // The remote deletion has committed, so a cleanup failure cannot change the
         // outcome -- but it leaves the device describing a backup that no longer exists.
         if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
-            if let Err(error) = self.post_delete_backup() {
+            if let Err(error) = Self::post_delete_backup() {
                 crate::critical!(
                     "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
                 );
@@ -671,6 +635,34 @@ pub struct ManifestDebug {
 
 /// Internal helpers (not exported)
 impl BackupManager {
+    /// Clears the local state that a deleted backup leaves stale: the manifest file
+    /// and the backup base report.
+    ///
+    /// Not exported: `remove_factor` is the only caller, and it invokes this itself on
+    /// [`RemoveFactorOutcome::BackupDeleted`]. Teardowns Bedrock does not yet drive
+    /// (standalone delete-backup, sync-factor deletion on logout, reconciliation when
+    /// the service reports the backup gone) need to move into Bedrock rather than
+    /// reach for this over FFI.
+    ///
+    /// # Errors
+    /// - Returns an error if the post-processing fails.
+    fn post_delete_backup() -> Result<(), BackupError> {
+        crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
+        let manifest = ManifestManager::new();
+        manifest.danger_delete_manifest()?;
+
+        // After deleting the manifest, delete the base report so any backup-related
+        // state (designators, size, counters) is fully cleared. It will be recreated
+        // automatically if/when backup is enabled again.
+        if let Err(e) = ClientEventsReporter::new().delete_base_report() {
+            crate::warn!(
+                "[ClientEvents] failed to delete base report after manifest deletion: {e:?}"
+            );
+        }
+
+        Ok(())
+    }
+
     fn service(&self) -> Result<&BackupServiceClient, BackupOperationError> {
         self.backup_service.get_or_try_init(|| {
             let config = get_config().ok_or_else(|| {
@@ -982,72 +974,6 @@ impl From<ClientEventsError> for BackupError {
     }
 }
 
-/// Whether a `remove_factor` outcome represents a completed attempt worth reporting.
-///
-/// [`BackupOperationError::WouldDeleteBackup`] and
-/// [`BackupOperationError::NeedsReauth`] are preconditions asking the caller for
-/// confirmation or a signer -- the removal has not been attempted yet, so counting
-/// them would inflate the failure rate this event feeds.
-const fn is_reportable_remove_outcome(
-    result: &Result<RemoveFactorOutcome, BackupOperationError>,
-) -> bool {
-    !matches!(
-        result,
-        Err(BackupOperationError::WouldDeleteBackup
-            | BackupOperationError::NeedsReauth { .. })
-    )
-}
-
-/// Reports the outcome of [`BackupManager::remove_factor`] as a `RemoveMainFactor`
-/// event. Native MUST NOT also send one, or every removal is double-counted.
-///
-/// Fire-and-forget: the user is already waiting on the result this merely describes,
-/// so the send is detached and the caller returns without it.
-///
-/// # Spawning
-/// `bedrock_export` wraps every exported async fn in `async_compat::Compat`, which
-/// enters a process-global runtime handle on each poll, so the task outlives this
-/// call. (Distinct from the no-spawn rule on `MigrationProcessor`, which is about
-/// cancellation safety — there, work outliving the future is the bug.) That runtime is
-/// single-threaded, hence the deadline below: a hung foreign HTTP client would
-/// otherwise pin the thread every other detached task shares.
-fn send_remove_factor_event(
-    result: &Result<RemoveFactorOutcome, BackupOperationError>,
-) {
-    if !is_reportable_remove_outcome(result) {
-        return;
-    }
-
-    let success = result.is_ok();
-    let error_message = result.as_ref().err().map(ToString::to_string);
-    let timestamp = Utc::now().to_rfc3339();
-
-    tokio::spawn(async move {
-        let reporter = ClientEventsReporter::new();
-        let send = reporter.send_event(
-            BackupReportEventKind::RemoveMainFactor,
-            success,
-            error_message,
-            timestamp,
-            false,
-        );
-        match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, send).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                crate::warn!(
-                    "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
-                );
-            }
-            Err(_elapsed) => {
-                crate::warn!(
-                    "[ClientEvents] RemoveMainFactor event timed out after {}s",
-                    REMOVE_FACTOR_EVENT_TIMEOUT.as_secs()
-                );
-            }
-        }
-    });
-}
-
 /// Why a factor operation needs the caller to re-authenticate before retrying.
 ///
 /// Both reasons are remediated by a native passkey ceremony; they differ in what
@@ -1181,50 +1107,4 @@ pub struct BackupAccount {
     ///
     /// This public key can be used to authenticate with a specific backup.
     public_key: String,
-}
-
-#[cfg(test)]
-mod remove_factor_event_tests {
-    use super::*;
-
-    /// Every confirmation prompt raises `WouldDeleteBackup`, so reporting the
-    /// precondition signals would swamp the failure-rate metric with non-failures.
-    #[test]
-    fn preconditions_are_not_reported_as_attempts() {
-        for error in [
-            BackupOperationError::WouldDeleteBackup,
-            BackupOperationError::NeedsReauth {
-                reason: NeedsReauthReason::MainFactorRequired,
-            },
-            BackupOperationError::NeedsReauth {
-                reason: NeedsReauthReason::SyncFactorInvalid,
-            },
-        ] {
-            assert!(
-                !is_reportable_remove_outcome(&Err(error)),
-                "preconditions must not count as attempts"
-            );
-        }
-    }
-
-    #[test]
-    fn completed_attempts_are_reported() {
-        assert!(is_reportable_remove_outcome(&Ok(
-            RemoveFactorOutcome::BackupDeleted
-        )));
-        for error in [
-            BackupOperationError::Network { retryable: true },
-            BackupOperationError::Turnkey {
-                code: "turnkey_user_not_found".to_string(),
-            },
-            BackupOperationError::BackupService {
-                code: "factor_not_found".to_string(),
-            },
-        ] {
-            assert!(
-                is_reportable_remove_outcome(&Err(error)),
-                "a real failure must be reported"
-            );
-        }
-    }
 }
