@@ -258,7 +258,11 @@ fn plan_oidc_removal(
         .to_string();
 
     let turnkey_key = metadata.turnkey_key().cloned().ok_or_else(|| {
-        crate::error!("remove_factor.missing_turnkey_key");
+        // An OIDC factor with no Turnkey key: the remote account is internally
+        // inconsistent and no removal can proceed until someone looks at it.
+        crate::critical!(
+            "remove_factor.missing_turnkey_key (OIDC factor present with no Turnkey key)"
+        );
         BackupOperationError::BackupService {
             code: "missing_turnkey_key".to_string(),
         }
@@ -269,7 +273,7 @@ fn plan_oidc_removal(
         ..
     } = &turnkey_key
     else {
-        crate::error!("remove_factor.turnkey_key_wrong_kind");
+        crate::critical!("remove_factor.turnkey_key_wrong_kind");
         return Err(BackupOperationError::BackupService {
             code: "missing_turnkey_key".to_string(),
         });

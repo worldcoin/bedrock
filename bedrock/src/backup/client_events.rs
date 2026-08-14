@@ -284,6 +284,30 @@ impl ClientEventsReporter {
         timestamp_iso8601: String,
         is_public: bool,
     ) -> Result<(), ClientEventsError> {
+        let request = self.prepare_event(
+            &kind,
+            success,
+            error_message,
+            timestamp_iso8601,
+            is_public,
+        )?;
+        request.post().await
+    }
+
+    /// Composes the event request, reading every local input up front.
+    ///
+    /// Split from the send so a detached caller can snapshot the base report before
+    /// anything else mutates or deletes it -- on the single-threaded runtime a spawned
+    /// task does not poll until the current call yields, by which point
+    /// `post_delete_backup` may already have removed the report.
+    fn prepare_event(
+        &self,
+        kind: &BackupReportEventKind,
+        success: bool,
+        error_message: Option<String>,
+        timestamp_iso8601: String,
+        is_public: bool,
+    ) -> Result<PreparedEvent, ClientEventsError> {
         // Ensure installation ID exists before sending
         let ensured_installation_id = self.ensure_installation_id()?;
 
@@ -341,9 +365,33 @@ impl ClientEventsReporter {
             Self::EVENTS_ENDPOINT.to_string()
         };
 
-        http.fetch_from_app_backend(endpoint, HttpMethod::Post, headers, Some(body))
-            .await?;
+        Ok(PreparedEvent {
+            http,
+            endpoint,
+            headers,
+            body,
+        })
+    }
+}
 
+/// An event request with every local input already resolved; all that is left is I/O.
+pub(super) struct PreparedEvent {
+    http: std::sync::Arc<dyn crate::primitives::http_client::AuthenticatedHttpClient>,
+    endpoint: String,
+    headers: Vec<HttpHeader>,
+    body: Vec<u8>,
+}
+
+impl PreparedEvent {
+    async fn post(self) -> Result<(), ClientEventsError> {
+        self.http
+            .fetch_from_app_backend(
+                self.endpoint,
+                HttpMethod::Post,
+                self.headers,
+                Some(self.body),
+            )
+            .await?;
         Ok(())
     }
 }
@@ -519,20 +567,26 @@ pub(super) fn send_remove_factor_event(
         return;
     }
 
-    let success = result.is_ok();
-    let error_message = result.as_ref().err().map(ToString::to_string);
-    let timestamp = Utc::now().to_rfc3339();
+    // Composed *before* spawning: the caller goes on to delete the base report this
+    // reads, and a spawned task would not poll until after that.
+    let request = match ClientEventsReporter::new().prepare_event(
+        &BackupReportEventKind::RemoveMainFactor,
+        result.is_ok(),
+        result.as_ref().err().map(ToString::to_string),
+        Utc::now().to_rfc3339(),
+        false,
+    ) {
+        Ok(request) => request,
+        Err(error) => {
+            crate::warn!(
+                "[ClientEvents] failed to compose RemoveMainFactor event: {error:?}"
+            );
+            return;
+        }
+    };
 
     tokio::spawn(async move {
-        let reporter = ClientEventsReporter::new();
-        let send = reporter.send_event(
-            BackupReportEventKind::RemoveMainFactor,
-            success,
-            error_message,
-            timestamp,
-            false,
-        );
-        match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, send).await {
+        match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, request.post()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 crate::warn!(

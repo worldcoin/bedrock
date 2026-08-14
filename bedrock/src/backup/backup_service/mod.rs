@@ -289,11 +289,23 @@ fn transport_error(error: reqwest::Error) -> BackupOperationError {
     BackupOperationError::Network { retryable }
 }
 
+/// Whether `status` will plausibly succeed on a later attempt.
+///
+/// 5xx is a degraded service; 429 is backpressure and 408 a server-side timeout, both
+/// of which clear on their own. Classifying those two as terminal is what would make
+/// [`BackupServiceClient::fetch_challenge`] silently skip the bounded retry it opts
+/// into.
+fn is_transient_status(status: StatusCode) -> bool {
+    status.is_server_error()
+        || status == StatusCode::TOO_MANY_REQUESTS
+        || status == StatusCode::REQUEST_TIMEOUT
+}
+
 /// Classifies a non-2xx backup-service response.
 ///
 /// `unauthorized_factor` means the sync factor is no longer authorized and the
-/// caller must re-authenticate. 5xx without a recognizable body is treated as a
-/// retryable network failure.
+/// caller must re-authenticate. Transient statuses become retryable network failures
+/// whether or not the body parses.
 fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
     if let Ok(parsed) = serde_json::from_slice::<ServiceErrorBody>(body) {
         let code = parsed.error.code;
@@ -303,11 +315,11 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
                 reason: NeedsReauthReason::SyncFactorInvalid,
             };
         }
-        if status.is_server_error() {
+        if is_transient_status(status) {
             // The generic retry log carries neither, and they are what distinguishes
             // a 500 from a 503 during an incident.
             crate::warn!(
-                "backup_service.server_error code={code} status={}",
+                "backup_service.transient code={code} status={}",
                 status.as_u16()
             );
             return BackupOperationError::Network { retryable: true };
@@ -318,8 +330,8 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
         );
         return BackupOperationError::BackupService { code };
     }
-    if status.is_server_error() {
-        crate::warn!("backup_service.server_error status={}", status.as_u16());
+    if is_transient_status(status) {
+        crate::warn!("backup_service.transient status={}", status.as_u16());
         BackupOperationError::Network { retryable: true }
     } else {
         crate::warn!("backup_service.client_error status={}", status.as_u16());
@@ -416,6 +428,50 @@ mod tests {
         let error =
             ec_keypair_authorization(&signer, "not valid base64!!!").unwrap_err();
         assert!(matches!(error, BackupOperationError::BackupService { .. }));
+    }
+
+    /// `fetch_challenge` opts into bounded retry, but only a `Network { retryable }`
+    /// classification actually retries. 429 and 408 reaching the caller as terminal
+    /// business errors is the bug both PR reviewers caught.
+    #[test]
+    fn transient_statuses_are_retryable_with_or_without_a_body() {
+        let body = br#"{"error":{"code":"rate_limited","message":"slow down"}}"#;
+        for status in [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(
+                matches!(
+                    status_error(status, body),
+                    BackupOperationError::Network { retryable: true }
+                ),
+                "{status} with a body should be retryable"
+            );
+            assert!(
+                matches!(
+                    status_error(status, b"not json"),
+                    BackupOperationError::Network { retryable: true }
+                ),
+                "{status} without a body should be retryable"
+            );
+        }
+    }
+
+    /// An ordinary rejection must stay terminal: retrying it burns the single-use
+    /// challenge token for nothing.
+    #[test]
+    fn business_rejections_stay_terminal() {
+        let body = br#"{"error":{"code":"factor_not_found","message":"nope"}}"#;
+        assert!(matches!(
+            status_error(StatusCode::BAD_REQUEST, body),
+            BackupOperationError::BackupService { .. }
+        ));
+        assert!(matches!(
+            status_error(StatusCode::NOT_FOUND, b"not json"),
+            BackupOperationError::BackupService { .. }
+        ));
     }
 
     /// The challenge token is single-use and the delete is not idempotent. Only the
