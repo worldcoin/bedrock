@@ -314,8 +314,7 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
                 reason: NeedsReauthReason::SyncFactorInvalid,
             };
         }
-        // Checked before the 5xx branch: a risk rejection is terminal for this
-        // request, so retrying it as a transient fault would only burn attempts.
+        // Before the 5xx branch: a risk block will not clear on retry.
         if is_risk_code(&code) {
             crate::warn!(
                 "backup_service.risk_rejected code={code} status={}",
@@ -326,9 +325,8 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
             };
         }
         if status.is_server_error() {
-            // Retried as transient, but the status and the service's own code are the
-            // only things that distinguish a 500 from a 503 during an incident, and
-            // they are not recoverable from the generic retry log.
+            // The generic retry log carries neither, and they are what distinguishes
+            // a 500 from a 503 during an incident.
             crate::warn!(
                 "backup_service.server_error code={code} status={}",
                 status.as_u16()
@@ -354,10 +352,8 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
 
 /// Maps an attestation-provider failure.
 ///
-/// The Attestation Gateway is where risk/fraud blocks surface first: it refuses to
-/// mint a token, so the request never reaches the backup service and
-/// [`status_error`] never sees it. A recognizable risk code in the refusal body is
-/// therefore classified here; everything else stays a network error.
+/// Risk blocks surface here rather than in [`status_error`]: the gateway refuses to
+/// mint a token, so the request never reaches the backup service.
 fn attestation_error(error: &HttpError) -> BackupOperationError {
     if let HttpError::BadStatusCode {
         code: status,
@@ -376,21 +372,18 @@ fn attestation_error(error: &HttpError) -> BackupOperationError {
             }
         }
     }
-    // A degraded gateway is as retryable as a degraded backup service; classifying it
-    // otherwise tells native a transient outage is permanent, on a path where nothing
-    // has been committed yet. Matched exhaustively so a new `HttpError` variant has to
-    // be classified deliberately rather than defaulting to "permanent".
+    // Nothing is committed at this point, so a transient gateway failure reported as
+    // permanent strands an operation a retry would have completed. Exhaustive: a new
+    // `HttpError` variant must be classified, not silently treated as permanent.
     let retryable = match error {
         HttpError::Timeout
         | HttpError::NoConnectivity
         | HttpError::DnsResolutionFailed { .. }
         | HttpError::ConnectionRefused { .. } => true,
-        // 5xx is a gateway outage; 429 is backpressure that clears on its own.
+        // 429 is backpressure that clears on its own.
         HttpError::BadStatusCode { code, .. } => {
             *code == 429 || (500..600).contains(code)
         }
-        // A pinned-cert failure, a user-cancelled ceremony, and an unclassified
-        // provider error will all fail again the same way.
         HttpError::SslError { .. }
         | HttpError::Cancelled
         | HttpError::Generic { .. }
@@ -464,9 +457,8 @@ mod tests {
         format!(r#"{{"error":{{"code":"{code}","message":"nope"}}}}"#).into_bytes()
     }
 
-    /// `delete_factor` is not idempotent and its challenge token is single-use, so a
-    /// replay would burn a consumed token at best and double-apply at worst. Only the
-    /// `retry: false` argument prevents it, which is otherwise invisible to the suite.
+    /// The challenge token is single-use and the delete is not idempotent. Only the
+    /// `retry: false` argument prevents a replay, and nothing else pins it.
     #[tokio::test]
     async fn delete_factor_is_never_replayed() {
         use crate::primitives::attestation::AttestationTokenProvider;
@@ -562,8 +554,7 @@ mod tests {
         }
     }
 
-    /// A risk block surfaces at the gateway, which refuses to mint a token, so the
-    /// request never reaches the backup service.
+    /// The gateway refuses to mint a token, so the request never reaches the service.
     #[test]
     fn attestation_refusal_carrying_a_risk_code_is_classified() {
         let error = attestation_error(&HttpError::BadStatusCode {
@@ -573,9 +564,7 @@ mod tests {
         assert!(matches!(error, BackupOperationError::RiskRejected { .. }));
     }
 
-    /// Nothing is committed when the gateway refuses, so a transient failure told to
-    /// native as permanent strands an operation a retry would have completed. This
-    /// must agree with `transport_error`, which treats the same classes as retryable.
+    /// Must agree with `transport_error`, which treats the same classes as retryable.
     #[test]
     fn transient_attestation_failures_are_retryable() {
         for error in [
@@ -628,8 +617,7 @@ mod tests {
         }
     }
 
-    /// A risk rejection is terminal: classifying it as a retryable 5xx would burn
-    /// the caller's attempts against a block that will not clear on retry.
+    /// A risk block will not clear on retry, so it must outrank a retryable 5xx.
     #[test]
     fn risk_code_wins_over_a_server_status() {
         assert!(matches!(

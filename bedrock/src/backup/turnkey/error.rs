@@ -282,10 +282,8 @@ pub enum TurnkeyMigrationError {
 mod classifier_tests {
     use super::*;
 
-    /// These classifiers match free text that Turnkey controls, and they gate
-    /// user-visible behaviour: `is_no_matching_provider` decides `debug!` vs a
-    /// `[Critical]` page, and `indicates_invalid_signer` decides whether the caller is
-    /// told to re-authenticate. If Turnkey rewords a message, this is what should fail.
+    /// These match free text Turnkey controls and gate a `[Critical]` page and a
+    /// re-auth prompt. If Turnkey rewords a message, this is what should fail.
     #[test]
     fn recognizes_the_upstream_strings_it_depends_on() {
         let stale = TurnkeyApiError::Unauthorized {
@@ -311,9 +309,8 @@ mod classifier_tests {
         assert!(denied.indicates_invalid_signer());
     }
 
-    /// The classifiers must not fire on unrelated failures: a false
-    /// `is_no_matching_provider` would silently swallow a real orphan, and a false
-    /// `indicates_invalid_signer` would send the user through a pointless ceremony.
+    /// A false `is_no_matching_provider` swallows a real orphan; a false
+    /// `indicates_invalid_signer` sends the user through a pointless ceremony.
     #[test]
     fn does_not_fire_on_unrelated_failures() {
         for error in [
@@ -333,8 +330,7 @@ mod classifier_tests {
         }
     }
 
-    /// A still-`PENDING` activity may yet succeed upstream, so it must not be reported
-    /// as an already-absent provider (silently swallowed) either.
+    /// May yet succeed upstream, so it must not be swallowed as already-absent.
     #[test]
     fn a_pending_activity_is_not_an_absent_provider() {
         let pending = TurnkeyApiError::ActivityPollingExceeded {

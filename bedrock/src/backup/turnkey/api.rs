@@ -364,19 +364,30 @@ impl TurnkeyApiClient {
             provider_ids,
         };
 
+        let requested = intent.provider_ids.len();
         let timestamp_ms = ntp_timestamp_ms()?;
-        self.with_retry("delete_oauth_providers", || async {
-            client
-                .delete_oauth_providers(
-                    suborganization_id.to_string(),
-                    timestamp_ms,
-                    intent.clone(),
-                )
-                .await
-                .map(|_activity| ())
-                .map_err(TurnkeyApiError::from)
-        })
-        .await?;
+        let deleted = self
+            .with_retry("delete_oauth_providers", || async {
+                client
+                    .delete_oauth_providers(
+                        suborganization_id.to_string(),
+                        timestamp_ms,
+                        intent.clone(),
+                    )
+                    .await
+                    .map(|activity| activity.result.provider_ids.len())
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        // A completed activity that deleted nothing would otherwise be reported as
+        // success, leaving the provider the caller asked to revoke still usable.
+        // Mirrors the same check in `create_oauth_providers`.
+        if deleted != requested {
+            crate::critical!(
+                "turnkey.delete_oauth_providers.count_mismatch requested={requested} deleted={deleted}"
+            );
+        }
 
         // User has changed, remove the cache.
         self.users_cache.clear();

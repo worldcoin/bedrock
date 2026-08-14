@@ -62,9 +62,8 @@ use crate::primitives::{KeypairSignerError, P256Signer};
 /// UI-blocking operation. Deadline for iOS which can't cancel uniffi async.
 const REMOVE_FACTOR_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Deadline for the `RemoveMainFactor` client event, which is sent after
-/// [`REMOVE_FACTOR_TIMEOUT`] has already been spent and over the unbounded foreign
-/// HTTP client. Losing the event is strictly better than hanging the caller.
+/// Deadline for the detached `RemoveMainFactor` event send. Bounds how long a hung
+/// foreign HTTP client can occupy the shared runtime thread.
 const REMOVE_FACTOR_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
@@ -488,13 +487,10 @@ impl BackupManager {
             });
         }
 
-        // `RemoveMainFactor` is deliberately NOT rejected the same way, even though
-        // `BackupManager::remove_factor` now sends it itself. Both apps send this event
-        // today and neither calls `remove_factor` yet, so rejecting it would break
-        // their telemetry the moment they bump Bedrock -- ahead of any benefit. The
-        // "do not also send it" contract is documented on `remove_factor`; enforce it
-        // here only once both platforms have migrated, or the transition costs more
-        // than the double-count it prevents.
+        // `RemoveMainFactor` is deliberately not rejected too, though `remove_factor`
+        // now sends it: both apps still send it themselves and neither calls
+        // `remove_factor` yet, so rejecting it would break their telemetry on the next
+        // Bedrock bump. Enforce once both platforms have migrated.
 
         let client_events = ClientEventsReporter::new();
 
@@ -621,14 +617,12 @@ impl BackupManager {
                 }
             };
 
-        send_remove_factor_event(&result).await;
+        send_remove_factor_event(&result);
 
         let outcome = result?;
 
-        // Removing the backup makes the local manifest and event state stale. The
-        // remote deletion has already committed, so a cleanup failure cannot change
-        // the outcome we report -- but it leaves the device describing a backup that
-        // no longer exists, which needs triage rather than a quiet warning.
+        // The remote deletion has committed, so a cleanup failure cannot change the
+        // outcome -- but it leaves the device describing a backup that no longer exists.
         if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
             if let Err(error) = self.post_delete_backup() {
                 crate::critical!(
@@ -1006,47 +1000,53 @@ const fn is_reportable_remove_outcome(
 }
 
 /// Reports the outcome of [`BackupManager::remove_factor`] as a `RemoveMainFactor`
-/// event.
+/// event. Native MUST NOT also send one, or every removal is double-counted.
 ///
-/// Bedrock owns this event now that it owns the flow; native MUST NOT also send one
-/// for the same attempt or every removal is double-counted.
+/// Fire-and-forget: the user is already waiting on the result this merely describes,
+/// so the send is detached and the caller returns without it.
 ///
-/// [`BackupOperationError::WouldDeleteBackup`] and
-/// [`BackupOperationError::NeedsReauth`] are deliberately not reported: they are
-/// preconditions asking the caller for confirmation or a signer, not failed attempts,
-/// and counting them would inflate the failure rate this event feeds.
-async fn send_remove_factor_event(
+/// # Spawning
+/// `bedrock_export` wraps every exported async fn in `async_compat::Compat`, which
+/// enters a process-global runtime handle on each poll, so the task outlives this
+/// call. (Distinct from the no-spawn rule on `MigrationProcessor`, which is about
+/// cancellation safety — there, work outliving the future is the bug.) That runtime is
+/// single-threaded, hence the deadline below: a hung foreign HTTP client would
+/// otherwise pin the thread every other detached task shares.
+fn send_remove_factor_event(
     result: &Result<RemoveFactorOutcome, BackupOperationError>,
 ) {
     if !is_reportable_remove_outcome(result) {
         return;
     }
 
-    // `send_event` ends in the foreign HTTP client, which Bedrock cannot bound. The
-    // user is already waiting on the result this event merely describes, so cap it:
-    // telemetry must never outlive the operation it reports on.
-    let reporter = ClientEventsReporter::new();
-    let send = reporter.send_event(
-        BackupReportEventKind::RemoveMainFactor,
-        result.is_ok(),
-        result.as_ref().err().map(ToString::to_string),
-        Utc::now().to_rfc3339(),
-        false,
-    );
-    match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, send).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            crate::warn!(
-                "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
-            );
+    let success = result.is_ok();
+    let error_message = result.as_ref().err().map(ToString::to_string);
+    let timestamp = Utc::now().to_rfc3339();
+
+    tokio::spawn(async move {
+        let reporter = ClientEventsReporter::new();
+        let send = reporter.send_event(
+            BackupReportEventKind::RemoveMainFactor,
+            success,
+            error_message,
+            timestamp,
+            false,
+        );
+        match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, send).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                crate::warn!(
+                    "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
+                );
+            }
+            Err(_elapsed) => {
+                crate::warn!(
+                    "[ClientEvents] RemoveMainFactor event timed out after {}s",
+                    REMOVE_FACTOR_EVENT_TIMEOUT.as_secs()
+                );
+            }
         }
-        Err(_elapsed) => {
-            crate::warn!(
-                "[ClientEvents] RemoveMainFactor event timed out after {}s",
-                REMOVE_FACTOR_EVENT_TIMEOUT.as_secs()
-            );
-        }
-    }
+    });
 }
 
 /// Why a factor operation needs the caller to re-authenticate before retrying.
@@ -1200,10 +1200,8 @@ pub struct BackupAccount {
 mod remove_factor_event_tests {
     use super::*;
 
-    /// The `RemoveMainFactor` event feeds a failure-rate metric, so it must count only
-    /// attempts that actually reached the backup service. The two precondition signals
-    /// are the common case (every confirmation prompt raises `WouldDeleteBackup`), so
-    /// reporting them would swamp the metric with non-failures.
+    /// Every confirmation prompt raises `WouldDeleteBackup`, so reporting the
+    /// precondition signals would swamp the failure-rate metric with non-failures.
     #[test]
     fn preconditions_are_not_reported_as_attempts() {
         for error in [
