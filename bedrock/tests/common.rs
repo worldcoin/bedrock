@@ -4,7 +4,7 @@ use std::str::FromStr;
 use alloy::{
     network::Ethereum,
     node_bindings::AnvilInstance,
-    primitives::{address, keccak256, Address, Log, U256},
+    primitives::{address, keccak256, Address, Bytes, Log, U256},
     providers::{ext::AnvilApi, Provider},
     sol,
     sol_types::{SolCall, SolEvent},
@@ -43,6 +43,9 @@ sol!(
         ) external;
 
         function enableModules(address[] memory modules) external;
+
+        /// Whether `module` is enabled on the Safe.
+        function isModuleEnabled(address module) external view returns (bool);
 
         /// EIP-1271 validation
         function isValidSignature(bytes32 dataHash, bytes memory signature) external view returns (bytes4);
@@ -105,10 +108,14 @@ pub fn setup_anvil() -> AnvilInstance {
     alloy::node_bindings::Anvil::new().fork(rpc_url).spawn()
 }
 
-pub async fn deploy_safe<P>(
+/// Deploys a Safe proxy with the given (already-encoded) `setup` calldata and
+/// returns the new Safe address. Shared by [`deploy_safe`] and
+/// [`deploy_safe_without_4337_module`], which differ only in the setup args.
+async fn deploy_safe_with_setup<P>(
     provider: &P,
     owner: Address,
     deploy_nonce: U256,
+    setup_data: Vec<u8>,
 ) -> anyhow::Result<Address>
 where
     P: Provider<Ethereum>,
@@ -120,23 +127,6 @@ where
         .unwrap();
 
     let proxy_factory = ISafeProxyFactory::new(SAFE_PROXY_FACTORY_ADDRESS, provider);
-
-    // Encode the Safe setup call
-    let setup_data = ISafe::setupCall {
-        _owners: vec![owner],
-        _threshold: U256::from(1),
-        to: SAFE_MODULE_SETUP_ADDRESS,
-        data: ISafe::enableModulesCall {
-            modules: vec![SAFE_4337_MODULE_ADDRESS],
-        }
-        .abi_encode()
-        .into(),
-        fallbackHandler: SAFE_4337_MODULE_ADDRESS,
-        paymentToken: Address::ZERO,
-        payment: U256::ZERO,
-        paymentReceiver: Address::ZERO,
-    }
-    .abi_encode();
 
     // Deploy Safe via proxy factory
     let deploy_tx = proxy_factory
@@ -170,6 +160,60 @@ where
         .expect("ProxyCreation event not found");
 
     Ok(proxy_creation_event.proxy)
+}
+
+/// Deploys a Safe with the ERC-4337 module enabled and set as fallback handler.
+pub async fn deploy_safe<P>(
+    provider: &P,
+    owner: Address,
+    deploy_nonce: U256,
+) -> anyhow::Result<Address>
+where
+    P: Provider<Ethereum>,
+{
+    let setup_data = ISafe::setupCall {
+        _owners: vec![owner],
+        _threshold: U256::from(1),
+        to: SAFE_MODULE_SETUP_ADDRESS,
+        data: ISafe::enableModulesCall {
+            modules: vec![SAFE_4337_MODULE_ADDRESS],
+        }
+        .abi_encode()
+        .into(),
+        fallbackHandler: SAFE_4337_MODULE_ADDRESS,
+        paymentToken: Address::ZERO,
+        payment: U256::ZERO,
+        paymentReceiver: Address::ZERO,
+    }
+    .abi_encode();
+
+    deploy_safe_with_setup(provider, owner, deploy_nonce, setup_data).await
+}
+
+/// Deploys a Safe **without** the ERC-4337 module or fallback handler,
+/// simulating a pre-4337 (2024-era) World App wallet that needs repair.
+pub async fn deploy_safe_without_4337_module<P>(
+    provider: &P,
+    owner: Address,
+    deploy_nonce: U256,
+) -> anyhow::Result<Address>
+where
+    P: Provider<Ethereum>,
+{
+    // Bare setup: no module-setup delegatecall and a zero fallback handler.
+    let setup_data = ISafe::setupCall {
+        _owners: vec![owner],
+        _threshold: U256::from(1),
+        to: Address::ZERO,
+        data: Bytes::new(),
+        fallbackHandler: Address::ZERO,
+        paymentToken: Address::ZERO,
+        payment: U256::ZERO,
+        paymentReceiver: Address::ZERO,
+    }
+    .abi_encode();
+
+    deploy_safe_with_setup(provider, owner, deploy_nonce, setup_data).await
 }
 
 /// Set an ERC-20 balance for a Safe by directly writing the storage slot

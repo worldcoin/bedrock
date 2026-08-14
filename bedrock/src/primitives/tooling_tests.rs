@@ -98,6 +98,16 @@ impl ToolingDemo {
         );
     }
 
+    /// Logs at [`LogLevel::Critical`](crate::primitives::logger::LogLevel::Critical)
+    /// so foreign tests can verify the level survives the FFI boundary, and that the
+    /// severity is carried by the level rather than a tag in the message.
+    ///
+    /// `marker` is echoed into the `demo_marker` attribute so foreign tests can
+    /// locate the emitted record unambiguously among logs from other tests.
+    pub fn log_critical(&self, marker: &str) {
+        crate::critical!(demo_marker = marker, "something needs immediate attention");
+    }
+
     /// Returns a simple result for testing.
     #[must_use]
     pub fn get_demo_result(&self) -> String {

@@ -10,6 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -22,6 +23,19 @@ private class CapturingLogger : Logger {
 
     override fun log(level: LogLevel, message: String, attributes: Map<String, String>) {
         records.add(Triple(level, message, attributes))
+    }
+
+    companion object {
+        // setLogger keeps the first logger for the whole process, so a test that
+        // installs its own fresh instance would silently observe no records at all
+        // once another test got there first. Every test shares this one instance and
+        // matches its records by a unique marker.
+        private val shared = CapturingLogger()
+
+        fun installed(): CapturingLogger {
+            setLogger(shared)
+            return shared
+        }
     }
 }
 
@@ -45,14 +59,9 @@ class BedrockToolingTests {
 
     // Verifies structured attributes and the always-present bedrock_version
     // attribute survive the round-trip to a foreign [Logger] implementation.
-    //
-    // setLogger installs a process-global logger exactly once, so this suite is
-    // the sole caller; records are matched by a unique marker to stay robust
-    // against logs emitted by other tests sharing the global logger.
     @Test
     fun testForeignLoggerReceivesAttributesAndVersion() {
-        val logger = CapturingLogger()
-        setLogger(logger)
+        val logger = CapturingLogger.installed()
 
         val demo = ToolingDemo()
         val marker = "kotlin-attr-${UUID.randomUUID()}"
@@ -72,6 +81,26 @@ class BedrockToolingTests {
         assertNotNull(plain, "capturing logger should receive the plain log")
         assertEquals(version, plain.third["bedrock_version"])
         assertEquals(1, plain.third.size, "version is the only attribute on a fieldless log")
+    }
+
+    // Criticals must arrive as LogLevel.CRITICAL rather than as an ERROR carrying a
+    // "[Critical]" tag in the text, so the host can map them onto a severity above
+    // error and alert on status instead of matching the message.
+    @Test
+    fun testCriticalLevelSurvivesTheFfiBoundary() {
+        val logger = CapturingLogger.installed()
+
+        val demo = ToolingDemo()
+        val marker = "kotlin-critical-${UUID.randomUUID()}"
+        demo.logCritical(marker)
+
+        val critical = logger.records.firstOrNull { it.third["demo_marker"] == marker }
+        assertNotNull(critical, "capturing logger should receive the critical log")
+        assertEquals(LogLevel.CRITICAL, critical.first, "criticals must use LogLevel.CRITICAL")
+        assertFalse(
+            critical.second.contains("[Critical]"),
+            "severity belongs in the level, not as a tag in the message",
+        )
     }
 
     // MARK: - Error Handling Tests

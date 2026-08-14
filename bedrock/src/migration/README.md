@@ -16,6 +16,9 @@ trait MigrationProcessor {
 
 The migration system is a permanent artifact of the app and is run on app start to bring the app to an expected state. The processors are expected to be idempotent.
 
+> [!NOTE]
+> Unrelated to the [Turnkey account migrations](../backup/turnkey/migrations/README.md) which are specifically and solely for the Turnkey state.
+
 ## States
 The `controller.rs` stores a key value mapping between the id of the migration and a record of the migration. The record most importantly contains the status of the migration, but also useful monitoring and debug information such as `started_at`, `last_attempted_at`.
 

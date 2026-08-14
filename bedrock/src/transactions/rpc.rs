@@ -13,7 +13,7 @@ use crate::{
     },
     smart_account::{SafeSmartAccountError, UserOperation},
 };
-use alloy::primitives::{Address, Bytes, FixedBytes, U128, U256};
+use alloy::primitives::{Address, Bytes, FixedBytes, B256, U128, U256};
 use alloy::sol_types::SolCall;
 use alloy::{hex::FromHex, providers::MULTICALL3_ADDRESS};
 
@@ -48,6 +48,9 @@ pub enum RpcMethod {
     /// Queries the status of a `UserOperation`
     #[serde(rename = "wa_getUserOperationReceipt")]
     WaGetUserOperationReceipt,
+    /// Relay a signed Safe `execTransaction` for the backend to submit on-chain
+    #[serde(rename = "wa_relaySafeTransaction")]
+    RelaySafeTransaction,
     /// Submit a signed `UserOperation` (V1)
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperation,
@@ -57,6 +60,9 @@ pub enum RpcMethod {
     /// Make a read call to a smart contract
     #[serde(rename = "eth_call")]
     EthCall,
+    /// Read a single storage slot of a contract
+    #[serde(rename = "eth_getStorageAt")]
+    EthGetStorageAt,
     /// Query supported ERC-4337 entry points
     #[serde(rename = "eth_supportedEntryPoints")]
     SupportedEntryPoints,
@@ -290,6 +296,40 @@ pub struct WaGetUserOperationReceiptResponse {
     pub block_timestamp: Option<String>,
 }
 
+/// Single positional param for the `wa_relaySafeTransaction` JSON-RPC call.
+///
+/// Mirrors the arguments of the Safe `execTransaction` method plus the target
+/// Safe. All numeric fields are `0x`-prefixed hex and addresses are
+/// `0x`-prefixed; `signatures` is the packed owner signature(s).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelaySafeTransactionRequest {
+    /// The Safe whose `execTransaction` is being called.
+    pub safe_address: String,
+    /// `to` argument of `execTransaction`.
+    pub to: String,
+    /// `value` argument.
+    pub value: String,
+    /// `data` argument.
+    pub data: String,
+    /// `operation` argument (`0` = call, `1` = delegatecall).
+    pub operation: u8,
+    /// `safeTxGas` argument.
+    pub safe_tx_gas: String,
+    /// `baseGas` argument.
+    pub base_gas: String,
+    /// `gasPrice` argument.
+    pub gas_price: String,
+    /// `gasToken` argument.
+    pub gas_token: String,
+    /// `refundReceiver` argument.
+    pub refund_receiver: String,
+    /// `nonce` argument.
+    pub nonce: String,
+    /// Packed owner signature(s).
+    pub signatures: String,
+}
+
 /// RPC client for handling 4337 `UserOperation` requests
 ///
 /// This client communicates with the RPC endpoint at `/v1/rpc/{network}` and `/v2/rpc/{network}`.
@@ -310,6 +350,7 @@ impl RpcClient {
     fn rpc_endpoint(network: Network, method: &RpcMethod) -> String {
         let version = match method {
             RpcMethod::EthCall
+            | RpcMethod::EthGetStorageAt
             | RpcMethod::PmSponsorUserOperation
             | RpcMethod::SendUserOperationV2 => "v2",
             _ => "v1",
@@ -630,6 +671,74 @@ impl RpcClient {
             error_message: format!("Invalid eth_call result format: {e}"),
         })
     }
+
+    /// Reads a single storage slot of a contract via `eth_getStorageAt` on the
+    /// latest block.
+    ///
+    /// # Arguments
+    /// - `network`: target network
+    /// - `address`: contract whose storage is read
+    /// - `slot`: 32-byte storage slot key
+    ///
+    /// # Errors
+    /// - Returns an RPC error if the call fails or the result is malformed.
+    pub async fn eth_get_storage_at(
+        &self,
+        network: Network,
+        address: Address,
+        slot: B256,
+    ) -> Result<B256, RpcError> {
+        let params = vec![
+            Value::String(format!("{address:?}")),
+            Value::String(format!("{slot:?}")),
+            Value::String("latest".to_string()),
+        ];
+
+        let result: String = self
+            .rpc_call(
+                network,
+                RpcMethod::EthGetStorageAt,
+                params,
+                RpcProviderName::Any,
+            )
+            .await?;
+
+        B256::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            error_message: format!("Invalid eth_getStorageAt result format: {e}"),
+        })
+    }
+
+    /// Relays a signed Safe `execTransaction` via `wa_relaySafeTransaction` on
+    /// the `/v1/rpc/{network}` endpoint.
+    ///
+    /// The backend submits the transaction on-chain and pays gas on the user's
+    /// behalf. Used by the
+    /// [`Safe4337ModuleProcessor`](crate::migration::Safe4337ModuleProcessor)
+    /// migration: a module-less Safe cannot pay its own gas via ERC-4337, so the
+    /// `enableModule`/`setFallbackHandler` repair must be relayed.
+    ///
+    /// # Returns
+    /// The submitted transaction hash.
+    ///
+    /// # Errors
+    /// - Returns an RPC error if the request fails to serialize, the HTTP call
+    ///   fails, or the RPC returns an error response.
+    pub async fn relay_safe_transaction(
+        &self,
+        network: Network,
+        request: &RelaySafeTransactionRequest,
+    ) -> Result<String, RpcError> {
+        let params =
+            vec![serde_json::to_value(request).map_err(|_| RpcError::JsonError)?];
+
+        self.rpc_call(
+            network,
+            RpcMethod::RelaySafeTransaction,
+            params,
+            RpcProviderName::Any,
+        )
+        .await
+    }
 }
 
 /// Gets the global RPC client, initializing it on first access.
@@ -857,6 +966,7 @@ mod tests {
             RpcMethod::SponsorUserOperation,
             RpcMethod::SendUserOperation,
             RpcMethod::WaGetUserOperationReceipt,
+            RpcMethod::RelaySafeTransaction,
             RpcMethod::SupportedEntryPoints,
         ] {
             let url = RpcClient::rpc_endpoint(network, &method);

@@ -10,6 +10,7 @@ use std::str::FromStr;
 
 // Re-export HTTP client types for external use
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
+pub use signer::{KeypairSigner, KeypairSignerError, P256Signer};
 pub use user_agent::{UserAgent, UserAgentBuilder};
 
 /// The prefix for Bedrock-generated transactions.
@@ -60,6 +61,9 @@ pub mod filesystem;
 /// Introduces authenticated HTTP client functionality that native applications must implement for bedrock.
 pub mod http_client;
 
+/// TLS trust policy for bedrock's Rust-native outbound HTTPS clients.
+pub mod tls;
+
 /// Introduces User-Agent helpers for requests issued through Bedrock consumers.
 pub mod user_agent;
 
@@ -76,6 +80,9 @@ pub mod contracts;
 
 /// Network Time Provider for sensitive operations that require a clock with no skew
 pub mod ntp;
+
+/// Foreign-implemented keypair signer used for Turnkey API request stamping.
+pub mod signer;
 
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

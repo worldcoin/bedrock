@@ -15,13 +15,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Get new version
         id: version
         run: |
           NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.workspace_members[0]' | cut -d '#' -f2)
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
   build-swift:
     name: Publish Swift
@@ -32,22 +34,24 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
         with:
           ref: ${{ needs.pre-release-checks.outputs.commit_sha }}
+          persist-credentials: false
 
       - name: Checkout swift mirror repo
-        uses: actions/checkout@v6
+        # Credentials must persist: the "Commit swift build" step below pushes to this repo.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
         with:
           repository: worldcoin/bedrock-swift
           path: target-repo
           token: ${{ secrets.DEPLOY_BOT_TOKEN }}
 
       - name: Setup Swift
-        uses: swift-actions/setup-swift@v2
+        uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0 https://github.com/swift-actions/setup-swift/releases/tag/v2.4.0
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
           toolchain: stable
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
@@ -60,7 +64,7 @@ jobs:
           zip -r Bedrock.xcframework.zip swift/Bedrock.xcframework
 
       - name: Create draft release in bedrock-swift & upload binaries
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2 https://github.com/softprops/action-gh-release/releases/tag/v3.0.2
         id: release
         with:
           repository: worldcoin/bedrock-swift
@@ -77,10 +81,10 @@ jobs:
         id: meta
         run: |
           ASSET_URL="${{ fromJSON(steps.release.outputs.assets)[0].url }}.zip"
-          echo "asset_url=${ASSET_URL}" >> $GITHUB_OUTPUT
+          echo "asset_url=${ASSET_URL}" >> "$GITHUB_OUTPUT"
 
           CHECKSUM=$(swift package compute-checksum Bedrock.xcframework.zip)
-          echo "checksum=${CHECKSUM}" >> $GITHUB_OUTPUT
+          echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
 
       - name: Commit swift build
         env:
@@ -100,9 +104,9 @@ jobs:
           git add .
           git commit -m "Release $NEW_VERSION"
 
-          git tag $NEW_VERSION
+          git tag "$NEW_VERSION"
           git push
-          git push origin $NEW_VERSION
+          git push origin "$NEW_VERSION"
 
       - name: Mark release as latest
         env:
@@ -131,12 +135,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
         with:
           ref: ${{ needs.pre-release-checks.outputs.commit_sha }}
+          persist-credentials: false
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
           toolchain: stable
           targets: ${{ matrix.settings.target }}
@@ -150,7 +155,7 @@ jobs:
           CROSS_NO_WARNINGS=0 cross build --target ${{ matrix.settings.target }} --release --locked
 
       - name: Upload artifact
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 https://github.com/actions/upload-artifact/releases/tag/v7.0.1
         with:
           name: android-${{ matrix.settings.target }}
           path: ./target/${{ matrix.settings.target }}/release/libbedrock.so
@@ -166,23 +171,24 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 https://github.com/actions/checkout/releases/tag/v7.0.1
         with:
           ref: ${{ needs.pre-release-checks.outputs.commit_sha }}
+          persist-credentials: false
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
           toolchain: stable
 
       - name: Setup Java
-        uses: actions/setup-java@0ab4596768b603586c0de567f2430c30f5b0d2b0 # v3.13.0
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0 https://github.com/actions/setup-java/releases/tag/v5.7.0
         with:
           distribution: temurin
           java-version: 17
 
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 https://github.com/actions/download-artifact/releases/tag/v8.0.1
         with:
           path: .
 

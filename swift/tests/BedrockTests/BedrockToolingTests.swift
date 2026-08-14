@@ -6,20 +6,38 @@ import XCTest
 // Foreign Tests for tooling functionality (i.e. logging and error handling)
 // The demo structs are only available in Foreign Tests and are not available in built binaries.
 
+// A single log line as the host logger received it.
+struct CapturedRecord {
+    let level: LogLevel
+    let message: String
+    let attributes: [String: String]
+}
+
 // A `Logger` implementation that records every delivered log line so tests can
 // assert on messages and structured attributes. Manual locking makes it safe to
 // hand to Rust as a `Sendable` callback interface.
 final class CapturingLogger: Logger, @unchecked Sendable {
+    // setLogger keeps the first logger for the whole process, so a test that installs
+    // its own fresh instance would silently observe no records at all once another
+    // test got there first. Every test shares this one instance and matches its
+    // records by a unique marker.
+    static let shared = CapturingLogger()
+
+    static func installed() -> CapturingLogger {
+        setLogger(logger: shared)
+        return shared
+    }
+
     private let lock = NSLock()
-    private var records: [(level: LogLevel, message: String, attributes: [String: String])] = []
+    private var records: [CapturedRecord] = []
 
     func log(level: LogLevel, message: String, attributes: [String: String]) {
         lock.lock()
-        records.append((level: level, message: message, attributes: attributes))
+        records.append(CapturedRecord(level: level, message: message, attributes: attributes))
         lock.unlock()
     }
 
-    func snapshot() -> [(level: LogLevel, message: String, attributes: [String: String])] {
+    func snapshot() -> [CapturedRecord] {
         lock.lock()
         defer { lock.unlock() }
         return records
@@ -43,8 +61,7 @@ final class BedrockToolingTests: XCTestCase {
 
     // Verifies structured attributes and the always-present bedrock_version
     func testForeignLoggerReceivesAttributesAndVersion() throws {
-        let logger = CapturingLogger()
-        setLogger(logger: logger)
+        let logger = CapturingLogger.installed()
 
         let demo = ToolingDemo()
         let marker = "swift-attr-\(UUID().uuidString)"
@@ -65,6 +82,27 @@ final class BedrockToolingTests: XCTestCase {
             "capturing logger should receive the plain log")
         XCTAssertEqual(plain.attributes["bedrock_version"], version)
         XCTAssertEqual(plain.attributes.count, 1, "version is the only attribute on a fieldless log")
+    }
+
+    // Criticals must arrive as .critical rather than as an .error carrying a
+    // "[Critical]" tag in the text, so the host can map them onto a severity above
+    // error and alert on status instead of matching the message.
+    func testCriticalLevelSurvivesTheFfiBoundary() throws {
+        let logger = CapturingLogger.installed()
+
+        let demo = ToolingDemo()
+        let marker = "swift-critical-\(UUID().uuidString)"
+        demo.logCritical(marker: marker)
+
+        let critical = try XCTUnwrap(
+            logger.snapshot().first { $0.attributes["demo_marker"] == marker },
+            "capturing logger should receive the critical log")
+        guard case .critical = critical.level else {
+            return XCTFail("criticals must use LogLevel.critical, got \(critical.level)")
+        }
+        XCTAssertFalse(
+            critical.message.contains("[Critical]"),
+            "severity belongs in the level, not as a tag in the message")
     }
 
     // MARK: - Error Handling Tests

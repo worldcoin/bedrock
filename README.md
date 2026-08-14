@@ -113,14 +113,28 @@ impl MyStruct {
 Simplified logging macros that automatically use the current context:
 
 ```rust
-use bedrock::{trace, debug, info, warn, error};
+use bedrock::{trace, debug, info, warn, error, critical};
 
 // In a bedrock_export impl, logs will be automatically prefixed
 info!("User authenticated successfully");  // Logs: [Bedrock][MyStruct] User authenticated successfully
-debug!("Processing data: {}", value);       // Logs: [Bedrock][MyStruct] Processing data: 42
+
+// Leading `key = value` pairs become structured log attributes rather than message
+// text, so backends can filter and aggregate on them. Put the values the log is
+// about in fields; keep the message a constant description of what happened.
+info!(chain_id = 480, tx_hash = "0xabc", "user operation submitted");
+
+// `critical!` is for state needing immediate attention. It logs at
+// `LogLevel::Critical`, a severity above error that alerts match on — never write a
+// `[Critical]` tag into the message yourself.
+critical!(designator = "orb_pkg", "checksum for the file is unreadable");
 ```
 
-**Available macros:** `trace!`, `debug!`, `info!`, `warn!`, `error!`
+**Available macros:** `trace!`, `debug!`, `info!`, `warn!`, `error!`, `critical!`
+
+Every record also carries a `bedrock_version` attribute, and forwarded dependency
+logs carry `bedrock_dependency`. A format string is mandatory and must follow any
+fields; field values are only formatted when a host logger is installed, so keep them
+side-effect free.
 
 ### Manual Context Management
 
