@@ -282,28 +282,10 @@ fn transport_error(error: reqwest::Error) -> BackupOperationError {
     BackupOperationError::Network { retryable }
 }
 
-/// Risk/fraud codes returned verbatim by the gateway, WAF, or risk service.
-const RISK_CODES: [&str; 3] = ["RISK_DETECTED", "INVALID_SIWE", "INVALID_TOKEN"];
-
-/// Prefixes owned by the risk service (`RS-`), the WAF (`WAF-`), and auth (`AU-`).
-const RISK_CODE_PREFIXES: [&str; 3] = ["RS-", "WAF-", "AU-"];
-
-/// Whether `code` identifies a risk/fraud rejection rather than a backup-service
-/// business error. Mirrors the native clients' classification so all three agree on
-/// what routes into the fraud gatekeeper.
-fn is_risk_code(code: &str) -> bool {
-    let code = code.to_uppercase();
-    RISK_CODES.contains(&code.as_str())
-        || RISK_CODE_PREFIXES
-            .iter()
-            .any(|prefix| code.starts_with(prefix))
-}
-
 /// Classifies a non-2xx backup-service response.
 ///
 /// `unauthorized_factor` means the sync factor is no longer authorized and the
-/// caller must re-authenticate. Risk/fraud codes are surfaced separately so native
-/// can open the fraud gatekeeper. 5xx without a recognizable body is treated as a
+/// caller must re-authenticate. 5xx without a recognizable body is treated as a
 /// retryable network failure.
 fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
     if let Ok(parsed) = serde_json::from_slice::<ServiceErrorBody>(body) {
@@ -312,16 +294,6 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
             crate::warn!("backup_service.unauthorized_factor");
             return BackupOperationError::NeedsReauth {
                 reason: NeedsReauthReason::SyncFactorInvalid,
-            };
-        }
-        // Before the 5xx branch: a risk block will not clear on retry.
-        if is_risk_code(&code) {
-            crate::warn!(
-                "backup_service.risk_rejected code={code} status={}",
-                status.as_u16()
-            );
-            return BackupOperationError::RiskRejected {
-                code: code.to_uppercase(),
             };
         }
         if status.is_server_error() {
@@ -354,24 +326,10 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
 ///
 /// Risk blocks surface here rather than in [`status_error`]: the gateway refuses to
 /// mint a token, so the request never reaches the backup service.
+///
+/// Attestation is native's to establish before invoking Bedrock: a failure here is
+/// reported as an ordinary network error, and native decides what the user sees.
 fn attestation_error(error: &HttpError) -> BackupOperationError {
-    if let HttpError::BadStatusCode {
-        code: status,
-        response_body,
-    } = error
-    {
-        if let Ok(parsed) = serde_json::from_slice::<ServiceErrorBody>(response_body) {
-            if is_risk_code(&parsed.error.code) {
-                crate::warn!(
-                    "backup_service.attestation.risk_rejected code={} status={status}",
-                    parsed.error.code
-                );
-                return BackupOperationError::RiskRejected {
-                    code: parsed.error.code.to_uppercase(),
-                };
-            }
-        }
-    }
     // Nothing is committed at this point, so a transient gateway failure reported as
     // permanent strands an operation a retry would have completed. Exhaustive: a new
     // `HttpError` variant must be classified, not silently treated as permanent.
@@ -453,10 +411,6 @@ mod tests {
         assert!(matches!(error, BackupOperationError::BackupService { .. }));
     }
 
-    fn error_body(code: &str) -> Vec<u8> {
-        format!(r#"{{"error":{{"code":"{code}","message":"nope"}}}}"#).into_bytes()
-    }
-
     /// The challenge token is single-use and the delete is not idempotent. Only the
     /// `retry: false` argument prevents a replay, and nothing else pins it.
     #[tokio::test]
@@ -515,55 +469,6 @@ mod tests {
         assert_eq!(deletes, 1, "the delete must be attempted exactly once");
     }
 
-    #[test]
-    fn risk_codes_are_classified_for_the_fraud_gatekeeper() {
-        for code in [
-            "RISK_DETECTED",
-            "INVALID_SIWE",
-            "INVALID_TOKEN",
-            "RS-1234",
-            "WAF-BLOCKED",
-            "AU-42",
-            // The service is not guaranteed to uppercase.
-            "risk_detected",
-            "rs-1234",
-        ] {
-            assert!(is_risk_code(code), "{code} should be a risk code");
-            let error = status_error(StatusCode::FORBIDDEN, &error_body(code));
-            let BackupOperationError::RiskRejected { code: reported } = error else {
-                panic!("{code} should map to RiskRejected, got {error:?}");
-            };
-            assert_eq!(reported, code.to_uppercase(), "native matches on the code");
-        }
-    }
-
-    #[test]
-    fn business_errors_are_not_mistaken_for_risk() {
-        for code in [
-            "factor_not_found",
-            "encryption_key_not_found",
-            // Substring matches must not trigger: only a leading `RS-`/`WAF-`/`AU-`.
-            "audience_mismatch",
-            "backup_rs-stale",
-        ] {
-            assert!(!is_risk_code(code), "{code} must not be a risk code");
-            assert!(matches!(
-                status_error(StatusCode::BAD_REQUEST, &error_body(code)),
-                BackupOperationError::BackupService { .. }
-            ));
-        }
-    }
-
-    /// The gateway refuses to mint a token, so the request never reaches the service.
-    #[test]
-    fn attestation_refusal_carrying_a_risk_code_is_classified() {
-        let error = attestation_error(&HttpError::BadStatusCode {
-            code: 403,
-            response_body: error_body("RISK_DETECTED"),
-        });
-        assert!(matches!(error, BackupOperationError::RiskRejected { .. }));
-    }
-
     /// Must agree with `transport_error`, which treats the same classes as retryable.
     #[test]
     fn transient_attestation_failures_are_retryable() {
@@ -615,17 +520,5 @@ mod tests {
                 "{error} should not be retryable"
             );
         }
-    }
-
-    /// A risk block will not clear on retry, so it must outrank a retryable 5xx.
-    #[test]
-    fn risk_code_wins_over_a_server_status() {
-        assert!(matches!(
-            status_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &error_body("RISK_DETECTED")
-            ),
-            BackupOperationError::RiskRejected { .. }
-        ));
     }
 }

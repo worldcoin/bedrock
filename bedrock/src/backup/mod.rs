@@ -579,12 +579,11 @@ impl BackupManager {
     ///   attempt, nor call [`Self::post_delete_backup`] afterwards. Bedrock does both.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`]. Three variants are signals native clients
-    /// must handle specifically rather than surfacing as a generic failure:
-    /// [`BackupOperationError::WouldDeleteBackup`] (prompt for confirmation, then
-    /// retry with `user_confirmed_backup_removal`), [`BackupOperationError::NeedsReauth`]
-    /// (run a passkey ceremony to obtain what the reason names, then retry), and
-    /// [`BackupOperationError::RiskRejected`] (open the fraud gatekeeper).
+    /// Returns [`BackupOperationError`]. Two variants are signals native clients must
+    /// handle specifically rather than surfacing as a generic failure:
+    /// [`BackupOperationError::WouldDeleteBackup`] (prompt for confirmation, then retry
+    /// with `user_confirmed_backup_removal`) and [`BackupOperationError::NeedsReauth`]
+    /// (run a passkey ceremony to obtain what the reason names, then retry).
     pub async fn remove_factor(
         &self,
         sync_factor: &P256Signer,
@@ -1085,18 +1084,6 @@ pub enum BackupOperationError {
         /// The backup service's machine-readable error code.
         code: String,
     },
-    /// The request was rejected by risk/fraud checks (the Attestation Gateway, the
-    /// WAF, or the risk service), not by backup-service business logic.
-    ///
-    /// Native MUST route this into its fraud-gatekeeper flow rather than showing a
-    /// generic error: the user may be able to clear the block interactively. `code`
-    /// is the upstream code (e.g. `RISK_DETECTED`, `RS-*`, `WAF-*`, `AU-*`) and
-    /// selects the user-facing copy.
-    #[error("rejected by risk checks: {code}")]
-    RiskRejected {
-        /// The upstream risk/fraud code, uppercased.
-        code: String,
-    },
     /// Turnkey rejected the request. `code` is a coarse classification.
     #[error("turnkey error: {code}")]
     Turnkey {
@@ -1227,9 +1214,6 @@ mod remove_factor_event_tests {
         )));
         for error in [
             BackupOperationError::Network { retryable: true },
-            BackupOperationError::RiskRejected {
-                code: "RISK_DETECTED".to_string(),
-            },
             BackupOperationError::Turnkey {
                 code: "turnkey_user_not_found".to_string(),
             },

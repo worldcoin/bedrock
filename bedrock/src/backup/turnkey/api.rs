@@ -395,7 +395,7 @@ impl TurnkeyApiClient {
     }
 
     /// Deletes the entire Turnkey Account (sub-organization). One of the few
-    /// operations that the [`SyncFactor`] can execute.
+    /// state-mutating operations that the [`SyncFactor`] can execute.
     ///
     /// # Errors
     /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.

@@ -279,11 +279,9 @@ pub enum TurnkeyMigrationError {
 }
 
 #[cfg(test)]
-mod classifier_tests {
+mod tests {
     use super::*;
 
-    /// These match free text Turnkey controls and gate a `[Critical]` page and a
-    /// re-auth prompt. If Turnkey rewords a message, this is what should fail.
     #[test]
     fn recognizes_the_upstream_strings_it_depends_on() {
         let stale = TurnkeyApiError::Unauthorized {
@@ -309,8 +307,6 @@ mod classifier_tests {
         assert!(denied.indicates_invalid_signer());
     }
 
-    /// A false `is_no_matching_provider` swallows a real orphan; a false
-    /// `indicates_invalid_signer` sends the user through a pointless ceremony.
     #[test]
     fn does_not_fire_on_unrelated_failures() {
         for error in [
@@ -330,7 +326,6 @@ mod classifier_tests {
         }
     }
 
-    /// May yet succeed upstream, so it must not be swallowed as already-absent.
     #[test]
     fn a_pending_activity_is_not_an_absent_provider() {
         let pending = TurnkeyApiError::ActivityPollingExceeded {
