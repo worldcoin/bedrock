@@ -79,11 +79,75 @@ pub enum TurnkeyApiError {
 }
 
 impl TurnkeyApiError {
+    /// Whether Turnkey rejected the request because the stamping key is not
+    /// registered on the sub-organization (`PUBLIC_KEY_NOT_FOUND`).
+    ///
+    /// For a sync-factor-signed activity this means the sync factor is stale and
+    /// the caller must re-authenticate to re-register it.
+    pub fn is_public_key_not_found(&self) -> bool {
+        self.body_contains("PUBLIC_KEY_NOT_FOUND")
+    }
+
+    /// Whether Turnkey rejected a provider deletion because the provider is already
+    /// gone. The caller should treat this as an idempotent success.
+    pub fn is_no_matching_provider(&self) -> bool {
+        self.body_contains("No matching providers found")
+    }
+
+    /// Whether the error indicates the stamping key is not a valid signer for the
+    /// sub-organization (unregistered key or unauthorized). The caller must
+    /// re-authenticate the sync factor.
+    pub fn indicates_invalid_signer(&self) -> bool {
+        self.is_public_key_not_found() || matches!(self, Self::Unauthorized { .. })
+    }
+
+    /// A coarse, non-sensitive classification for the client-facing error `code`.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::Unauthorized { .. } => "unauthorized",
+            Self::NotFound { .. } => "not_found",
+            Self::ServerError { .. } => "server_error",
+            Self::ClientError { .. } => "client_error",
+            Self::Transport { .. } => "transport",
+            Self::Activity { .. } => "activity",
+            Self::ActivityPollingExceeded { .. } => "activity_pending",
+            Self::Signer(_) => "signer",
+            Self::Client(_) => "client",
+            Self::MainUserNotFound => "main_user_not_found",
+            Self::Consistency => "consistency",
+        }
+    }
+
+    /// Searches the upstream diagnostic text of the error, if any, for `needle`.
+    /// Turnkey encodes its error codes in the response body rather than in a
+    /// dedicated field the SDK surfaces.
+    fn body_contains(&self, needle: &str) -> bool {
+        match self {
+            Self::Unauthorized { body }
+            | Self::NotFound { body }
+            | Self::RateLimited { body }
+            | Self::ClientError { body, .. }
+            | Self::ServerError { body, .. } => body.contains(needle),
+            Self::Activity { error_message }
+            | Self::ActivityPollingExceeded { error_message } => {
+                error_message.contains(needle)
+            }
+            Self::Timeout
+            | Self::Transport { .. }
+            | Self::Signer(_)
+            | Self::Client(_)
+            | Self::MainUserNotFound
+            | Self::Consistency => false,
+        }
+    }
+
     /// Whether this error is worth retrying (transient classes only).
     ///
     /// `ActivityPollingExceeded` is deliberately **not** retryable: the activity
     /// is already submitted. If execution fails at the TEE, the next migration will pick it up.
-    pub(super) const fn is_retryable(&self) -> bool {
+    pub const fn is_retryable(&self) -> bool {
         match self {
             Self::Timeout
             | Self::RateLimited { .. }
