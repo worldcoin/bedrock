@@ -444,17 +444,14 @@ impl BackupManager {
         timestamp_iso8601: String,
         is_public: bool,
     ) -> Result<(), BackupError> {
-        if kind == BackupReportEventKind::Sync {
+        if kind == BackupReportEventKind::Sync
+            || kind == BackupReportEventKind::RemoveMainFactor
+        {
             return Err(BackupError::Generic {
                 error_message: "Sync event is automatically sent from Bedrock"
                     .to_string(),
             });
         }
-
-        // `RemoveMainFactor` is deliberately not rejected too, though `remove_factor`
-        // now sends it: both apps still send it themselves and neither calls
-        // `remove_factor` yet, so rejecting it would break their telemetry on the next
-        // Bedrock bump. Enforce once both platforms have migrated.
 
         let client_events = ClientEventsReporter::new();
 
@@ -517,14 +514,17 @@ impl BackupManager {
 
     /// Removes the main factor `factor_id` from the user's backup (BF-7) everywhere.
     ///
-    /// # User Considerations
+    /// # Important Considerations
     /// - If you're removing the last main factor, the backup will be destroyed instead, the
     ///   user MUST see an explicit prompt and approve.
     /// - If removing an OIDC Factor and it's **not the last** OIDC factor, a [`MainFactor`] is
     ///   needed. Passkey removal needs neither a main factor nor Turnkey.
-    /// - iCloud Keychain factors are not yet supported and return
-    ///   [`BackupOperationError::Unsupported`]. Keychain factors are currently not displayed in the UI
-    ///   and are getting deprecated.
+    /// - iCloud Keychain factors are not yet supported and return [`BackupOperationError::Unsupported`];
+    ///   in any case they're currently not displayed in the UI and are getting deprecated.
+    ///
+    ///  # Native responsibilities
+    /// - On [`RemoveFactorOutcome::BackupDeleted`] the caller MUST delete its stored
+    ///   sync-factor keypair and refresh its "backup enabled" state.
     ///
     /// # Arguments
     /// - `sync_factor`: the sync-factor [`P256Signer`]; authenticates the backup
@@ -534,13 +534,6 @@ impl BackupManager {
     /// - `factor_id`: the id of the factor to remove.
     /// - `user_confirmed_backup_removal`: set only after the user has confirmed that
     ///   removing the last main factor will delete the entire backup.
-    ///
-    /// # Native responsibilities
-    /// - On [`RemoveFactorOutcome::BackupDeleted`] the caller MUST delete its stored
-    ///   sync-factor keypair and refresh its "backup enabled" state. See that
-    ///   variant's docs.
-    /// - The caller MUST NOT send its own `RemoveMainFactor` client event for this
-    ///   attempt. Bedrock sends it, and clears its own local state.
     ///
     /// # Errors
     /// Returns [`BackupOperationError`]. Two variants are signals native clients must
@@ -584,8 +577,7 @@ impl BackupManager {
 
         let outcome = result?;
 
-        // The remote deletion has committed, so a cleanup failure cannot change the
-        // outcome -- but it leaves the device describing a backup that no longer exists.
+        // Local state clean up & event report
         match &outcome {
             RemoveFactorOutcome::BackupDeleted => {
                 if let Err(error) = Self::post_delete_backup() {
@@ -640,14 +632,8 @@ pub struct ManifestDebug {
 
 /// Internal helpers (not exported)
 impl BackupManager {
-    /// Clears the local state that a deleted backup leaves stale: the manifest file
-    /// and the backup base report.
-    ///
-    /// Not exported: `remove_factor` is the only caller, and it invokes this itself on
-    /// [`RemoveFactorOutcome::BackupDeleted`]. Teardowns Bedrock does not yet drive
-    /// (standalone delete-backup, sync-factor deletion on logout, reconciliation when
-    /// the service reports the backup gone) need to move into Bedrock rather than
-    /// reach for this over FFI.
+    /// Clears the local state after a backup deletion: the manifest file
+    /// and the backup base report
     ///
     /// # Errors
     /// - Returns an error if the post-processing fails.
@@ -1043,7 +1029,7 @@ pub enum BackupOperationError {
     /// An unexpected internal error. By default, no reason to log (Bedrock already handles it).
     #[error("{error_message}")]
     Generic {
-        /// Additional human redable description.
+        /// Additional human-readable description.
         error_message: String,
     },
 }
