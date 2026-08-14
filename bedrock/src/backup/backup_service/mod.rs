@@ -38,7 +38,19 @@ const RETRIEVE_METADATA_CHALLENGE_PATH: &str =
 const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
 
 /// Per-request timeout. A degraded backup service must not hang the operation.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+///
+/// NOTE: Backup creation and sync will require larger timeouts, it'll be added once that
+/// feature is supported.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
+
+/// Deadline for fetching a delete-factor challenge. It is retried, so its own budget
+/// is several [`REQUEST_TIMEOUT`]s; it runs before anything is committed, so
+/// cancelling it is safe.
+const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Deadline for the foreign attestation callback, which Bedrock cannot otherwise
+/// bound and which sits in the commit path.
+const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// HTTP client for the backup service, owning its own `reqwest` transport.
 #[derive(Debug)]
@@ -131,12 +143,21 @@ impl BackupServiceClient {
         factor_id: &str,
         encryption_key: Option<BackupEncryptionKey>,
     ) -> Result<DeleteFactorResponse, BackupOperationError> {
-        let challenge = self
-            .fetch_challenge(
+        let challenge = match tokio::time::timeout(
+            CHALLENGE_TIMEOUT,
+            self.fetch_challenge(
                 DELETE_FACTOR_CHALLENGE_PATH,
                 &json!({ "factorId": factor_id }),
-            )
-            .await?;
+            ),
+        )
+        .await
+        {
+            Ok(challenge) => challenge?,
+            Err(_elapsed) => {
+                crate::warn!("backup_service.delete_factor.challenge_timed_out");
+                return Err(BackupOperationError::Network { retryable: true });
+            }
+        };
         let authorization =
             ec_keypair_authorization(sync_factor, &challenge.challenge)?;
         let request = DeleteFactorRequest {
@@ -157,10 +178,18 @@ impl BackupServiceClient {
             }
         })?;
 
-        let token = provider
-            .assert_json_request("POST", DELETE_FACTOR_PATH, &body)
-            .await
-            .map_err(|error| attestation_error(&error))?;
+        let token = match tokio::time::timeout(
+            ATTESTATION_TIMEOUT,
+            provider.assert_json_request("POST", DELETE_FACTOR_PATH, &body),
+        )
+        .await
+        {
+            Ok(token) => token.map_err(|error| attestation_error(&error))?,
+            Err(_elapsed) => {
+                crate::warn!("backup_service.attestation.timed_out");
+                return Err(BackupOperationError::Attestation);
+            }
+        };
 
         let bytes = self
             .post_bytes(
@@ -341,33 +370,14 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
     }
 }
 
-/// Maps an attestation-provider failure.
+/// Maps any attestation-provider failure to [`BackupOperationError::Attestation`].
 ///
-/// Risk blocks surface here rather than in [`status_error`]: the gateway refuses to
-/// mint a token, so the request never reaches the backup service.
-///
-/// Attestation is native's to establish before invoking Bedrock: a failure here is
-/// reported as an ordinary network error, and native decides what the user sees.
+/// The failure originates in the native attestation client, which owns the gateway
+/// exchange and the user-facing handling of it. Bedrock does not re-derive meaning
+/// from a response it did not make.
 fn attestation_error(error: &HttpError) -> BackupOperationError {
-    // Nothing is committed at this point, so a transient gateway failure reported as
-    // permanent strands an operation a retry would have completed. Exhaustive: a new
-    // `HttpError` variant must be classified, not silently treated as permanent.
-    let retryable = match error {
-        HttpError::Timeout
-        | HttpError::NoConnectivity
-        | HttpError::DnsResolutionFailed { .. }
-        | HttpError::ConnectionRefused { .. } => true,
-        // 429 is backpressure that clears on its own.
-        HttpError::BadStatusCode { code, .. } => {
-            *code == 429 || (500..600).contains(code)
-        }
-        HttpError::SslError { .. }
-        | HttpError::Cancelled
-        | HttpError::Generic { .. }
-        | HttpError::FileSystem(_) => false,
-    };
-    crate::warn!("backup_service.attestation.failed retryable={retryable} err={error}");
-    BackupOperationError::Network { retryable }
+    crate::warn!("backup_service.attestation.failed err={error}");
+    BackupOperationError::Attestation
 }
 
 fn serialize_error(error: &serde_json::Error) -> BackupOperationError {
@@ -530,58 +540,5 @@ mod tests {
             .filter(|request| request.url.path() == DELETE_FACTOR_PATH)
             .count();
         assert_eq!(deletes, 1, "the delete must be attempted exactly once");
-    }
-
-    /// Must agree with `transport_error`, which treats the same classes as retryable.
-    #[test]
-    fn transient_attestation_failures_are_retryable() {
-        for error in [
-            HttpError::Timeout,
-            HttpError::NoConnectivity,
-            HttpError::DnsResolutionFailed {
-                error_message: "no such host".to_string(),
-            },
-            HttpError::ConnectionRefused {
-                error_message: "refused".to_string(),
-            },
-            HttpError::BadStatusCode {
-                code: 503,
-                response_body: b"gateway unavailable".to_vec(),
-            },
-            HttpError::BadStatusCode {
-                code: 429,
-                response_body: b"slow down".to_vec(),
-            },
-        ] {
-            assert!(
-                matches!(
-                    attestation_error(&error),
-                    BackupOperationError::Network { retryable: true }
-                ),
-                "{error} should be retryable"
-            );
-        }
-    }
-
-    #[test]
-    fn permanent_attestation_failures_are_not_retryable() {
-        for error in [
-            HttpError::Cancelled,
-            HttpError::SslError {
-                reason: "pinning failed".to_string(),
-            },
-            HttpError::BadStatusCode {
-                code: 400,
-                response_body: b"bad request".to_vec(),
-            },
-        ] {
-            assert!(
-                matches!(
-                    attestation_error(&error),
-                    BackupOperationError::Network { retryable: false }
-                ),
-                "{error} should not be retryable"
-            );
-        }
     }
 }

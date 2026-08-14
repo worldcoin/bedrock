@@ -294,12 +294,7 @@ impl ClientEventsReporter {
         request.post().await
     }
 
-    /// Composes the event request, reading every local input up front.
-    ///
-    /// Split from the send so a detached caller can snapshot the base report before
-    /// anything else mutates or deletes it -- on the single-threaded runtime a spawned
-    /// task does not poll until the current call yields, by which point
-    /// `post_delete_backup` may already have removed the report.
+    /// Composes the event request
     fn prepare_event(
         &self,
         kind: &BackupReportEventKind,

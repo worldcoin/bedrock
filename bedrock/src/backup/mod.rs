@@ -47,7 +47,6 @@ use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
-use std::time::Duration;
 
 use once_cell::sync::OnceCell;
 
@@ -56,10 +55,6 @@ use crate::backup::flows::{BackupFlow, FlowContext, RemoveFactor};
 use crate::backup::turnkey::TurnkeyApiClient;
 use crate::primitives::config::get_config;
 use crate::primitives::{KeypairSignerError, P256Signer};
-
-/// Overall deadline for a single `remove_factor` run. It is a foreground,
-/// UI-blocking operation. Deadline for iOS which can't cancel uniffi async.
-const REMOVE_FACTOR_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -561,17 +556,10 @@ impl BackupManager {
             user_confirmed_backup_removal,
         };
 
-        let result =
-            match tokio::time::timeout(REMOVE_FACTOR_TIMEOUT, flow.run(&ctx)).await {
-                Ok(result) => result,
-                Err(_elapsed) => {
-                    crate::error!(
-                        "remove_factor timed out after {}s",
-                        REMOVE_FACTOR_TIMEOUT.as_secs()
-                    );
-                    Err(BackupOperationError::Network { retryable: true })
-                }
-            };
+        // No deadline here: the flow bounds its own phases. One spanning the whole run
+        // would cancel the irreversible delete, reporting a retryable failure for a
+        // removal the service had already applied and skipping the cleanup below.
+        let result = flow.run(&ctx).await;
 
         client_events::send_remove_factor_event(&result);
 
@@ -1001,6 +989,10 @@ pub enum BackupOperationError {
         /// The backup service's machine-readable error code.
         code: String,
     },
+    /// The native attestation client could not produce a gateway token. It owns the
+    /// exchange and the user-facing handling; Bedrock only reports that it failed.
+    #[error("attestation failed")]
+    Attestation,
     /// Turnkey rejected the request. `code` is a coarse classification.
     #[error("turnkey error: {code}")]
     Turnkey {

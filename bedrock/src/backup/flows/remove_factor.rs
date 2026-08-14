@@ -1,6 +1,8 @@
 //! BF-7 (remove a main factor: an OIDC account or a passkey), escalating to BF-8
 //! (delete the whole backup) when the removed factor is the last main factor.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use super::{BackupFlow, FlowContext};
@@ -10,6 +12,18 @@ use crate::backup::backup_service::{
 use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::P256Signer;
+
+/// Deadline for the cancel-safe phase: the metadata read and the Turnkey probes.
+/// Expiring here costs nothing but the reads.
+const PREPARE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Deadline for the post-commit Turnkey cleanup. Expiring here orphans a Turnkey
+/// resource but cannot change the outcome, which the service has already applied.
+#[cfg(not(test))]
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Shortened under test so the expiry path is exercised without a real 10s wait.
+#[cfg(test)]
+const CLEANUP_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Outcome of a successful factor removal.
 #[derive(Debug, uniffi::Enum)]
@@ -48,10 +62,53 @@ pub struct RemoveFactor {
 impl BackupFlow for RemoveFactor {
     type Output = RemoveFactorOutcome;
 
+    /// Runs in two phases, split at the irreversible backup-service delete.
+    ///
+    /// Everything before the commit is cancel-safe, so it carries the deadline.
+    /// Everything from the commit on does not: a deadline there would discard an
+    /// outcome the service has already applied, leaving the caller with a retryable
+    /// error for work that succeeded. The commit bounds itself with per-request
+    /// timeouts instead, and the cleanup after it carries its own.
     async fn run(
         &self,
         ctx: &FlowContext<'_>,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
+        let prepared =
+            match tokio::time::timeout(PREPARE_TIMEOUT, self.prepare(ctx)).await {
+                Ok(prepared) => prepared?,
+                Err(_elapsed) => {
+                    crate::warn!(
+                        "remove_factor.prepare_timed_out after {}s (nothing committed)",
+                        PREPARE_TIMEOUT.as_secs()
+                    );
+                    return Err(BackupOperationError::Network { retryable: true });
+                }
+            };
+
+        self.commit(ctx, prepared).await
+    }
+}
+
+/// What the cancel-safe phase resolved, ready for the commit.
+enum Prepared {
+    /// An OIDC removal, with the providers to tear down afterwards (`None` when the
+    /// whole sub-organization goes instead).
+    Oidc {
+        plan: OidcRemovalPlan,
+        provider_ids: Option<Vec<String>>,
+    },
+    /// A passkey removal: only the PRF key to drop.
+    Passkey { prf_key: BackupEncryptionKey },
+}
+
+impl RemoveFactor {
+    /// Reads state and validates every precondition that is knowable in advance.
+    ///
+    /// Cancel-safe: performs no writes, so abandoning it costs only the reads.
+    async fn prepare(
+        &self,
+        ctx: &FlowContext<'_>,
+    ) -> Result<Prepared, BackupOperationError> {
         let metadata = ctx.service.retrieve_metadata(ctx.sync_factor).await?;
         let factor = metadata.factor(&self.factor_id).ok_or_else(|| {
             crate::warn!("remove_factor.factor_not_found");
@@ -73,10 +130,17 @@ impl BackupFlow for RemoveFactor {
 
         match &factor.kind {
             BackupFactorKind::OidcAccount { .. } => {
-                self.remove_oidc(ctx, &metadata).await
+                self.prepare_oidc(ctx, &metadata).await
             }
             BackupFactorKind::Passkey { .. } => {
-                self.remove_passkey(ctx, &metadata).await
+                let prf_key = metadata.single_prf_key().cloned().ok_or_else(|| {
+                    crate::warn!("remove_factor.missing_prf_key");
+                    BackupOperationError::Unsupported {
+                        detail: "the passkey has no PRF encryption key to drop"
+                            .to_string(),
+                    }
+                })?;
+                Ok(Prepared::Passkey { prf_key })
             }
             // Rejected by `unsupported_reason` before the confirmation gate.
             BackupFactorKind::EcKeypair { .. } => {
@@ -87,24 +151,20 @@ impl BackupFlow for RemoveFactor {
             }
         }
     }
-}
 
-impl RemoveFactor {
-    /// Removes an OIDC factor. Deleting one of several providers needs a
-    /// [`MainFactor`]; removing the last OIDC factor tears down the whole sub-org
-    /// (sync-signed) and drops the Turnkey encryption key.
-    async fn remove_oidc(
+    /// Probes Turnkey so the teardown failures that are knowable in advance surface
+    /// while retrying is still safe.
+    ///
+    /// A transient failure is fatal only on the provider path, which needs the read's
+    /// data (deleting just the id we were handed would orphan sibling audiences); the
+    /// last-OIDC path needs only its verdict.
+    async fn prepare_oidc(
         &self,
         ctx: &FlowContext<'_>,
         metadata: &BackupMetadata,
-    ) -> Result<RemoveFactorOutcome, BackupOperationError> {
+    ) -> Result<Prepared, BackupOperationError> {
         let plan = plan_oidc_removal(metadata, &self.factor_id)?;
 
-        // Probe Turnkey first: teardown failures knowable in advance are worth an
-        // error here rather than an orphaned resource after the commit. A transient
-        // failure is fatal only on the provider path, which needs the read's data
-        // (deleting just the id we were handed would orphan sibling audiences); the
-        // last-OIDC path needs only its verdict.
         let provider_ids = if plan.is_last_oidc_factor {
             verify_sync_factor(ctx, &plan).await?;
             None
@@ -119,51 +179,72 @@ impl RemoveFactor {
             });
         };
 
+        Ok(Prepared::Oidc { plan, provider_ids })
+    }
+
+    /// Applies the removal at the authoritative store, then cleans up Turnkey.
+    ///
+    /// Deliberately not wrapped in a cancelling deadline: past the delete the outcome
+    /// is decided, and dropping this future would report a failure for it.
+    async fn commit(
+        &self,
+        ctx: &FlowContext<'_>,
+        prepared: Prepared,
+    ) -> Result<RemoveFactorOutcome, BackupOperationError> {
+        let (encryption_key, oidc) = match prepared {
+            Prepared::Oidc { plan, provider_ids } => (
+                plan.is_last_oidc_factor.then(|| plan.turnkey_key.clone()),
+                Some((plan, provider_ids)),
+            ),
+            Prepared::Passkey { prf_key } => (Some(prf_key), None),
+        };
+
         // backup-service is authoritative, drop first
-        let encryption_key = plan.is_last_oidc_factor.then(|| plan.turnkey_key.clone());
         let response = ctx
             .service
             .delete_factor(ctx.sync_factor, &self.factor_id, encryption_key)
             .await?;
 
-        // Best-effort: the factor is already gone from the authoritative store, so
-        // failing here would block a user whose removal succeeded. Orphans are logged
-        // `critical!` because nothing reclaims them yet (TODO in `turnkey::migrations`).
+        if let Some((plan, provider_ids)) = oidc {
+            best_effort_turnkey_cleanup(ctx, &plan, provider_ids).await;
+        }
+
+        finalize(response, self.user_confirmed_backup_removal)
+    }
+}
+
+/// Tears down whatever Turnkey resources the removal orphaned, under its own deadline.
+///
+/// Best-effort on both counts: the factor is already gone from the authoritative
+/// store, so neither a failure nor a timeout can change what the caller is told. It
+/// carries a deadline anyway so a wedged Turnkey cannot hold a foreground call open,
+/// and reports the orphan at `critical!` because nothing reclaims it yet (TODO in
+/// `turnkey::migrations`).
+async fn best_effort_turnkey_cleanup(
+    ctx: &FlowContext<'_>,
+    plan: &OidcRemovalPlan,
+    provider_ids: Option<Vec<String>>,
+) {
+    let cleanup = async {
         if plan.is_last_oidc_factor {
             best_effort_delete_sub_org(ctx.turnkey, &plan.suborg_id, ctx.sync_factor)
                 .await;
         } else if let (Some(main_factor), Some(provider_ids)) =
             (ctx.main_factor, provider_ids)
         {
-            best_effort_delete_providers(ctx, &plan, &provider_ids, main_factor).await;
+            best_effort_delete_providers(ctx, plan, &provider_ids, main_factor).await;
         }
+    };
 
-        finalize(response, self.user_confirmed_backup_removal)
-    }
-
-    /// Removes a passkey factor by dropping its PRF encryption key at the backup
-    /// service. No Turnkey and no main factor are involved.
-    ///
-    /// Preconditions are enforced by [`unsupported_reason`] before the confirmation
-    /// gate; the `ok_or_else` below is defensive, not the user-facing check.
-    async fn remove_passkey(
-        &self,
-        ctx: &FlowContext<'_>,
-        metadata: &BackupMetadata,
-    ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        let prf_key = metadata.single_prf_key().cloned().ok_or_else(|| {
-            crate::warn!("remove_factor.missing_prf_key");
-            BackupOperationError::Unsupported {
-                detail: "the passkey has no PRF encryption key to drop".to_string(),
-            }
-        })?;
-
-        let response = ctx
-            .service
-            .delete_factor(ctx.sync_factor, &self.factor_id, Some(prf_key))
-            .await?;
-
-        finalize(response, self.user_confirmed_backup_removal)
+    if tokio::time::timeout(CLEANUP_TIMEOUT, cleanup)
+        .await
+        .is_err()
+    {
+        crate::critical!(
+            "remove_factor.turnkey_cleanup_timed_out suborg_id={} after {}s (factor IS removed; Turnkey resources orphaned)",
+            plan.suborg_id,
+            CLEANUP_TIMEOUT.as_secs()
+        );
     }
 }
 
@@ -1059,6 +1140,37 @@ mod tests {
             "the backup must be intact so the caller can re-auth and retry"
         );
         assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
+    }
+
+    /// A cleanup that outlives its deadline must not erase the commit.
+    ///
+    /// The whole point of splitting the deadline: `delete_factor` has already returned
+    /// `Ok`, so the outcome is decided. Cancelling the flow here would hand the caller
+    /// a retryable error for a removal that succeeded, skip the local cleanup, and send
+    /// them into a retry that hits `factor_not_found`.
+    #[tokio::test]
+    async fn slow_turnkey_cleanup_does_not_erase_the_committed_outcome() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(&server, metadata(vec![oidc_factor("f-1", "p-1")])).await;
+        mount_users(&server, vec![]).await;
+        mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
+        // Teardown hangs well past CLEANUP_TIMEOUT.
+        Mock::given(method("POST"))
+            .and(path(DELETE_SUB_ORG))
+            .respond_with(ResponseTemplate::new(200).set_delay(CLEANUP_TIMEOUT * 20))
+            .mount(&server)
+            .await;
+
+        let outcome = run_remove(&server, "f-1", None, true).await.unwrap();
+
+        assert!(
+            matches!(outcome, RemoveFactorOutcome::BackupDeleted),
+            "the committed outcome must survive a timed-out cleanup, got {outcome:?}"
+        );
+        assert!(called_paths(&server)
+            .await
+            .contains(&DELETE_FACTOR.to_string()));
     }
 
     /// A Turnkey outage must not block removals: the teardown it gates is best-effort,
