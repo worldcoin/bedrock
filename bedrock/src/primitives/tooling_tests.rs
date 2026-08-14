@@ -85,11 +85,7 @@ impl ToolingDemo {
         warn!("This is a warning message from ToolingDemo");
     }
 
-    /// Logs a message with structured attributes to verify attribute delivery
-    /// across the FFI boundary.
-    ///
-    /// `marker` is echoed into the `demo_marker` attribute so foreign tests can
-    /// locate the emitted record unambiguously among logs from other tests.
+    ///Create a log record with additional attributes
     pub fn log_with_attributes(&self, marker: &str) {
         info!(
             demo_marker = marker,
@@ -98,12 +94,7 @@ impl ToolingDemo {
         );
     }
 
-    /// Logs at [`LogLevel::Critical`](crate::primitives::logger::LogLevel::Critical)
-    /// so foreign tests can verify the level survives the FFI boundary, and that the
-    /// severity is carried by the level rather than a tag in the message.
-    ///
-    /// `marker` is echoed into the `demo_marker` attribute so foreign tests can
-    /// locate the emitted record unambiguously among logs from other tests.
+    /// Log a critical message
     pub fn log_critical(&self, marker: &str) {
         crate::critical!(demo_marker = marker, "something needs immediate attention");
     }

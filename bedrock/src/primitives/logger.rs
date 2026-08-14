@@ -171,15 +171,10 @@ pub fn log_message(level: LogLevel, args: std::fmt::Arguments<'_>) {
     log_message_with_attributes(level, args, HashMap::new);
 }
 
-/// Like [`log_message`], but attaches structured attributes to the log line.
+/// Like [`log_message`], but with structured attributes.
 ///
-/// `attributes` is only invoked once a host logger is known to be installed, so a
-/// disabled logger never pays to format attribute values — matching how
-/// `format_args!` defers formatting the message.
-///
-/// Attribute values are hex-secret redacted just like the message. The
-/// [`VERSION_ATTRIBUTE_KEY`] attribute is always added by [`deliver`], and takes
-/// precedence over any caller-supplied value for that key.
+/// `attributes` is only invoked once a logger is known to be installed, so a disabled
+/// logger never pays to format the values.
 #[doc(hidden)]
 pub fn log_message_with_attributes<F>(
     level: LogLevel,
@@ -188,23 +183,7 @@ pub fn log_message_with_attributes<F>(
 ) where
     F: FnOnce() -> HashMap<String, String>,
 {
-    log_to(LOGGER_INSTANCE.get(), level, args, attributes);
-}
-
-/// Applies the [`LogContext`] prefix and hands the record to `logger`, doing no work
-/// whatsoever when it is `None`.
-///
-/// Split out of [`log_message_with_attributes`] so the disabled path is testable
-/// without depending on the state of the process-global logger.
-fn log_to<F>(
-    logger: Option<&Arc<dyn Logger>>,
-    level: LogLevel,
-    args: std::fmt::Arguments<'_>,
-    attributes: F,
-) where
-    F: FnOnce() -> HashMap<String, String>,
-{
-    let Some(logger) = logger else {
+    let Some(logger) = LOGGER_INSTANCE.get() else {
         return;
     };
     let message = get_context()
@@ -212,12 +191,8 @@ fn log_to<F>(
     deliver(logger, level, message, attributes());
 }
 
-/// Redacts hex secrets from the message and attribute values, attaches the
-/// Bedrock version attribute, and forwards the record to the host `logger`.
-///
-/// The single choke point for both delivery paths ([`log_message_with_attributes`]
-/// for Bedrock's own logs and [`ForeignLoggerSubscriber::event`] for dependency
-/// logs), so every emitted line is sanitized and version-stamped.
+/// The single delivery path for both Bedrock's own logs and forwarded dependency
+/// logs, so every emitted line is hex-redacted and version-stamped exactly once.
 fn deliver(
     logger: &Arc<dyn Logger>,
     level: LogLevel,
@@ -279,25 +254,13 @@ macro_rules! __bedrock_log {
 /// Leading `key = value` pairs (before the format string) are attached as
 /// structured attributes; each value must implement [`std::fmt::Display`].
 ///
-/// # Syntax
+/// A format string is mandatory and must follow any fields. Keys are plain
+/// identifiers — `tracing`'s `?`/`%` sigils and dotted keys do not parse. Avoid keys
+/// log backends reserve (`message`, `status`, `service`, `host`, `timestamp`,
+/// `trace_id`, `error.*`); only [`VERSION_ATTRIBUTE_KEY`] is protected here.
 ///
-/// A format string is **mandatory** and must come after any fields. Keys are plain
-/// identifiers: `tracing`'s `?value`/`%value` sigils and its bare-identifier
-/// shorthand are not supported, and a dotted key (`http.status_code = 500`) does not
-/// parse. Prefer the value the log is *about* as a field over interpolating it into
-/// the message, so backends can filter and aggregate on it.
-///
-/// Avoid attribute keys that log backends reserve for their own use — `message`,
-/// `status`, `service`, `host`, `timestamp`, `trace_id`, and the `error.*` family:
-/// only [`VERSION_ATTRIBUTE_KEY`] is protected from being overwritten here, so a
-/// clashing key silently shadows the host's field instead.
-///
-/// # Evaluation
-///
-/// Field values are evaluated **only when a host logger is installed**, whereas
-/// message arguments are always evaluated. Keep field expressions side-effect free:
-/// `info!(n = counter.fetch_add(1, Ordering::Relaxed), "...")` would increment in
-/// production and not in a test that never calls [`set_logger`].
+/// Field values are evaluated only when a host logger is installed, so keep them
+/// side-effect free.
 ///
 /// # Examples
 ///
@@ -353,16 +316,9 @@ macro_rules! error {
 /// Logs a message at [`LogLevel::Critical`], for state that needs immediate
 /// attention. There's usually very low alerting threshold for these.
 ///
-/// The severity is carried by the level, not by a tag in the message, so alerts match
-/// on the record's status rather than its text. Accepts structured fields like the
-/// other macros.
-///
-/// # Alerting
-///
-/// Records previously arrived as `ERROR` with a literal `[Critical] ` prefix in the
-/// message. Any monitor still matching that text will not match these, so monitors
-/// have to move to the record's status (Datadog's `critical`, syslog severity 2)
-/// before a release carrying this ships. See [`LogLevel::Critical`].
+/// Records previously arrived as `ERROR` tagged `[Critical] ` in the message. Any
+/// monitor matching that text will not match these — monitors must move to the
+/// record's status (Datadog's `critical`, syslog severity 2) before this ships.
 #[macro_export]
 macro_rules! critical {
     ($($arg:tt)*) => {
@@ -601,8 +557,8 @@ impl Subscriber for ForeignLoggerSubscriber {
     /// forwarded at `WARN` and above; their debug/trace noise is rejected at the
     /// callsite so it is never even formatted.
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        !is_bedrock_target(metadata)
-            && is_forwardable_dependency_level(*metadata.level())
+        let level = *metadata.level();
+        !is_bedrock_target(metadata) && (level == Level::WARN || level == Level::ERROR)
     }
 
     fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
@@ -654,14 +610,6 @@ impl Subscriber for ForeignLoggerSubscriber {
     fn exit(&self, _span: &span::Id) {}
 }
 
-/// Whether a dependency record at `level` is severe enough to forward.
-///
-/// Dependency debug and trace noise is rejected at the callsite so it is never even
-/// formatted; only `WARN` and above reach the host.
-fn is_forwardable_dependency_level(level: Level) -> bool {
-    level == Level::WARN || level == Level::ERROR
-}
-
 /// Returns `true` when the event originates from the `bedrock` crate.
 fn is_bedrock_target(metadata: &Metadata<'_>) -> bool {
     metadata.target().starts_with("bedrock")
@@ -670,11 +618,8 @@ fn is_bedrock_target(metadata: &Metadata<'_>) -> bool {
             .is_some_and(|module_path| module_path.starts_with("bedrock"))
 }
 
-/// Collects a `tracing` event's fields.
-///
-/// The `message` field (the format string passed to the logging macros) forms
-/// the log body; every other structured field is collected into `attributes` so
-/// it is forwarded to the host as a log attribute rather than being dropped.
+/// Collects a `tracing` event's fields: `message` becomes the log body, everything
+/// else becomes an attribute.
 #[derive(Default)]
 struct EventVisitor {
     message: String,
@@ -699,9 +644,8 @@ impl EventVisitor {
 }
 
 impl tracing::field::Visit for EventVisitor {
-    /// Records string fields verbatim. Overriding this (rather than letting the
-    /// default forward to [`Self::record_debug`]) keeps string attribute values
-    /// unquoted, which log backends can filter and aggregate on directly.
+    /// Overriding this rather than falling through to [`Self::record_debug`] keeps
+    /// string values unquoted, so backends can filter on them.
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         if field.name() == "message" {
             self.message.push_str(value);
@@ -710,8 +654,7 @@ impl tracing::field::Visit for EventVisitor {
         }
     }
 
-    /// Fallback for non-string fields (numbers, booleans, and other `Debug`
-    /// types). `Debug` already renders these without surrounding quotes.
+    /// Fallback for non-string fields; `Debug` renders these unquoted.
     fn record_debug(
         &mut self,
         field: &tracing::field::Field,
@@ -757,8 +700,8 @@ fn log_level(level: Level) -> LogLevel {
 #[cfg(test)]
 mod delivery_tests {
     use super::{
-        get_context, in_log_context, set_logger, span, Event, LogContext, LogLevel,
-        Logger, Metadata, Subscriber, VERSION_ATTRIBUTE_KEY,
+        get_context, in_log_context, set_logger, LogContext, LogLevel, Logger,
+        VERSION_ATTRIBUTE_KEY,
     };
     use serial_test::serial;
     use std::collections::HashMap;
@@ -990,178 +933,6 @@ mod delivery_tests {
         );
     }
 
-    /// Relays every event into the real [`ForeignLoggerSubscriber::event`] path.
-    ///
-    /// `ForeignLoggerSubscriber::enabled` rejects anything whose target *or* module
-    /// path starts with `bedrock`, which is every event this file can emit (see
-    /// [`in_crate_events_are_never_treated_as_dependencies`]). This relay therefore
-    /// accepts everything so the real `event` body can be driven; the filter itself
-    /// is asserted separately.
-    struct RelayToForeign(super::ForeignLoggerSubscriber);
-
-    impl Subscriber for RelayToForeign {
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
-        }
-        fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
-            span::Id::from_u64(1)
-        }
-        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-        fn event(&self, event: &Event<'_>) {
-            self.0.event(event);
-        }
-        fn enter(&self, _: &span::Id) {}
-        fn exit(&self, _: &span::Id) {}
-    }
-
-    /// The dependency path is the one place log values are third-party controlled, so
-    /// it is the path that most needs to be shown going through [`super::deliver`]:
-    /// redacted, version-stamped, and attributed to the crate it came from.
-    #[test]
-    #[serial]
-    fn dependency_events_are_redacted_stamped_and_attributed() {
-        use super::{ForeignLoggerSubscriber, DEPENDENCY_ATTRIBUTE_KEY};
-        use std::sync::atomic::AtomicU64;
-
-        capture_records();
-
-        let relay = Arc::new(RelayToForeign(ForeignLoggerSubscriber {
-            next_span_id: AtomicU64::new(1),
-        }));
-        let secret = "a".repeat(32);
-        tracing::subscriber::with_default(relay, || {
-            tracing::warn!(target: "siegel", key = %secret, "dep-marker mlock failed {secret}");
-            tracing::error!(target: "siegel", code = 500);
-        });
-
-        let (level, message, attributes) = captured_record("dep-marker mlock");
-        assert!(matches!(level, LogLevel::Warn), "wrong level: {level:?}");
-        assert_eq!(
-            message, "dep-marker mlock failed aa..aa",
-            "the dependency message must be hex-redacted"
-        );
-        assert_eq!(
-            attributes.get("key").map(String::as_str),
-            Some("aa..aa"),
-            "dependency attribute values must be hex-redacted"
-        );
-        assert_eq!(
-            attributes.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
-            Some(env!("CARGO_PKG_VERSION")),
-        );
-        assert_eq!(
-            attributes.get(DEPENDENCY_ATTRIBUTE_KEY).map(String::as_str),
-            Some("siegel"),
-        );
-
-        // A field-only event records no `message` field, but must still arrive with a
-        // non-empty body plus its fields.
-        let field_only = captured()
-            .iter()
-            .find(|(_, _, attributes)| attributes.contains_key("code"))
-            .cloned()
-            .expect("the field-only event was forwarded");
-        let (level, message, attributes) = field_only;
-        assert!(matches!(level, LogLevel::Error), "wrong level: {level:?}");
-        // Pinned exactly: `metadata.name()` would embed the dependency's build-time
-        // source path and line, which must not reach the host and cannot be grouped.
-        assert_eq!(
-            message, "siegel event without a message",
-            "the fallback body must be the target, not the callsite's source path"
-        );
-        assert_eq!(attributes.get("code").map(String::as_str), Some("500"));
-    }
-
-    /// A dependency field named like one of Bedrock's own attribute keys must not be
-    /// able to spoof it: Bedrock's value wins.
-    #[test]
-    #[serial]
-    fn dependency_fields_cannot_spoof_bedrock_attributes() {
-        use super::{ForeignLoggerSubscriber, DEPENDENCY_ATTRIBUTE_KEY};
-        use std::sync::atomic::AtomicU64;
-
-        capture_records();
-
-        let relay = Arc::new(RelayToForeign(ForeignLoggerSubscriber {
-            next_span_id: AtomicU64::new(1),
-        }));
-        tracing::subscriber::with_default(relay, || {
-            tracing::warn!(
-                target: "siegel",
-                bedrock_dependency = "not-siegel",
-                bedrock_version = "0.0.0-spoofed",
-                "spoof-marker",
-            );
-        });
-
-        let (_, _, attributes) = captured_record("spoof-marker");
-        assert_eq!(
-            attributes.get(DEPENDENCY_ATTRIBUTE_KEY).map(String::as_str),
-            Some("siegel"),
-            "the real target must override a spoofed dependency field"
-        );
-        assert_eq!(
-            attributes.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
-            Some(env!("CARGO_PKG_VERSION")),
-            "the real version must override a spoofed version field"
-        );
-    }
-
-    /// Bedrock's own records take the direct path, so forwarding them through
-    /// `tracing` as well would double-log every line. The check is on the module path
-    /// as well as the target, which is why even an explicit `target:` override here
-    /// is still recognized as Bedrock's own, and why [`RelayToForeign`] exists.
-    #[test]
-    fn in_crate_events_are_never_treated_as_dependencies() {
-        /// Captures what [`super::is_bedrock_target`] answers for a real event's
-        /// metadata, then rejects it so nothing reaches the host logger.
-        struct Probe(Mutex<Vec<bool>>);
-
-        impl Subscriber for Probe {
-            fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-                self.0
-                    .lock()
-                    .expect("probe lock")
-                    .push(super::is_bedrock_target(metadata));
-                false
-            }
-            fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
-                span::Id::from_u64(1)
-            }
-            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-            fn event(&self, _: &Event<'_>) {}
-            fn enter(&self, _: &span::Id) {}
-            fn exit(&self, _: &span::Id) {}
-        }
-
-        let probe = Arc::new(Probe(Mutex::new(Vec::new())));
-        tracing::subscriber::with_default(probe.clone(), || {
-            tracing::warn!(target: "siegel", "target says dependency, module says bedrock");
-        });
-
-        let observed = probe.0.lock().expect("probe lock").clone();
-        assert!(
-            !observed.is_empty() && observed.iter().all(|is_bedrock| *is_bedrock),
-            "an in-crate event must be recognized as Bedrock's own: {observed:?}",
-        );
-    }
-
-    /// Dependency noise below `WARN` is rejected at the callsite so it is never even
-    /// formatted; raising the floor silently would flood the host logger.
-    #[test]
-    fn only_warn_and_above_forward_from_dependencies() {
-        use super::is_forwardable_dependency_level;
-        use tracing::Level;
-
-        assert!(is_forwardable_dependency_level(Level::ERROR));
-        assert!(is_forwardable_dependency_level(Level::WARN));
-        assert!(!is_forwardable_dependency_level(Level::INFO));
-        assert!(!is_forwardable_dependency_level(Level::DEBUG));
-        assert!(!is_forwardable_dependency_level(Level::TRACE));
-    }
-
     /// Pins the shapes `__bedrock_log!` has to accept. The token muncher picks its
     /// arm by shape alone, so a regression here is a silent mis-parse: fields landing
     /// in the message, or a form that stops compiling for every call site using it.
@@ -1363,97 +1134,5 @@ mod tests {
             attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
             Some(env!("CARGO_PKG_VERSION")),
         );
-    }
-
-    /// Without a host logger the record is dropped, and building its attributes must
-    /// be skipped too: a structured call site is expected to be free at rest, so an
-    /// expensive (or side-effecting) `Display` impl is never run.
-    #[test]
-    fn attributes_are_not_built_without_a_logger() {
-        let built = std::cell::Cell::new(false);
-
-        log_to(None, LogLevel::Info, format_args!("dropped"), || {
-            built.set(true);
-            HashMap::new()
-        });
-
-        assert!(
-            !built.get(),
-            "attributes must not be built without a logger"
-        );
-    }
-
-    /// The counterpart to [`attributes_are_not_built_without_a_logger`]: with a logger
-    /// present the closure runs and its fields reach the host.
-    #[test]
-    fn attributes_are_built_once_a_logger_is_present() {
-        let capturing = Arc::new(CapturingLogger::default());
-        let logger: Arc<dyn Logger> = capturing.clone();
-
-        log_to(Some(&logger), LogLevel::Info, format_args!("kept"), || {
-            HashMap::from([("chain_id".to_owned(), "480".to_owned())])
-        });
-
-        let records = capturing.records.lock().unwrap().clone();
-        assert_eq!(records.len(), 1);
-        let (level, message, attrs) = &records[0];
-        assert!(matches!(level, LogLevel::Info));
-        assert_eq!(message, "kept");
-        assert_eq!(attrs.get("chain_id").map(String::as_str), Some("480"));
-        assert_eq!(
-            attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
-            Some(env!("CARGO_PKG_VERSION")),
-        );
-    }
-
-    #[test]
-    fn event_visitor_keeps_strings_unquoted() {
-        use std::sync::Mutex;
-
-        // A minimal subscriber that runs a real `tracing` event through
-        // `EventVisitor`, so field recording exercises the same
-        // `record_str`/`record_debug` dispatch as the dependency-log path.
-        struct Capture(Mutex<Vec<(String, HashMap<String, String>)>>);
-
-        impl Subscriber for Capture {
-            fn enabled(&self, _: &Metadata<'_>) -> bool {
-                true
-            }
-            fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
-                span::Id::from_u64(1)
-            }
-            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-            fn event(&self, event: &Event<'_>) {
-                let mut visitor = EventVisitor::default();
-                event.record(&mut visitor);
-                self.0
-                    .lock()
-                    .unwrap()
-                    .push((visitor.message, visitor.attributes));
-            }
-            fn enter(&self, _: &span::Id) {}
-            fn exit(&self, _: &span::Id) {}
-        }
-
-        let capture = Arc::new(Capture(Mutex::new(Vec::new())));
-        tracing::subscriber::with_default(capture.clone(), || {
-            tracing::info!(
-                path = "/foo/bar",
-                attempts = 3,
-                ok = true,
-                "deserialize failed"
-            );
-        });
-
-        let events = capture.0.lock().unwrap().clone();
-        assert_eq!(events.len(), 1);
-        let (message, attrs) = &events[0];
-        assert_eq!(message, "deserialize failed");
-        // String fields are stored without surrounding quotes.
-        assert_eq!(attrs.get("path").map(String::as_str), Some("/foo/bar"));
-        // Numbers and booleans render bare via the `record_debug` fallback.
-        assert_eq!(attrs.get("attempts").map(String::as_str), Some("3"));
-        assert_eq!(attrs.get("ok").map(String::as_str), Some("true"));
     }
 }

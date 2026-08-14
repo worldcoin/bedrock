@@ -70,9 +70,9 @@ impl Logger for StdoutLogger {
         &self,
         level: LogLevel,
         message: String,
-        attributes: std::collections::HashMap<String, String>,
+        _attributes: std::collections::HashMap<String, String>,
     ) {
-        println!("[bedrock][{level:?}] {message} {attributes:?}");
+        println!("[bedrock][{level:?}] {message}");
     }
 }
 

@@ -70,6 +70,17 @@ fn dependency_warnings_reach_the_host_and_noise_does_not() {
     tracing::info!(target: "siegel", "info noise");
     tracing::debug!(target: "siegel", "debug noise");
     tracing::trace!(target: "siegel", "trace noise");
+    // A field-only event records no `message`, and must not arrive blank. The fields
+    // also cover both visitor paths: `&str` via `record_str`, the rest via
+    // `record_debug`; all must render unquoted so a backend can filter on them.
+    tracing::error!(target: "siegel", code = 500, path = "/foo/bar", ok = true);
+    // Bedrock's own attributes must win over a dependency field of the same name.
+    tracing::warn!(
+        target: "siegel",
+        bedrock_dependency = "spoofed",
+        bedrock_version = "0.0.0-spoofed",
+        "spoof-marker",
+    );
     // Bedrock's own records take the direct path; forwarding them here too would
     // double-log every line.
     tracing::warn!(target: "bedrock::smart_account", "bedrock's own must not forward");
@@ -119,6 +130,33 @@ fn dependency_warnings_reach_the_host_and_noise_does_not() {
 
     let (level, _, _) = only("an error from a dependency");
     assert!(matches!(level, LogLevel::Error), "wrong level: {level:?}");
+
+    // The field-only event: non-blank body, and every field rendered unquoted.
+    let field_only = records
+        .iter()
+        .find(|(_, _, attributes)| attributes.contains_key("code"))
+        .expect("the field-only event was forwarded");
+    let (level, message, attributes) = field_only;
+    assert!(matches!(level, LogLevel::Error), "wrong level: {level:?}");
+    assert_eq!(
+        message, "siegel event without a message",
+        "the fallback body must be the target, not the callsite's source path"
+    );
+    assert_eq!(attributes.get("code").map(String::as_str), Some("500"));
+    assert_eq!(attributes.get("path").map(String::as_str), Some("/foo/bar"));
+    assert_eq!(attributes.get("ok").map(String::as_str), Some("true"));
+
+    let (_, _, attributes) = only("spoof-marker");
+    assert_eq!(
+        attributes.get("bedrock_dependency").map(String::as_str),
+        Some("siegel"),
+        "the real target must override a spoofed dependency field"
+    );
+    assert_eq!(
+        attributes.get("bedrock_version").map(String::as_str),
+        Some(env!("CARGO_PKG_VERSION")),
+        "the real version must override a spoofed version field"
+    );
 
     let (level, _, attributes) = only("a warning through the log facade");
     assert!(matches!(level, LogLevel::Warn), "wrong level: {level:?}");
