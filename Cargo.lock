@@ -5485,7 +5485,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "siegel"
 version = "0.3.0"
-source = "git+https://github.com/toolsforhumanity/siegel#2bc2737a55b70c3c53683da992a22e2333f9280a"
+source = "git+https://github.com/toolsforhumanity/siegel?rev=2bc2737a55b70c3c53683da992a22e2333f9280a#2bc2737a55b70c3c53683da992a22e2333f9280a"
 dependencies = [
  "libc",
  "thiserror 2.0.18",
@@ -5495,7 +5495,7 @@ dependencies = [
 [[package]]
 name = "siegel-uniffi"
 version = "0.3.0"
-source = "git+https://github.com/toolsforhumanity/siegel#2bc2737a55b70c3c53683da992a22e2333f9280a"
+source = "git+https://github.com/toolsforhumanity/siegel?rev=2bc2737a55b70c3c53683da992a22e2333f9280a#2bc2737a55b70c3c53683da992a22e2333f9280a"
 dependencies = [
  "getrandom 0.4.1",
  "siegel",
