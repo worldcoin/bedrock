@@ -14,6 +14,7 @@ use siegel_uniffi::SiegelSession;
 use turnkey_enclave_encrypt::client::EnclaveEncryptClient;
 use turnkey_enclave_encrypt::QuorumPublicKey;
 
+use crate::backup::{MainFactor, SyncFactor};
 use crate::root_key::RootKey;
 
 mod api;
@@ -22,10 +23,10 @@ mod migrations;
 mod policies;
 
 #[cfg(test)]
-mod test;
+pub(in crate::backup) mod test;
 
-use api::{MainFactor, SyncFactor, TurnkeyApiClient};
-pub use error::TurnkeyMigrationError;
+pub use api::TurnkeyApiClient;
+pub use error::{TurnkeyApiError, TurnkeyMigrationError};
 use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::get_config;
