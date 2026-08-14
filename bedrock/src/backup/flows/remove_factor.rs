@@ -13,9 +13,13 @@ use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::P256Signer;
 
-/// Deadline for the cancel-safe phase: the metadata read and the Turnkey probes.
-/// Expiring here costs nothing but the reads.
-const PREPARE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Deadline for a single Turnkey pre-flight probe.
+///
+/// Scoped to the probe rather than the whole cancel-safe phase: a phase-wide budget
+/// would have to exceed `retrieve_metadata`'s own retried budget, and cancelling it
+/// would turn a hung `get_users` into a hard failure for the very paths written to
+/// tolerate a Turnkey outage.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Deadline for the post-commit Turnkey cleanup. Expiring here orphans a Turnkey
 /// resource but cannot change the outcome, which the service has already applied.
@@ -73,18 +77,10 @@ impl BackupFlow for RemoveFactor {
         &self,
         ctx: &FlowContext<'_>,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        let prepared =
-            match tokio::time::timeout(PREPARE_TIMEOUT, self.prepare(ctx)).await {
-                Ok(prepared) => prepared?,
-                Err(_elapsed) => {
-                    crate::warn!(
-                        "remove_factor.prepare_timed_out after {}s (nothing committed)",
-                        PREPARE_TIMEOUT.as_secs()
-                    );
-                    return Err(BackupOperationError::Network { retryable: true });
-                }
-            };
-
+        // No phase-wide deadline: `retrieve_metadata` is bounded by its own per-request
+        // timeouts and bounded retries, and each Turnkey probe carries `PROBE_TIMEOUT`
+        // with the tolerance its own path requires.
+        let prepared = self.prepare(ctx).await?;
         self.commit(ctx, prepared).await
     }
 }
@@ -97,8 +93,12 @@ enum Prepared {
         plan: OidcRemovalPlan,
         provider_ids: Option<Vec<String>>,
     },
-    /// A passkey removal: only the PRF key to drop.
-    Passkey { prf_key: BackupEncryptionKey },
+    /// A passkey removal: the PRF key to drop, plus the Turnkey authenticator
+    /// backing it when the backup has a Turnkey account.
+    Passkey {
+        prf_key: BackupEncryptionKey,
+        authenticator: Option<PasskeyAuthenticator>,
+    },
 }
 
 impl RemoveFactor {
@@ -132,7 +132,7 @@ impl RemoveFactor {
             BackupFactorKind::OidcAccount { .. } => {
                 self.prepare_oidc(ctx, &metadata).await
             }
-            BackupFactorKind::Passkey { .. } => {
+            BackupFactorKind::Passkey { credential_id, .. } => {
                 let prf_key = metadata.single_prf_key().cloned().ok_or_else(|| {
                     crate::warn!("remove_factor.missing_prf_key");
                     BackupOperationError::Unsupported {
@@ -140,7 +140,13 @@ impl RemoveFactor {
                             .to_string(),
                     }
                 })?;
-                Ok(Prepared::Passkey { prf_key })
+                let authenticator = self
+                    .prepare_authenticator(ctx, &metadata, credential_id)
+                    .await?;
+                Ok(Prepared::Passkey {
+                    prf_key,
+                    authenticator,
+                })
             }
             // Rejected by `unsupported_reason` before the confirmation gate.
             BackupFactorKind::EcKeypair { .. } => {
@@ -182,6 +188,83 @@ impl RemoveFactor {
         Ok(Prepared::Oidc { plan, provider_ids })
     }
 
+    /// Resolves the Turnkey authenticator registered for `credential_id`, if any.
+    ///
+    /// Dropping the PRF key at the backup service stops the passkey recovering the
+    /// backup, but leaves it able to authorize Turnkey activities. Removing it there
+    /// too is what makes the disconnect complete.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::MainFactorRequired`] when the authenticator exists but no
+    /// main factor was supplied: authenticators live on the root user, so deleting one
+    /// needs the same signer an OAuth provider deletion does.
+    async fn prepare_authenticator(
+        &self,
+        ctx: &FlowContext<'_>,
+        metadata: &BackupMetadata,
+        credential_id: &str,
+    ) -> Result<Option<PasskeyAuthenticator>, BackupOperationError> {
+        // No Turnkey account: the passkey was never registered there.
+        let Some(BackupEncryptionKey::Turnkey {
+            turnkey_account_id,
+            turnkey_user_id,
+            ..
+        }) = metadata.turnkey_key()
+        else {
+            return Ok(None);
+        };
+
+        let probe = ctx
+            .turnkey
+            .get_users(turnkey_account_id, SyncFactor(ctx.sync_factor));
+        let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
+            crate::warn!(
+                "remove_factor.authenticator_lookup_timed_out (Turnkey unresponsive; skipping)"
+            );
+            return Ok(None);
+        };
+        let users = match result {
+            Ok(users) => users,
+            // Best-effort, like the teardown it feeds: a degraded Turnkey must not
+            // block dropping the factor at the authoritative store.
+            Err(error) if error.is_retryable() => {
+                crate::warn!(
+                    "remove_factor.authenticator_lookup_inconclusive code={} err={error}",
+                    error.code()
+                );
+                return Ok(None);
+            }
+            Err(error) => return Err(map_turnkey_error(&error)),
+        };
+
+        let Some(authenticator_id) = users
+            .iter()
+            .find(|user| user.user_id == *turnkey_user_id)
+            .and_then(|user| {
+                user.authenticators
+                    .iter()
+                    .find(|authenticator| authenticator.credential_id == credential_id)
+            })
+            .map(|authenticator| authenticator.authenticator_id.clone())
+        else {
+            crate::debug!("remove_factor.authenticator_already_absent");
+            return Ok(None);
+        };
+
+        if ctx.main_factor.is_none() {
+            crate::debug!("remove_factor.authenticator_needs_main_factor");
+            return Err(BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::MainFactorRequired,
+            });
+        }
+
+        Ok(Some(PasskeyAuthenticator {
+            suborg: turnkey_account_id.clone(),
+            user: turnkey_user_id.clone(),
+            id: authenticator_id,
+        }))
+    }
+
     /// Applies the removal at the authoritative store, then cleans up Turnkey.
     ///
     /// Deliberately not wrapped in a cancelling deadline: past the delete the outcome
@@ -191,12 +274,19 @@ impl RemoveFactor {
         ctx: &FlowContext<'_>,
         prepared: Prepared,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
+        let mut passkey_authenticator = None;
         let (encryption_key, oidc) = match prepared {
             Prepared::Oidc { plan, provider_ids } => (
                 plan.is_last_oidc_factor.then(|| plan.turnkey_key.clone()),
                 Some((plan, provider_ids)),
             ),
-            Prepared::Passkey { prf_key } => (Some(prf_key), None),
+            Prepared::Passkey {
+                prf_key,
+                authenticator,
+            } => {
+                passkey_authenticator = authenticator;
+                (Some(prf_key), None)
+            }
         };
 
         // backup-service is authoritative, drop first
@@ -207,6 +297,10 @@ impl RemoveFactor {
 
         if let Some((plan, provider_ids)) = oidc {
             best_effort_turnkey_cleanup(ctx, &plan, provider_ids).await;
+        } else if let (Some(authenticator), Some(main_factor)) =
+            (passkey_authenticator, ctx.main_factor)
+        {
+            best_effort_delete_authenticator(ctx, &authenticator, main_factor).await;
         }
 
         finalize(response, self.user_confirmed_backup_removal)
@@ -246,6 +340,13 @@ async fn best_effort_turnkey_cleanup(
             CLEANUP_TIMEOUT.as_secs()
         );
     }
+}
+
+/// The Turnkey authenticator backing a passkey factor.
+struct PasskeyAuthenticator {
+    suborg: String,
+    user: String,
+    id: String,
 }
 
 /// Why this factor cannot be removed at all, if it cannot.
@@ -405,11 +506,18 @@ async fn verify_sync_factor(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
 ) -> Result<(), BackupOperationError> {
-    match ctx
+    let probe = ctx
         .turnkey
-        .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor))
-        .await
-    {
+        .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor));
+    let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
+        crate::warn!(
+            "remove_factor.preflight_timed_out after {}s (Turnkey unresponsive; proceeding)",
+            PROBE_TIMEOUT.as_secs()
+        );
+        return Ok(());
+    };
+
+    match result {
         Ok(_) => Ok(()),
         Err(error) if error.indicates_invalid_signer() => {
             crate::warn!("remove_factor.sync_factor_invalid (pre-flight)");
@@ -417,12 +525,22 @@ async fn verify_sync_factor(
                 reason: NeedsReauthReason::SyncFactorInvalid,
             })
         }
-        Err(error) => {
+        // Only a retryable service outage is tolerated. A signer that cannot stamp,
+        // or any other permanent failure, will fail the teardown the same way every
+        // time, so it aborts here while retrying is still free.
+        Err(error) if error.is_retryable() => {
             crate::warn!(
-                "remove_factor.preflight_inconclusive code={} err={error} (proceeding; teardown is best-effort)",
+                "remove_factor.preflight_inconclusive code={} err={error} (Turnkey degraded; proceeding)",
                 error.code()
             );
             Ok(())
+        }
+        Err(error) => {
+            crate::warn!(
+                "remove_factor.preflight_failed code={} err={error}",
+                error.code()
+            );
+            Err(map_turnkey_error(&error))
         }
     }
 }
@@ -443,11 +561,18 @@ async fn verify_main_factor(
     plan: &OidcRemovalPlan,
     main_factor: &P256Signer,
 ) -> Result<(), BackupOperationError> {
-    let user_id = match ctx
+    let probe = ctx
         .turnkey
-        .whoami_user_id(&plan.suborg_id, MainFactor(main_factor))
-        .await
-    {
+        .whoami_user_id(&plan.suborg_id, MainFactor(main_factor));
+    let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
+        crate::warn!(
+            "remove_factor.main_factor_preflight_timed_out after {}s (proceeding)",
+            PROBE_TIMEOUT.as_secs()
+        );
+        return Ok(());
+    };
+
+    let user_id = match result {
         Ok(user_id) => user_id,
         Err(error) if error.indicates_invalid_signer() => {
             crate::warn!("remove_factor.main_factor_invalid (pre-flight)");
@@ -455,13 +580,20 @@ async fn verify_main_factor(
                 reason: NeedsReauthReason::MainFactorRequired,
             });
         }
-        // Transient: the teardown is best-effort, so don't block on an outage.
-        Err(error) => {
+        // Only a retryable service outage is tolerated; see `verify_sync_factor`.
+        Err(error) if error.is_retryable() => {
             crate::warn!(
                 "remove_factor.main_factor_preflight_inconclusive code={} err={error}",
                 error.code()
             );
             return Ok(());
+        }
+        Err(error) => {
+            crate::warn!(
+                "remove_factor.main_factor_preflight_failed code={} err={error}",
+                error.code()
+            );
+            return Err(map_turnkey_error(&error));
         }
     };
 
@@ -477,6 +609,44 @@ async fn verify_main_factor(
         });
     }
     Ok(())
+}
+
+/// Removes the passkey's Turnkey authenticator, under the cleanup deadline.
+///
+/// Best-effort for the same reason as the OIDC teardown: the factor is already gone
+/// from the authoritative store, so nothing here can change what the caller is told.
+async fn best_effort_delete_authenticator(
+    ctx: &FlowContext<'_>,
+    authenticator: &PasskeyAuthenticator,
+    main_factor: &P256Signer,
+) {
+    let delete = ctx.turnkey.delete_authenticators(
+        &authenticator.suborg,
+        &authenticator.user,
+        vec![authenticator.id.clone()],
+        MainFactor(main_factor),
+    );
+
+    match tokio::time::timeout(CLEANUP_TIMEOUT, delete).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error @ TurnkeyApiError::ActivityPollingExceeded { .. })) => {
+            crate::warn!("remove_factor.authenticator_teardown_pending err={error}");
+        }
+        Ok(Err(error)) => {
+            // The passkey can still authorize Turnkey activities.
+            crate::critical!(
+                "remove_factor.authenticator_orphaned suborg_id={} code={} err={error}",
+                authenticator.suborg,
+                error.code()
+            );
+        }
+        Err(_elapsed) => {
+            crate::critical!(
+                "remove_factor.authenticator_teardown_timed_out suborg_id={}",
+                authenticator.suborg
+            );
+        }
+    }
 }
 
 /// Tears down the Turnkey sub-organization; failures are logged (no hard failure)
@@ -626,6 +796,7 @@ mod tests {
     const WHOAMI: &str = "/public/v1/query/whoami";
     const DELETE_SUB_ORG: &str = "/public/v1/submit/delete_sub_organization";
     const DELETE_OAUTH: &str = "/public/v1/submit/delete_oauth_providers";
+    const DELETE_AUTHENTICATORS: &str = "/public/v1/submit/delete_authenticators";
 
     struct FakeAttestation;
 
@@ -745,6 +916,43 @@ mod tests {
         let mut user = json!({ "userId": "user-1", "userName": "auth_user_main" });
         user["oauthProviders"] = Value::Array(providers);
         user
+    }
+
+    /// `list_users` where the root user carries `credential_ids` as authenticators.
+    async fn mount_users_with_authenticators(
+        server: &MockServer,
+        credential_ids: &[&str],
+    ) {
+        let authenticators: Vec<Value> = credential_ids
+            .iter()
+            .map(|credential_id| {
+                json!({
+                    "transports": [],
+                    "attestationType": "none",
+                    "aaguid": "",
+                    "credentialId": credential_id,
+                    "model": "",
+                    "authenticatorId": format!("auth-{credential_id}"),
+                    "authenticatorName": "passkey",
+                })
+            })
+            .collect();
+        let mut user = main_user(vec![]);
+        user["authenticators"] = Value::Array(authenticators);
+        mount(server, LIST_USERS, json!({ "users": [user] })).await;
+    }
+
+    async fn mount_delete_authenticators(server: &MockServer, deleted: &str) {
+        mount(
+            server,
+            DELETE_AUTHENTICATORS,
+            completed_activity(
+                "ACTIVITY_TYPE_DELETE_AUTHENTICATORS",
+                "deleteAuthenticatorsResult",
+                json!({ "authenticatorIds": [deleted] }),
+            ),
+        )
+        .await;
     }
 
     /// All `providerIds` across every captured `delete_oauth_providers` request.
@@ -1252,15 +1460,85 @@ mod tests {
         )
         .await;
 
+        // The passkey was never registered as a Turnkey authenticator.
+        mount_users_with_authenticators(&server, &[]).await;
+
         let outcome = run_remove(&server, "pk-1", None, false).await.unwrap();
 
         assert!(matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }));
         let body = delete_factor_body(&server).await;
         assert!(body.contains("\"PRF\"") && body.contains("prf-ek"));
         let paths = called_paths(&server).await;
-        assert!(!paths.contains(&LIST_USERS.to_string()));
+        assert!(!paths.contains(&DELETE_AUTHENTICATORS.to_string()));
         assert!(!paths.contains(&DELETE_OAUTH.to_string()));
         assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
+    }
+
+    /// Dropping the PRF key stops the passkey recovering the backup, but on its own
+    /// leaves it able to authorize Turnkey activities. The disconnect is only complete
+    /// once the authenticator goes too.
+    #[tokio::test]
+    async fn passkey_removal_deletes_the_turnkey_authenticator() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata_keyed(
+                vec![prf_key("prf-ek"), turnkey_key()],
+                vec![passkey_factor("pk-1"), oidc_factor("f-2", "p-2")],
+            ),
+        )
+        .await;
+        mount_users_with_authenticators(&server, &["cred-pk-1"]).await;
+        mount_delete_factor(
+            &server,
+            json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-2", "p-2")]) }),
+        )
+        .await;
+        mount_delete_authenticators(&server, "auth-cred-pk-1").await;
+        let main = signer();
+
+        let outcome = run_remove(&server, "pk-1", Some(&main), false)
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }));
+        let paths = called_paths(&server).await;
+        assert!(paths.contains(&DELETE_AUTHENTICATORS.to_string()));
+        assert_ordered(&paths, DELETE_FACTOR, DELETE_AUTHENTICATORS);
+    }
+
+    /// Authenticators live on the root user, so removing one needs the same signer an
+    /// OAuth provider deletion does. Asked for before anything is committed.
+    #[tokio::test]
+    async fn passkey_removal_needs_a_main_factor_for_the_authenticator() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata_keyed(
+                vec![prf_key("prf-ek"), turnkey_key()],
+                vec![passkey_factor("pk-1"), oidc_factor("f-2", "p-2")],
+            ),
+        )
+        .await;
+        mount_users_with_authenticators(&server, &["cred-pk-1"]).await;
+        mount_delete_factor(&server, json!({ "backupDeleted": false })).await;
+
+        let error = run_remove(&server, "pk-1", None, false).await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                BackupOperationError::NeedsReauth {
+                    reason: NeedsReauthReason::MainFactorRequired
+                }
+            ),
+            "expected MainFactorRequired, got {error:?}"
+        );
+        assert!(!called_paths(&server)
+            .await
+            .contains(&DELETE_FACTOR.to_string()));
     }
 
     /// Last passkey, confirmed: the service deletes the whole backup, no Turnkey.

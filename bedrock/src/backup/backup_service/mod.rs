@@ -310,7 +310,12 @@ fn uncompressed_public_key(
 /// Maps a transport failure to a retryable/non-retryable network error, never
 /// leaking the URL.
 fn transport_error(error: reqwest::Error) -> BackupOperationError {
-    let retryable = error.is_timeout() || error.is_connect();
+    // `is_body`/`is_request` cover a connection reset while the response body is being
+    // read: the request never completed, so a retry is as safe as for a timeout.
+    let retryable = error.is_timeout()
+        || error.is_connect()
+        || error.is_body()
+        || error.is_request();
     crate::warn!(
         "backup_service.transport retryable={retryable} err={}",
         error.without_url()

@@ -18,9 +18,9 @@ use turnkey_api_key_stamper::{
 };
 use turnkey_client::generated::external::data::v1::{Policy, User};
 use turnkey_client::generated::immutable::activity::v1::{
-    CreateOauthProvidersIntentV2, CreatePolicyIntentV3, DeleteOauthProvidersIntent,
-    DeletePolicyIntent, DeleteSubOrganizationIntent, OauthProviderParamsV2,
-    UpdatePolicyIntentV2,
+    CreateOauthProvidersIntentV2, CreatePolicyIntentV3, DeleteAuthenticatorsIntent,
+    DeleteOauthProvidersIntent, DeletePolicyIntent, DeleteSubOrganizationIntent,
+    OauthProviderParamsV2, UpdatePolicyIntentV2,
 };
 use turnkey_client::generated::services::coordinator::public::v1::{
     GetPoliciesRequest, GetUsersRequest, GetWhoamiRequest,
@@ -413,6 +413,53 @@ impl TurnkeyApiClient {
         if deleted != requested {
             crate::critical!(
                 "turnkey.delete_oauth_providers.count_mismatch requested={requested} deleted={deleted}"
+            );
+        }
+
+        // User has changed, remove the cache.
+        self.users_cache.clear();
+        Ok(())
+    }
+
+    /// Deletes `WebAuthn` authenticators (passkeys) from a Turnkey user.
+    ///
+    /// A [`MainFactor`] is required for the same reason as
+    /// [`Self::delete_oauth_providers`]: authenticators live on the root user.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn delete_authenticators(
+        &self,
+        suborganization_id: &str,
+        user_id: &str,
+        authenticator_ids: Vec<String>,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let intent = DeleteAuthenticatorsIntent {
+            user_id: user_id.to_string(),
+            authenticator_ids,
+        };
+
+        let requested = intent.authenticator_ids.len();
+        let timestamp_ms = ntp_timestamp_ms()?;
+        let deleted = self
+            .with_retry("delete_authenticators", || async {
+                client
+                    .delete_authenticators(
+                        suborganization_id.to_string(),
+                        timestamp_ms,
+                        intent.clone(),
+                    )
+                    .await
+                    .map(|activity| activity.result.authenticator_ids.len())
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        if deleted != requested {
+            crate::critical!(
+                "turnkey.delete_authenticators.count_mismatch requested={requested} deleted={deleted}"
             );
         }
 

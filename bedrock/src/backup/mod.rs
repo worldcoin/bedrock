@@ -40,7 +40,9 @@ use crate::backup::backup_format::v0::{
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
-use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
+use crate::primitives::filesystem::{
+    get_filesystem_raw, FileSystemError, FileSystemExt,
+};
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::STANDARD;
 use crypto_box::SecretKey;
@@ -622,11 +624,19 @@ impl BackupManager {
     /// - Returns an error if the post-processing fails.
     fn post_delete_backup() -> Result<(), BackupError> {
         crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
-        let manifest = ManifestManager::new();
-        manifest.danger_delete_manifest()?;
+        // A device that never created or restored a backup locally has no manifest,
+        // but may still hold report state. Treat its absence as already-done rather
+        // than returning early and leaving that state behind.
+        match ManifestManager::new().danger_delete_manifest() {
+            Ok(()) => {}
+            Err(BackupError::FileSystem(FileSystemError::FileDoesNotExist)) => {
+                crate::debug!("post_delete_backup: no local manifest to delete");
+            }
+            Err(error) => return Err(error),
+        }
 
-        // After deleting the manifest, delete the base report so any backup-related
-        // state (designators, size, counters) is fully cleared. It will be recreated
+        // The base report is independent state; clear it either way so nothing
+        // backup-related (designators, size, counters) survives. It is recreated
         // automatically if/when backup is enabled again.
         if let Err(e) = ClientEventsReporter::new().delete_base_report() {
             crate::warn!(
