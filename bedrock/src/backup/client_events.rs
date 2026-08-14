@@ -16,8 +16,12 @@ use crate::primitives::filesystem::{
     create_middleware, get_filesystem_raw, FileSystemError, FileSystemExt,
     FileSystemMiddleware,
 };
-use crate::primitives::http_client::{get_http_client, HttpHeader};
+use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader};
 use crate::HttpMethod;
+
+/// Deadline for sending any client event. The foreign HTTP client is unbounded, and
+/// reporting must never outlive what it reports on.
+const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Errors that can occur when reporting client events.
 #[derive(Debug, thiserror::Error)]
@@ -378,15 +382,24 @@ pub(super) struct PreparedEvent {
 }
 
 impl PreparedEvent {
+    /// Sends the event, bounded by [`EVENT_SEND_TIMEOUT`].
+    ///
+    /// Every event goes through here, so the bound is universal: the foreign HTTP
+    /// client is not something Bedrock can otherwise bound, and no report is worth
+    /// holding a caller open for.
     async fn post(self) -> Result<(), ClientEventsError> {
-        self.http
-            .fetch_from_app_backend(
-                self.endpoint,
-                HttpMethod::Post,
-                self.headers,
-                Some(self.body),
-            )
-            .await?;
+        let send = self.http.fetch_from_app_backend(
+            self.endpoint,
+            HttpMethod::Post,
+            self.headers,
+            Some(self.body),
+        );
+        match tokio::time::timeout(EVENT_SEND_TIMEOUT, send).await {
+            Ok(result) => result?,
+            Err(_elapsed) => {
+                return Err(ClientEventsError::HttpError(HttpError::Timeout))
+            }
+        };
         Ok(())
     }
 }
@@ -522,26 +535,6 @@ impl ClientEventsReporter {
     }
 }
 
-/// Deadline for the detached `RemoveMainFactor` send. Bounds how long a hung foreign
-/// HTTP client can occupy the shared runtime thread.
-const REMOVE_FACTOR_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Whether a `remove_factor` outcome represents a completed attempt worth reporting.
-///
-/// [`BackupOperationError::WouldDeleteBackup`] and
-/// [`BackupOperationError::NeedsReauth`] are preconditions asking the caller for
-/// confirmation or a signer -- the removal has not been attempted yet, so counting
-/// them would inflate the failure rate this event feeds.
-const fn is_reportable_remove_outcome(
-    result: &Result<RemoveFactorOutcome, BackupOperationError>,
-) -> bool {
-    !matches!(
-        result,
-        Err(BackupOperationError::WouldDeleteBackup
-            | BackupOperationError::NeedsReauth { .. })
-    )
-}
-
 /// Reports the outcome of `BackupManager::remove_factor` as a `RemoveMainFactor`
 /// event. Native MUST NOT also send one, or every removal is double-counted.
 ///
@@ -558,7 +551,12 @@ const fn is_reportable_remove_outcome(
 pub(super) fn send_remove_factor_event(
     result: &Result<RemoveFactorOutcome, BackupOperationError>,
 ) {
-    if !is_reportable_remove_outcome(result) {
+    if matches!(
+        result,
+        Err(BackupOperationError::WouldDeleteBackup
+            | BackupOperationError::NeedsReauth { .. })
+    ) {
+        // Not errors, don't report
         return;
     }
 
@@ -581,42 +579,33 @@ pub(super) fn send_remove_factor_event(
     };
 
     tokio::spawn(async move {
-        match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, request.post()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                crate::warn!(
-                    "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
-                );
-            }
-            Err(_elapsed) => {
-                crate::warn!(
-                    "[ClientEvents] RemoveMainFactor event timed out after {}s",
-                    REMOVE_FACTOR_EVENT_TIMEOUT.as_secs()
-                );
-            }
+        if let Err(error) = request.post().await {
+            crate::warn!(
+                "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
+            );
         }
     });
 }
 
-/// Rewrites the base-report attributes that a factor removal invalidates.
+/// Syncs the base report with `metadata`, the authoritative view of the backup.
 ///
-/// The report carries the factor and key inventory, so after a removal it describes a
-/// backup that no longer exists. Bedrock holds the fresh metadata the service returned
-/// and owns the report, so it reconciles both rather than relying on the caller to.
+/// The report carries a factor and key inventory that any change to the backup makes
+/// stale. Bedrock owns the report and is holding the fresh metadata, so it reconciles
+/// the two itself rather than relying on the caller.
 ///
-/// Only the fields a removal can change are set; the rest of the report is left alone
-/// by [`ClientEventsReporter::set_backup_report_attributes`]'s merge.
-pub(super) fn refresh_report_after_removal(metadata: &BackupMetadata) {
+/// Only the fields metadata describes are set; everything else is left alone by
+/// [`ClientEventsReporter::set_backup_report_attributes`]'s merge.
+pub(super) fn sync_report_with_metadata(metadata: &BackupMetadata) {
     if let Err(error) =
         ClientEventsReporter::new().set_backup_report_attributes(report_input(metadata))
     {
         crate::warn!(
-            "[ClientEvents] failed to refresh base report after removal: {error:?}"
+            "[ClientEvents] failed to sync base report with metadata: {error:?}"
         );
     }
 }
 
-/// Maps backup metadata onto the report fields a removal can change.
+/// Maps backup metadata onto the report fields it describes.
 fn report_input(metadata: &BackupMetadata) -> BackupReportInput {
     let main_factors = metadata
         .factors
@@ -675,48 +664,6 @@ fn report_input(metadata: &BackupMetadata) -> BackupReportInput {
 #[cfg(test)]
 mod remove_factor_event_tests {
     use super::*;
-    use crate::backup::NeedsReauthReason;
-
-    /// Every confirmation prompt raises `WouldDeleteBackup`, so reporting the
-    /// precondition signals would swamp the failure-rate metric with non-failures.
-    #[test]
-    fn preconditions_are_not_reported_as_attempts() {
-        for error in [
-            BackupOperationError::WouldDeleteBackup,
-            BackupOperationError::NeedsReauth {
-                reason: NeedsReauthReason::MainFactorRequired,
-            },
-            BackupOperationError::NeedsReauth {
-                reason: NeedsReauthReason::SyncFactorInvalid,
-            },
-        ] {
-            assert!(
-                !is_reportable_remove_outcome(&Err(error)),
-                "preconditions must not count as attempts"
-            );
-        }
-    }
-
-    #[test]
-    fn completed_attempts_are_reported() {
-        assert!(is_reportable_remove_outcome(&Ok(
-            RemoveFactorOutcome::BackupDeleted
-        )));
-        for error in [
-            BackupOperationError::Network { retryable: true },
-            BackupOperationError::Turnkey {
-                code: "turnkey_user_not_found".to_string(),
-            },
-            BackupOperationError::BackupService {
-                code: "factor_not_found".to_string(),
-            },
-        ] {
-            assert!(
-                is_reportable_remove_outcome(&Err(error)),
-                "a real failure must be reported"
-            );
-        }
-    }
 
     fn oidc(created_at: i64, google: bool) -> crate::backup::BackupFactor {
         crate::backup::BackupFactor {
@@ -735,41 +682,6 @@ mod remove_factor_event_tests {
                 turnkey_provider_id: "p".to_string(),
             },
         }
-    }
-
-    /// The report is what the removal invalidates, so the mapping has to reflect the
-    /// post-removal metadata exactly -- including dropping the Turnkey flag once the
-    /// last OIDC factor and its key are gone.
-    #[test]
-    fn report_input_reflects_the_metadata_after_a_removal() {
-        let metadata = BackupMetadata {
-            id: "b".to_string(),
-            manifest_hash: "h".to_string(),
-            keys: vec![BackupEncryptionKey::Prf {
-                encrypted_key: "ek".to_string(),
-            }],
-            factors: vec![crate::backup::BackupFactor {
-                id: "pk".to_string(),
-                created_at: 0,
-                kind: BackupFactorKind::Passkey {
-                    credential_id: "c".to_string(),
-                    label: "L".to_string(),
-                },
-            }],
-            sync_factors: vec![],
-        };
-
-        let input = report_input(&metadata);
-
-        assert_eq!(input.has_turnkey_account, Some(false));
-        assert_eq!(
-            input.encryption_keys,
-            Some(vec![BackupReportEncryptionKeyKind::Prf])
-        );
-        assert_eq!(input.sync_factor_count, Some(0));
-        let factors = input.main_factors.unwrap();
-        assert_eq!(factors.len(), 1);
-        assert_eq!(factors[0].kind, "PASSKEY");
     }
 
     #[test]

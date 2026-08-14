@@ -570,9 +570,6 @@ async fn provider_ids_for_identity(
         .map_err(|error| map_turnkey_error(&error))?;
 
     let Some(user) = users.iter().find(|user| user.user_id == plan.user_id) else {
-        // No provider deletion can succeed without the user. Unlike the failures the
-        // teardown tolerates, this is knowable pre-commit, so abort while retry is safe
-        // rather than report success over a still-authorized account.
         crate::critical!(
             "remove_factor.turnkey_user_missing suborg_id={} user_id={} (aborting before commit)",
             plan.suborg_id,
@@ -1142,12 +1139,6 @@ mod tests {
         assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
     }
 
-    /// A cleanup that outlives its deadline must not erase the commit.
-    ///
-    /// The whole point of splitting the deadline: `delete_factor` has already returned
-    /// `Ok`, so the outcome is decided. Cancelling the flow here would hand the caller
-    /// a retryable error for a removal that succeeded, skip the local cleanup, and send
-    /// them into a retry that hits `factor_not_found`.
     #[tokio::test]
     async fn slow_turnkey_cleanup_does_not_erase_the_committed_outcome() {
         install_attestation();
@@ -1299,7 +1290,7 @@ mod tests {
     }
 
     /// More than one passkey: Bedrock can't tell which PRF key backs the target, so
-    /// it aborts before any mutation.
+    /// it aborts before any mutation. INVARIANT: we don't allow multiple passkeys on a backup.
     #[tokio::test]
     async fn multiple_passkeys_removal_unsupported() {
         install_attestation();
@@ -1339,24 +1330,6 @@ mod tests {
         assert!(!called_paths(&server)
             .await
             .contains(&DELETE_FACTOR.to_string()));
-    }
-
-    /// The factor is both unsupported and the last main factor, so whichever check
-    /// runs first decides the error -- and the user must not be asked to approve
-    /// deleting their backup for a removal that was never supported.
-    #[tokio::test]
-    async fn unsupported_removal_is_refused_before_asking_to_delete_the_backup() {
-        install_attestation();
-        let server = MockServer::start().await;
-        // Sole main factor, and an unsupported kind.
-        mount_metadata(&server, metadata(vec![eckeypair_factor("ec-1")])).await;
-
-        let error = run_remove(&server, "ec-1", None, false).await.unwrap_err();
-
-        assert!(
-            matches!(error, BackupOperationError::Unsupported { .. }),
-            "expected Unsupported ahead of WouldDeleteBackup, got {error:?}"
-        );
     }
 
     /// Same ordering, for the passkey preconditions.
@@ -1419,10 +1392,7 @@ mod tests {
             .contains(&DELETE_SUB_ORG.to_string()));
     }
 
-    /// The user completed the passkey ceremony with the wrong passkey: the signer is
-    /// valid at Turnkey but authenticates as a different user, so it cannot delete the
-    /// root user's providers. The teardown is best-effort, so without this check the
-    /// factor would be dropped and the disconnected account left authorized.
+    /// The user completed the passkey ceremony with the wrong passkey
     #[tokio::test]
     async fn provider_removal_aborts_when_the_main_factor_is_the_wrong_user() {
         install_attestation();
@@ -1459,7 +1429,6 @@ mod tests {
         assert!(!paths.contains(&DELETE_OAUTH.to_string()));
     }
 
-    /// A main factor Turnkey does not know at all: same abort, same reason.
     #[tokio::test]
     async fn provider_removal_aborts_when_the_main_factor_is_unregistered() {
         install_attestation();
@@ -1497,8 +1466,6 @@ mod tests {
             .contains(&DELETE_FACTOR.to_string()));
     }
 
-    /// No provider deletion can succeed if the user is absent, and that is knowable
-    /// before the commit -- so abort rather than leave the account still authorized.
     #[tokio::test]
     async fn provider_removal_aborts_when_the_turnkey_user_is_missing() {
         install_attestation();

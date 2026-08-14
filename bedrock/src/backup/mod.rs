@@ -556,26 +556,21 @@ impl BackupManager {
             user_confirmed_backup_removal,
         };
 
-        // No deadline here: the flow bounds its own phases. One spanning the whole run
-        // would cancel the irreversible delete, reporting a retryable failure for a
-        // removal the service had already applied and skipping the cleanup below.
         let result = flow.run(&ctx).await;
+
+        if let Ok(RemoveFactorOutcome::FactorRemoved { metadata }) = &result {
+            client_events::sync_report_with_metadata(metadata);
+        }
 
         client_events::send_remove_factor_event(&result);
 
         let outcome = result?;
 
-        // Local state clean up & event report
-        match &outcome {
-            RemoveFactorOutcome::BackupDeleted => {
-                if let Err(error) = Self::post_delete_backup() {
-                    crate::critical!(
-                        "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
-                    );
-                }
-            }
-            RemoveFactorOutcome::FactorRemoved { metadata } => {
-                client_events::refresh_report_after_removal(metadata);
+        if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
+            if let Err(error) = Self::post_delete_backup() {
+                crate::critical!(
+                    "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
+                );
             }
         }
         Ok(outcome)
