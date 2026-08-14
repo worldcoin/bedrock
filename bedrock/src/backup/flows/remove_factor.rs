@@ -22,6 +22,22 @@ pub enum RemoveFactorOutcome {
     },
     /// The removed factor was the last [`MainFactor`], so the entire backup was
     /// deleted (the user had confirmed).
+    ///
+    /// # Native responsibilities
+    /// Bedrock has already cleared the state it owns (the local manifest and the
+    /// backup event report). The sync factor, however, lives in native secure
+    /// storage, and the backup it authenticated no longer exists, so on receiving
+    /// this the caller MUST:
+    /// 1. Delete its stored sync-factor keypair (iOS `keyManagementService`, Android
+    ///    `LocalSyncFactorStore`). Keeping it strands a credential that every
+    ///    subsequent backup call would fail against.
+    /// 2. Update whatever "backup enabled" state it shows the user.
+    ///
+    /// The caller MUST NOT call [`BackupManager::post_delete_backup`] afterwards:
+    /// Bedrock already did, and it is not needed on this path.
+    ///
+    /// [`BackupManager`]: crate::backup::BackupManager
+    /// [`BackupManager::post_delete_backup`]: crate::backup::BackupManager::post_delete_backup
     BackupDeleted,
 }
 
@@ -85,10 +101,16 @@ impl RemoveFactor {
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
         let plan = plan_oidc_removal(metadata, &self.factor_id)?;
 
-        // The provider path needs a main factor and the full set of providers backing
-        // the identity; resolve both before the irreversible delete-factor commit so a
-        // re-auth or a transient Turnkey read fails while a retry is still safe.
+        // Both paths probe Turnkey before the irreversible delete-factor commit, so a
+        // re-auth or a transient read fails while a retry is still safe.
+        //
+        // The teardown below is best-effort, and a stale sync factor is the likeliest
+        // way for it to fail. Probing first turns "backup gone, sub-organization
+        // orphaned, user told everything worked" into an actionable
+        // `NeedsReauth` with nothing yet destroyed. The read is cached per client, so
+        // the provider path pays for it only once.
         let provider_ids = if plan.is_last_oidc_factor {
+            verify_sync_factor(ctx, &plan).await?;
             None
         } else if ctx.main_factor.is_some() {
             Some(provider_ids_for_identity(ctx, &plan).await?)
@@ -243,6 +265,25 @@ fn map_turnkey_error(error: &TurnkeyApiError) -> BackupOperationError {
             code: error.code().to_string(),
         }
     }
+}
+
+/// Confirms Turnkey still accepts the sync factor, before anything irreversible.
+///
+/// Any authenticated read proves the signer is registered and authorized; `get_users`
+/// is the one the provider path already needs, so it shares the client's cache.
+///
+/// # Errors
+/// [`NeedsReauthReason::SyncFactorInvalid`] if Turnkey no longer knows the signer;
+/// otherwise the mapped transport/Turnkey error.
+async fn verify_sync_factor(
+    ctx: &FlowContext<'_>,
+    plan: &OidcRemovalPlan,
+) -> Result<(), BackupOperationError> {
+    ctx.turnkey
+        .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor))
+        .await
+        .map_err(|error| map_turnkey_error(&error))?;
+    Ok(())
 }
 
 /// Tears down the Turnkey sub-organization; failures are logged (no hard failure)
@@ -740,6 +781,7 @@ mod tests {
             json!({ "backupDeleted": false, "backupMetadata": metadata(vec![passkey_factor("pk-1")]) }),
         )
         .await;
+        mount_users(&server, vec![]).await;
         mount_delete_sub_org(&server).await;
 
         let outcome = run_remove(&server, "f-1", None, false).await.unwrap();
@@ -751,6 +793,50 @@ mod tests {
         let paths = called_paths(&server).await;
         assert!(paths.contains(&DELETE_SUB_ORG.to_string()));
         assert!(!paths.contains(&DELETE_OAUTH.to_string()));
+    }
+
+    /// Last-OIDC path: a sync factor Turnkey no longer knows aborts *before* the
+    /// backup-service commit.
+    ///
+    /// Without the pre-flight the delete would succeed, the best-effort teardown
+    /// would fail on the same stale key, and the user would be told everything
+    /// worked while the sub-organization leaked with nothing left to reclaim it.
+    #[tokio::test]
+    async fn last_oidc_removal_aborts_when_sync_factor_is_stale() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata(vec![oidc_factor("f-1", "p-1"), passkey_factor("pk-1")]),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(LIST_USERS))
+            .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+                "error": { "message": "PUBLIC_KEY_NOT_FOUND" }
+            })))
+            .mount(&server)
+            .await;
+        mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
+        mount_delete_sub_org(&server).await;
+
+        let error = run_remove(&server, "f-1", None, false).await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                BackupOperationError::NeedsReauth {
+                    reason: NeedsReauthReason::SyncFactorInvalid
+                }
+            ),
+            "expected SyncFactorInvalid, got {error:?}"
+        );
+        let paths = called_paths(&server).await;
+        assert!(
+            !paths.contains(&DELETE_FACTOR.to_string()),
+            "the backup must be intact so the caller can re-auth and retry"
+        );
+        assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
     }
 
     /// Provider path: a transient Turnkey read failure aborts before the commit, so
@@ -911,6 +997,7 @@ mod tests {
             json!({ "backupDeleted": true, "backupMetadata": null }),
         )
         .await;
+        mount_users(&server, vec![]).await;
         mount_delete_sub_org(&server).await;
 
         let outcome = run_remove(&server, "f-1", None, true).await.unwrap();

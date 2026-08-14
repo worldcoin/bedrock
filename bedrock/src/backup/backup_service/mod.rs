@@ -282,10 +282,28 @@ fn transport_error(error: reqwest::Error) -> BackupOperationError {
     BackupOperationError::Network { retryable }
 }
 
+/// Risk/fraud codes returned verbatim by the gateway, WAF, or risk service.
+const RISK_CODES: [&str; 3] = ["RISK_DETECTED", "INVALID_SIWE", "INVALID_TOKEN"];
+
+/// Prefixes owned by the risk service (`RS-`), the WAF (`WAF-`), and auth (`AU-`).
+const RISK_CODE_PREFIXES: [&str; 3] = ["RS-", "WAF-", "AU-"];
+
+/// Whether `code` identifies a risk/fraud rejection rather than a backup-service
+/// business error. Mirrors the native clients' classification so all three agree on
+/// what routes into the fraud gatekeeper.
+fn is_risk_code(code: &str) -> bool {
+    let code = code.to_uppercase();
+    RISK_CODES.contains(&code.as_str())
+        || RISK_CODE_PREFIXES
+            .iter()
+            .any(|prefix| code.starts_with(prefix))
+}
+
 /// Classifies a non-2xx backup-service response.
 ///
 /// `unauthorized_factor` means the sync factor is no longer authorized and the
-/// caller must re-authenticate. 5xx without a recognizable body is treated as a
+/// caller must re-authenticate. Risk/fraud codes are surfaced separately so native
+/// can open the fraud gatekeeper. 5xx without a recognizable body is treated as a
 /// retryable network failure.
 fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
     if let Ok(parsed) = serde_json::from_slice::<ServiceErrorBody>(body) {
@@ -294,6 +312,17 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
             crate::warn!("backup_service.unauthorized_factor");
             return BackupOperationError::NeedsReauth {
                 reason: NeedsReauthReason::SyncFactorInvalid,
+            };
+        }
+        // Checked before the 5xx branch: a risk rejection is terminal for this
+        // request, so retrying it as a transient fault would only burn attempts.
+        if is_risk_code(&code) {
+            crate::warn!(
+                "backup_service.risk_rejected code={code} status={}",
+                status.as_u16()
+            );
+            return BackupOperationError::RiskRejected {
+                code: code.to_uppercase(),
             };
         }
         if status.is_server_error() {
@@ -316,8 +345,30 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
     }
 }
 
-/// Maps an attestation-provider failure to a network error.
+/// Maps an attestation-provider failure.
+///
+/// The Attestation Gateway is where risk/fraud blocks surface first: it refuses to
+/// mint a token, so the request never reaches the backup service and
+/// [`status_error`] never sees it. A recognizable risk code in the refusal body is
+/// therefore classified here; everything else stays a network error.
 fn attestation_error(error: &HttpError) -> BackupOperationError {
+    if let HttpError::BadStatusCode {
+        code: status,
+        response_body,
+    } = error
+    {
+        if let Ok(parsed) = serde_json::from_slice::<ServiceErrorBody>(response_body) {
+            if is_risk_code(&parsed.error.code) {
+                crate::warn!(
+                    "backup_service.attestation.risk_rejected code={} status={status}",
+                    parsed.error.code
+                );
+                return BackupOperationError::RiskRejected {
+                    code: parsed.error.code.to_uppercase(),
+                };
+            }
+        }
+    }
     let retryable = matches!(error, HttpError::Timeout | HttpError::NoConnectivity);
     crate::warn!("backup_service.attestation.failed retryable={retryable} err={error}");
     BackupOperationError::Network { retryable }
@@ -381,5 +432,87 @@ mod tests {
         let error =
             ec_keypair_authorization(&signer, "not valid base64!!!").unwrap_err();
         assert!(matches!(error, BackupOperationError::BackupService { .. }));
+    }
+
+    fn error_body(code: &str) -> Vec<u8> {
+        format!(r#"{{"error":{{"code":"{code}","message":"nope"}}}}"#).into_bytes()
+    }
+
+    #[test]
+    fn risk_codes_are_classified_for_the_fraud_gatekeeper() {
+        for code in [
+            "RISK_DETECTED",
+            "INVALID_SIWE",
+            "INVALID_TOKEN",
+            "RS-1234",
+            "WAF-BLOCKED",
+            "AU-42",
+            // The service is not guaranteed to uppercase.
+            "risk_detected",
+            "rs-1234",
+        ] {
+            assert!(is_risk_code(code), "{code} should be a risk code");
+            let error = status_error(StatusCode::FORBIDDEN, &error_body(code));
+            let BackupOperationError::RiskRejected { code: reported } = error else {
+                panic!("{code} should map to RiskRejected, got {error:?}");
+            };
+            assert_eq!(reported, code.to_uppercase(), "native matches on the code");
+        }
+    }
+
+    #[test]
+    fn business_errors_are_not_mistaken_for_risk() {
+        for code in [
+            "factor_not_found",
+            "encryption_key_not_found",
+            // Substring matches must not trigger: only a leading `RS-`/`WAF-`/`AU-`.
+            "audience_mismatch",
+            "backup_rs-stale",
+        ] {
+            assert!(!is_risk_code(code), "{code} must not be a risk code");
+            assert!(matches!(
+                status_error(StatusCode::BAD_REQUEST, &error_body(code)),
+                BackupOperationError::BackupService { .. }
+            ));
+        }
+    }
+
+    /// A risk block surfaces at the gateway, which refuses to mint a token, so the
+    /// request never reaches the backup service.
+    #[test]
+    fn attestation_refusal_carrying_a_risk_code_is_classified() {
+        let error = attestation_error(&HttpError::BadStatusCode {
+            code: 403,
+            response_body: error_body("RISK_DETECTED"),
+        });
+        assert!(matches!(error, BackupOperationError::RiskRejected { .. }));
+    }
+
+    #[test]
+    fn attestation_transport_failures_stay_network_errors() {
+        assert!(matches!(
+            attestation_error(&HttpError::Timeout),
+            BackupOperationError::Network { retryable: true }
+        ));
+        assert!(matches!(
+            attestation_error(&HttpError::BadStatusCode {
+                code: 500,
+                response_body: b"gateway exploded".to_vec(),
+            }),
+            BackupOperationError::Network { retryable: false }
+        ));
+    }
+
+    /// A risk rejection is terminal: classifying it as a retryable 5xx would burn
+    /// the caller's attempts against a block that will not clear on retry.
+    #[test]
+    fn risk_code_wins_over_a_server_status() {
+        assert!(matches!(
+            status_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &error_body("RISK_DETECTED")
+            ),
+            BackupOperationError::RiskRejected { .. }
+        ));
     }
 }

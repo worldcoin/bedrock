@@ -25,6 +25,7 @@ pub use flows::RemoveFactorOutcome;
 
 use base64::Engine;
 use bedrock_macros::bedrock_export;
+use chrono::Utc;
 pub use client_events::{
     BackupReportEncryptionKeyKind, BackupReportEventKind, BackupReportMainFactor,
     BaseReport, ClientEventsError, ClientEventsReporter,
@@ -410,12 +411,17 @@ impl BackupManager {
         Self::with_root_key(root_secret, Self::backup_account)
     }
 
-    /// Should be called after the backup is disabled/deleted.
+    /// Clears the local state that a deleted/disabled backup leaves stale: the
+    /// manifest file and the backup base report.
     ///
-    /// It processes local state after the backup is disabled/deleted.
+    /// # When to call it
+    /// Only for backup teardowns Bedrock does not itself drive:
+    /// - a standalone "delete my backup" action (BF-8 invoked directly),
+    /// - sync-factor deletion on logout,
+    /// - reconciliation, when the service reports the backup no longer exists.
     ///
-    /// Currently it:
-    /// 1. Deletes the local manifest file.
+    /// Do NOT call it after [`Self::remove_factor`] returns
+    /// [`RemoveFactorOutcome::BackupDeleted`] — that flow already does.
     ///
     /// # Errors
     /// - Returns an error if the post-processing fails.
@@ -556,9 +562,20 @@ impl BackupManager {
     /// - `user_confirmed_backup_removal`: set only after the user has confirmed that
     ///   removing the last main factor will delete the entire backup.
     ///
+    /// # Native responsibilities
+    /// - On [`RemoveFactorOutcome::BackupDeleted`] the caller MUST delete its stored
+    ///   sync-factor keypair and refresh its "backup enabled" state. See that
+    ///   variant's docs.
+    /// - The caller MUST NOT send its own `RemoveMainFactor` client event for this
+    ///   attempt, nor call [`Self::post_delete_backup`] afterwards. Bedrock does both.
+    ///
     /// # Errors
-    /// Returns [`BackupOperationError`]. [`BackupOperationError::WouldDeleteBackup`]
-    /// and [`BackupOperationError::NeedsReauth`] are specific signals that native clients should handle.
+    /// Returns [`BackupOperationError`]. Three variants are signals native clients
+    /// must handle specifically rather than surfacing as a generic failure:
+    /// [`BackupOperationError::WouldDeleteBackup`] (prompt for confirmation, then
+    /// retry with `user_confirmed_backup_removal`), [`BackupOperationError::NeedsReauth`]
+    /// (run a passkey ceremony to obtain what the reason names, then retry), and
+    /// [`BackupOperationError::RiskRejected`] (open the fraud gatekeeper).
     pub async fn remove_factor(
         &self,
         sync_factor: &P256Signer,
@@ -579,17 +596,21 @@ impl BackupManager {
             user_confirmed_backup_removal,
         };
 
-        let outcome =
+        let result =
             match tokio::time::timeout(REMOVE_FACTOR_TIMEOUT, flow.run(&ctx)).await {
-                Ok(result) => result?,
+                Ok(result) => result,
                 Err(_elapsed) => {
                     crate::error!(
                         "remove_factor timed out after {}s",
                         REMOVE_FACTOR_TIMEOUT.as_secs()
                     );
-                    return Err(BackupOperationError::Network { retryable: true });
+                    Err(BackupOperationError::Network { retryable: true })
                 }
             };
+
+        send_remove_factor_event(&result).await;
+
+        let outcome = result?;
 
         // Removing the backup makes the local manifest and event state stale.
         if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
@@ -950,6 +971,41 @@ impl From<ClientEventsError> for BackupError {
     }
 }
 
+/// Reports the outcome of [`BackupManager::remove_factor`] as a `RemoveMainFactor`
+/// event.
+///
+/// Bedrock owns this event now that it owns the flow; native MUST NOT also send one
+/// for the same attempt or every removal is double-counted.
+///
+/// [`BackupOperationError::WouldDeleteBackup`] and
+/// [`BackupOperationError::NeedsReauth`] are deliberately not reported: they are
+/// preconditions asking the caller for confirmation or a signer, not failed attempts,
+/// and counting them would inflate the failure rate this event feeds.
+async fn send_remove_factor_event(
+    result: &Result<RemoveFactorOutcome, BackupOperationError>,
+) {
+    if matches!(
+        result,
+        Err(BackupOperationError::WouldDeleteBackup
+            | BackupOperationError::NeedsReauth { .. })
+    ) {
+        return;
+    }
+
+    if let Err(error) = ClientEventsReporter::new()
+        .send_event(
+            BackupReportEventKind::RemoveMainFactor,
+            result.is_ok(),
+            result.as_ref().err().map(ToString::to_string),
+            Utc::now().to_rfc3339(),
+            false,
+        )
+        .await
+    {
+        crate::warn!("[ClientEvents] failed to send RemoveMainFactor event: {error:?}");
+    }
+}
+
 /// Why a factor operation needs the caller to re-authenticate before retrying.
 ///
 /// Both reasons are remediated by a native passkey ceremony; they differ in what
@@ -984,6 +1040,18 @@ pub enum BackupOperationError {
     #[error("backup service error: {code}")]
     BackupService {
         /// The backup service's machine-readable error code.
+        code: String,
+    },
+    /// The request was rejected by risk/fraud checks (the Attestation Gateway, the
+    /// WAF, or the risk service), not by backup-service business logic.
+    ///
+    /// Native MUST route this into its fraud-gatekeeper flow rather than showing a
+    /// generic error: the user may be able to clear the block interactively. `code`
+    /// is the upstream code (e.g. `RISK_DETECTED`, `RS-*`, `WAF-*`, `AU-*`) and
+    /// selects the user-facing copy.
+    #[error("rejected by risk checks: {code}")]
+    RiskRejected {
+        /// The upstream risk/fraud code, uppercased.
         code: String,
     },
     /// Turnkey rejected the request. `code` is a coarse classification.
