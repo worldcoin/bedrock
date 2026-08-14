@@ -141,8 +141,9 @@ mod tests {
 
     struct MockAttestationProvider;
 
+    #[async_trait::async_trait]
     impl AttestationTokenProvider for MockAttestationProvider {
-        fn attestation_token(
+        async fn attestation_token(
             &self,
             _request_hash: String,
         ) -> Result<String, HttpError> {

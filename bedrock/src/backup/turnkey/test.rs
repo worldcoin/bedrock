@@ -429,6 +429,7 @@ mod functional_tests {
     /// Functional tests for the `sync_factor` migration.
     mod sync_factor {
         use super::*;
+        use crate::backup::{MainFactor, SyncFactor};
 
         #[tokio::test]
         async fn sync_factor_policy_creates_policy_when_missing() {
