@@ -69,7 +69,10 @@ impl TurnkeyMigration for MigrationSyncFactorPolicy {
         };
 
         let mut details = Vec::with_capacity(actions.len());
-        crate::debug!("requires execution of {} operations for sync_factor_policy", actions.len());
+        crate::debug!(
+            "requires execution of {} operations for sync_factor_policy",
+            actions.len()
+        );
         for action in actions {
             match action {
                 PolicyAction::Create { user_name, intent } => {

@@ -7,13 +7,21 @@
 //! <https://docs.toolsforhumanity.com/world-app/backup>.
 
 mod backup_format;
+mod backup_service;
 mod client_events;
+mod flows;
 mod manifest;
 mod service_client;
 mod turnkey;
 
 #[cfg(test)]
 mod test;
+
+pub use backup_service::{
+    BackupEncryptionKey, BackupFactor, BackupFactorKind, BackupMetadata,
+    BackupOidcAccount,
+};
+pub use flows::RemoveOidcOutcome;
 
 use base64::Engine;
 use bedrock_macros::bedrock_export;
@@ -39,6 +47,19 @@ use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
+use std::time::Duration;
+
+use once_cell::sync::OnceCell;
+
+use crate::backup::backup_service::BackupServiceClient;
+use crate::backup::flows::{BackupFlow, FlowContext, RemoveOidcFactor};
+use crate::backup::turnkey::TurnkeyApiClient;
+use crate::primitives::config::get_config;
+use crate::primitives::{KeypairSignerError, P256Signer};
+
+/// Overall deadline for a single `remove_oidc_factor` run. It is a foreground,
+/// UI-blocking operation. Deadline for iOS which can't cancel uniffi async.
+const REMOVE_OIDC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -57,8 +78,11 @@ use std::str::FromStr;
 /// decrypt the backup.
 ///
 /// Documentation: <https://docs.toolsforhumanity.com/world-app/backup>
-#[derive(uniffi::Object, Clone, Debug, Default)]
-pub struct BackupManager {}
+#[derive(uniffi::Object, Debug, Default)]
+pub struct BackupManager {
+    /// Backup-service client
+    backup_service: OnceCell<BackupServiceClient>,
+}
 
 #[bedrock_export]
 impl BackupManager {
@@ -66,7 +90,7 @@ impl BackupManager {
     #[must_use]
     /// Constructs a new `BackupManager` instance.
     pub fn new() -> Self {
-        Self {}
+        Self::default()
     }
 
     /// Creates a sealed backup with metadata for a new user with a factor secret. Since it's a new user,
@@ -511,7 +535,97 @@ impl BackupManager {
             manifest_hash: hex::encode(manifest_hash),
         })
     }
+
+    /// Removes the OIDC factor `factor_id` from the user's backup (BF-7) everywhere.
+    ///
+    /// # User Considerations
+    /// - If you're removing the last main factor, the backup will be destroyed instead, the
+    ///   user MUST see an explicit prompt and approve.
+    /// - If removing an OIDC Factor and it's **not the last** OIDC factor, a [`MainFactor`] is
+    ///   needed.
+    ///
+    /// # Arguments
+    /// - `sync_factor`: the sync-factor [`P256Signer`]; authenticates the backup
+    ///   service calls and stamps the Turnkey sub-organization teardown.
+    /// - `main_factor`: an optional main-factor [`P256Signer`]. Required to delete an
+    ///   OAuth provider if it is **not** the last one.
+    /// - `factor_id`: the id of the factor to remove.
+    /// - `user_confirmed_backup_removal`: set only after the user has confirmed that
+    ///   removing the last main factor will delete the entire backup.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`]. [`BackupOperationError::WouldDeleteBackup`]
+    /// and [`BackupOperationError::NeedsReauth`] are specific signals that native clients should handle.
+    pub async fn remove_oidc_factor(
+        &self,
+        sync_factor: &P256Signer,
+        main_factor: Option<Arc<P256Signer>>,
+        factor_id: String,
+        user_confirmed_backup_removal: bool,
+    ) -> Result<RemoveOidcOutcome, BackupOperationError> {
+        let service = self.service()?;
+        let turnkey = TurnkeyApiClient::new();
+        let ctx = FlowContext {
+            service,
+            turnkey: &turnkey,
+            sync_factor,
+            main_factor: main_factor.as_deref(),
+        };
+        let flow = RemoveOidcFactor {
+            factor_id,
+            user_confirmed_backup_removal,
+        };
+
+        let outcome =
+            match tokio::time::timeout(REMOVE_OIDC_TIMEOUT, flow.run(&ctx)).await {
+                Ok(result) => result?,
+                Err(_elapsed) => {
+                    crate::error!(
+                        "remove_oidc_factor timed out after {}s",
+                        REMOVE_OIDC_TIMEOUT.as_secs()
+                    );
+                    return Err(BackupOperationError::Network { retryable: true });
+                }
+            };
+
+        // Removing the backup makes the local manifest and event state stale.
+        if matches!(outcome, RemoveOidcOutcome::BackupDeleted) {
+            if let Err(error) = self.post_delete_backup() {
+                crate::warn!(
+                    "remove_oidc_factor.post_delete_cleanup_failed err={error:?}"
+                );
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// Retrieves the user's current backup metadata.
+    ///
+    /// # Threading
+    /// Performs network I/O; callers SHOULD invoke it off the main thread.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`]; an `unauthorized_factor` rejection surfaces
+    /// as [`BackupOperationError::NeedsReauth`].
+    pub async fn retrieve_metadata(
+        &self,
+        sync_factor: &P256Signer,
+    ) -> Result<BackupMetadata, BackupOperationError> {
+        self.service()?.retrieve_metadata(sync_factor).await
+    }
 }
+
+/// A **Sync Factor** signer, has only read permissions and specific delete permissions.
+///
+/// Reference: <https://docs.toolsforhumanity.com/world-app/backup/factors>
+#[derive(Clone, Copy)]
+pub struct SyncFactor<'a>(pub &'a P256Signer);
+
+/// A **Main Factor** signer, has full write permissions.
+///
+/// Reference: <https://docs.toolsforhumanity.com/world-app/backup/factors>
+#[derive(Clone, Copy)]
+pub struct MainFactor<'a>(pub &'a P256Signer);
 
 /// Debug information about the local manifest on disk.
 #[derive(Debug, uniffi::Record)]
@@ -522,8 +636,20 @@ pub struct ManifestDebug {
     pub manifest_hash: String,
 }
 
-// Internal helpers (not exported)
+/// Internal helpers (not exported)
 impl BackupManager {
+    fn service(&self) -> Result<&BackupServiceClient, BackupOperationError> {
+        self.backup_service.get_or_try_init(|| {
+            let config = get_config().ok_or_else(|| {
+                crate::error!("backup service aborted: Bedrock config not initialized");
+                BackupOperationError::Generic {
+                    error_message: "bedrock config not initialized".to_string(),
+                }
+            })?;
+            BackupServiceClient::new(config.environment())
+        })
+    }
+
     /// Reads the root secret out of a one-shot Siegel session, parses it into a
     /// [`RootKey`], and hands it to `f`.
     fn with_root_key<T>(
@@ -820,6 +946,75 @@ impl From<std::io::Error> for BackupError {
 impl From<ClientEventsError> for BackupError {
     fn from(e: ClientEventsError) -> Self {
         Self::ClientEventsError(e.to_string())
+    }
+}
+
+/// Why a factor operation needs the caller to re-authenticate before retrying.
+///
+/// Both reasons are remediated by a native passkey ceremony; they differ in what
+/// the ceremony must produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum NeedsReauthReason {
+    /// The operation needs a [`MainFactor`] that was not supplied. The user needs to
+    /// authenticate.
+    MainFactorRequired,
+    /// The sync factor is no longer valid: not registered in Turnkey, or no longer
+    /// authorized by the backup service. Native must re-auth a [`MainFactor`], refresh
+    /// the sync factor, and re-invoke.
+    SyncFactorInvalid,
+}
+
+/// Error returned by high-level backup flows.
+///
+/// Most variants are opaque by design (details are logged inside Bedrock).
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum BackupOperationError {
+    /// The factor provided invalid or under-permissioned. Re-authenticate and retry.
+    #[error("re-authentication required: {reason:?}")]
+    NeedsReauth {
+        /// What needs to be fixed
+        reason: NeedsReauthReason,
+    },
+    /// Completing this removal would delete the entire backup because it is the last
+    /// main factor. The user must confirm, then retry.
+    #[error("operation would delete the entire backup")]
+    WouldDeleteBackup,
+    /// The backup service rejected the request. `code` is its machine-readable code.
+    #[error("backup service error: {code}")]
+    BackupService {
+        /// The backup service's machine-readable error code.
+        code: String,
+    },
+    /// Turnkey rejected the request. `code` is a coarse classification.
+    #[error("turnkey error: {code}")]
+    Turnkey {
+        /// A coarse classification of the Turnkey failure.
+        code: String,
+    },
+    /// The signer could not produce a signature or public key.
+    #[error("signer error: {inner}")]
+    Signer {
+        /// The underlying signer failure.
+        inner: KeypairSignerError,
+    },
+    /// A network failure reaching the backup service. `retryable` indicates whether
+    /// a later retry may succeed.
+    #[error("network error (retryable={retryable})")]
+    Network {
+        /// Whether retrying the operation may succeed.
+        retryable: bool,
+    },
+    /// An unexpected internal error. By default, no reason to log (Bedrock already handles it).
+    #[error("{error_message}")]
+    Generic {
+        /// Additional human redable description.
+        error_message: String,
+    },
+}
+
+impl From<KeypairSignerError> for BackupOperationError {
+    fn from(inner: KeypairSignerError) -> Self {
+        Self::Signer { inner }
     }
 }
 
