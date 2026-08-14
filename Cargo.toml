@@ -21,7 +21,7 @@ version = "0.5.2"
 
 [workspace.dependencies]
 # NOTE: Maintain parity with org-wide UNIFFI_VERSION
-uniffi = { version = "0.31.0", features = ["build", "tokio"] }
+uniffi = { version = "0.32.0", features = ["build", "tokio"] }
 
 [profile.release]
 debug = false
