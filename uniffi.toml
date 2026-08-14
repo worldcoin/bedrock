@@ -1,1 +1,6 @@
+[bindings.kotlin]
+# Work around UniFFI's u16 return-value signedness bug on Android ARM32.
+# Remove after upgrading to a UniFFI release containing mozilla/uniffi-rs#2897 and #2935.
+omit_checksums = true
+
 [bindings.swift]

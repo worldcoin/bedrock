@@ -203,7 +203,14 @@ jobs:
 
       - name: Generate bindings
         working-directory: kotlin
-        run: cargo run -p uniffi-bindgen generate ./bedrock-android/src/main/jniLibs/arm64-v8a/libbedrock.so --library --language kotlin --no-format --out-dir bedrock-android/src/main/java
+        run: |
+          cargo run -p uniffi-bindgen generate \
+            ./bedrock-android/src/main/jniLibs/arm64-v8a/libbedrock.so \
+            --config ../uniffi.toml \
+            --library \
+            --language kotlin \
+            --no-format \
+            --out-dir bedrock-android/src/main/java
 
       - name: Set up Gradle
         working-directory: kotlin

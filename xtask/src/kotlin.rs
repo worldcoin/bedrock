@@ -118,6 +118,8 @@ fn generate_bindings(root: &Path, library: &Path, out_dir: &Path) -> Result<()> 
         .current_dir(root)
         .args(["run", "-p", "uniffi-bindgen", "generate"])
         .arg(library)
+        .arg("--config")
+        .arg(root.join("uniffi.toml"))
         .args([
             "--library",
             "--language",
