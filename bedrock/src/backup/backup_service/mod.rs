@@ -22,7 +22,7 @@ use wire::{
 };
 
 use crate::backup::{BackupOperationError, NeedsReauthReason};
-use crate::primitives::attestation::get_attestation_provider;
+use crate::primitives::attestation::get_attestation_gateway;
 use crate::primitives::config::BedrockEnvironment;
 use crate::primitives::retry::{retry_with_backoff, RetryPolicy};
 use crate::primitives::{KeypairSignerError, P256Signer};
@@ -143,7 +143,7 @@ impl BackupServiceClient {
         let body =
             serde_json::to_vec(&request).map_err(|error| serialize_error(&error))?;
 
-        let provider = get_attestation_provider().ok_or_else(|| {
+        let provider = get_attestation_gateway().ok_or_else(|| {
             crate::error!("backup_service.attestation.provider_missing");
             BackupOperationError::Generic {
                 error_message: "attestation token provider not initialized".to_string(),

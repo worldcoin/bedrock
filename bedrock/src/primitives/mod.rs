@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 // Re-export HTTP client types for external use
 pub use attestation::{
-    get_attestation_provider, set_attestation_token_provider, AttestationTokenProvider,
+    get_attestation_gateway, set_attestation_token_provider, AttestationTokenProvider,
 };
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
 pub use signer::{KeypairSigner, KeypairSignerError, P256Signer};

@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 use crate::HttpError;
 
 /// Global attestation-token provider set by the host.
-static ATTESTATION_PROVIDER: OnceLock<Arc<AttestationGateway>> = OnceLock::new();
+static ATTESTATION_GATEWAY: OnceLock<Arc<AttestationGateway>> = OnceLock::new();
 
 /// A provider of Attestation Gateway tokens.
 #[uniffi::export(with_foreign)]
@@ -36,20 +36,20 @@ pub trait AttestationTokenProvider: Send + Sync {
 pub fn set_attestation_token_provider(
     provider: Arc<dyn AttestationTokenProvider>,
 ) -> bool {
-    if ATTESTATION_PROVIDER.get().is_some() {
+    if ATTESTATION_GATEWAY.get().is_some() {
         return false;
     }
     let gateway = AttestationGateway::new(provider);
-    ATTESTATION_PROVIDER.set(Arc::new(gateway)).is_ok()
+    ATTESTATION_GATEWAY.set(Arc::new(gateway)).is_ok()
 }
 
-/// Returns the configured attestation-token provider, if any.
+/// Returns the configured attestation gateway, if any.
 #[must_use]
-pub fn get_attestation_provider() -> Option<Arc<AttestationGateway>> {
-    ATTESTATION_PROVIDER.get().cloned()
+pub fn get_attestation_gateway() -> Option<Arc<AttestationGateway>> {
+    ATTESTATION_GATEWAY.get().cloned()
 }
 
-/// Enables hashing and token computation for endpoints requiring an Attesetation Gateway token
+/// Enables hashing and token computation for endpoints requiring an Attestation Gateway token
 pub struct AttestationGateway {
     pub(crate) provider: Arc<dyn AttestationTokenProvider>,
 }
@@ -88,7 +88,7 @@ impl AttestationGateway {
     ) -> Result<String, HttpError> {
         let mut map = Map::new();
 
-        // Important to keep keys' order
+        // Canonical key order.
         if !body.is_empty() {
             let body_json: Value =
                 serde_json::from_slice(body).map_err(|_| HttpError::Generic {
