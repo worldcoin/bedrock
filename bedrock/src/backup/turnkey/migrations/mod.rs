@@ -27,6 +27,7 @@ pub(super) const MIGRATIONS: &[&dyn TurnkeyMigration] =
 // 1. Ensure `auth_user_main` is the only one in the root quorum (housekeeping)
 // 2. Ensure break glass user exists and has the correct policy
 // 3. Ensure max number of sync factor users and policies (port over from Android)
+// 4. Ensure factors registered in Turnkey match factors from backup-service (remove stales)
 
 /// Global result from running the entire set of migrations.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]

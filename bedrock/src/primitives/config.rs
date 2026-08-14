@@ -55,6 +55,17 @@ impl BedrockEnvironment {
             Self::Production => "production",
         }
     }
+
+    /// Base URL of the [backup-service](https://github.com/worldcoin/backup-service)
+    #[must_use]
+    pub const fn backup_service_base_url(&self) -> &'static str {
+        match self {
+            Self::Production => "https://api-tfh-backup-prod.nethermind.io",
+            Self::Staging | Self::Sandbox => {
+                "https://backup-service.stage-crypto.worldcoin.org"
+            }
+        }
+    }
 }
 
 /// Returns the current `BedrockEnvironment`, defaulting to `Production` if
