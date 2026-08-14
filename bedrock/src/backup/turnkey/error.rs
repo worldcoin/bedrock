@@ -277,3 +277,71 @@ pub enum TurnkeyMigrationError {
     #[error("a migration is already in progress")]
     AlreadyInProgress,
 }
+
+#[cfg(test)]
+mod classifier_tests {
+    use super::*;
+
+    /// These classifiers match free text that Turnkey controls, and they gate
+    /// user-visible behaviour: `is_no_matching_provider` decides `debug!` vs a
+    /// `[Critical]` page, and `indicates_invalid_signer` decides whether the caller is
+    /// told to re-authenticate. If Turnkey rewords a message, this is what should fail.
+    #[test]
+    fn recognizes_the_upstream_strings_it_depends_on() {
+        let stale = TurnkeyApiError::Unauthorized {
+            body: r#"{"code":7,"message":"PUBLIC_KEY_NOT_FOUND: unknown key"}"#
+                .to_string(),
+        };
+        assert!(stale.is_public_key_not_found());
+        assert!(stale.indicates_invalid_signer());
+
+        let absent = TurnkeyApiError::Activity {
+            error_message: "No matching providers found for the given ids".to_string(),
+        };
+        assert!(absent.is_no_matching_provider());
+    }
+
+    /// A 401 without the marker is still a stale/under-permissioned signer.
+    #[test]
+    fn any_unauthorized_is_an_invalid_signer() {
+        let denied = TurnkeyApiError::Unauthorized {
+            body: "policy denied".to_string(),
+        };
+        assert!(!denied.is_public_key_not_found());
+        assert!(denied.indicates_invalid_signer());
+    }
+
+    /// The classifiers must not fire on unrelated failures: a false
+    /// `is_no_matching_provider` would silently swallow a real orphan, and a false
+    /// `indicates_invalid_signer` would send the user through a pointless ceremony.
+    #[test]
+    fn does_not_fire_on_unrelated_failures() {
+        for error in [
+            TurnkeyApiError::Timeout,
+            TurnkeyApiError::ServerError {
+                status: 503,
+                body: "upstream unavailable".to_string(),
+            },
+            TurnkeyApiError::Activity {
+                error_message: "activity rejected by policy".to_string(),
+            },
+            TurnkeyApiError::MainUserNotFound,
+            TurnkeyApiError::Consistency,
+        ] {
+            assert!(!error.is_no_matching_provider(), "{error}");
+            assert!(!error.indicates_invalid_signer(), "{error}");
+        }
+    }
+
+    /// A still-`PENDING` activity may yet succeed upstream, so it must not be reported
+    /// as an already-absent provider (silently swallowed) either.
+    #[test]
+    fn a_pending_activity_is_not_an_absent_provider() {
+        let pending = TurnkeyApiError::ActivityPollingExceeded {
+            error_message: "still PENDING after 5 attempts".to_string(),
+        };
+        assert!(!pending.is_no_matching_provider());
+        assert!(!pending.indicates_invalid_signer());
+        assert_eq!(pending.code(), "activity_pending");
+    }
+}

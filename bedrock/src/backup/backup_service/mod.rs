@@ -326,6 +326,13 @@ fn status_error(status: StatusCode, body: &[u8]) -> BackupOperationError {
             };
         }
         if status.is_server_error() {
+            // Retried as transient, but the status and the service's own code are the
+            // only things that distinguish a 500 from a 503 during an incident, and
+            // they are not recoverable from the generic retry log.
+            crate::warn!(
+                "backup_service.server_error code={code} status={}",
+                status.as_u16()
+            );
             return BackupOperationError::Network { retryable: true };
         }
         crate::warn!(
@@ -371,11 +378,23 @@ fn attestation_error(error: &HttpError) -> BackupOperationError {
     }
     // A degraded gateway is as retryable as a degraded backup service; classifying it
     // otherwise tells native a transient outage is permanent, on a path where nothing
-    // has been committed yet.
+    // has been committed yet. Matched exhaustively so a new `HttpError` variant has to
+    // be classified deliberately rather than defaulting to "permanent".
     let retryable = match error {
-        HttpError::Timeout | HttpError::NoConnectivity => true,
-        HttpError::BadStatusCode { code, .. } => (500..600).contains(code),
-        _ => false,
+        HttpError::Timeout
+        | HttpError::NoConnectivity
+        | HttpError::DnsResolutionFailed { .. }
+        | HttpError::ConnectionRefused { .. } => true,
+        // 5xx is a gateway outage; 429 is backpressure that clears on its own.
+        HttpError::BadStatusCode { code, .. } => {
+            *code == 429 || (500..600).contains(code)
+        }
+        // A pinned-cert failure, a user-cancelled ceremony, and an unclassified
+        // provider error will all fail again the same way.
+        HttpError::SslError { .. }
+        | HttpError::Cancelled
+        | HttpError::Generic { .. }
+        | HttpError::FileSystem(_) => false,
     };
     crate::warn!("backup_service.attestation.failed retryable={retryable} err={error}");
     BackupOperationError::Network { retryable }
@@ -554,38 +573,59 @@ mod tests {
         assert!(matches!(error, BackupOperationError::RiskRejected { .. }));
     }
 
+    /// Nothing is committed when the gateway refuses, so a transient failure told to
+    /// native as permanent strands an operation a retry would have completed. This
+    /// must agree with `transport_error`, which treats the same classes as retryable.
     #[test]
-    fn attestation_transport_failures_stay_network_errors() {
-        assert!(matches!(
-            attestation_error(&HttpError::Timeout),
-            BackupOperationError::Network { retryable: true }
-        ));
-        assert!(matches!(
-            attestation_error(&HttpError::Cancelled),
-            BackupOperationError::Network { retryable: false }
-        ));
-    }
-
-    /// A degraded gateway must be as retryable as a degraded backup service: nothing
-    /// has been committed at this point, so telling native the failure is permanent
-    /// strands an operation a retry would have completed.
-    #[test]
-    fn attestation_gateway_outage_is_retryable() {
-        assert!(matches!(
-            attestation_error(&HttpError::BadStatusCode {
+    fn transient_attestation_failures_are_retryable() {
+        for error in [
+            HttpError::Timeout,
+            HttpError::NoConnectivity,
+            HttpError::DnsResolutionFailed {
+                error_message: "no such host".to_string(),
+            },
+            HttpError::ConnectionRefused {
+                error_message: "refused".to_string(),
+            },
+            HttpError::BadStatusCode {
                 code: 503,
                 response_body: b"gateway unavailable".to_vec(),
-            }),
-            BackupOperationError::Network { retryable: true }
-        ));
-        // A 4xx refusal we could not classify is not going to fix itself.
-        assert!(matches!(
-            attestation_error(&HttpError::BadStatusCode {
+            },
+            HttpError::BadStatusCode {
+                code: 429,
+                response_body: b"slow down".to_vec(),
+            },
+        ] {
+            assert!(
+                matches!(
+                    attestation_error(&error),
+                    BackupOperationError::Network { retryable: true }
+                ),
+                "{error} should be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn permanent_attestation_failures_are_not_retryable() {
+        for error in [
+            HttpError::Cancelled,
+            HttpError::SslError {
+                reason: "pinning failed".to_string(),
+            },
+            HttpError::BadStatusCode {
                 code: 400,
                 response_body: b"bad request".to_vec(),
-            }),
-            BackupOperationError::Network { retryable: false }
-        ));
+            },
+        ] {
+            assert!(
+                matches!(
+                    attestation_error(&error),
+                    BackupOperationError::Network { retryable: false }
+                ),
+                "{error} should not be retryable"
+            );
+        }
     }
 
     /// A risk rejection is terminal: classifying it as a retryable 5xx would burn

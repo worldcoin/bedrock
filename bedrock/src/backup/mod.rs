@@ -989,6 +989,22 @@ impl From<ClientEventsError> for BackupError {
     }
 }
 
+/// Whether a `remove_factor` outcome represents a completed attempt worth reporting.
+///
+/// [`BackupOperationError::WouldDeleteBackup`] and
+/// [`BackupOperationError::NeedsReauth`] are preconditions asking the caller for
+/// confirmation or a signer -- the removal has not been attempted yet, so counting
+/// them would inflate the failure rate this event feeds.
+const fn is_reportable_remove_outcome(
+    result: &Result<RemoveFactorOutcome, BackupOperationError>,
+) -> bool {
+    !matches!(
+        result,
+        Err(BackupOperationError::WouldDeleteBackup
+            | BackupOperationError::NeedsReauth { .. })
+    )
+}
+
 /// Reports the outcome of [`BackupManager::remove_factor`] as a `RemoveMainFactor`
 /// event.
 ///
@@ -1002,11 +1018,7 @@ impl From<ClientEventsError> for BackupError {
 async fn send_remove_factor_event(
     result: &Result<RemoveFactorOutcome, BackupOperationError>,
 ) {
-    if matches!(
-        result,
-        Err(BackupOperationError::WouldDeleteBackup
-            | BackupOperationError::NeedsReauth { .. })
-    ) {
+    if !is_reportable_remove_outcome(result) {
         return;
     }
 
@@ -1182,4 +1194,55 @@ pub struct BackupAccount {
     ///
     /// This public key can be used to authenticate with a specific backup.
     public_key: String,
+}
+
+#[cfg(test)]
+mod remove_factor_event_tests {
+    use super::*;
+
+    /// The `RemoveMainFactor` event feeds a failure-rate metric, so it must count only
+    /// attempts that actually reached the backup service. The two precondition signals
+    /// are the common case (every confirmation prompt raises `WouldDeleteBackup`), so
+    /// reporting them would swamp the metric with non-failures.
+    #[test]
+    fn preconditions_are_not_reported_as_attempts() {
+        for error in [
+            BackupOperationError::WouldDeleteBackup,
+            BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::MainFactorRequired,
+            },
+            BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::SyncFactorInvalid,
+            },
+        ] {
+            assert!(
+                !is_reportable_remove_outcome(&Err(error)),
+                "preconditions must not count as attempts"
+            );
+        }
+    }
+
+    #[test]
+    fn completed_attempts_are_reported() {
+        assert!(is_reportable_remove_outcome(&Ok(
+            RemoveFactorOutcome::BackupDeleted
+        )));
+        for error in [
+            BackupOperationError::Network { retryable: true },
+            BackupOperationError::RiskRejected {
+                code: "RISK_DETECTED".to_string(),
+            },
+            BackupOperationError::Turnkey {
+                code: "turnkey_user_not_found".to_string(),
+            },
+            BackupOperationError::BackupService {
+                code: "factor_not_found".to_string(),
+            },
+        ] {
+            assert!(
+                is_reportable_remove_outcome(&Err(error)),
+                "a real failure must be reported"
+            );
+        }
+    }
 }
