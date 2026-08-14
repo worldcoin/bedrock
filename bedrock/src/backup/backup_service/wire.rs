@@ -129,11 +129,30 @@ impl BackupMetadata {
             .count()
     }
 
+    /// Number of passkey main factors.
+    pub(in crate::backup) fn passkey_factor_count(&self) -> usize {
+        self.factors
+            .iter()
+            .filter(|factor| matches!(factor.kind, BackupFactorKind::Passkey { .. }))
+            .count()
+    }
+
     /// The single Turnkey encryption key, if the backup has a Turnkey account.
     pub(in crate::backup) fn turnkey_key(&self) -> Option<&BackupEncryptionKey> {
         self.keys
             .iter()
             .find(|key| matches!(key, BackupEncryptionKey::Turnkey { .. }))
+    }
+
+    /// The single PRF encryption key, or `None` unless there is exactly one. A
+    /// passkey removal drops this key. Invariant, only one passkey is allowed in the backup.
+    pub(in crate::backup) fn single_prf_key(&self) -> Option<&BackupEncryptionKey> {
+        let mut prf_keys = self
+            .keys
+            .iter()
+            .filter(|key| matches!(key, BackupEncryptionKey::Prf { .. }));
+        let key = prf_keys.next()?;
+        prf_keys.next().is_none().then_some(key)
     }
 }
 

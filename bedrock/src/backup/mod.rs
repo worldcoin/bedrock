@@ -21,7 +21,7 @@ pub use backup_service::{
     BackupEncryptionKey, BackupFactor, BackupFactorKind, BackupMetadata,
     BackupOidcAccount,
 };
-pub use flows::RemoveOidcOutcome;
+pub use flows::RemoveFactorOutcome;
 
 use base64::Engine;
 use bedrock_macros::bedrock_export;
@@ -52,14 +52,14 @@ use std::time::Duration;
 use once_cell::sync::OnceCell;
 
 use crate::backup::backup_service::BackupServiceClient;
-use crate::backup::flows::{BackupFlow, FlowContext, RemoveOidcFactor};
+use crate::backup::flows::{BackupFlow, FlowContext, RemoveFactor};
 use crate::backup::turnkey::TurnkeyApiClient;
 use crate::primitives::config::get_config;
 use crate::primitives::{KeypairSignerError, P256Signer};
 
-/// Overall deadline for a single `remove_oidc_factor` run. It is a foreground,
+/// Overall deadline for a single `remove_factor` run. It is a foreground,
 /// UI-blocking operation. Deadline for iOS which can't cancel uniffi async.
-const REMOVE_OIDC_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOVE_FACTOR_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -536,13 +536,16 @@ impl BackupManager {
         })
     }
 
-    /// Removes the OIDC factor `factor_id` from the user's backup (BF-7) everywhere.
+    /// Removes the main factor `factor_id` from the user's backup (BF-7) everywhere.
     ///
     /// # User Considerations
     /// - If you're removing the last main factor, the backup will be destroyed instead, the
     ///   user MUST see an explicit prompt and approve.
     /// - If removing an OIDC Factor and it's **not the last** OIDC factor, a [`MainFactor`] is
-    ///   needed.
+    ///   needed. Passkey removal needs neither a main factor nor Turnkey.
+    /// - iCloud Keychain factors are not yet supported and return
+    ///   [`BackupOperationError::Unsupported`]. Keychain factors are currently not displayed in the UI
+    ///   and are getting deprecated.
     ///
     /// # Arguments
     /// - `sync_factor`: the sync-factor [`P256Signer`]; authenticates the backup
@@ -556,13 +559,13 @@ impl BackupManager {
     /// # Errors
     /// Returns [`BackupOperationError`]. [`BackupOperationError::WouldDeleteBackup`]
     /// and [`BackupOperationError::NeedsReauth`] are specific signals that native clients should handle.
-    pub async fn remove_oidc_factor(
+    pub async fn remove_factor(
         &self,
         sync_factor: &P256Signer,
         main_factor: Option<Arc<P256Signer>>,
         factor_id: String,
         user_confirmed_backup_removal: bool,
-    ) -> Result<RemoveOidcOutcome, BackupOperationError> {
+    ) -> Result<RemoveFactorOutcome, BackupOperationError> {
         let service = self.service()?;
         let turnkey = TurnkeyApiClient::new();
         let ctx = FlowContext {
@@ -571,29 +574,27 @@ impl BackupManager {
             sync_factor,
             main_factor: main_factor.as_deref(),
         };
-        let flow = RemoveOidcFactor {
+        let flow = RemoveFactor {
             factor_id,
             user_confirmed_backup_removal,
         };
 
         let outcome =
-            match tokio::time::timeout(REMOVE_OIDC_TIMEOUT, flow.run(&ctx)).await {
+            match tokio::time::timeout(REMOVE_FACTOR_TIMEOUT, flow.run(&ctx)).await {
                 Ok(result) => result?,
                 Err(_elapsed) => {
                     crate::error!(
-                        "remove_oidc_factor timed out after {}s",
-                        REMOVE_OIDC_TIMEOUT.as_secs()
+                        "remove_factor timed out after {}s",
+                        REMOVE_FACTOR_TIMEOUT.as_secs()
                     );
                     return Err(BackupOperationError::Network { retryable: true });
                 }
             };
 
         // Removing the backup makes the local manifest and event state stale.
-        if matches!(outcome, RemoveOidcOutcome::BackupDeleted) {
+        if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
             if let Err(error) = self.post_delete_backup() {
-                crate::warn!(
-                    "remove_oidc_factor.post_delete_cleanup_failed err={error:?}"
-                );
+                crate::warn!("remove_factor.post_delete_cleanup_failed err={error:?}");
             }
         }
         Ok(outcome)
@@ -1003,6 +1004,12 @@ pub enum BackupOperationError {
     Network {
         /// Whether retrying the operation may succeed.
         retryable: bool,
+    },
+    /// The requested operation is not supported. Terminal state.
+    #[error("unsupported removal: {detail}")]
+    Unsupported {
+        /// Human-readable description of what is unsupported.
+        detail: String,
     },
     /// An unexpected internal error. By default, no reason to log (Bedrock already handles it).
     #[error("{error_message}")]

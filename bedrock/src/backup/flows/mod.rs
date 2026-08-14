@@ -3,9 +3,9 @@
 //!
 //! Reference: <https://docs.toolsforhumanity.com/world-app/backup/flows>
 
-mod remove_oidc_factor;
+mod remove_factor;
 
-pub use remove_oidc_factor::{RemoveOidcFactor, RemoveOidcOutcome};
+pub use remove_factor::{RemoveFactor, RemoveFactorOutcome};
 
 use crate::backup::backup_service::BackupServiceClient;
 use crate::backup::turnkey::TurnkeyApiClient;
