@@ -108,7 +108,8 @@ impl RemoveFactor {
         let provider_ids = if plan.is_last_oidc_factor {
             verify_sync_factor(ctx, &plan).await?;
             None
-        } else if ctx.main_factor.is_some() {
+        } else if let Some(main_factor) = ctx.main_factor {
+            verify_main_factor(ctx, &plan, main_factor).await?;
             Some(provider_ids_for_identity(ctx, &plan).await?)
         } else {
             // Deleting an OAuth provider requires a [`MainFactor`]
@@ -341,6 +342,58 @@ async fn verify_sync_factor(
     }
 }
 
+/// Confirms the main factor authenticates as the root user that owns the providers,
+/// before anything irreversible.
+///
+/// The sync-factor probe cannot cover this: the provider deletion is stamped by the
+/// *main* factor, and that teardown is best-effort. A main factor from the wrong
+/// passkey would therefore drop the backup factor, fail the teardown, and report
+/// success while the account the user asked to disconnect stayed authorized.
+///
+/// # Errors
+/// [`NeedsReauthReason::MainFactorRequired`] if the signer is unknown to Turnkey or
+/// authenticates as a different user — in both cases the caller needs a new ceremony.
+async fn verify_main_factor(
+    ctx: &FlowContext<'_>,
+    plan: &OidcRemovalPlan,
+    main_factor: &P256Signer,
+) -> Result<(), BackupOperationError> {
+    let user_id = match ctx
+        .turnkey
+        .whoami_user_id(&plan.suborg_id, MainFactor(main_factor))
+        .await
+    {
+        Ok(user_id) => user_id,
+        Err(error) if error.indicates_invalid_signer() => {
+            crate::warn!("remove_factor.main_factor_invalid (pre-flight)");
+            return Err(BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::MainFactorRequired,
+            });
+        }
+        // Transient: the teardown is best-effort, so don't block on an outage.
+        Err(error) => {
+            crate::warn!(
+                "remove_factor.main_factor_preflight_inconclusive code={} err={error}",
+                error.code()
+            );
+            return Ok(());
+        }
+    };
+
+    if user_id != plan.user_id {
+        // A valid Turnkey key, but not the root user that owns the OAuth providers --
+        // the user completed the ceremony with the wrong passkey.
+        crate::warn!(
+            "remove_factor.main_factor_wrong_user expected={} got={user_id}",
+            plan.user_id
+        );
+        return Err(BackupOperationError::NeedsReauth {
+            reason: NeedsReauthReason::MainFactorRequired,
+        });
+    }
+    Ok(())
+}
+
 /// Tears down the Turnkey sub-organization; failures are logged (no hard failure)
 async fn best_effort_delete_sub_org(
     turnkey: &TurnkeyApiClient,
@@ -488,6 +541,7 @@ mod tests {
     const DELETE_FACTOR_CHALLENGE: &str = "/v1/delete-factor/challenge/keypair";
     const DELETE_FACTOR: &str = "/v1/delete-factor";
     const LIST_USERS: &str = "/public/v1/query/list_users";
+    const WHOAMI: &str = "/public/v1/query/whoami";
     const DELETE_SUB_ORG: &str = "/public/v1/submit/delete_sub_organization";
     const DELETE_OAUTH: &str = "/public/v1/submit/delete_oauth_providers";
 
@@ -649,6 +703,21 @@ mod tests {
         mount(server, DELETE_FACTOR, response).await;
     }
 
+    /// `whoami` for the main factor, resolving to `user_id`.
+    async fn mount_whoami(server: &MockServer, user_id: &str) {
+        mount(
+            server,
+            WHOAMI,
+            json!({
+                "organizationId": "suborg-1",
+                "organizationName": "org",
+                "userId": user_id,
+                "username": "auth_user_main",
+            }),
+        )
+        .await;
+    }
+
     async fn mount_users(server: &MockServer, providers: Vec<Value>) {
         mount(
             server,
@@ -784,6 +853,7 @@ mod tests {
             json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-2", "p-2")]) }),
         )
         .await;
+        mount_whoami(&server, "user-1").await;
         mount_delete_oauth(&server).await;
         let main = signer();
 
@@ -833,6 +903,7 @@ mod tests {
             json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-google", "p-google")]) }),
         )
         .await;
+        mount_whoami(&server, "user-1").await;
         mount_delete_oauth(&server).await;
         let main = signer();
 
@@ -1232,6 +1303,84 @@ mod tests {
             .contains(&DELETE_SUB_ORG.to_string()));
     }
 
+    /// The user completed the passkey ceremony with the wrong passkey: the signer is
+    /// valid at Turnkey but authenticates as a different user, so it cannot delete the
+    /// root user's providers. The teardown is best-effort, so without this check the
+    /// factor would be dropped and the disconnected account left authorized.
+    #[tokio::test]
+    async fn provider_removal_aborts_when_the_main_factor_is_the_wrong_user() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata(vec![oidc_factor("f-1", "p-1"), oidc_factor("f-2", "p-2")]),
+        )
+        .await;
+        mount_whoami(&server, "some-other-user").await;
+        mount_users(&server, vec![oauth_provider("p-1", "iss", "sub")]).await;
+        mount_delete_factor(&server, json!({ "backupDeleted": false })).await;
+        mount_delete_oauth(&server).await;
+        let main = signer();
+
+        let error = run_remove(&server, "f-1", Some(&main), false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                BackupOperationError::NeedsReauth {
+                    reason: NeedsReauthReason::MainFactorRequired
+                }
+            ),
+            "expected MainFactorRequired, got {error:?}"
+        );
+        let paths = called_paths(&server).await;
+        assert!(
+            !paths.contains(&DELETE_FACTOR.to_string()),
+            "nothing may be committed for a main factor that cannot do the teardown"
+        );
+        assert!(!paths.contains(&DELETE_OAUTH.to_string()));
+    }
+
+    /// A main factor Turnkey does not know at all: same abort, same reason.
+    #[tokio::test]
+    async fn provider_removal_aborts_when_the_main_factor_is_unregistered() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata(vec![oidc_factor("f-1", "p-1"), oidc_factor("f-2", "p-2")]),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(WHOAMI))
+            .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+                "error": { "message": "PUBLIC_KEY_NOT_FOUND" }
+            })))
+            .mount(&server)
+            .await;
+        mount_delete_factor(&server, json!({ "backupDeleted": false })).await;
+        let main = signer();
+
+        let error = run_remove(&server, "f-1", Some(&main), false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                BackupOperationError::NeedsReauth {
+                    reason: NeedsReauthReason::MainFactorRequired
+                }
+            ),
+            "expected MainFactorRequired, got {error:?}"
+        );
+        assert!(!called_paths(&server)
+            .await
+            .contains(&DELETE_FACTOR.to_string()));
+    }
+
     /// No provider deletion can succeed if the user is absent, and that is knowable
     /// before the commit -- so abort rather than leave the account still authorized.
     #[tokio::test]
@@ -1255,6 +1404,7 @@ mod tests {
         )
         .await;
         mount_delete_factor(&server, json!({ "backupDeleted": false })).await;
+        mount_whoami(&server, "user-1").await;
         mount_delete_oauth(&server).await;
         let main = signer();
 
@@ -1293,6 +1443,7 @@ mod tests {
             json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-2", "p-2")]) }),
         )
         .await;
+        mount_whoami(&server, "user-1").await;
         mount_delete_oauth(&server).await;
         let main = signer();
 

@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -7,7 +7,10 @@ use strum::Display;
 
 use super::manifest::ManifestManager;
 use crate::backup::manifest::BackupManifest;
-use crate::backup::{BackupFileDesignator, BackupOperationError, RemoveFactorOutcome};
+use crate::backup::{
+    BackupEncryptionKey, BackupFactorKind, BackupFileDesignator, BackupMetadata,
+    BackupOidcAccount, BackupOperationError, RemoveFactorOutcome,
+};
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
     create_middleware, get_filesystem_raw, FileSystemError, FileSystemExt,
@@ -546,6 +549,80 @@ pub(super) fn send_remove_factor_event(
     });
 }
 
+/// Rewrites the base-report attributes that a factor removal invalidates.
+///
+/// The report carries the factor and key inventory, so after a removal it describes a
+/// backup that no longer exists. Bedrock holds the fresh metadata the service returned
+/// and owns the report, so it reconciles both rather than relying on the caller to.
+///
+/// Only the fields a removal can change are set; the rest of the report is left alone
+/// by [`ClientEventsReporter::set_backup_report_attributes`]'s merge.
+pub(super) fn refresh_report_after_removal(metadata: &BackupMetadata) {
+    if let Err(error) =
+        ClientEventsReporter::new().set_backup_report_attributes(report_input(metadata))
+    {
+        crate::warn!(
+            "[ClientEvents] failed to refresh base report after removal: {error:?}"
+        );
+    }
+}
+
+/// Maps backup metadata onto the report fields a removal can change.
+fn report_input(metadata: &BackupMetadata) -> BackupReportInput {
+    let main_factors = metadata
+        .factors
+        .iter()
+        .filter_map(|factor| {
+            let (kind, account) = match &factor.kind {
+                BackupFactorKind::Passkey { .. } => ("PASSKEY", "PASSKEY".to_string()),
+                BackupFactorKind::OidcAccount { account, .. } => (
+                    "OIDC",
+                    match account {
+                        BackupOidcAccount::Google { .. } => "GOOGLE".to_string(),
+                        BackupOidcAccount::Apple { .. } => "APPLE".to_string(),
+                    },
+                ),
+                // Not a main factor for reporting purposes.
+                BackupFactorKind::EcKeypair { .. } => return None,
+            };
+            Some(BackupReportMainFactor {
+                kind: kind.to_string(),
+                account,
+                created_at: DateTime::from_timestamp(factor.created_at, 0)
+                    .unwrap_or_default()
+                    .to_rfc3339(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let encryption_keys = metadata
+        .keys
+        .iter()
+        .map(|key| match key {
+            BackupEncryptionKey::Prf { .. } => BackupReportEncryptionKeyKind::Prf,
+            BackupEncryptionKey::Turnkey { .. } => {
+                BackupReportEncryptionKeyKind::Turnkey
+            }
+            BackupEncryptionKey::Icloud { .. } => {
+                BackupReportEncryptionKeyKind::IcloudKeychain
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let has_turnkey_account =
+        encryption_keys.contains(&BackupReportEncryptionKeyKind::Turnkey);
+
+    BackupReportInput {
+        main_factors: Some(main_factors),
+        encryption_keys: Some(encryption_keys),
+        has_turnkey_account: Some(has_turnkey_account),
+        sync_factor_count: Some(
+            u32::try_from(metadata.sync_factors.len()).unwrap_or(u32::MAX),
+        ),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod remove_factor_event_tests {
     use super::*;
@@ -590,5 +667,99 @@ mod remove_factor_event_tests {
                 "a real failure must be reported"
             );
         }
+    }
+
+    fn oidc(created_at: i64, google: bool) -> crate::backup::BackupFactor {
+        crate::backup::BackupFactor {
+            id: "f".to_string(),
+            created_at,
+            kind: BackupFactorKind::OidcAccount {
+                account: if google {
+                    BackupOidcAccount::Google {
+                        masked_email: "g***@x".to_string(),
+                    }
+                } else {
+                    BackupOidcAccount::Apple {
+                        masked_email: "a***@x".to_string(),
+                    }
+                },
+                turnkey_provider_id: "p".to_string(),
+            },
+        }
+    }
+
+    /// The report is what the removal invalidates, so the mapping has to reflect the
+    /// post-removal metadata exactly -- including dropping the Turnkey flag once the
+    /// last OIDC factor and its key are gone.
+    #[test]
+    fn report_input_reflects_the_metadata_after_a_removal() {
+        let metadata = BackupMetadata {
+            id: "b".to_string(),
+            manifest_hash: "h".to_string(),
+            keys: vec![BackupEncryptionKey::Prf {
+                encrypted_key: "ek".to_string(),
+            }],
+            factors: vec![crate::backup::BackupFactor {
+                id: "pk".to_string(),
+                created_at: 0,
+                kind: BackupFactorKind::Passkey {
+                    credential_id: "c".to_string(),
+                    label: "L".to_string(),
+                },
+            }],
+            sync_factors: vec![],
+        };
+
+        let input = report_input(&metadata);
+
+        assert_eq!(input.has_turnkey_account, Some(false));
+        assert_eq!(
+            input.encryption_keys,
+            Some(vec![BackupReportEncryptionKeyKind::Prf])
+        );
+        assert_eq!(input.sync_factor_count, Some(0));
+        let factors = input.main_factors.unwrap();
+        assert_eq!(factors.len(), 1);
+        assert_eq!(factors[0].kind, "PASSKEY");
+    }
+
+    #[test]
+    fn report_input_maps_oidc_accounts_and_keeps_the_turnkey_flag() {
+        let metadata = BackupMetadata {
+            id: "b".to_string(),
+            manifest_hash: "h".to_string(),
+            keys: vec![BackupEncryptionKey::Turnkey {
+                encrypted_key: "ek".to_string(),
+                turnkey_account_id: "suborg".to_string(),
+                turnkey_user_id: "user".to_string(),
+                turnkey_private_key_id: "pk".to_string(),
+            }],
+            factors: vec![oidc(1_700_000_000, true), oidc(1_700_000_001, false)],
+            sync_factors: vec![crate::backup::BackupFactor {
+                id: "s".to_string(),
+                created_at: 0,
+                kind: BackupFactorKind::EcKeypair {
+                    public_key: "k".to_string(),
+                },
+            }],
+        };
+
+        let input = report_input(&metadata);
+
+        assert_eq!(input.has_turnkey_account, Some(true));
+        assert_eq!(input.sync_factor_count, Some(1));
+        let factors = input.main_factors.unwrap();
+        assert_eq!(
+            factors
+                .iter()
+                .map(|f| f.account.as_str())
+                .collect::<Vec<_>>(),
+            vec!["GOOGLE", "APPLE"]
+        );
+        assert!(
+            factors[0].created_at.starts_with("2023-"),
+            "timestamp must be ISO 8601, got {}",
+            factors[0].created_at
+        );
     }
 }

@@ -66,7 +66,14 @@ impl BackupServiceClient {
     }
 
     fn with_base_url(base_url: String) -> Result<Self, BackupOperationError> {
-        let http = reqwest::Client::builder()
+        // Bedrock-owned outbound HTTPS must go through the shared trust policy: on
+        // Android that is the bundled `webpki-roots`, since the native store needs a
+        // JNI `Context` that does not cross the FFI boundary.
+        let http = crate::primitives::tls::client_builder()
+            .map_err(|error| {
+                crate::error!("backup_service.tls_config_failed err={error}");
+                BackupOperationError::Network { retryable: false }
+            })?
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|error| {

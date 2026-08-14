@@ -586,11 +586,16 @@ impl BackupManager {
 
         // The remote deletion has committed, so a cleanup failure cannot change the
         // outcome -- but it leaves the device describing a backup that no longer exists.
-        if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
-            if let Err(error) = Self::post_delete_backup() {
-                crate::critical!(
-                    "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
-                );
+        match &outcome {
+            RemoveFactorOutcome::BackupDeleted => {
+                if let Err(error) = Self::post_delete_backup() {
+                    crate::critical!(
+                        "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
+                    );
+                }
+            }
+            RemoveFactorOutcome::FactorRemoved { metadata } => {
+                client_events::refresh_report_after_removal(metadata);
             }
         }
         Ok(outcome)

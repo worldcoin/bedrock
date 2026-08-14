@@ -256,6 +256,33 @@ impl TurnkeyApiClient {
         .await
     }
 
+    /// Returns the Turnkey user id that `signer` authenticates as in
+    /// `suborganization_id`.
+    ///
+    /// Not cached: the whole point is to exercise this specific signer.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures. An
+    /// unregistered key surfaces as [`TurnkeyApiError::is_public_key_not_found`].
+    pub async fn whoami_user_id(
+        &self,
+        suborganization_id: &str,
+        signer: MainFactor<'_>,
+    ) -> Result<String, TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let request = GetWhoamiRequest {
+            organization_id: suborganization_id.to_string(),
+        };
+        self.with_retry("whoami_user_id", || async {
+            client
+                .get_whoami(request.clone())
+                .await
+                .map(|response| response.user_id)
+                .map_err(TurnkeyApiError::from)
+        })
+        .await
+    }
+
     /// Lists the users of a sub-organization.
     ///
     /// Results are cached for the lifetime of this client.
