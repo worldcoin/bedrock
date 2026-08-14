@@ -94,7 +94,7 @@ x509-cert = { version = "0.2.5", features = ["pem"] }
 zeroize = "1.8"
 hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
 http = "1.4.0"
-siegel-uniffi = { version = "=0.3.0", features = ["tracing"] }
+siegel-uniffi = { git = "https://github.com/toolsforhumanity/siegel", features = ["tracing"] }
 turnkey_client = "0.12.0"
 turnkey_api_key_stamper = "0.12.0"
 
