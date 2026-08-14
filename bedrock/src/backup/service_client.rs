@@ -12,6 +12,9 @@ static BACKUP_SERVICE_API_INSTANCE: OnceLock<Arc<dyn BackupServiceApi>> =
 /// Foreign trait that native layers implement to perform backup-service network calls.
 ///
 /// If set, this will be used by Bedrock instead of any internal HTTP client.
+///
+// TODO: superseded by the Bedrock-owned `backup::service::BackupServiceClient`,
+// this is DEPRECATED as Bedrock will now own all the logic to interact with the backup-service.
 #[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait BackupServiceApi: Send + Sync {

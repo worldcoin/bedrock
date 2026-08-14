@@ -1,10 +1,11 @@
 //! Turnkey account migrations. The purpose is to check the state of a
 //! user's Turnkey account to ensure it is correct and up-to-date.
 
+use crate::backup::{MainFactor, SyncFactor};
 use crate::primitives::config::BedrockEnvironment;
 use crate::{error, info};
 
-use super::api::{MainFactor, SyncFactor, TurnkeyApiClient};
+use super::api::TurnkeyApiClient;
 use super::error::TurnkeyApiError;
 
 mod apple_audience;

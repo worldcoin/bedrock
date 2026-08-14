@@ -8,7 +8,6 @@
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -19,30 +18,21 @@ use turnkey_api_key_stamper::{
 };
 use turnkey_client::generated::external::data::v1::{Policy, User};
 use turnkey_client::generated::immutable::activity::v1::{
-    CreateOauthProvidersIntentV2, CreatePolicyIntentV3, DeletePolicyIntent,
-    OauthProviderParamsV2, UpdatePolicyIntentV2,
+    CreateOauthProvidersIntentV2, CreatePolicyIntentV3, DeleteOauthProvidersIntent,
+    DeletePolicyIntent, DeleteSubOrganizationIntent, OauthProviderParamsV2,
+    UpdatePolicyIntentV2,
 };
 use turnkey_client::generated::services::coordinator::public::v1::{
     GetPoliciesRequest, GetUsersRequest, GetWhoamiRequest,
 };
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
+use crate::backup::{MainFactor, SyncFactor};
 use crate::primitives::ntp::now_with_ntp;
+use crate::primitives::retry::{retry_with_backoff, RetryPolicy};
 use crate::primitives::P256Signer;
-use crate::warn;
 
 use super::error::TurnkeyApiError;
-
-/// A read/query signer — a **sync factor**. Stamps `whoami` and `get_users`,
-/// never privileged writes. A newtype so the split can't be crossed by accident.
-#[derive(Clone, Copy)]
-pub(super) struct SyncFactor<'a>(pub(super) &'a P256Signer);
-
-/// A write/submit signer — a **main factor**. Stamps privileged activities such
-/// as `create_oauth_providers`. A newtype so it can't be passed where a sync
-/// factor is expected (or vice versa).
-#[derive(Clone, Copy)]
-pub(super) struct MainFactor<'a>(pub(super) &'a P256Signer);
 
 /// Adapts a [`P256Signer`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
 /// client can stamp requests with a key held in native secure storage.
@@ -96,38 +86,6 @@ struct ApiStamp {
     public_key: String,
     signature: String,
     scheme: String,
-}
-
-/// Bounded retry policy: exponential backoff with full jitter.
-#[derive(Debug, Clone, Copy)]
-struct RetryPolicy {
-    max_attempts: u32,
-    base_delay: Duration,
-    max_delay: Duration,
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            max_attempts: 3,
-            base_delay: Duration::from_millis(250),
-            max_delay: Duration::from_secs(2),
-        }
-    }
-}
-
-/// Computes the backoff delay for `attempt` (1-indexed) with full jitter,
-/// capped at [`RetryPolicy::max_delay`].
-fn backoff_delay(attempt: u32, policy: &RetryPolicy) -> Duration {
-    let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
-    let exp = policy.base_delay.saturating_mul(factor);
-    let capped = exp.min(policy.max_delay);
-    let ceil_ms = u64::try_from(capped.as_millis()).unwrap_or(u64::MAX);
-    if ceil_ms == 0 {
-        return Duration::ZERO;
-    }
-    // Random jitter: uniform in [0, ceil_ms]
-    Duration::from_millis(rand::random::<u64>() % ceil_ms.saturating_add(1))
 }
 
 /// A cache of one query result for a **single** sub-organization.
@@ -227,7 +185,7 @@ impl TurnkeyApiClient {
     /// Creates a client that targets `base_url` instead of Turnkey's default,
     /// for driving the real client against a mock HTTP server in tests.
     #[cfg(test)]
-    pub(super) fn with_base_url(base_url: String) -> Self {
+    pub fn with_base_url(base_url: String) -> Self {
         Self {
             base_url: Some(base_url),
             ..Self::new()
@@ -255,30 +213,13 @@ impl TurnkeyApiClient {
     async fn with_retry<T, Fut>(
         &self,
         operation: &str,
-        mut op: impl FnMut() -> Fut + Send,
+        op: impl FnMut() -> Fut + Send,
     ) -> Result<T, TurnkeyApiError>
     where
         Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
     {
-        let mut attempt: u32 = 0;
-        loop {
-            match op().await {
-                Ok(value) => return Ok(value),
-                Err(error) => {
-                    attempt += 1;
-                    if attempt >= self.retry.max_attempts || !error.is_retryable() {
-                        warn!("turnkey.request.failed op={operation} attempts={attempt} err={error}");
-                        return Err(error);
-                    }
-                    let delay = backoff_delay(attempt, &self.retry);
-                    warn!(
-                        "turnkey.request.retry op={operation} attempt={attempt} delay_ms={} err={error}",
-                        delay.as_millis()
-                    );
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
+        retry_with_backoff(&self.retry, operation, TurnkeyApiError::is_retryable, op)
+            .await
     }
 }
 
@@ -399,6 +340,80 @@ impl TurnkeyApiClient {
 
         // User has changed, remove the cache
         self.users_cache.clear();
+        Ok(())
+    }
+
+    /// Deletes OAuth providers from a Turnkey user.
+    ///
+    /// A [`MainFactor`] is required because OAuth providers live on the root user
+    /// ([`super::policies::AUTH_USER_MAIN_USERNAME`]) and Turnkey doesn't allow non-root
+    /// users to update root users even if a policy allows it.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn delete_oauth_providers(
+        &self,
+        suborganization_id: &str,
+        user_id: &str,
+        provider_ids: Vec<String>,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let intent = DeleteOauthProvidersIntent {
+            user_id: user_id.to_string(),
+            provider_ids,
+        };
+
+        let timestamp_ms = ntp_timestamp_ms()?;
+        self.with_retry("delete_oauth_providers", || async {
+            client
+                .delete_oauth_providers(
+                    suborganization_id.to_string(),
+                    timestamp_ms,
+                    intent.clone(),
+                )
+                .await
+                .map(|_activity| ())
+                .map_err(TurnkeyApiError::from)
+        })
+        .await?;
+
+        // User has changed, remove the cache.
+        self.users_cache.clear();
+        Ok(())
+    }
+
+    /// Deletes the entire Turnkey Account (sub-organization). One of the few
+    /// operations that the [`SyncFactor`] can execute.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn delete_sub_organization(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let intent = DeleteSubOrganizationIntent {
+            delete_without_export: Some(true),
+        };
+
+        let timestamp_ms = ntp_timestamp_ms()?;
+        self.with_retry("delete_sub_organization", || async {
+            client
+                .delete_sub_organization(
+                    suborganization_id.to_string(),
+                    timestamp_ms,
+                    intent,
+                )
+                .await
+                .map(|_activity| ())
+                .map_err(TurnkeyApiError::from)
+        })
+        .await?;
+
+        self.users_cache.clear();
+        self.policies_cache.clear();
         Ok(())
     }
 
@@ -620,14 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn backoff_is_bounded_by_max_delay() {
-        let policy = RetryPolicy::default();
-        for attempt in 1..=8 {
-            assert!(backoff_delay(attempt, &policy) <= policy.max_delay);
-        }
-    }
-
-    #[test]
     fn sdk_error_status_classification() {
         use turnkey_client::TurnkeyClientError;
         assert!(matches!(
@@ -655,7 +662,6 @@ mod tests {
             TurnkeyApiError::from(TurnkeyClientError::MissingResult),
             TurnkeyApiError::Activity { .. }
         ));
-        // Polling giving up is transient (retryable), not a rejected activity.
         assert!(matches!(
             TurnkeyApiError::from(TurnkeyClientError::ExceededRetries(3)),
             TurnkeyApiError::ActivityPollingExceeded { .. }
