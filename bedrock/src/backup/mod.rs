@@ -481,20 +481,20 @@ impl BackupManager {
         timestamp_iso8601: String,
         is_public: bool,
     ) -> Result<(), BackupError> {
-        // Bedrock owns the flows behind these, so it sends their events itself.
-        // Accepting one here would double-count the operation in the failure rate the
-        // event feeds, and Bedrock and the app ship independently -- an older app build
-        // still emitting its own must be rejected, not silently believed.
-        if matches!(
-            kind,
-            BackupReportEventKind::Sync | BackupReportEventKind::RemoveMainFactor
-        ) {
+        if kind == BackupReportEventKind::Sync {
             return Err(BackupError::Generic {
-                error_message: format!(
-                    "the {kind} event is automatically sent from Bedrock"
-                ),
+                error_message: "Sync event is automatically sent from Bedrock"
+                    .to_string(),
             });
         }
+
+        // `RemoveMainFactor` is deliberately NOT rejected the same way, even though
+        // `BackupManager::remove_factor` now sends it itself. Both apps send this event
+        // today and neither calls `remove_factor` yet, so rejecting it would break
+        // their telemetry the moment they bump Bedrock -- ahead of any benefit. The
+        // "do not also send it" contract is documented on `remove_factor`; enforce it
+        // here only once both platforms have migrated, or the transition costs more
+        // than the double-count it prevents.
 
         let client_events = ClientEventsReporter::new();
 
