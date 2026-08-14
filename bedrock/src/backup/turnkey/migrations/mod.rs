@@ -1,5 +1,4 @@
-//! Turnkey account migrations. The purpose is to check the state of a
-//! user's Turnkey account to ensure it is correct and up-to-date.
+#![doc = include_str!("README.md")]
 
 use crate::backup::{MainFactor, SyncFactor};
 use crate::primitives::config::BedrockEnvironment;

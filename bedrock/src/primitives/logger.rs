@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -136,6 +137,13 @@ pub fn log_message(level: LogLevel, args: std::fmt::Arguments<'_>) {
     logger.log(level, sanitize_hex_secrets(message));
 }
 
+/// Delivers an `ERROR` record tagged `[Critical]`, after the active [`LogContext`]
+/// prefix. See [`critical`](crate::critical).
+#[doc(hidden)]
+pub fn log_critical(args: std::fmt::Arguments<'_>) {
+    log_message(LogLevel::Error, format_args!("[Critical] {args}"));
+}
+
 /// Context-aware logging macros that automatically use the current logging context.
 ///
 /// These macros allow you to log messages that will be automatically prefixed
@@ -206,7 +214,23 @@ macro_rules! error {
     };
 }
 
+/// Logs an error-level message tagged `[Critical]`, for state that needs immediate
+/// attention. There's usually very low alerting threshold for these.
+///
+/// The tag is added by the logger, so do not repeat it in the message. Records land as
+/// `[Bedrock][<module>] [Critical] <message>`
+#[macro_export]
+macro_rules! critical {
+    ($($arg:tt)*) => {
+        $crate::primitives::logger::log_critical(format_args!($($arg)*))
+    };
+}
+
 /// A scope guard that sets a logging context and automatically clears it when dropped.
+///
+/// The context is thread-local, so a guard is only valid for synchronous code. Held
+/// across an `.await` it is silently lost as soon as the future resumes on another
+/// runtime worker; use [`in_log_context`] for anything `async`.
 ///
 /// # Examples
 ///
@@ -222,6 +246,28 @@ macro_rules! error {
 /// ```
 pub struct LogContext {
     previous: Option<String>,
+}
+
+/// Runs `future` in the [`LogContext`] of `module`, re-applying it on every poll.
+///
+/// The context is thread-local while a future may resume on any runtime worker, so a
+/// single guard held across an `.await` would drop the prefix from every record
+/// emitted after the first suspension (and restore a stale context onto whichever
+/// worker resumed it). Re-applying the context per poll keeps the prefix on
+/// everything the future logs, nested synchronous calls included.
+///
+/// [`bedrock_export`](crate::bedrock_export) wraps every exported `async` method in it.
+pub async fn in_log_context<F>(module: &str, future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(move |cx| {
+        let _bedrock_logger_ctx = LogContext::new(module);
+        future.as_mut().poll(cx)
+    })
+    .await
 }
 
 impl LogContext {
@@ -492,6 +538,163 @@ fn log_level(level: Level) -> LogLevel {
         LogLevel::Debug
     } else {
         LogLevel::Trace
+    }
+}
+
+/// The log context is what makes every record alertable, so its scoping is tested
+/// directly: a lost context means logs a monitor can no longer match.
+#[cfg(test)]
+mod context_tests {
+    use super::{
+        get_context, in_log_context, set_logger, LogContext, LogLevel, Logger,
+    };
+    use serial_test::serial;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll, Waker};
+
+    /// Records delivered to [`CapturingLogger`].
+    static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Captures the fully formatted records, i.e. what the host logger receives.
+    struct CapturingLogger;
+
+    impl Logger for CapturingLogger {
+        fn log(&self, _level: LogLevel, message: String) {
+            CAPTURED.lock().expect("captured lock").push(message);
+        }
+    }
+
+    /// Installs [`CapturingLogger`] and drops records left by an earlier test.
+    ///
+    /// [`set_logger`] keeps the first logger for the whole process, so tests that use
+    /// this must be `#[serial]` and must assert on the records they recognize: other
+    /// tests logging in parallel land in the same sink.
+    fn capture_records() {
+        set_logger(Arc::new(CapturingLogger));
+        CAPTURED.lock().expect("captured lock").clear();
+    }
+
+    /// The record containing `needle`, or a panic naming everything captured.
+    fn captured_record(needle: &str) -> String {
+        let captured = CAPTURED.lock().expect("captured lock");
+        captured
+            .iter()
+            .find(|record| record.contains(needle))
+            .unwrap_or_else(|| {
+                panic!("no record containing {needle:?} in {captured:?}")
+            })
+            .clone()
+    }
+
+    /// Returns `Pending` on the first poll only, so the caller has to poll twice.
+    #[derive(Default)]
+    struct YieldOnce(bool);
+
+    impl Future for YieldOnce {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.0 {
+                return Poll::Ready(());
+            }
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+
+    #[test]
+    fn guard_scopes_the_context_to_its_lifetime() {
+        assert!(get_context().is_none());
+        {
+            let _bedrock_logger_ctx = LogContext::new("Backup");
+            assert_eq!(get_context().as_deref(), Some("[Bedrock][Backup]"));
+        }
+        assert!(get_context().is_none());
+    }
+
+    /// A runtime may resume a task on any worker. The context must be re-applied by
+    /// whichever thread polls the future, otherwise every record after the first
+    /// `.await` loses its tag.
+    #[test]
+    fn context_is_reapplied_when_a_future_resumes_on_another_thread() {
+        let mut future = Box::pin(in_log_context("TurnkeyMigration", async {
+            let on_first_poll = get_context();
+            YieldOnce::default().await;
+            (on_first_poll, get_context())
+        }));
+
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending(),
+            "the future must suspend once for this test to be meaningful"
+        );
+
+        let (first, second) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let polled = future
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()));
+                    let Poll::Ready(observed) = polled else {
+                        panic!("future should have completed on its second poll");
+                    };
+                    observed
+                })
+                .join()
+                .expect("polling thread panicked")
+        });
+
+        assert_eq!(first.as_deref(), Some("[Bedrock][TurnkeyMigration]"));
+        assert_eq!(
+            second.as_deref(),
+            Some("[Bedrock][TurnkeyMigration]"),
+            "the resuming thread must see the context"
+        );
+        assert!(
+            get_context().is_none(),
+            "the context must not outlive the future"
+        );
+    }
+
+    /// End to end: an exported `async` method logs on both sides of an `.await`, and
+    /// both records have to reach the host logger tagged.
+    #[cfg(feature = "tooling_tests")]
+    #[tokio::test]
+    #[serial]
+    async fn exported_async_method_tags_records_around_an_await() {
+        capture_records();
+
+        crate::primitives::tooling_tests::ToolingDemo::new()
+            .demo_async_operation(1)
+            .await
+            .expect("the demo operation succeeds under 5s");
+
+        for needle in ["Starting async operation", "Async operation successful"] {
+            let record = captured_record(needle);
+            assert!(
+                record.starts_with("[Bedrock][ToolingDemo] "),
+                "untagged record: {record}"
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn critical_records_are_tagged_after_the_context() {
+        capture_records();
+
+        let _bedrock_logger_ctx = LogContext::new("Backup");
+        crate::critical!("checksum for {} is unreadable", "orb_pkg");
+
+        assert_eq!(
+            captured_record("is unreadable"),
+            "[Bedrock][Backup] [Critical] checksum for orb_pkg is unreadable"
+        );
     }
 }
 

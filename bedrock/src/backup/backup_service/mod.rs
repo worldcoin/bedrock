@@ -247,7 +247,7 @@ fn ec_keypair_authorization(
     let public_key = uncompressed_public_key(sync_factor)?;
     Ok(Authorization::EcKeypair {
         public_key: STANDARD.encode(public_key),
-        signature: STANDARD.encode(signature),
+        signature: STANDARD.encode(signature.to_der()),
     })
 }
 

@@ -64,6 +64,9 @@ pub mod filesystem;
 /// Introduces authenticated HTTP client functionality that native applications must implement for bedrock.
 pub mod http_client;
 
+/// TLS trust policy for bedrock's Rust-native outbound HTTPS clients.
+pub mod tls;
+
 /// Introduces User-Agent helpers for requests issued through Bedrock consumers.
 pub mod user_agent;
 

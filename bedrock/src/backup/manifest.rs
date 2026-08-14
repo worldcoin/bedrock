@@ -84,8 +84,8 @@ impl BackupManifest {
 
                     // Checksum: 32 raw bytes from hex
                     let ck_bytes = hex::decode(&entry.checksum_hex).map_err(|_| {
-                        crate::error!(
-                            "[Critical] Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
+                        crate::critical!(
+                            "Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
                             entry.designator
                         );
                         BackupError::InvalidFileForBackup(format!(
@@ -94,8 +94,8 @@ impl BackupManifest {
                         ))
                     })?;
                     let ck_arr: [u8; 32] = ck_bytes.try_into().map_err(|_| {
-                        crate::error!(
-                            "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
+                        crate::critical!(
+                            "Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
                             entry.designator
                         );
                         BackupError::InvalidFileForBackup(format!(
@@ -402,8 +402,8 @@ impl ManifestManager {
             let computed_checksum = blake3::hash(&data);
             let expected_checksum: [u8; 32] = hex::decode(&entry.checksum_hex)
                 .map_err(|_| {
-                    crate::error!(
-                        "[Critical] Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
+                    crate::critical!(
+                        "Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
                         entry.designator
                     );
                     BackupError::InvalidFileForBackup(format!(
@@ -413,8 +413,8 @@ impl ManifestManager {
                 })?
                 .try_into()
                 .map_err(|_| {
-                    crate::error!(
-                        "[Critical] Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
+                    crate::critical!(
+                        "Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
                         entry.designator
                     );
                     BackupError::InvalidFileForBackup(format!(

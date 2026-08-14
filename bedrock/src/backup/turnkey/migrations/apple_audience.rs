@@ -46,6 +46,8 @@ impl TurnkeyMigration for MigrationAppleAudience {
         "Enable Sign in with Apple for all iOS and Android apps."
     }
 
+    /// Every observed state this reconciles, and the plan for each, is tabulated
+    /// in `migrations/README.md` (rendered in the [`migrations`](super) module docs).
     async fn run(
         &self,
         ctx: &MigrationContext<'_>,
@@ -143,8 +145,8 @@ fn plan(
         .iter()
         .any(|provider| provider.subject != subject)
     {
-        crate::error!(
-            "critical consistency error. user has Apple OIDCs with different `sub`s"
+        crate::critical!(
+            "consistency error. user has Apple OIDCs with different `sub`s"
         );
         return Err(TurnkeyApiError::Consistency);
     }

@@ -64,7 +64,7 @@ impl Stamp for KeypairSignerStamper {
             .map_err(|e| StamperError::InvalidPrivateKeyBytes(e.to_string()))?;
         let stamp = ApiStamp {
             public_key: self.signer.public_key_hex().to_string(),
-            signature: hex::encode(signature),
+            signature: hex::encode(signature.to_der()),
             scheme: SIGNATURE_SCHEME_P256.to_string(),
         };
         let json = serde_json::to_string(&stamp).map_err(|e| {
@@ -333,8 +333,8 @@ impl TurnkeyApiClient {
         if created != requested {
             // If Turnkey's activity succeeded but the created count is mismatched, this is surfacing
             // a major consistency problem with Turnkey. Requires immediate attention.
-            crate::error!(
-                "CRITICAL. turnkey.create_oauth_providers.count_mismatch requested={requested} created={created}"
+            crate::critical!(
+                "turnkey.create_oauth_providers.count_mismatch requested={requested} created={created}"
             );
         }
 
