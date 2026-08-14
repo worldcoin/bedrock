@@ -274,10 +274,10 @@ fn map_turnkey_error(error: &TurnkeyApiError) -> BackupOperationError {
 /// `get_users` is the read the provider path already needs, so it shares the client's
 /// cache. Note this proves the signer is *registered and accepted for a read*, not
 /// that policy authorizes the delete activity that follows: a sub-organization whose
-/// [`MigrationSyncFactorPolicy`](crate::backup::turnkey::migrations) never ran can
-/// pass here and still reject the teardown. It converts the common failure (a sync
-/// factor Turnkey has never seen) into an actionable error before the commit; it does
-/// not make the teardown guaranteed.
+/// `sync_factor_policy` migration never ran can pass here and still reject the
+/// teardown. It converts the common failure (a sync factor Turnkey has never seen)
+/// into an actionable error before the commit; it does not make the teardown
+/// guaranteed.
 ///
 /// # Errors
 /// [`NeedsReauthReason::SyncFactorInvalid`] if Turnkey no longer knows the signer;
