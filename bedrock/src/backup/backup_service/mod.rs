@@ -369,7 +369,14 @@ fn attestation_error(error: &HttpError) -> BackupOperationError {
             }
         }
     }
-    let retryable = matches!(error, HttpError::Timeout | HttpError::NoConnectivity);
+    // A degraded gateway is as retryable as a degraded backup service; classifying it
+    // otherwise tells native a transient outage is permanent, on a path where nothing
+    // has been committed yet.
+    let retryable = match error {
+        HttpError::Timeout | HttpError::NoConnectivity => true,
+        HttpError::BadStatusCode { code, .. } => (500..600).contains(code),
+        _ => false,
+    };
     crate::warn!("backup_service.attestation.failed retryable={retryable} err={error}");
     BackupOperationError::Network { retryable }
 }
@@ -438,6 +445,65 @@ mod tests {
         format!(r#"{{"error":{{"code":"{code}","message":"nope"}}}}"#).into_bytes()
     }
 
+    /// `delete_factor` is not idempotent and its challenge token is single-use, so a
+    /// replay would burn a consumed token at best and double-apply at worst. Only the
+    /// `retry: false` argument prevents it, which is otherwise invisible to the suite.
+    #[tokio::test]
+    async fn delete_factor_is_never_replayed() {
+        use crate::primitives::attestation::AttestationTokenProvider;
+        use crate::primitives::set_attestation_token_provider;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        struct FakeAttestation;
+        #[async_trait::async_trait]
+        impl AttestationTokenProvider for FakeAttestation {
+            async fn attestation_token(
+                &self,
+                _request_hash: String,
+            ) -> Result<String, HttpError> {
+                Ok("fake".to_string())
+            }
+        }
+        set_attestation_token_provider(Arc::new(FakeAttestation));
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_FACTOR_CHALLENGE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "challenge": STANDARD.encode([7u8; 32]),
+                "token": "challenge-token",
+            })))
+            .mount(&server)
+            .await;
+        // A status the challenge fetch *would* retry, to prove the delete does not.
+        Mock::given(method("POST"))
+            .and(path(DELETE_FACTOR_PATH))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = BackupServiceClient::with_base_url_for_test(server.uri()).unwrap();
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let error = client
+            .delete_factor(&signer, "f-1", None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
+        ));
+        let deletes = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == DELETE_FACTOR_PATH)
+            .count();
+        assert_eq!(deletes, 1, "the delete must be attempted exactly once");
+    }
+
     #[test]
     fn risk_codes_are_classified_for_the_fraud_gatekeeper() {
         for code in [
@@ -495,9 +561,28 @@ mod tests {
             BackupOperationError::Network { retryable: true }
         ));
         assert!(matches!(
+            attestation_error(&HttpError::Cancelled),
+            BackupOperationError::Network { retryable: false }
+        ));
+    }
+
+    /// A degraded gateway must be as retryable as a degraded backup service: nothing
+    /// has been committed at this point, so telling native the failure is permanent
+    /// strands an operation a retry would have completed.
+    #[test]
+    fn attestation_gateway_outage_is_retryable() {
+        assert!(matches!(
             attestation_error(&HttpError::BadStatusCode {
-                code: 500,
-                response_body: b"gateway exploded".to_vec(),
+                code: 503,
+                response_body: b"gateway unavailable".to_vec(),
+            }),
+            BackupOperationError::Network { retryable: true }
+        ));
+        // A 4xx refusal we could not classify is not going to fix itself.
+        assert!(matches!(
+            attestation_error(&HttpError::BadStatusCode {
+                code: 400,
+                response_body: b"bad request".to_vec(),
             }),
             BackupOperationError::Network { retryable: false }
         ));

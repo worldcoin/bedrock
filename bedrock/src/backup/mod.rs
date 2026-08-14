@@ -62,6 +62,11 @@ use crate::primitives::{KeypairSignerError, P256Signer};
 /// UI-blocking operation. Deadline for iOS which can't cancel uniffi async.
 const REMOVE_FACTOR_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Deadline for the `RemoveMainFactor` client event, which is sent after
+/// [`REMOVE_FACTOR_TIMEOUT`] has already been spent and over the unbounded foreign
+/// HTTP client. Losing the event is strictly better than hanging the caller.
+const REMOVE_FACTOR_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
 /// Unsealed backups are raw bytes with the `RootKey` and files.
@@ -476,10 +481,18 @@ impl BackupManager {
         timestamp_iso8601: String,
         is_public: bool,
     ) -> Result<(), BackupError> {
-        if kind == BackupReportEventKind::Sync {
+        // Bedrock owns the flows behind these, so it sends their events itself.
+        // Accepting one here would double-count the operation in the failure rate the
+        // event feeds, and Bedrock and the app ship independently -- an older app build
+        // still emitting its own must be rejected, not silently believed.
+        if matches!(
+            kind,
+            BackupReportEventKind::Sync | BackupReportEventKind::RemoveMainFactor
+        ) {
             return Err(BackupError::Generic {
-                error_message: "Sync event is automatically sent from Bedrock"
-                    .to_string(),
+                error_message: format!(
+                    "the {kind} event is automatically sent from Bedrock"
+                ),
             });
         }
 
@@ -612,10 +625,15 @@ impl BackupManager {
 
         let outcome = result?;
 
-        // Removing the backup makes the local manifest and event state stale.
+        // Removing the backup makes the local manifest and event state stale. The
+        // remote deletion has already committed, so a cleanup failure cannot change
+        // the outcome we report -- but it leaves the device describing a backup that
+        // no longer exists, which needs triage rather than a quiet warning.
         if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
             if let Err(error) = self.post_delete_backup() {
-                crate::warn!("remove_factor.post_delete_cleanup_failed err={error:?}");
+                crate::critical!(
+                    "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
+                );
             }
         }
         Ok(outcome)
@@ -992,17 +1010,30 @@ async fn send_remove_factor_event(
         return;
     }
 
-    if let Err(error) = ClientEventsReporter::new()
-        .send_event(
-            BackupReportEventKind::RemoveMainFactor,
-            result.is_ok(),
-            result.as_ref().err().map(ToString::to_string),
-            Utc::now().to_rfc3339(),
-            false,
-        )
-        .await
-    {
-        crate::warn!("[ClientEvents] failed to send RemoveMainFactor event: {error:?}");
+    // `send_event` ends in the foreign HTTP client, which Bedrock cannot bound. The
+    // user is already waiting on the result this event merely describes, so cap it:
+    // telemetry must never outlive the operation it reports on.
+    let reporter = ClientEventsReporter::new();
+    let send = reporter.send_event(
+        BackupReportEventKind::RemoveMainFactor,
+        result.is_ok(),
+        result.as_ref().err().map(ToString::to_string),
+        Utc::now().to_rfc3339(),
+        false,
+    );
+    match tokio::time::timeout(REMOVE_FACTOR_EVENT_TIMEOUT, send).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            crate::warn!(
+                "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
+            );
+        }
+        Err(_elapsed) => {
+            crate::warn!(
+                "[ClientEvents] RemoveMainFactor event timed out after {}s",
+                REMOVE_FACTOR_EVENT_TIMEOUT.as_secs()
+            );
+        }
     }
 }
 

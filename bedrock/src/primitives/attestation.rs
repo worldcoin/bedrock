@@ -37,6 +37,11 @@ pub fn set_attestation_token_provider(
     provider: Arc<dyn AttestationTokenProvider>,
 ) -> bool {
     if ATTESTATION_GATEWAY.get().is_some() {
+        // Most FFI callers discard the return value, so a re-initialization (e.g. after
+        // an account switch) would otherwise keep the stale provider with no evidence.
+        crate::warn!(
+            "attestation.provider_already_set: keeping the existing provider, ignoring the new one"
+        );
         return false;
     }
     let gateway = AttestationGateway::new(provider);

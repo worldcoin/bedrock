@@ -80,7 +80,7 @@ impl BackupFlow for RemoveFactor {
                 self.remove_passkey(ctx, &metadata).await
             }
             BackupFactorKind::EcKeypair { .. } => {
-                crate::error!("remove_factor.keychain_removal_unsupported");
+                crate::warn!("remove_factor.keychain_removal_unsupported");
                 Err(BackupOperationError::Unsupported {
                     detail: "iCloud Keychain factor removal is not yet supported"
                         .to_string(),
@@ -129,9 +129,11 @@ impl RemoveFactor {
             .delete_factor(ctx.sync_factor, &self.factor_id, encryption_key)
             .await?;
 
-        // Turnkey teardown is best-effort: the factor is already removed, and a
-        // failure here leaves an orphaned Turnkey resource for a later migration, not
-        // a blocked user (BF-8).
+        // Turnkey teardown is best-effort: the factor is already removed at the
+        // authoritative store, so failing here would block a user whose removal has in
+        // fact succeeded. The cost is an orphaned Turnkey resource, logged at
+        // `critical!` because nothing reclaims it today -- the sweep is still a TODO in
+        // `turnkey::migrations`, and the sub-org id is gone from the metadata by now.
         if plan.is_last_oidc_factor {
             best_effort_delete_sub_org(ctx.turnkey, &plan.suborg_id, ctx.sync_factor)
                 .await;
@@ -156,7 +158,7 @@ impl RemoveFactor {
         metadata: &BackupMetadata,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
         if metadata.passkey_factor_count() > 1 {
-            crate::error!("remove_factor.multiple_passkeys_unsupported");
+            crate::warn!("remove_factor.multiple_passkeys_unsupported");
             return Err(BackupOperationError::Unsupported {
                 detail:
                     "removing a passkey is unsupported while several passkeys exist"
@@ -165,7 +167,7 @@ impl RemoveFactor {
         }
 
         let prf_key = metadata.single_prf_key().cloned().ok_or_else(|| {
-            crate::error!("remove_factor.missing_prf_key");
+            crate::warn!("remove_factor.missing_prf_key");
             BackupOperationError::Unsupported {
                 detail: "the passkey has no PRF encryption key to drop".to_string(),
             }
@@ -269,8 +271,13 @@ fn map_turnkey_error(error: &TurnkeyApiError) -> BackupOperationError {
 
 /// Confirms Turnkey still accepts the sync factor, before anything irreversible.
 ///
-/// Any authenticated read proves the signer is registered and authorized; `get_users`
-/// is the one the provider path already needs, so it shares the client's cache.
+/// `get_users` is the read the provider path already needs, so it shares the client's
+/// cache. Note this proves the signer is *registered and accepted for a read*, not
+/// that policy authorizes the delete activity that follows: a sub-organization whose
+/// [`MigrationSyncFactorPolicy`](crate::backup::turnkey::migrations) never ran can
+/// pass here and still reject the teardown. It converts the common failure (a sync
+/// factor Turnkey has never seen) into an actionable error before the commit; it does
+/// not make the teardown guaranteed.
 ///
 /// # Errors
 /// [`NeedsReauthReason::SyncFactorInvalid`] if Turnkey no longer knows the signer;
@@ -296,8 +303,12 @@ async fn best_effort_delete_sub_org(
         .delete_sub_organization(suborg_id, SyncFactor(sync_factor))
         .await
     {
-        crate::error!(
-            "remove_factor.turnkey_suborg_cleanup_failed (best effort) code={} err={error}",
+        // The delete-factor call above already dropped the Turnkey encryption key from
+        // the backup metadata, so `suborg_id` is no longer recoverable from anywhere
+        // else -- if it is not in this record, the sub-organization cannot be found
+        // again, let alone reclaimed.
+        crate::critical!(
+            "remove_factor.turnkey_suborg_orphaned suborg_id={suborg_id} code={} err={error}",
             error.code()
         );
     }
@@ -333,8 +344,11 @@ async fn best_effort_delete_providers(
                 );
             }
             Err(error) => {
-                crate::error!(
-                    "remove_factor.turnkey_provider_cleanup_failed (best effort) provider={provider_id} code={} err={error}",
+                // The OAuth provider is still registered in Turnkey, so the account
+                // the user asked to disconnect can still authorize against it.
+                crate::critical!(
+                    "remove_factor.turnkey_provider_orphaned suborg_id={} provider={provider_id} code={} err={error}",
+                    plan.suborg_id,
                     error.code()
                 );
             }
@@ -358,28 +372,39 @@ async fn provider_ids_for_identity(
         .await
         .map_err(|error| map_turnkey_error(&error))?;
 
-    let ids = users
-        .iter()
-        .find(|user| user.user_id == plan.user_id)
-        .and_then(|user| {
-            let target = user
-                .oauth_providers
-                .iter()
-                .find(|provider| provider.provider_id == plan.provider_id)?;
-            Some(
-                user.oauth_providers
-                    .iter()
-                    .filter(|provider| {
-                        provider.issuer == target.issuer
-                            && provider.subject == target.subject
-                    })
-                    .map(|provider| provider.provider_id.clone())
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .unwrap_or_default();
+    let Some(user) = users.iter().find(|user| user.user_id == plan.user_id) else {
+        // The metadata's `turnkey_user_id` does not exist in the sub-organization. The
+        // teardown below would iterate an empty list and report success, leaving the
+        // provider the user asked to disconnect registered and usable, so say so.
+        crate::critical!(
+            "remove_factor.turnkey_user_missing suborg_id={} user_id={} (OAuth provider cannot be removed)",
+            plan.suborg_id,
+            plan.user_id
+        );
+        return Ok(Vec::new());
+    };
 
-    Ok(ids)
+    let Some(target) = user
+        .oauth_providers
+        .iter()
+        .find(|provider| provider.provider_id == plan.provider_id)
+    else {
+        // Already absent: an earlier attempt got this far. Idempotent, not an error.
+        crate::debug!(
+            "remove_factor.turnkey_provider_already_absent provider={}",
+            plan.provider_id
+        );
+        return Ok(Vec::new());
+    };
+
+    Ok(user
+        .oauth_providers
+        .iter()
+        .filter(|provider| {
+            provider.issuer == target.issuer && provider.subject == target.subject
+        })
+        .map(|provider| provider.provider_id.clone())
+        .collect())
 }
 
 #[cfg(test)]
@@ -793,6 +818,73 @@ mod tests {
         let paths = called_paths(&server).await;
         assert!(paths.contains(&DELETE_SUB_ORG.to_string()));
         assert!(!paths.contains(&DELETE_OAUTH.to_string()));
+        assert_ordered(&paths, DELETE_FACTOR, DELETE_SUB_ORG);
+    }
+
+    /// The whole safety argument of this flow is that the authoritative store commits
+    /// *before* the best-effort teardown: reversing it would tear down Turnkey for a
+    /// removal the backup service might still reject.
+    fn assert_ordered(paths: &[String], first: &str, then: &str) {
+        let first_at = paths.iter().position(|path| path == first);
+        let then_at = paths.iter().position(|path| path == then);
+        assert!(
+            matches!((first_at, then_at), (Some(a), Some(b)) if a < b),
+            "expected {first} before {then}, got {paths:?}"
+        );
+    }
+
+    /// The teardown is best-effort by design: once the backup service has committed,
+    /// a Turnkey failure must not be reported as a failed removal. It is logged at
+    /// `critical!` instead, because nothing reclaims the orphan.
+    #[tokio::test]
+    async fn last_oidc_removal_survives_a_failing_sub_org_teardown() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata(vec![oidc_factor("f-1", "p-1"), passkey_factor("pk-1")]),
+        )
+        .await;
+        mount_delete_factor(
+            &server,
+            json!({ "backupDeleted": false, "backupMetadata": metadata(vec![passkey_factor("pk-1")]) }),
+        )
+        .await;
+        mount_users(&server, vec![]).await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_SUB_ORG))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let outcome = run_remove(&server, "f-1", None, false).await.unwrap();
+
+        assert!(
+            matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }),
+            "the factor is gone from the authoritative store; the user must be told so"
+        );
+    }
+
+    /// Turnkey rejecting the sync factor *after* the commit is still best-effort. The
+    /// pre-flight exists to make this rare, not to make it fatal.
+    #[tokio::test]
+    async fn last_oidc_removal_survives_an_unauthorized_teardown() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(&server, metadata(vec![oidc_factor("f-1", "p-1")])).await;
+        mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
+        mount_users(&server, vec![]).await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_SUB_ORG))
+            .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+                "error": { "message": "PUBLIC_KEY_NOT_FOUND" }
+            })))
+            .mount(&server)
+            .await;
+
+        let outcome = run_remove(&server, "f-1", None, true).await.unwrap();
+
+        assert!(matches!(outcome, RemoveFactorOutcome::BackupDeleted));
     }
 
     /// Last-OIDC path: a sync factor Turnkey no longer knows aborts *before* the
