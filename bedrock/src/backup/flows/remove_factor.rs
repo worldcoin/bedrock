@@ -106,9 +106,14 @@ impl RemoveFactor {
         // still safe -- a stale sync factor on either path, and a missing Turnkey user
         // on the provider path. Each turns "backup gone, Turnkey resource orphaned,
         // user told everything worked" into an actionable error with nothing yet
-        // destroyed. A merely transient Turnkey failure is *not* fatal here (see
-        // `verify_sync_factor`). The read is cached per client, so the provider path
-        // pays for it only once.
+        // destroyed. The read is cached per client, so the provider path pays for it
+        // only once.
+        //
+        // The two paths treat a *transient* Turnkey failure differently, deliberately:
+        // the last-OIDC path needs only the read's verdict, so it proceeds (see
+        // `verify_sync_factor`), while the provider path needs the read's *data* --
+        // without it the only alternative is deleting the single id we were handed,
+        // orphaning that identity's sibling audiences.
         let provider_ids = if plan.is_last_oidc_factor {
             verify_sync_factor(ctx, &plan).await?;
             None
