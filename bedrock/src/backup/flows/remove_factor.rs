@@ -13,12 +13,7 @@ use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::P256Signer;
 
-/// Deadline for a single Turnkey pre-flight probe.
-///
-/// Scoped to the probe rather than the whole cancel-safe phase: a phase-wide budget
-/// would have to exceed `retrieve_metadata`'s own retried budget, and cancelling it
-/// would turn a hung `get_users` into a hard failure for the very paths written to
-/// tolerate a Turnkey outage.
+/// Deadline for a single Turnkey pre-flight probe
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Deadline for the post-commit Turnkey cleanup. Expiring here orphans a Turnkey
@@ -77,9 +72,6 @@ impl BackupFlow for RemoveFactor {
         &self,
         ctx: &FlowContext<'_>,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        // No phase-wide deadline: `retrieve_metadata` is bounded by its own per-request
-        // timeouts and bounded retries, and each Turnkey probe carries `PROBE_TIMEOUT`
-        // with the tolerance its own path requires.
         let prepared = self.prepare(ctx).await?;
         self.commit(ctx, prepared).await
     }
@@ -188,11 +180,8 @@ impl RemoveFactor {
         Ok(Prepared::Oidc { plan, provider_ids })
     }
 
-    /// Resolves the Turnkey authenticator registered for `credential_id`, if any.
-    ///
-    /// Dropping the PRF key at the backup service stops the passkey recovering the
-    /// backup, but leaves it able to authorize Turnkey activities. Removing it there
-    /// too is what makes the disconnect complete.
+    /// Resolves the Turnkey authenticator registered for `credential_id`, if any to
+    /// remove also from Turnkey.
     ///
     /// # Errors
     /// [`NeedsReauthReason::MainFactorRequired`] when the authenticator exists but no
