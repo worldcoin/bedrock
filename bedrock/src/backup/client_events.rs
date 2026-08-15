@@ -544,10 +544,7 @@ impl ClientEventsReporter {
 /// # Spawning
 /// `bedrock_export` wraps every exported async fn in `async_compat::Compat`, which
 /// enters a process-global runtime handle on each poll, so the task outlives this
-/// call. (Distinct from the no-spawn rule on `MigrationProcessor`, which is about
-/// cancellation safety — there, work outliving the future is the bug.) That runtime is
-/// single-threaded, hence the deadline: a hung foreign HTTP client would otherwise pin
-/// the thread every other detached task shares.
+/// call
 pub(super) fn send_remove_factor_event(
     result: &Result<RemoveFactorOutcome, BackupOperationError>,
 ) {
