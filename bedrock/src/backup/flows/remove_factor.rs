@@ -87,7 +87,7 @@ enum Prepared {
     /// whole sub-organization goes instead).
     Oidc {
         plan: OidcRemovalPlan,
-        provider_ids: Option<Vec<String>>,
+        identity: Option<OidcIdentity>,
     },
     /// A passkey removal: the PRF key to drop, plus the Turnkey authenticator
     /// backing it when the backup has a Turnkey account.
@@ -167,13 +167,13 @@ impl RemoveFactor {
     ) -> Result<Prepared, BackupOperationError> {
         let plan = plan_oidc_removal(metadata, &self.factor_id)?;
 
-        let provider_ids = if plan.is_last_oidc_factor {
+        let identity = if plan.is_last_oidc_factor {
             verify_sync_factor(ctx, &plan).await?;
             None
         } else if let Some(main_factor) = ctx.main_factor {
             verify_main_factor(ctx, &plan.suborg_id, &plan.user_id, main_factor)
                 .await?;
-            Some(provider_ids_for_identity(ctx, &plan, false).await?)
+            resolve_oidc_identity(ctx, &plan).await?
         } else {
             // Deleting an OAuth provider requires a [`MainFactor`]
             crate::debug!("remove_factor.needs_main_factor");
@@ -182,7 +182,7 @@ impl RemoveFactor {
             });
         };
 
-        Ok(Prepared::Oidc { plan, provider_ids })
+        Ok(Prepared::Oidc { plan, identity })
     }
 
     /// Resolves the Turnkey authenticator registered for `credential_id`, if any to
@@ -272,9 +272,9 @@ impl RemoveFactor {
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
         let mut passkey_authenticator = None;
         let (encryption_key, oidc) = match prepared {
-            Prepared::Oidc { plan, provider_ids } => (
+            Prepared::Oidc { plan, identity } => (
                 plan.is_last_oidc_factor.then(|| plan.turnkey_key.clone()),
-                Some((plan, provider_ids)),
+                Some((plan, identity)),
             ),
             Prepared::Passkey {
                 prf_key,
@@ -291,8 +291,8 @@ impl RemoveFactor {
             .delete_factor(ctx.sync_factor, &self.factor_id, encryption_key)
             .await?;
 
-        if let Some((plan, provider_ids)) = oidc {
-            best_effort_turnkey_cleanup(ctx, &plan, provider_ids).await;
+        if let Some((plan, identity)) = oidc {
+            best_effort_turnkey_cleanup(ctx, &plan, identity).await;
         } else if let (Some(authenticator), Some(main_factor)) =
             (passkey_authenticator, ctx.main_factor)
         {
@@ -313,14 +313,16 @@ impl RemoveFactor {
 async fn best_effort_turnkey_cleanup(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
-    provider_ids: Option<Vec<String>>,
+    identity: Option<OidcIdentity>,
 ) {
     let cleanup = async {
         if plan.is_last_oidc_factor {
             best_effort_delete_sub_org(ctx.turnkey, &plan.suborg_id, ctx.sync_factor)
                 .await;
-        } else if let (Some(main_factor), Some(_)) = (ctx.main_factor, provider_ids) {
-            best_effort_delete_providers(ctx, plan, main_factor).await;
+        } else if let (Some(main_factor), Some(identity)) =
+            (ctx.main_factor, identity.as_ref())
+        {
+            best_effort_delete_providers(ctx, plan, identity, main_factor).await;
         }
     };
 
@@ -334,6 +336,13 @@ async fn best_effort_turnkey_cleanup(
             CLEANUP_TIMEOUT.as_secs()
         );
     }
+}
+
+/// The OIDC identity a provider belongs to, captured while the target provider is
+/// still present so a later read can still find its sibling audiences.
+struct OidcIdentity {
+    issuer: String,
+    subject: String,
 }
 
 /// The Turnkey authenticator backing a passkey factor.
@@ -678,10 +687,11 @@ async fn best_effort_delete_sub_org(
 async fn best_effort_delete_providers(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
+    identity: &OidcIdentity,
     main_factor: &P256Signer,
 ) {
     for attempt in 1..=PROVIDER_TEARDOWN_ATTEMPTS {
-        let provider_ids = match provider_ids_for_identity(ctx, plan, true).await {
+        let provider_ids = match provider_ids_for_identity(ctx, plan, identity).await {
             Ok(provider_ids) => provider_ids,
             Err(error) => {
                 crate::critical!(
@@ -746,20 +756,15 @@ async fn best_effort_delete_providers(
 /// Fails on a read error rather than falling back to the single provider, so a
 /// transient error can't leave the sibling providers orphaned. Returns an empty set
 /// if the identity is already absent from Turnkey (nothing to delete).
-async fn provider_ids_for_identity(
+async fn resolve_oidc_identity(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
-    fresh: bool,
-) -> Result<Vec<String>, BackupOperationError> {
-    let signer = SyncFactor(ctx.sync_factor);
-    let read = async {
-        if fresh {
-            ctx.turnkey.get_users_fresh(&plan.suborg_id, signer).await
-        } else {
-            ctx.turnkey.get_users(&plan.suborg_id, signer).await
-        }
-    };
-    let users = read.await.map_err(|error| map_turnkey_error(&error))?;
+) -> Result<Option<OidcIdentity>, BackupOperationError> {
+    let users = ctx
+        .turnkey
+        .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor))
+        .await
+        .map_err(|error| map_turnkey_error(&error))?;
 
     let Some(user) = users.iter().find(|user| user.user_id == plan.user_id) else {
         crate::critical!(
@@ -777,22 +782,48 @@ async fn provider_ids_for_identity(
         .iter()
         .find(|provider| provider.provider_id == plan.provider_id)
     else {
-        // An earlier attempt got this far. Idempotent, not an error.
-        crate::debug!(
-            "remove_factor.turnkey_provider_already_absent provider={}",
+        // Without the target we cannot derive `issuer`+`subject`, so any sibling
+        // audience of the same identity is unreachable and stays authorized.
+        crate::critical!(
+            "remove_factor.turnkey_provider_already_absent suborg_id={} provider={} (siblings of this identity cannot be identified)",
+            plan.suborg_id,
             plan.provider_id
         );
-        return Ok(Vec::new());
+        return Ok(None);
     };
 
-    Ok(user
-        .oauth_providers
+    Ok(Some(OidcIdentity {
+        issuer: target.issuer.clone(),
+        subject: target.subject.clone(),
+    }))
+}
+
+/// Every provider id currently backing `identity`, from a fresh read.
+async fn provider_ids_for_identity(
+    ctx: &FlowContext<'_>,
+    plan: &OidcRemovalPlan,
+    identity: &OidcIdentity,
+) -> Result<Vec<String>, BackupOperationError> {
+    let users = ctx
+        .turnkey
+        .get_users_fresh(&plan.suborg_id, SyncFactor(ctx.sync_factor))
+        .await
+        .map_err(|error| map_turnkey_error(&error))?;
+
+    Ok(users
         .iter()
-        .filter(|provider| {
-            provider.issuer == target.issuer && provider.subject == target.subject
+        .find(|user| user.user_id == plan.user_id)
+        .map(|user| {
+            user.oauth_providers
+                .iter()
+                .filter(|provider| {
+                    provider.issuer == identity.issuer
+                        && provider.subject == identity.subject
+                })
+                .map(|provider| provider.provider_id.clone())
+                .collect()
         })
-        .map(|provider| provider.provider_id.clone())
-        .collect())
+        .unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -1242,6 +1273,66 @@ mod tests {
             .filter(|path| *path == DELETE_OAUTH)
             .count();
         assert_eq!(deletes, 1, "the identity must be torn down atomically");
+    }
+
+    /// The target audience disappears between the pre-commit read and the teardown
+    /// (a concurrent removal, say). Its siblings must still go: the identity is
+    /// captured while the target is present, so it survives the target's absence.
+    #[tokio::test]
+    async fn provider_teardown_deletes_siblings_when_the_target_vanishes() {
+        install_attestation();
+        let server = MockServer::start().await;
+        let apple = "https://appleid.apple.com";
+        mount_metadata(
+            &server,
+            metadata(vec![
+                oidc_factor("f-apple", "p-apple-ios"),
+                oidc_factor("f-google", "p-google"),
+            ]),
+        )
+        .await;
+        mount_whoami(&server, "user-1").await;
+        // Pre-commit read sees the target; the post-commit read no longer does.
+        Mock::given(method("POST"))
+            .and(path(LIST_USERS))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "users": [main_user(vec![
+                    oauth_provider("p-apple-ios", apple, "sub-apple"),
+                    oauth_provider("p-apple-web", apple, "sub-apple"),
+                ])]
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(LIST_USERS))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "users": [main_user(vec![oauth_provider(
+                    "p-apple-web",
+                    apple,
+                    "sub-apple",
+                )])]
+            })))
+            .mount(&server)
+            .await;
+        mount_delete_factor(
+            &server,
+            json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-google", "p-google")]) }),
+        )
+        .await;
+        mount_delete_oauth(&server).await;
+        let main = signer();
+
+        let outcome = run_remove(&server, "f-apple", Some(&main), false)
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }));
+        assert_eq!(
+            deleted_provider_ids(&server).await,
+            vec!["p-apple-web".to_string()],
+            "the surviving audience of the same identity must still be deleted"
+        );
     }
 
     /// Corrupt metadata with two Turnkey keys cannot say which sub-organization a
