@@ -167,7 +167,8 @@ impl RemoveFactor {
             verify_sync_factor(ctx, &plan).await?;
             None
         } else if let Some(main_factor) = ctx.main_factor {
-            verify_main_factor(ctx, &plan, main_factor).await?;
+            verify_main_factor(ctx, &plan.suborg_id, &plan.user_id, main_factor)
+                .await?;
             Some(provider_ids_for_identity(ctx, &plan).await?)
         } else {
             // Deleting an OAuth provider requires a [`MainFactor`]
@@ -240,12 +241,14 @@ impl RemoveFactor {
             return Ok(None);
         };
 
-        if ctx.main_factor.is_none() {
+        let Some(main_factor) = ctx.main_factor else {
             crate::debug!("remove_factor.authenticator_needs_main_factor");
             return Err(BackupOperationError::NeedsReauth {
                 reason: NeedsReauthReason::MainFactorRequired,
             });
-        }
+        };
+        verify_main_factor(ctx, turnkey_account_id, turnkey_user_id, main_factor)
+            .await?;
 
         Ok(Some(PasskeyAuthenticator {
             suborg: turnkey_account_id.clone(),
@@ -547,12 +550,13 @@ async fn verify_sync_factor(
 /// authenticates as a different user — in both cases the caller needs a new ceremony.
 async fn verify_main_factor(
     ctx: &FlowContext<'_>,
-    plan: &OidcRemovalPlan,
+    suborg_id: &str,
+    expected_user_id: &str,
     main_factor: &P256Signer,
 ) -> Result<(), BackupOperationError> {
     let probe = ctx
         .turnkey
-        .whoami_user_id(&plan.suborg_id, MainFactor(main_factor));
+        .whoami_user_id(suborg_id, MainFactor(main_factor));
     let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
         crate::warn!(
             "remove_factor.main_factor_preflight_timed_out after {}s (proceeding)",
@@ -586,12 +590,11 @@ async fn verify_main_factor(
         }
     };
 
-    if user_id != plan.user_id {
+    if user_id != expected_user_id {
         // A valid Turnkey key, but not the root user that owns the OAuth providers --
         // the user completed the ceremony with the wrong passkey.
         crate::warn!(
-            "remove_factor.main_factor_wrong_user expected={} got={user_id}",
-            plan.user_id
+            "remove_factor.main_factor_wrong_user expected={expected_user_id} got={user_id}"
         );
         return Err(BackupOperationError::NeedsReauth {
             reason: NeedsReauthReason::MainFactorRequired,
@@ -1479,6 +1482,7 @@ mod tests {
         )
         .await;
         mount_users_with_authenticators(&server, &["cred-pk-1"]).await;
+        mount_whoami(&server, "user-1").await;
         mount_delete_factor(
             &server,
             json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-2", "p-2")]) }),
@@ -1495,6 +1499,42 @@ mod tests {
         let paths = called_paths(&server).await;
         assert!(paths.contains(&DELETE_AUTHENTICATORS.to_string()));
         assert_ordered(&paths, DELETE_FACTOR, DELETE_AUTHENTICATORS);
+    }
+
+    #[tokio::test]
+    async fn passkey_removal_aborts_when_the_main_factor_is_the_wrong_user() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata_keyed(
+                vec![prf_key("prf-ek"), turnkey_key()],
+                vec![passkey_factor("pk-1"), oidc_factor("f-2", "p-2")],
+            ),
+        )
+        .await;
+        mount_users_with_authenticators(&server, &["cred-pk-1"]).await;
+        mount_whoami(&server, "some-other-user").await;
+        mount_delete_factor(&server, json!({ "backupDeleted": false })).await;
+        mount_delete_authenticators(&server, "auth-cred-pk-1").await;
+        let main = signer();
+
+        let error = run_remove(&server, "pk-1", Some(&main), false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                BackupOperationError::NeedsReauth {
+                    reason: NeedsReauthReason::MainFactorRequired
+                }
+            ),
+            "expected MainFactorRequired, got {error:?}"
+        );
+        let paths = called_paths(&server).await;
+        assert!(!paths.contains(&DELETE_FACTOR.to_string()));
+        assert!(!paths.contains(&DELETE_AUTHENTICATORS.to_string()));
     }
 
     /// Authenticators live on the root user, so removing one needs the same signer an

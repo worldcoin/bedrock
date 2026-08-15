@@ -624,27 +624,20 @@ impl BackupManager {
     /// - Returns an error if the post-processing fails.
     fn post_delete_backup() -> Result<(), BackupError> {
         crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
-        // A device that never created or restored a backup locally has no manifest,
-        // but may still hold report state. Treat its absence as already-done rather
-        // than returning early and leaving that state behind.
-        match ManifestManager::new().danger_delete_manifest() {
-            Ok(()) => {}
-            Err(BackupError::FileSystem(FileSystemError::FileDoesNotExist)) => {
-                crate::debug!("post_delete_backup: no local manifest to delete");
-            }
-            Err(error) => return Err(error),
+
+        let manifest = match ManifestManager::new().danger_delete_manifest() {
+            Ok(())
+            | Err(BackupError::FileSystem(FileSystemError::FileDoesNotExist)) => Ok(()),
+            Err(error) => Err(error),
+        };
+
+        let report = ClientEventsReporter::new().delete_base_report();
+        if let Err(error) = &report {
+            crate::warn!("[ClientEvents] failed to delete base report: {error:?}");
         }
 
-        // The base report is independent state; clear it either way so nothing
-        // backup-related (designators, size, counters) survives. It is recreated
-        // automatically if/when backup is enabled again.
-        if let Err(e) = ClientEventsReporter::new().delete_base_report() {
-            crate::warn!(
-                "[ClientEvents] failed to delete base report after manifest deletion: {e:?}"
-            );
-        }
-
-        Ok(())
+        manifest?;
+        report.map_err(Into::into)
     }
 
     fn service(&self) -> Result<&BackupServiceClient, BackupOperationError> {
