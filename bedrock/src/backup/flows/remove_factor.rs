@@ -24,6 +24,10 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const CLEANUP_TIMEOUT: Duration = Duration::from_millis(200);
 
+/// How many times the provider teardown re-reads and resubmits when the identity's
+/// provider set changes underneath it.
+const PROVIDER_TEARDOWN_ATTEMPTS: u32 = 3;
+
 /// Outcome of a successful factor removal.
 #[derive(Debug, uniffi::Enum)]
 pub enum RemoveFactorOutcome {
@@ -169,7 +173,7 @@ impl RemoveFactor {
         } else if let Some(main_factor) = ctx.main_factor {
             verify_main_factor(ctx, &plan.suborg_id, &plan.user_id, main_factor)
                 .await?;
-            Some(provider_ids_for_identity(ctx, &plan).await?)
+            Some(provider_ids_for_identity(ctx, &plan, false).await?)
         } else {
             // Deleting an OAuth provider requires a [`MainFactor`]
             crate::debug!("remove_factor.needs_main_factor");
@@ -315,10 +319,8 @@ async fn best_effort_turnkey_cleanup(
         if plan.is_last_oidc_factor {
             best_effort_delete_sub_org(ctx.turnkey, &plan.suborg_id, ctx.sync_factor)
                 .await;
-        } else if let (Some(main_factor), Some(provider_ids)) =
-            (ctx.main_factor, provider_ids)
-        {
-            best_effort_delete_providers(ctx, plan, &provider_ids, main_factor).await;
+        } else if let (Some(main_factor), Some(_)) = (ctx.main_factor, provider_ids) {
+            best_effort_delete_providers(ctx, plan, main_factor).await;
         }
     };
 
@@ -676,43 +678,66 @@ async fn best_effort_delete_sub_org(
 async fn best_effort_delete_providers(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
-    provider_ids: &[String],
     main_factor: &P256Signer,
 ) {
-    for provider_id in provider_ids {
+    for attempt in 1..=PROVIDER_TEARDOWN_ATTEMPTS {
+        let provider_ids = match provider_ids_for_identity(ctx, plan, true).await {
+            Ok(provider_ids) => provider_ids,
+            Err(error) => {
+                crate::critical!(
+                    "remove_factor.turnkey_provider_orphaned suborg_id={} (could not re-read providers) err={error}",
+                    plan.suborg_id
+                );
+                return;
+            }
+        };
+
+        if provider_ids.is_empty() {
+            crate::debug!("remove_factor.turnkey_providers_already_absent");
+            return;
+        }
+
         match ctx
             .turnkey
             .delete_oauth_providers(
                 &plan.suborg_id,
                 &plan.user_id,
-                vec![provider_id.clone()],
+                provider_ids,
                 MainFactor(main_factor),
             )
             .await
         {
-            Ok(()) => {}
+            Ok(()) => return,
+            // The identity's provider set changed between the read and the delete.
+            // Re-read and submit the whole set again rather than leave it half-torn.
             Err(error) if error.is_no_matching_provider() => {
                 crate::debug!(
-                    "remove_factor.turnkey_provider_already_absent provider={provider_id}"
+                    "remove_factor.turnkey_providers_changed attempt={attempt}"
                 );
             }
-            // May yet complete upstream, so not an orphan.
             Err(error @ TurnkeyApiError::ActivityPollingExceeded { .. }) => {
                 crate::warn!(
-                    "remove_factor.turnkey_provider_teardown_pending suborg_id={} provider={provider_id} err={error}",
+                    "remove_factor.turnkey_provider_teardown_pending suborg_id={} err={error}",
                     plan.suborg_id
                 );
+                return;
             }
             Err(error) => {
                 // The account the user asked to disconnect can still authorize.
                 crate::critical!(
-                    "remove_factor.turnkey_provider_orphaned suborg_id={} provider={provider_id} code={} err={error}",
+                    "remove_factor.turnkey_provider_orphaned suborg_id={} code={} err={error}",
                     plan.suborg_id,
                     error.code()
                 );
+                return;
             }
         }
     }
+
+    crate::critical!(
+        "remove_factor.turnkey_provider_orphaned suborg_id={} (provider set kept changing across {PROVIDER_TEARDOWN_ATTEMPTS} attempts)",
+        plan.suborg_id
+    );
 }
 
 /// Resolves every Turnkey provider id sharing the target provider's OIDC identity
@@ -724,12 +749,17 @@ async fn best_effort_delete_providers(
 async fn provider_ids_for_identity(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
+    fresh: bool,
 ) -> Result<Vec<String>, BackupOperationError> {
-    let users = ctx
-        .turnkey
-        .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor))
-        .await
-        .map_err(|error| map_turnkey_error(&error))?;
+    let signer = SyncFactor(ctx.sync_factor);
+    let read = async {
+        if fresh {
+            ctx.turnkey.get_users_fresh(&plan.suborg_id, signer).await
+        } else {
+            ctx.turnkey.get_users(&plan.suborg_id, signer).await
+        }
+    };
+    let users = read.await.map_err(|error| map_turnkey_error(&error))?;
 
     let Some(user) = users.iter().find(|user| user.user_id == plan.user_id) else {
         crate::critical!(
@@ -1204,6 +1234,44 @@ mod tests {
                 "p-apple-wid".to_string(),
             ]
         );
+        // One activity for the whole identity: a per-provider loop leaves the set
+        // half-torn when a later call stalls or fails.
+        let deletes = called_paths(&server)
+            .await
+            .iter()
+            .filter(|path| *path == DELETE_OAUTH)
+            .count();
+        assert_eq!(deletes, 1, "the identity must be torn down atomically");
+    }
+
+    /// Corrupt metadata with two Turnkey keys cannot say which sub-organization a
+    /// removal targets, so it must refuse rather than pick one.
+    #[tokio::test]
+    async fn oidc_removal_aborts_on_multiple_turnkey_keys() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata_keyed(
+                vec![turnkey_key(), turnkey_key()],
+                vec![oidc_factor("f-1", "p-1"), oidc_factor("f-2", "p-2")],
+            ),
+        )
+        .await;
+        mount_delete_factor(&server, json!({ "backupDeleted": false })).await;
+        let main = signer();
+
+        let error = run_remove(&server, "f-1", Some(&main), false)
+            .await
+            .unwrap_err();
+
+        let BackupOperationError::BackupService { code } = &error else {
+            panic!("expected a BackupService error, got {error:?}");
+        };
+        assert_eq!(code, "missing_turnkey_key");
+        assert!(!called_paths(&server)
+            .await
+            .contains(&DELETE_FACTOR.to_string()));
     }
 
     /// Last OIDC factor: tears down the sub-organization and drops the encryption key.

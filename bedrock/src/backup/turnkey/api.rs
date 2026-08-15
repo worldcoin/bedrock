@@ -289,6 +289,22 @@ impl TurnkeyApiClient {
     ///
     /// # Errors
     /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    /// Re-reads the users, discarding any cached copy first.
+    ///
+    /// For callers that must act on the current state rather than a snapshot taken
+    /// earlier in the same flow.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    pub async fn get_users_fresh(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<Arc<Vec<User>>, TurnkeyApiError> {
+        self.users_cache.clear();
+        self.get_users(suborganization_id, signer).await
+    }
+
     pub async fn get_users(
         &self,
         suborganization_id: &str,

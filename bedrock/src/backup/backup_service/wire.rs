@@ -137,11 +137,23 @@ impl BackupMetadata {
             .count()
     }
 
-    /// The single Turnkey encryption key, if the backup has a Turnkey account.
+    /// The Turnkey encryption key, or `None` unless there is exactly one.
+    ///
+    /// More than one means the metadata cannot say which sub-organization a removal
+    /// targets, so callers must refuse rather than pick.
     pub(in crate::backup) fn turnkey_key(&self) -> Option<&BackupEncryptionKey> {
-        self.keys
+        let mut turnkey_keys = self
+            .keys
             .iter()
-            .find(|key| matches!(key, BackupEncryptionKey::Turnkey { .. }))
+            .filter(|key| matches!(key, BackupEncryptionKey::Turnkey { .. }));
+        let key = turnkey_keys.next()?;
+        if turnkey_keys.next().is_some() {
+            crate::critical!(
+                "backup_metadata.multiple_turnkey_keys (cannot resolve which sub-organization a removal targets)"
+            );
+            return None;
+        }
+        Some(key)
     }
 
     /// The single PRF encryption key, or `None` unless there is exactly one. A

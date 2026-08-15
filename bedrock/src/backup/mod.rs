@@ -515,7 +515,7 @@ impl BackupManager {
     /// - If you're removing the last main factor, the backup will be destroyed instead, the
     ///   user MUST see an explicit prompt and approve.
     /// - If removing an OIDC Factor and it's **not the last** OIDC factor, a [`MainFactor`] is
-    ///   needed. Passkey removal needs neither a main factor nor Turnkey.
+    ///   needed. Passkey removal does not need Turnkey.
     /// - iCloud Keychain factors are not yet supported and return [`BackupOperationError::Unsupported`];
     ///   in any case they're currently not displayed in the UI and are getting deprecated.
     ///
