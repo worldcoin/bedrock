@@ -67,11 +67,6 @@ thread_local! {
 ///}
 /// ```
 ///
-/// Map [`LogLevel::Critical`] to a severity **above** error (Datadog's `critical`
-/// status, `Logger.critical` on `dd-sdk-ios`). Collapsing it into `.error` silently
-/// discards the only signal that distinguishes an alertable record from routine
-/// error noise.
-///
 /// ### In app delegate
 ///
 /// ```swift
@@ -87,8 +82,7 @@ pub trait Logger: Sync + Send {
     /// * `message` - The log message to be recorded.
     /// * `attributes` - Structured key/value metadata for the log line. Hosts
     ///   that support structured logging (e.g. Datadog) should attach these as
-    ///   log attributes rather than folding them into `message`. Every log
-    ///   carries at least the [`VERSION_ATTRIBUTE_KEY`] attribute.
+    ///   log attributes rather than folding them into `message`.
     fn log(
         &self,
         level: LogLevel,
@@ -116,9 +110,10 @@ pub enum LogLevel {
     Warn,
     /// Designates error events that might still allow the application to continue running.
     Error,
-    /// Designates state that needs immediate attention (a corrupt manifest, an
+    /// Designates state that needs **immediate** attention (a corrupt manifest, an
     /// inconsistent remote account). Emitted only by [`critical`](crate::critical),
-    /// and expected to carry a very low alerting threshold on the host.
+    /// and expected to carry a very low alerting threshold on the host. Usually these
+    /// warrant **individual investigations**.
     Critical,
 }
 
@@ -150,16 +145,14 @@ pub fn set_logger(logger: Arc<dyn Logger>) {
     install_dependency_capture();
 }
 
-/// Attribute key carrying the running Bedrock version. Attached to every log
-/// line so log backends can attribute records to a specific Bedrock release.
+/// Bedrock version attribute attached to every log.
 pub const VERSION_ATTRIBUTE_KEY: &str = "bedrock_version";
 
 /// The Bedrock crate version, attached to every log line under
 /// [`VERSION_ATTRIBUTE_KEY`].
 const BEDROCK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Attribute key naming the dependency a forwarded record came from (its `tracing`
-/// target). Present only on dependency logs, never on Bedrock's own.
+/// Source of log (dependency) for non-Bedrock logs.
 pub const DEPENDENCY_ATTRIBUTE_KEY: &str = "bedrock_dependency";
 
 /// Delivers a Bedrock-originated log record directly to the host [`Logger`],
@@ -172,9 +165,6 @@ pub fn log_message(level: LogLevel, args: std::fmt::Arguments<'_>) {
 }
 
 /// Like [`log_message`], but with structured attributes.
-///
-/// `attributes` is only invoked once a logger is known to be installed, so a disabled
-/// logger never pays to format the values.
 #[doc(hidden)]
 pub fn log_message_with_attributes<F>(
     level: LogLevel,
@@ -206,7 +196,7 @@ fn deliver(
     logger.log(level, sanitize_hex_secrets(message), attributes);
 }
 
-/// Internal implementation of the logging macros. Not public API.
+/// Internal implementation of the logging macros.
 ///
 /// Splits a macro invocation into leading `key = value` fields (delivered as
 /// structured attributes) and a trailing `format_args!` message, then routes to
@@ -223,9 +213,7 @@ macro_rules! __bedrock_log {
     (@acc $level:expr, [] $($fmt:tt)*) => {
         $crate::primitives::logger::log_message($level, ::core::format_args!($($fmt)*))
     };
-    // One or more fields: collect them into an attribute map. The map is built
-    // inside a closure so that formatting each value is skipped entirely when no
-    // host logger is installed, just as `format_args!` defers the message.
+    // One or more fields: collect them into an attribute map.
     (@acc $level:expr, [$(($key:ident = $val:expr))+] $($fmt:tt)*) => {
         $crate::primitives::logger::log_message_with_attributes(
             $level,
@@ -254,13 +242,8 @@ macro_rules! __bedrock_log {
 /// Leading `key = value` pairs (before the format string) are attached as
 /// structured attributes; each value must implement [`std::fmt::Display`].
 ///
-/// A format string is mandatory and must follow any fields. Keys are plain
-/// identifiers — `tracing`'s `?`/`%` sigils and dotted keys do not parse. Avoid keys
-/// log backends reserve (`message`, `status`, `service`, `host`, `timestamp`,
-/// `trace_id`, `error.*`); only [`VERSION_ATTRIBUTE_KEY`] is protected here.
-///
-/// Field values are evaluated only when a host logger is installed, so keep them
-/// side-effect free.
+/// Avoid keys log backends reserve (`message`, `status`, `service`, `host`, `timestamp`,
+/// `trace_id`, `error.*`).
 ///
 /// # Examples
 ///
@@ -315,10 +298,6 @@ macro_rules! error {
 
 /// Logs a message at [`LogLevel::Critical`], for state that needs immediate
 /// attention. There's usually very low alerting threshold for these.
-///
-/// Records previously arrived as `ERROR` tagged `[Critical] ` in the message. Any
-/// monitor matching that text will not match these — monitors must move to the
-/// record's status (Datadog's `critical`, syslog severity 2) before this ships.
 #[macro_export]
 macro_rules! critical {
     ($($arg:tt)*) => {
@@ -532,8 +511,6 @@ fn install_dependency_capture() {
     if let Err(error) =
         tracing_log::LogTracer::init_with_filter(tracing_log::log::LevelFilter::Warn)
     {
-        // Not fatal, but it silently halves dependency coverage for the process
-        // lifetime, so say so rather than leaving triage to guess.
         crate::warn!(
             error_message = error,
             "another `log` logger is already installed; dependencies logging via the \
@@ -571,19 +548,13 @@ impl Subscriber for ForeignLoggerSubscriber {
     fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
 
     /// Forwards a dependency event to the host logger. Structured fields are
-    /// forwarded as log attributes; both message and attributes are hex-secret
-    /// redacted and version-stamped by [`deliver`].
+    /// forwarded as log attributes; both message and attributes are secret redacted.
     ///
-    /// The originating crate is attached under [`DEPENDENCY_ATTRIBUTE_KEY`] so a
-    /// forwarded warning can be attributed to a dependency without parsing its text.
+    /// The originating crate is attached under [`DEPENDENCY_ATTRIBUTE_KEY`].
     fn event(&self, event: &Event<'_>) {
         let Some(logger) = LOGGER_INSTANCE.get() else {
             return;
         };
-        // Records bridged from the `log` crate by `tracing_log::LogTracer` all share
-        // one static callsite whose target is the literal "log"; the real target only
-        // arrives as a `log.target` field. Normalizing recovers it, so a `log`-based
-        // dependency is attributed to itself rather than to "log".
         let normalized = event.normalized_metadata();
         let metadata = normalized.as_ref().unwrap_or_else(|| event.metadata());
         let mut visitor = EventVisitor::default();
@@ -592,10 +563,6 @@ impl Subscriber for ForeignLoggerSubscriber {
             DEPENDENCY_ATTRIBUTE_KEY.to_owned(),
             metadata.target().to_owned(),
         );
-        // A field-only event (`tracing::error!(code = 500)`) records no `message`
-        // field. Hosts and log backends key their views on the body, so fall back to
-        // the target: it is constant per dependency, which groups. `metadata.name()`
-        // would not — it embeds the dependency's build-time source path and line.
         let message = if visitor.message.is_empty() {
             format!("{} event without a message", metadata.target())
         } else {
@@ -626,15 +593,10 @@ struct EventVisitor {
     attributes: HashMap<String, String>,
 }
 
-/// Bookkeeping fields that `tracing_log::LogTracer` attaches to every record it
-/// bridges from the `log` crate. They are plumbing, not the dependency's own data:
-/// `log.target` is recovered via `normalized_metadata` instead, and `log.file` is the
-/// dependency's **build-time** absolute path, which must not reach the host.
 const LOG_BRIDGE_FIELDS: [&str; 4] =
     ["log.target", "log.module_path", "log.file", "log.line"];
 
 impl EventVisitor {
-    /// Records `value` under `name`, unless it is `log` bridge plumbing.
     fn record_attribute(&mut self, name: &str, value: String) {
         if LOG_BRIDGE_FIELDS.contains(&name) {
             return;
@@ -690,15 +652,9 @@ fn log_level(level: Level) -> LogLevel {
     }
 }
 
-/// Tests that exercise delivery through the process-global logger: the log context
-/// is what makes every record alertable, so its scoping is tested directly (a lost
-/// context means logs a monitor can no longer match), as are the level and
-/// attributes the host ultimately receives.
-///
-/// [`set_logger`] keeps the first logger for the whole process, so every global-logger
-/// test belongs in this module and must be `#[serial]`.
+/// Test delivery through the global logger. Tests must be `#[serial]`
 #[cfg(test)]
-mod delivery_tests {
+mod tests {
     use super::{
         get_context, in_log_context, set_logger, LogContext, LogLevel, Logger,
         VERSION_ATTRIBUTE_KEY,
@@ -730,29 +686,14 @@ mod delivery_tests {
         }
     }
 
-    /// Locks [`CAPTURED`], recovering from poisoning.
-    ///
-    /// A failing assertion in one test would otherwise poison the sink and make every
-    /// later test in this module fail with `PoisonError` instead of its own assertion,
-    /// hiding which test actually broke.
     fn captured() -> std::sync::MutexGuard<'static, Vec<Captured>> {
         CAPTURED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Marker for the record [`capture_records`] emits to confirm delivery.
     const PROBE: &str = "capture-probe";
 
-    /// Installs [`CapturingLogger`] and drops records left by an earlier test.
-    ///
-    /// Callers must be `#[serial]` and must assert on the records they recognize:
-    /// other tests logging in parallel land in the same sink.
-    ///
-    /// `set_logger` keeps whichever logger got there first, so this probes delivery
-    /// and fails naming that cause. Without the probe, an earlier `set_logger` (for
-    /// example `StdoutLogger` under `--include-ignored`) makes every test in this
-    /// module fail with a misleading "no record containing ...".
     fn capture_records() {
         set_logger(Arc::new(CapturingLogger));
         captured().clear();
@@ -873,8 +814,6 @@ mod delivery_tests {
         }
     }
 
-    /// Criticals carry their severity in the level, not as a tag in the message, so
-    /// the host (and Datadog) can alert on status instead of matching text.
     #[test]
     #[serial]
     fn critical_records_use_the_critical_level_without_a_message_tag() {
@@ -887,10 +826,7 @@ mod delivery_tests {
         );
 
         let (level, message, attributes) = captured_record("is unreadable");
-        assert!(
-            matches!(level, LogLevel::Critical),
-            "wrong level: {level:?}"
-        );
+        assert!(matches!(level, LogLevel::Critical));
         assert_eq!(
             message,
             "[Bedrock][Backup] checksum for the file is unreadable"
@@ -901,8 +837,6 @@ mod delivery_tests {
         );
     }
 
-    /// Structured fields reach the host as attributes, and every record carries the
-    /// Bedrock version regardless of whether the call site supplied fields.
     #[test]
     #[serial]
     fn macros_forward_fields_and_version() {
@@ -933,9 +867,6 @@ mod delivery_tests {
         );
     }
 
-    /// Pins the shapes `__bedrock_log!` has to accept. The token muncher picks its
-    /// arm by shape alone, so a regression here is a silent mis-parse: fields landing
-    /// in the message, or a form that stops compiling for every call site using it.
     #[test]
     #[serial]
     fn macros_accept_every_supported_call_shape() {
@@ -968,11 +899,7 @@ mod delivery_tests {
 
         let (_, message, attributes) = captured_record("shape-named");
         assert_eq!(message, "shape-named 7");
-        assert_eq!(
-            attributes.len(),
-            1,
-            "a named format argument must not become an attribute"
-        );
+        assert_eq!(attributes.len(), 1);
     }
 }
 
