@@ -113,7 +113,7 @@ mod integration_tests {
 /// mocked API calls to Turnkey (follows same mocking patterns as Turnkey's SDK).
 mod functional_tests {
     use super::TestSigner;
-    use crate::backup::turnkey::api::{MainFactor, SyncFactor, TurnkeyApiClient};
+    use crate::backup::turnkey::api::TurnkeyApiClient;
     use crate::backup::turnkey::migrations::{
         run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS,
     };
@@ -285,6 +285,8 @@ mod functional_tests {
 
     /// Functional tests for the `apple_audience` migration.
     mod apple_audiences {
+        use crate::backup::{MainFactor, SyncFactor};
+
         use super::*;
 
         #[tokio::test]
@@ -427,6 +429,7 @@ mod functional_tests {
     /// Functional tests for the `sync_factor` migration.
     mod sync_factor {
         use super::*;
+        use crate::backup::{MainFactor, SyncFactor};
 
         #[tokio::test]
         async fn sync_factor_policy_creates_policy_when_missing() {
