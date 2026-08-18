@@ -652,28 +652,24 @@ fn log_level(level: Level) -> LogLevel {
     }
 }
 
-/// Test delivery through the global logger. Tests must be `#[serial]`
 #[cfg(test)]
 mod tests {
-    use super::{
-        get_context, in_log_context, set_logger, LogContext, LogLevel, Logger,
-        VERSION_ATTRIBUTE_KEY,
-    };
-    use serial_test::serial;
-    use std::collections::HashMap;
-    use std::future::Future;
+    use super::*;
+
     use std::pin::Pin;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Mutex, PoisonError};
     use std::task::{Context, Poll, Waker};
 
-    /// A single record as the host logger saw it: level, message, and attributes.
+    use serial_test::serial;
+
+    /// A single record as the host logger received it.
     type Captured = (LogLevel, String, HashMap<String, String>);
 
-    /// Records delivered to [`CapturingLogger`].
-    static CAPTURED: Mutex<Vec<Captured>> = Mutex::new(Vec::new());
-
-    /// Captures the fully formatted records, i.e. what the host logger receives.
-    struct CapturingLogger;
+    /// Captures fully formatted records, i.e. exactly what a host logger receives.
+    #[derive(Default)]
+    struct CapturingLogger {
+        records: Mutex<Vec<Captured>>,
+    }
 
     impl Logger for CapturingLogger {
         fn log(
@@ -682,41 +678,67 @@ mod tests {
             message: String,
             attributes: HashMap<String, String>,
         ) {
-            captured().push((level, message, attributes));
+            self.records
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((level, message, attributes));
         }
     }
 
-    fn captured() -> std::sync::MutexGuard<'static, Vec<Captured>> {
-        CAPTURED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    impl CapturingLogger {
+        fn clear(&self) {
+            self.records
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
+        }
+
+        fn record(&self, needle: &str) -> Captured {
+            // Cloned out so the guard is released before any assertion can panic.
+            let records = self
+                .records
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let mut matching = records
+                .iter()
+                .filter(|(_, message, _)| message.contains(needle));
+            let found = matching.next().unwrap_or_else(|| {
+                panic!("no record containing {needle:?} in {records:?}")
+            });
+            assert!(
+                matching.next().is_none(),
+                "{needle:?} was delivered more than once: {records:?}"
+            );
+            found.clone()
+        }
     }
+
+    /// The capturing logger owning the process-global slot.
+    static GLOBAL: OnceLock<Arc<CapturingLogger>> = OnceLock::new();
 
     const PROBE: &str = "capture-probe";
 
-    fn capture_records() {
-        set_logger(Arc::new(CapturingLogger));
-        captured().clear();
+    /// Installs [`CapturingLogger`] globally on first use and returns it emptied.
+    fn global_capture() -> &'static Arc<CapturingLogger> {
+        let logger = GLOBAL.get_or_init(|| {
+            let logger = Arc::new(CapturingLogger::default());
+            set_logger(logger.clone());
+            logger
+        });
 
+        logger.clear();
         crate::trace!("{PROBE}");
-        let delivered = captured().iter().any(|(_, m, _)| m.contains(PROBE));
         assert!(
-            delivered,
+            !logger
+                .records
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
             "another logger owns the process-global slot; CapturingLogger sees nothing",
         );
-        captured().clear();
-    }
-
-    /// The record containing `needle`, or a panic naming everything captured.
-    fn captured_record(needle: &str) -> Captured {
-        let captured = captured();
-        captured
-            .iter()
-            .find(|(_, message, _)| message.contains(needle))
-            .unwrap_or_else(|| {
-                panic!("no record containing {needle:?} in {captured:?}")
-            })
-            .clone()
+        logger.clear();
+        logger
     }
 
     /// Returns `Pending` on the first poll only, so the caller has to poll twice.
@@ -735,6 +757,93 @@ mod tests {
             Poll::Pending
         }
     }
+
+    // MARK: - Secret redaction
+
+    #[test]
+    fn hex_runs_at_or_above_the_threshold_are_redacted() {
+        assert_eq!(
+            HEX_SECRET_MIN_LEN, 21,
+            "the boundary cases below encode this threshold"
+        );
+        let long = "deadbeefcafebabe1234567890abcdef1234567890abcdef";
+        let at_threshold = "a".repeat(21);
+        let below_threshold = "a".repeat(20);
+
+        let cases = [
+            (format!("key={long} end"), "key=de..ef end".to_owned()),
+            (format!("addr 0x{long} end"), "addr 0xde..ef end".to_owned()),
+            (
+                format!("x={} y={}", "a".repeat(32), "b".repeat(32)),
+                "x=aa..aa y=bb..bb".to_owned(),
+            ),
+            (
+                "DEADBEEFCAFEBABE1234567890ABCDEF".to_owned(),
+                "DE..EF".to_owned(),
+            ),
+            (
+                format!("clé={} résumé", "a".repeat(32)),
+                "clé=aa..aa résumé".to_owned(),
+            ),
+            (at_threshold, "aa..aa".to_owned()),
+            (below_threshold.clone(), below_threshold),
+            (String::new(), String::new()),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                sanitize_hex_secrets(input.clone()),
+                expected,
+                "wrong redaction for {input:?}"
+            );
+        }
+    }
+
+    /// A string with nothing to redact is returned as-is, without reallocating.
+    #[test]
+    fn a_clean_string_keeps_its_allocation() {
+        let input = String::from("no secrets here");
+        let ptr = input.as_ptr();
+        let sanitized = sanitize_hex_secrets(input);
+        assert_eq!(sanitized.as_ptr(), ptr, "should return the same allocation");
+    }
+
+    // MARK: - The delivery funnel
+
+    /// [`deliver`] is the single path for both Bedrock's own records and forwarded
+    /// dependency ones, so redaction and version stamping are asserted here once.
+    #[test]
+    fn deliver_redacts_secrets_and_stamps_the_real_version() {
+        let capturing = Arc::new(CapturingLogger::default());
+        let logger: Arc<dyn Logger> = capturing.clone();
+
+        let secret = "a".repeat(32);
+        let attributes = HashMap::from([
+            ("factor".to_owned(), secret.clone()),
+            ("plain".to_owned(), "value".to_owned()),
+            (VERSION_ATTRIBUTE_KEY.to_owned(), "0.0.0-spoofed".to_owned()),
+        ]);
+
+        deliver(
+            &logger,
+            LogLevel::Info,
+            format!("secret={secret}"),
+            attributes,
+        );
+
+        let (level, message, attributes) = capturing.record("secret=");
+        assert!(matches!(level, LogLevel::Info), "wrong level: {level:?}");
+        assert_eq!(message, "secret=aa..aa");
+        assert_eq!(attributes.get("factor").map(String::as_str), Some("aa..aa"));
+        assert_eq!(attributes.get("plain").map(String::as_str), Some("value"));
+        assert_eq!(
+            attributes.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
+            Some(env!("CARGO_PKG_VERSION")),
+            "the real version must override a caller-supplied one"
+        );
+    }
+
+    // MARK: - Log context
 
     #[test]
     fn guard_scopes_the_context_to_its_lifetime() {
@@ -798,7 +907,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn exported_async_method_tags_records_around_an_await() {
-        capture_records();
+        let logger = global_capture();
 
         crate::primitives::tooling_tests::ToolingDemo::new()
             .demo_async_operation(1)
@@ -806,7 +915,7 @@ mod tests {
             .expect("the demo operation succeeds under 5s");
 
         for needle in ["Starting async operation", "Async operation successful"] {
-            let (_, record, _) = captured_record(needle);
+            let (_, record, _) = logger.record(needle);
             assert!(
                 record.starts_with("[Bedrock][ToolingDemo] "),
                 "untagged record: {record}"
@@ -814,10 +923,15 @@ mod tests {
         }
     }
 
+    // MARK: - Macros
+
+    /// `critical!` must arrive as [`LogLevel::Critical`] rather than as an `Error`
+    /// carrying a `[Critical]` tag in the text, so a host can alert on severity
+    /// instead of matching the message.
     #[test]
     #[serial]
     fn critical_records_use_the_critical_level_without_a_message_tag() {
-        capture_records();
+        let logger = global_capture();
 
         let _bedrock_logger_ctx = LogContext::new("Backup");
         crate::critical!(
@@ -825,8 +939,11 @@ mod tests {
             "checksum for the file is unreadable"
         );
 
-        let (level, message, attributes) = captured_record("is unreadable");
-        assert!(matches!(level, LogLevel::Critical));
+        let (level, message, attributes) = logger.record("is unreadable");
+        assert!(
+            matches!(level, LogLevel::Critical),
+            "wrong level: {level:?}"
+        );
         assert_eq!(
             message,
             "[Bedrock][Backup] checksum for the file is unreadable"
@@ -837,24 +954,22 @@ mod tests {
         );
     }
 
+    /// Fields become attributes, and the macro path reaches [`deliver`] — a fieldless
+    /// record arriving with the version as its only attribute proves both.
     #[test]
     #[serial]
     fn macros_forward_fields_and_version() {
-        capture_records();
+        let logger = global_capture();
 
         crate::info!(chain_id = 480, tx = "0xabc", "user operation submitted");
         crate::warn!("no fields here");
 
-        let (level, _, attributes) = captured_record("user operation submitted");
+        let (level, _, attributes) = logger.record("user operation submitted");
         assert!(matches!(level, LogLevel::Info), "wrong level: {level:?}");
         assert_eq!(attributes.get("chain_id").map(String::as_str), Some("480"));
         assert_eq!(attributes.get("tx").map(String::as_str), Some("0xabc"));
-        assert_eq!(
-            attributes.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
-            Some(env!("CARGO_PKG_VERSION")),
-        );
 
-        let (level, _, attributes) = captured_record("no fields here");
+        let (level, _, attributes) = logger.record("no fields here");
         assert!(matches!(level, LogLevel::Warn), "wrong level: {level:?}");
         assert_eq!(
             attributes.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
@@ -870,7 +985,7 @@ mod tests {
     #[test]
     #[serial]
     fn macros_accept_every_supported_call_shape() {
-        capture_records();
+        let logger = global_capture();
 
         let owned = String::from("owned");
         let borrowed: &str = "borrowed";
@@ -885,181 +1000,20 @@ mod tests {
         // Named format arguments after the format string are not fields.
         crate::info!("shape-named {named}", named = 7);
 
-        let (_, message, attributes) = captured_record("shape-args");
+        let (_, message, attributes) = logger.record("shape-args");
         assert_eq!(message, "shape-args owned borrowed");
         assert_eq!(attributes.get("a").map(String::as_str), Some("1"));
 
-        let (_, _, attributes) = captured_record("shape-comma");
+        let (_, _, attributes) = logger.record("shape-comma");
         assert_eq!(attributes.get("b").map(String::as_str), Some("2"));
 
-        let (_, message, attributes) = captured_record("shape-capture");
+        let (_, message, attributes) = logger.record("shape-capture");
         assert_eq!(message, "shape-capture owned borrowed");
         assert_eq!(attributes.get("c").map(String::as_str), Some("owned"));
         assert_eq!(attributes.get("d").map(String::as_str), Some("borrowed"));
 
-        let (_, message, attributes) = captured_record("shape-named");
+        let (_, message, attributes) = logger.record("shape-named");
         assert_eq!(message, "shape-named 7");
         assert_eq!(attributes.len(), 1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn short_hex_passes_through() {
-        let input = "tx hash is abcdef1";
-        assert_eq!(sanitize_hex_secrets(input.to_string()), input);
-    }
-
-    #[test]
-    fn long_hex_is_redacted() {
-        let input = "key=deadbeefcafebabe1234567890abcdef1234567890abcdef end";
-        assert_eq!(sanitize_hex_secrets(input.to_string()), "key=de..ef end");
-    }
-
-    #[test]
-    fn hex_with_0x_prefix() {
-        let input = "addr 0xdeadbeefcafebabe1234567890abcdef1234567890abcdef end";
-        assert_eq!(sanitize_hex_secrets(input.to_string()), "addr 0xde..ef end");
-    }
-
-    #[test]
-    fn multiple_secrets_redacted() {
-        let a = "a".repeat(32);
-        let b = "b".repeat(32);
-        let input = format!("x={a} y={b}");
-        assert_eq!(sanitize_hex_secrets(input), "x=aa..aa y=bb..bb");
-    }
-
-    #[test]
-    fn exactly_threshold_is_redacted() {
-        let input = "a".repeat(HEX_SECRET_MIN_LEN);
-        assert_eq!(sanitize_hex_secrets(input), "aa..aa");
-    }
-
-    #[test]
-    fn below_threshold_passes() {
-        let input = "a".repeat(HEX_SECRET_MIN_LEN - 1);
-        assert_eq!(sanitize_hex_secrets(input.clone()), input);
-    }
-
-    #[test]
-    fn no_hex_passes_through() {
-        let input = "hello world, no hex here!";
-        assert_eq!(sanitize_hex_secrets(input.to_string()), input);
-    }
-
-    #[test]
-    fn empty_string() {
-        assert_eq!(sanitize_hex_secrets(String::new()), "");
-    }
-
-    #[test]
-    fn uppercase_hex_redacted() {
-        let input = "DEADBEEFCAFEBABE1234567890ABCDEF1234567890ABCDEF";
-        assert_eq!(sanitize_hex_secrets(input.to_string()), "DE..EF");
-    }
-
-    #[test]
-    fn mixed_text_and_hex() {
-        let secret = "f".repeat(64);
-        let input = format!("user=alice secret={secret} action=login");
-        assert_eq!(
-            sanitize_hex_secrets(input),
-            "user=alice secret=ff..ff action=login"
-        );
-    }
-
-    #[test]
-    fn utf8_preserved_alongside_hex_redaction() {
-        let secret = "a".repeat(32);
-        let input = format!("clé={secret} résumé");
-        assert_eq!(sanitize_hex_secrets(input), "clé=aa..aa résumé");
-    }
-
-    #[test]
-    fn multibyte_utf8_no_hex() {
-        let input = "café naïve 日本語".to_string();
-        assert_eq!(sanitize_hex_secrets(input.clone()), input);
-    }
-
-    #[test]
-    fn no_alloc_when_clean() {
-        let input = String::from("no secrets here");
-        let ptr = input.as_ptr();
-        let output = sanitize_hex_secrets(input);
-        assert_eq!(output.as_ptr(), ptr, "should return same allocation");
-    }
-
-    /// A single captured log line: level, message, and attributes.
-    type CapturedRecord = (LogLevel, String, HashMap<String, String>);
-
-    /// A [`Logger`] that records every delivered log line for assertions.
-    #[derive(Default)]
-    struct CapturingLogger {
-        records: std::sync::Mutex<Vec<CapturedRecord>>,
-    }
-
-    impl Logger for CapturingLogger {
-        fn log(
-            &self,
-            level: LogLevel,
-            message: String,
-            attributes: HashMap<String, String>,
-        ) {
-            self.records
-                .lock()
-                .unwrap()
-                .push((level, message, attributes));
-        }
-    }
-
-    #[test]
-    fn deliver_attaches_version_and_sanitizes_attributes() {
-        let capturing = Arc::new(CapturingLogger::default());
-        let logger: Arc<dyn Logger> = capturing.clone();
-
-        let secret = "a".repeat(32);
-        let mut attributes = HashMap::new();
-        attributes.insert("factor".to_owned(), secret.clone());
-        attributes.insert("plain".to_owned(), "value".to_owned());
-
-        deliver(
-            &logger,
-            LogLevel::Info,
-            format!("secret={secret}"),
-            attributes,
-        );
-
-        let records = capturing.records.lock().unwrap().clone();
-        assert_eq!(records.len(), 1);
-        let (level, message, attrs) = &records[0];
-        assert!(matches!(level, LogLevel::Info));
-        assert_eq!(message, "secret=aa..aa");
-        assert_eq!(attrs.get("factor").map(String::as_str), Some("aa..aa"));
-        assert_eq!(attrs.get("plain").map(String::as_str), Some("value"));
-        assert_eq!(
-            attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
-            Some(env!("CARGO_PKG_VERSION")),
-        );
-    }
-
-    #[test]
-    fn deliver_overrides_caller_supplied_version() {
-        let capturing = Arc::new(CapturingLogger::default());
-        let logger: Arc<dyn Logger> = capturing.clone();
-
-        let mut attributes = HashMap::new();
-        attributes.insert(VERSION_ATTRIBUTE_KEY.to_owned(), "0.0.0-fake".to_owned());
-        deliver(&logger, LogLevel::Warn, "msg".to_owned(), attributes);
-
-        let records = capturing.records.lock().unwrap().clone();
-        let (_, _, attrs) = &records[0];
-        assert_eq!(
-            attrs.get(VERSION_ATTRIBUTE_KEY).map(String::as_str),
-            Some(env!("CARGO_PKG_VERSION")),
-        );
     }
 }

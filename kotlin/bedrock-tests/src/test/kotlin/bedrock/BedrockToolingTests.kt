@@ -26,10 +26,7 @@ private class CapturingLogger : Logger {
     }
 
     companion object {
-        // setLogger keeps the first logger for the whole process, so a test that
-        // installs its own fresh instance would silently observe no records at all
-        // once another test got there first. Every test shares this one instance and
-        // matches its records by a unique marker.
+        // global for all tests
         private val shared = CapturingLogger()
 
         fun installed(): CapturingLogger {
@@ -58,7 +55,6 @@ class BedrockToolingTests {
     }
 
     // Verifies structured attributes and the always-present bedrock_version
-    // attribute survive the round-trip to a foreign [Logger] implementation.
     @Test
     fun testForeignLoggerReceivesAttributesAndVersion() {
         val logger = CapturingLogger.installed()
@@ -83,11 +79,8 @@ class BedrockToolingTests {
         assertEquals(1, plain.third.size, "version is the only attribute on a fieldless log")
     }
 
-    // Criticals must arrive as LogLevel.CRITICAL rather than as an ERROR carrying a
-    // "[Critical]" tag in the text, so the host can map them onto a severity above
-    // error and alert on status instead of matching the message.
     @Test
-    fun testCriticalLevelSurvivesTheFfiBoundary() {
+    fun testCriticalLevelIsCorrectlyReported() {
         val logger = CapturingLogger.installed()
 
         val demo = ToolingDemo()
@@ -291,21 +284,21 @@ class BedrockToolingTests {
     }
 
     // MARK: - Async Operation Tests
-    
+
     @Test
     fun testDemoAsyncOperation_Success() = runBlocking {
         val demo = ToolingDemo()
-        
+
         // Test successful async operation with short delay
         val result = demo.demoAsyncOperation(100uL)
         assertTrue(result.contains("Async operation completed after 100ms"))
         assertTrue(result.contains("completed"))
     }
-    
+
     @Test
     fun testDemoAsyncOperation_Timeout() = runBlocking {
         val demo = ToolingDemo()
-        
+
         // Test async operation that should timeout (over 5000ms)
         val timeoutException = assertFailsWith<DemoException.Generic> {
             demo.demoAsyncOperation(6000uL)
@@ -313,36 +306,36 @@ class BedrockToolingTests {
         assertTrue(timeoutException.message?.contains("timeout exceeded") == true)
         assertTrue(timeoutException.message?.contains("5 seconds") == true)
     }
-    
+
     @Test
     fun testDemoAsyncOperation_MultipleOperations() = runBlocking {
         val demo = ToolingDemo()
-        
+
         // Test multiple async operations to ensure runtime stability
         val result1 = demo.demoAsyncOperation(50uL)
         val result2 = demo.demoAsyncOperation(100uL)
         val result3 = demo.demoAsyncOperation(150uL)
-        
+
         assertTrue(result1.contains("completed after 50ms"))
         assertTrue(result2.contains("completed after 100ms"))
         assertTrue(result3.contains("completed after 150ms"))
     }
-    
+
     @Test
     fun testDemoAsyncOperation_RuntimeIntegration() = runBlocking {
         // This test specifically verifies that the automatic tokio runtime configuration
         // added by bedrock_export works correctly in foreign code
         val demo = ToolingDemo()
-        
+
         // Run a series of async operations to stress test the runtime
         val delays = listOf(10uL, 25uL, 50uL, 75uL, 100uL)
         val results = mutableListOf<String>()
-        
+
         for (delay in delays) {
             val result = demo.demoAsyncOperation(delay)
             results.add(result)
         }
-        
+
         // Verify all operations completed successfully
         assertEquals(5, results.size)
         for ((index, result) in results.withIndex()) {

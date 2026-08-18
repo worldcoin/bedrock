@@ -17,10 +17,7 @@ struct CapturedRecord {
 // assert on messages and structured attributes. Manual locking makes it safe to
 // hand to Rust as a `Sendable` callback interface.
 final class CapturingLogger: Logger, @unchecked Sendable {
-    // setLogger keeps the first logger for the whole process, so a test that installs
-    // its own fresh instance would silently observe no records at all once another
-    // test got there first. Every test shares this one instance and matches its
-    // records by a unique marker.
+    // global for all tests
     static let shared = CapturingLogger()
 
     static func installed() -> CapturingLogger {
