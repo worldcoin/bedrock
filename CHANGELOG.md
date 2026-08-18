@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3](https://github.com/worldcoin/bedrock/compare/0.5.2...0.5.3) - 2026-08-14
+
+### Added
+
+- add critical log tag & fix log prefix on futures ([#407](https://github.com/worldcoin/bedrock/pull/407))
+
+### Other
+
+- bump uniffi to 0.32 & siegel to tfh git version ([#412](https://github.com/worldcoin/bedrock/pull/412))
+
 ## [0.5.2](https://github.com/worldcoin/bedrock/compare/0.5.1...0.5.2) - 2026-08-10
 
 ### Added

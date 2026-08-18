@@ -9,6 +9,9 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 // Re-export HTTP client types for external use
+pub use attestation::{
+    get_attestation_gateway, set_attestation_token_provider, AttestationTokenProvider,
+};
 pub use http_client::{AuthenticatedHttpClient, HttpError, HttpMethod};
 pub use signer::{KeypairSigner, KeypairSignerError, P256Signer};
 pub use user_agent::{UserAgent, UserAgentBuilder};
@@ -83,6 +86,12 @@ pub mod ntp;
 
 /// Foreign-implemented keypair signer used for Turnkey API request stamping.
 pub mod signer;
+
+/// Bounded retry with exponential backoff and jitter, shared by remote clients.
+pub mod retry;
+
+/// Foreign-implemented attestation-token provider for gateway-guarded requests.
+pub mod attestation;
 
 /// Supported blockchain networks for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

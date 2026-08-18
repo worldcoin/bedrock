@@ -1,18 +1,27 @@
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use std::time::Duration;
 use strum::Display;
 
 use super::manifest::ManifestManager;
 use crate::backup::manifest::BackupManifest;
-use crate::backup::BackupFileDesignator;
+use crate::backup::{
+    BackupEncryptionKey, BackupFactorKind, BackupFileDesignator, BackupMetadata,
+    BackupOidcAccount, BackupOperationError, RemoveFactorOutcome,
+};
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
     create_middleware, get_filesystem_raw, FileSystemError, FileSystemExt,
     FileSystemMiddleware,
 };
-use crate::primitives::http_client::{get_http_client, HttpHeader};
+use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader};
 use crate::HttpMethod;
+
+/// Deadline for sending any client event. The foreign HTTP client is unbounded, and
+/// reporting must never outlive what it reports on.
+const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Errors that can occur when reporting client events.
 #[derive(Debug, thiserror::Error)]
@@ -279,6 +288,25 @@ impl ClientEventsReporter {
         timestamp_iso8601: String,
         is_public: bool,
     ) -> Result<(), ClientEventsError> {
+        let request = self.prepare_event(
+            &kind,
+            success,
+            error_message,
+            timestamp_iso8601,
+            is_public,
+        )?;
+        request.post().await
+    }
+
+    /// Composes the event request
+    fn prepare_event(
+        &self,
+        kind: &BackupReportEventKind,
+        success: bool,
+        error_message: Option<String>,
+        timestamp_iso8601: String,
+        is_public: bool,
+    ) -> Result<PreparedEvent, ClientEventsError> {
         // Ensure installation ID exists before sending
         let ensured_installation_id = self.ensure_installation_id()?;
 
@@ -336,9 +364,42 @@ impl ClientEventsReporter {
             Self::EVENTS_ENDPOINT.to_string()
         };
 
-        http.fetch_from_app_backend(endpoint, HttpMethod::Post, headers, Some(body))
-            .await?;
+        Ok(PreparedEvent {
+            http,
+            endpoint,
+            headers,
+            body,
+        })
+    }
+}
 
+/// An event request with every local input already resolved; all that is left is I/O.
+pub(super) struct PreparedEvent {
+    http: std::sync::Arc<dyn crate::primitives::http_client::AuthenticatedHttpClient>,
+    endpoint: String,
+    headers: Vec<HttpHeader>,
+    body: Vec<u8>,
+}
+
+impl PreparedEvent {
+    /// Sends the event, bounded by [`EVENT_SEND_TIMEOUT`].
+    ///
+    /// Every event goes through here, so the bound is universal: the foreign HTTP
+    /// client is not something Bedrock can otherwise bound, and no report is worth
+    /// holding a caller open for.
+    async fn post(self) -> Result<(), ClientEventsError> {
+        let send = self.http.fetch_from_app_backend(
+            self.endpoint,
+            HttpMethod::Post,
+            self.headers,
+            Some(self.body),
+        );
+        match tokio::time::timeout(EVENT_SEND_TIMEOUT, send).await {
+            Ok(result) => result?,
+            Err(_elapsed) => {
+                return Err(ClientEventsError::HttpError(HttpError::Timeout))
+            }
+        };
         Ok(())
     }
 }
@@ -471,5 +532,192 @@ impl ClientEventsReporter {
 
         self.write_base_report(&base)?;
         Ok(())
+    }
+}
+
+/// Reports the outcome of `BackupManager::remove_factor` as a `RemoveMainFactor`
+/// event. Native MUST NOT also send one, or every removal is double-counted.
+///
+/// Fire-and-forget: the user is already waiting on the result this merely describes,
+/// so the send is detached and the caller returns without it.
+///
+/// # Spawning
+/// `bedrock_export` wraps every exported async fn in `async_compat::Compat`, which
+/// enters a process-global runtime handle on each poll, so the task outlives this
+/// call
+pub(super) fn send_remove_factor_event(
+    result: &Result<RemoveFactorOutcome, BackupOperationError>,
+) {
+    if matches!(
+        result,
+        Err(BackupOperationError::WouldDeleteBackup
+            | BackupOperationError::NeedsReauth { .. })
+    ) {
+        // Not errors, don't report
+        return;
+    }
+
+    // Composed *before* spawning: the caller goes on to delete the base report this
+    // reads, and a spawned task would not poll until after that.
+    let request = match ClientEventsReporter::new().prepare_event(
+        &BackupReportEventKind::RemoveMainFactor,
+        result.is_ok(),
+        result.as_ref().err().map(ToString::to_string),
+        Utc::now().to_rfc3339(),
+        false,
+    ) {
+        Ok(request) => request,
+        Err(error) => {
+            crate::warn!(
+                "[ClientEvents] failed to compose RemoveMainFactor event: {error:?}"
+            );
+            return;
+        }
+    };
+
+    tokio::spawn(async move {
+        if let Err(error) = request.post().await {
+            crate::warn!(
+                "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
+            );
+        }
+    });
+}
+
+/// Syncs the base report with `metadata`, the authoritative view of the backup.
+///
+/// The report carries a factor and key inventory that any change to the backup makes
+/// stale. Bedrock owns the report and is holding the fresh metadata, so it reconciles
+/// the two itself rather than relying on the caller.
+///
+/// Only the fields metadata describes are set; everything else is left alone by
+/// [`ClientEventsReporter::set_backup_report_attributes`]'s merge.
+pub(super) fn sync_report_with_metadata(metadata: &BackupMetadata) {
+    if let Err(error) =
+        ClientEventsReporter::new().set_backup_report_attributes(report_input(metadata))
+    {
+        crate::warn!(
+            "[ClientEvents] failed to sync base report with metadata: {error:?}"
+        );
+    }
+}
+
+/// Maps backup metadata onto the report fields it describes.
+fn report_input(metadata: &BackupMetadata) -> BackupReportInput {
+    let main_factors = metadata
+        .factors
+        .iter()
+        .filter_map(|factor| {
+            let (kind, account) = match &factor.kind {
+                BackupFactorKind::Passkey { .. } => ("PASSKEY", "PASSKEY".to_string()),
+                BackupFactorKind::OidcAccount { account, .. } => (
+                    "OIDC",
+                    match account {
+                        BackupOidcAccount::Google { .. } => "GOOGLE".to_string(),
+                        BackupOidcAccount::Apple { .. } => "APPLE".to_string(),
+                    },
+                ),
+                // Not a main factor for reporting purposes.
+                BackupFactorKind::EcKeypair { .. } => return None,
+            };
+            Some(BackupReportMainFactor {
+                kind: kind.to_string(),
+                account,
+                created_at: DateTime::from_timestamp(factor.created_at, 0)
+                    .unwrap_or_default()
+                    .to_rfc3339(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let encryption_keys = metadata
+        .keys
+        .iter()
+        .map(|key| match key {
+            BackupEncryptionKey::Prf { .. } => BackupReportEncryptionKeyKind::Prf,
+            BackupEncryptionKey::Turnkey { .. } => {
+                BackupReportEncryptionKeyKind::Turnkey
+            }
+            BackupEncryptionKey::Icloud { .. } => {
+                BackupReportEncryptionKeyKind::IcloudKeychain
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let has_turnkey_account =
+        encryption_keys.contains(&BackupReportEncryptionKeyKind::Turnkey);
+
+    BackupReportInput {
+        main_factors: Some(main_factors),
+        encryption_keys: Some(encryption_keys),
+        has_turnkey_account: Some(has_turnkey_account),
+        sync_factor_count: Some(
+            u32::try_from(metadata.sync_factors.len()).unwrap_or(u32::MAX),
+        ),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod remove_factor_event_tests {
+    use super::*;
+
+    fn oidc(created_at: i64, google: bool) -> crate::backup::BackupFactor {
+        crate::backup::BackupFactor {
+            id: "f".to_string(),
+            created_at,
+            kind: BackupFactorKind::OidcAccount {
+                account: if google {
+                    BackupOidcAccount::Google {
+                        masked_email: "g***@x".to_string(),
+                    }
+                } else {
+                    BackupOidcAccount::Apple {
+                        masked_email: "a***@x".to_string(),
+                    }
+                },
+                turnkey_provider_id: "p".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn report_input_maps_oidc_accounts_and_keeps_the_turnkey_flag() {
+        let metadata = BackupMetadata {
+            id: "b".to_string(),
+            manifest_hash: "h".to_string(),
+            keys: vec![BackupEncryptionKey::Turnkey {
+                encrypted_key: "ek".to_string(),
+                turnkey_account_id: "suborg".to_string(),
+                turnkey_user_id: "user".to_string(),
+                turnkey_private_key_id: "pk".to_string(),
+            }],
+            factors: vec![oidc(1_700_000_000, true), oidc(1_700_000_001, false)],
+            sync_factors: vec![crate::backup::BackupFactor {
+                id: "s".to_string(),
+                created_at: 0,
+                kind: BackupFactorKind::EcKeypair {
+                    public_key: "k".to_string(),
+                },
+            }],
+        };
+
+        let input = report_input(&metadata);
+
+        assert_eq!(input.has_turnkey_account, Some(true));
+        assert_eq!(input.sync_factor_count, Some(1));
+        let factors = input.main_factors.unwrap();
+        assert_eq!(
+            factors
+                .iter()
+                .map(|f| f.account.as_str())
+                .collect::<Vec<_>>(),
+            vec!["GOOGLE", "APPLE"]
+        );
+        assert!(
+            factors[0].created_at.starts_with("2023-"),
+            "timestamp must be ISO 8601, got {}",
+            factors[0].created_at
+        );
     }
 }

@@ -93,13 +93,15 @@ def main():
 
     print(f"::notice::uniffi version {actual_version} matches CI variable")
 
-    # External lib check failure doesn't fail the test but it raises warning
+    # A confirmed external version mismatch must fail version alignment. Failure
+    # to retrieve the external repository remains warning-only.
     xmtp_version = get_extern_lib_uniffi_version()
     if xmtp_version is not None and xmtp_version != args.expected_version:
         print(
-            f"::warning::uniffi version mismatch with libxmtp, "
+            f"::error::uniffi version mismatch with libxmtp, "
             f"expected version={args.expected_version}, libxmtp={xmtp_version}"
         )
+        sys.exit(1)
 
 
 # Tests

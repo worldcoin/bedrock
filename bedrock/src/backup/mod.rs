@@ -7,13 +7,21 @@
 //! <https://docs.toolsforhumanity.com/world-app/backup>.
 
 mod backup_format;
+mod backup_service;
 mod client_events;
+mod flows;
 mod manifest;
 mod service_client;
 mod turnkey;
 
 #[cfg(test)]
 mod test;
+
+pub use backup_service::{
+    BackupEncryptionKey, BackupFactor, BackupFactorKind, BackupMetadata,
+    BackupOidcAccount,
+};
+pub use flows::RemoveFactorOutcome;
 
 use base64::Engine;
 use bedrock_macros::bedrock_export;
@@ -32,13 +40,23 @@ use crate::backup::backup_format::v0::{
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
-use crate::primitives::filesystem::{get_filesystem_raw, FileSystemExt};
+use crate::primitives::filesystem::{
+    get_filesystem_raw, FileSystemError, FileSystemExt,
+};
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::STANDARD;
 use crypto_box::SecretKey;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
+
+use once_cell::sync::OnceCell;
+
+use crate::backup::backup_service::BackupServiceClient;
+use crate::backup::flows::{BackupFlow, FlowContext, RemoveFactor};
+use crate::backup::turnkey::TurnkeyApiClient;
+use crate::primitives::config::get_config;
+use crate::primitives::{KeypairSignerError, P256Signer};
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -57,8 +75,11 @@ use std::str::FromStr;
 /// decrypt the backup.
 ///
 /// Documentation: <https://docs.toolsforhumanity.com/world-app/backup>
-#[derive(uniffi::Object, Clone, Debug, Default)]
-pub struct BackupManager {}
+#[derive(uniffi::Object, Debug, Default)]
+pub struct BackupManager {
+    /// Backup-service client
+    backup_service: OnceCell<BackupServiceClient>,
+}
 
 #[bedrock_export]
 impl BackupManager {
@@ -66,7 +87,7 @@ impl BackupManager {
     #[must_use]
     /// Constructs a new `BackupManager` instance.
     pub fn new() -> Self {
-        Self {}
+        Self::default()
     }
 
     /// Creates a sealed backup with metadata for a new user with a factor secret. Since it's a new user,
@@ -386,32 +407,6 @@ impl BackupManager {
         Self::with_root_key(root_secret, Self::backup_account)
     }
 
-    /// Should be called after the backup is disabled/deleted.
-    ///
-    /// It processes local state after the backup is disabled/deleted.
-    ///
-    /// Currently it:
-    /// 1. Deletes the local manifest file.
-    ///
-    /// # Errors
-    /// - Returns an error if the post-processing fails.
-    pub fn post_delete_backup(&self) -> Result<(), BackupError> {
-        crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
-        let manifest = ManifestManager::new();
-        manifest.danger_delete_manifest()?;
-
-        // After deleting the manifest, delete the base report so any backup-related
-        // state (designators, size, counters) is fully cleared. It will be recreated
-        // automatically if/when backup is enabled again.
-        if let Err(e) = ClientEventsReporter::new().delete_base_report() {
-            crate::warn!(
-                "[ClientEvents] failed to delete base report after manifest deletion: {e:?}"
-            );
-        }
-
-        Ok(())
-    }
-
     /// **Client Event Streams**. Set the base report attributes for event reports.
     pub fn set_backup_report_attributes(&self, input: BackupReportInput) {
         let client_events = ClientEventsReporter::new();
@@ -446,7 +441,9 @@ impl BackupManager {
         timestamp_iso8601: String,
         is_public: bool,
     ) -> Result<(), BackupError> {
-        if kind == BackupReportEventKind::Sync {
+        if kind == BackupReportEventKind::Sync
+            || kind == BackupReportEventKind::RemoveMainFactor
+        {
             return Err(BackupError::Generic {
                 error_message: "Sync event is automatically sent from Bedrock"
                     .to_string(),
@@ -511,7 +508,103 @@ impl BackupManager {
             manifest_hash: hex::encode(manifest_hash),
         })
     }
+
+    /// Removes the main factor `factor_id` from the user's backup (BF-7) everywhere.
+    ///
+    /// # Important Considerations
+    /// - If you're removing the last main factor, the backup will be destroyed instead, the
+    ///   user MUST see an explicit prompt and approve.
+    /// - If removing an OIDC Factor and it's **not the last** OIDC factor, a [`MainFactor`] is
+    ///   needed. Passkey removal does not need Turnkey.
+    /// - iCloud Keychain factors are not yet supported and return [`BackupOperationError::Unsupported`];
+    ///   in any case they're currently not displayed in the UI and are getting deprecated.
+    ///
+    ///  # Native responsibilities
+    /// - On [`RemoveFactorOutcome::BackupDeleted`] the caller MUST delete its stored
+    ///   sync-factor keypair and refresh its "backup enabled" state.
+    ///
+    /// # Arguments
+    /// - `sync_factor`: the sync-factor [`P256Signer`]; authenticates the backup
+    ///   service calls and stamps the Turnkey sub-organization teardown.
+    /// - `main_factor`: an optional main-factor [`P256Signer`]. Required to delete an
+    ///   OAuth provider if it is **not** the last one.
+    /// - `factor_id`: the id of the factor to remove.
+    /// - `user_confirmed_backup_removal`: set only after the user has confirmed that
+    ///   removing the last main factor will delete the entire backup.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`]. Two variants are signals native clients must
+    /// handle specifically rather than surfacing as a generic failure:
+    /// [`BackupOperationError::WouldDeleteBackup`] (prompt for confirmation, then retry
+    /// with `user_confirmed_backup_removal`) and [`BackupOperationError::NeedsReauth`]
+    /// (run a passkey ceremony to obtain what the reason names, then retry).
+    pub async fn remove_factor(
+        &self,
+        sync_factor: &P256Signer,
+        main_factor: Option<Arc<P256Signer>>,
+        factor_id: String,
+        user_confirmed_backup_removal: bool,
+    ) -> Result<RemoveFactorOutcome, BackupOperationError> {
+        let service = self.service()?;
+        let turnkey = TurnkeyApiClient::new();
+        let ctx = FlowContext {
+            service,
+            turnkey: &turnkey,
+            sync_factor,
+            main_factor: main_factor.as_deref(),
+        };
+        let flow = RemoveFactor {
+            factor_id,
+            user_confirmed_backup_removal,
+        };
+
+        let result = flow.run(&ctx).await;
+
+        if let Ok(RemoveFactorOutcome::FactorRemoved { metadata }) = &result {
+            client_events::sync_report_with_metadata(metadata);
+        }
+
+        client_events::send_remove_factor_event(&result);
+
+        let outcome = result?;
+
+        if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
+            if let Err(error) = Self::post_delete_backup() {
+                crate::critical!(
+                    "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
+                );
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// Retrieves the user's current backup metadata.
+    ///
+    /// # Threading
+    /// Performs network I/O; callers SHOULD invoke it off the main thread.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`]; an `unauthorized_factor` rejection surfaces
+    /// as [`BackupOperationError::NeedsReauth`].
+    pub async fn retrieve_metadata(
+        &self,
+        sync_factor: &P256Signer,
+    ) -> Result<BackupMetadata, BackupOperationError> {
+        self.service()?.retrieve_metadata(sync_factor).await
+    }
 }
+
+/// A **Sync Factor** signer, has only read permissions and specific delete permissions.
+///
+/// Reference: <https://docs.toolsforhumanity.com/world-app/backup/factors>
+#[derive(Clone, Copy)]
+pub struct SyncFactor<'a>(pub &'a P256Signer);
+
+/// A **Main Factor** signer, has full write permissions.
+///
+/// Reference: <https://docs.toolsforhumanity.com/world-app/backup/factors>
+#[derive(Clone, Copy)]
+pub struct MainFactor<'a>(pub &'a P256Signer);
 
 /// Debug information about the local manifest on disk.
 #[derive(Debug, uniffi::Record)]
@@ -522,8 +615,43 @@ pub struct ManifestDebug {
     pub manifest_hash: String,
 }
 
-// Internal helpers (not exported)
+/// Internal helpers (not exported)
 impl BackupManager {
+    /// Clears the local state after a backup deletion: the manifest file
+    /// and the backup base report
+    ///
+    /// # Errors
+    /// - Returns an error if the post-processing fails.
+    fn post_delete_backup() -> Result<(), BackupError> {
+        crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
+
+        let manifest = match ManifestManager::new().danger_delete_manifest() {
+            Ok(())
+            | Err(BackupError::FileSystem(FileSystemError::FileDoesNotExist)) => Ok(()),
+            Err(error) => Err(error),
+        };
+
+        let report = ClientEventsReporter::new().delete_base_report();
+        if let Err(error) = &report {
+            crate::warn!("[ClientEvents] failed to delete base report: {error:?}");
+        }
+
+        manifest?;
+        report.map_err(Into::into)
+    }
+
+    fn service(&self) -> Result<&BackupServiceClient, BackupOperationError> {
+        self.backup_service.get_or_try_init(|| {
+            let config = get_config().ok_or_else(|| {
+                crate::error!("backup service aborted: Bedrock config not initialized");
+                BackupOperationError::Generic {
+                    error_message: "bedrock config not initialized".to_string(),
+                }
+            })?;
+            BackupServiceClient::new(config.environment())
+        })
+    }
+
     /// Reads the root secret out of a one-shot Siegel session, parses it into a
     /// [`RootKey`], and hands it to `f`.
     fn with_root_key<T>(
@@ -823,6 +951,85 @@ impl From<std::io::Error> for BackupError {
 impl From<ClientEventsError> for BackupError {
     fn from(e: ClientEventsError) -> Self {
         Self::ClientEventsError(e.to_string())
+    }
+}
+
+/// Why a factor operation needs the caller to re-authenticate before retrying.
+///
+/// Both reasons are remediated by a native passkey ceremony; they differ in what
+/// the ceremony must produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum NeedsReauthReason {
+    /// The operation needs a [`MainFactor`] that was not supplied. The user needs to
+    /// authenticate.
+    MainFactorRequired,
+    /// The sync factor is no longer valid: not registered in Turnkey, or no longer
+    /// authorized by the backup service. Native must re-auth a [`MainFactor`], refresh
+    /// the sync factor, and re-invoke.
+    SyncFactorInvalid,
+}
+
+/// Error returned by high-level backup flows.
+///
+/// Most variants are opaque by design (details are logged inside Bedrock).
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum BackupOperationError {
+    /// The factor provided invalid or under-permissioned. Re-authenticate and retry.
+    #[error("re-authentication required: {reason:?}")]
+    NeedsReauth {
+        /// What needs to be fixed
+        reason: NeedsReauthReason,
+    },
+    /// Completing this removal would delete the entire backup because it is the last
+    /// main factor. The user must confirm, then retry.
+    #[error("operation would delete the entire backup")]
+    WouldDeleteBackup,
+    /// The backup service rejected the request. `code` is its machine-readable code.
+    #[error("backup service error: {code}")]
+    BackupService {
+        /// The backup service's machine-readable error code.
+        code: String,
+    },
+    /// The native attestation client could not produce a gateway token. It owns the
+    /// exchange and the user-facing handling; Bedrock only reports that it failed.
+    #[error("attestation failed")]
+    Attestation,
+    /// Turnkey rejected the request. `code` is a coarse classification.
+    #[error("turnkey error: {code}")]
+    Turnkey {
+        /// A coarse classification of the Turnkey failure.
+        code: String,
+    },
+    /// The signer could not produce a signature or public key.
+    #[error("signer error: {inner}")]
+    Signer {
+        /// The underlying signer failure.
+        inner: KeypairSignerError,
+    },
+    /// A network failure reaching the backup service. `retryable` indicates whether
+    /// a later retry may succeed.
+    #[error("network error (retryable={retryable})")]
+    Network {
+        /// Whether retrying the operation may succeed.
+        retryable: bool,
+    },
+    /// The requested operation is not supported. Terminal state.
+    #[error("unsupported removal: {detail}")]
+    Unsupported {
+        /// Human-readable description of what is unsupported.
+        detail: String,
+    },
+    /// An unexpected internal error. By default, no reason to log (Bedrock already handles it).
+    #[error("{error_message}")]
+    Generic {
+        /// Additional human-readable description.
+        error_message: String,
+    },
+}
+
+impl From<KeypairSignerError> for BackupOperationError {
+    fn from(inner: KeypairSignerError) -> Self {
+        Self::Signer { inner }
     }
 }
 

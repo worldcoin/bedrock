@@ -61,7 +61,7 @@ impl TurnkeyMigration for MigrationAppleAudience {
 
         match plan {
             Plan::SkipNoAppleProvider | Plan::SkipReady => {
-                crate::info!("apple_audience skipped: {plan}");
+                crate::debug!("apple_audience skipped: {plan}");
                 Ok(MigrationOutcome::Skipped)
             }
             Plan::Create { user_id, providers } => {
