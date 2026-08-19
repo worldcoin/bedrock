@@ -1,13 +1,40 @@
 package bedrock
 
 import uniffi.bedrock.DemoException
+import uniffi.bedrock.LogLevel
+import uniffi.bedrock.Logger
 import uniffi.bedrock.ToolingDemo
+import uniffi.bedrock.setLogger
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
+
+// A [Logger] implementation that records every delivered log line so tests can
+// assert on messages and structured attributes. Backed by a thread-safe list
+// since Rust may invoke it from any thread.
+private class CapturingLogger : Logger {
+    val records = CopyOnWriteArrayList<Triple<LogLevel, String, Map<String, String>>>()
+
+    override fun log(level: LogLevel, message: String, attributes: Map<String, String>) {
+        records.add(Triple(level, message, attributes))
+    }
+
+    companion object {
+        // global for all tests
+        private val shared = CapturingLogger()
+
+        fun installed(): CapturingLogger {
+            setLogger(shared)
+            return shared
+        }
+    }
+}
 
 // Foreign Tests for tooling functionality (i.e. logging and error handling)
 // The demo structs are only available in Foreign Tests and are not available in built binaries.
@@ -25,6 +52,48 @@ class BedrockToolingTests {
         val result = demo.getDemoResult()
         assertTrue(result.contains("ToolingDemo"), "Result should contain the demo name")
         assertTrue(result.contains("Demo result"), "Result should contain expected text")
+    }
+
+    // Verifies structured attributes and the always-present bedrock_version
+    @Test
+    fun testForeignLoggerReceivesAttributesAndVersion() {
+        val logger = CapturingLogger.installed()
+
+        val demo = ToolingDemo()
+        val marker = "kotlin-attr-${UUID.randomUUID()}"
+        demo.logWithAttributes(marker)
+
+        val attributed = logger.records.firstOrNull { it.third["demo_marker"] == marker }
+        assertNotNull(attributed, "capturing logger should receive the attributed log")
+        assertEquals("ToolingDemo", attributed.third["demo_source"])
+        val version = attributed.third["bedrock_version"]
+        assertNotNull(version, "every log must carry bedrock_version")
+        assertTrue(version.isNotEmpty(), "bedrock_version must not be empty")
+
+        // A fieldless log still carries the version attribute and nothing else.
+        val plainMarker = "kotlin-plain-${UUID.randomUUID()}"
+        demo.logMessage(plainMarker)
+        val plain = logger.records.firstOrNull { it.second.contains(plainMarker) }
+        assertNotNull(plain, "capturing logger should receive the plain log")
+        assertEquals(version, plain.third["bedrock_version"])
+        assertEquals(1, plain.third.size, "version is the only attribute on a fieldless log")
+    }
+
+    @Test
+    fun testCriticalLevelIsCorrectlyReported() {
+        val logger = CapturingLogger.installed()
+
+        val demo = ToolingDemo()
+        val marker = "kotlin-critical-${UUID.randomUUID()}"
+        demo.logCritical(marker)
+
+        val critical = logger.records.firstOrNull { it.third["demo_marker"] == marker }
+        assertNotNull(critical, "capturing logger should receive the critical log")
+        assertEquals(LogLevel.CRITICAL, critical.first, "criticals must use LogLevel.CRITICAL")
+        assertFalse(
+            critical.second.contains("[Critical]"),
+            "severity belongs in the level, not as a tag in the message",
+        )
     }
 
     // MARK: - Error Handling Tests
@@ -215,21 +284,21 @@ class BedrockToolingTests {
     }
 
     // MARK: - Async Operation Tests
-    
+
     @Test
     fun testDemoAsyncOperation_Success() = runBlocking {
         val demo = ToolingDemo()
-        
+
         // Test successful async operation with short delay
         val result = demo.demoAsyncOperation(100uL)
         assertTrue(result.contains("Async operation completed after 100ms"))
         assertTrue(result.contains("completed"))
     }
-    
+
     @Test
     fun testDemoAsyncOperation_Timeout() = runBlocking {
         val demo = ToolingDemo()
-        
+
         // Test async operation that should timeout (over 5000ms)
         val timeoutException = assertFailsWith<DemoException.Generic> {
             demo.demoAsyncOperation(6000uL)
@@ -237,36 +306,36 @@ class BedrockToolingTests {
         assertTrue(timeoutException.message?.contains("timeout exceeded") == true)
         assertTrue(timeoutException.message?.contains("5 seconds") == true)
     }
-    
+
     @Test
     fun testDemoAsyncOperation_MultipleOperations() = runBlocking {
         val demo = ToolingDemo()
-        
+
         // Test multiple async operations to ensure runtime stability
         val result1 = demo.demoAsyncOperation(50uL)
         val result2 = demo.demoAsyncOperation(100uL)
         val result3 = demo.demoAsyncOperation(150uL)
-        
+
         assertTrue(result1.contains("completed after 50ms"))
         assertTrue(result2.contains("completed after 100ms"))
         assertTrue(result3.contains("completed after 150ms"))
     }
-    
+
     @Test
     fun testDemoAsyncOperation_RuntimeIntegration() = runBlocking {
         // This test specifically verifies that the automatic tokio runtime configuration
         // added by bedrock_export works correctly in foreign code
         val demo = ToolingDemo()
-        
+
         // Run a series of async operations to stress test the runtime
         val delays = listOf(10uL, 25uL, 50uL, 75uL, 100uL)
         val results = mutableListOf<String>()
-        
+
         for (delay in delays) {
             val result = demo.demoAsyncOperation(delay)
             results.add(result)
         }
-        
+
         // Verify all operations completed successfully
         assertEquals(5, results.size)
         for ((index, result) in results.withIndex()) {
