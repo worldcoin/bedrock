@@ -132,17 +132,19 @@ class BedrockFilesystemTests {
     }
 
     /**
-     * A second `setConfig` naming a different root is refused, so a stray initializer
-     * cannot leave Bedrock reading one directory while the caller writes another.
+     * Every `setConfig` after the first is refused, so a stray initializer naming a
+     * different root cannot leave Bedrock reading one directory while the caller
+     * believes it writes to another.
      *
      * Rejection of a *relative* root can only be observed in a process where nothing has
      * configured Bedrock yet, which the Rust suite covers.
      */
     @Test
-    fun testSetConfigRejectsADifferentRootPath() {
+    fun testSetConfigRefusesDuplicateInitialization() {
         val other = File(System.getProperty("java.io.tmpdir"), "bedrock-some-other-root")
+        other.deleteRecursively()
 
-        assertFailsWith<FileSystemException.InvalidPath> {
+        assertFailsWith<uniffi.bedrock.PrimitiveException.Generic> {
             uniffi.bedrock.setConfig(
                 uniffi.bedrock.BedrockEnvironment.STAGING,
                 uniffi.bedrock.Os.ANDROID,
@@ -150,7 +152,8 @@ class BedrockFilesystemTests {
             )
         }
 
-        // The committed root still works.
+        // The committed root still works, and the refused one was never created.
+        assertFalse(other.exists())
         val tester = FileSystemTester()
         tester.testWriteFile("after_rejection.txt", "ok")
         assertEquals("ok", tester.testReadFile("after_rejection.txt"))

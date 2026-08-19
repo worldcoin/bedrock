@@ -184,12 +184,15 @@ class BedrockToolingTests {
         // Verify config is initialized
         assertTrue(uniffi.bedrock.isInitialized(), "Config should be initialized")
 
-        // Try to initialize again - should be ignored (check logs for warning)
-        uniffi.bedrock.setConfig(
-            uniffi.bedrock.BedrockEnvironment.PRODUCTION,
-            uniffi.bedrock.Os.ANDROID,
-            BedrockTestSupport.rootPath,
-        )
+        // Initializing again is refused, even with the same root: the committed config
+        // is what Bedrock keeps using, so a silent no-op would hide the stray call.
+        assertFailsWith<uniffi.bedrock.PrimitiveException.Generic> {
+            uniffi.bedrock.setConfig(
+                uniffi.bedrock.BedrockEnvironment.PRODUCTION,
+                uniffi.bedrock.Os.ANDROID,
+                BedrockTestSupport.rootPath,
+            )
+        }
 
         // Environment should still be staging
         val configAfterSecondInit = uniffi.bedrock.getConfig()

@@ -121,23 +121,25 @@ final class BedrockFilesystemTests: XCTestCase {
         XCTAssertEqual(readContent, "{\"theme\": \"dark\"}", "Content in subdirectory should match")
     }
 
-    /// A second `setConfig` naming a different root is refused, so a stray initializer
-    /// cannot leave Bedrock reading one directory while the caller writes another.
+    /// Every `setConfig` after the first is refused, so a stray initializer naming a
+    /// different root cannot leave Bedrock reading one directory while the caller
+    /// believes it writes to another.
     ///
     /// Rejection of a *relative* root can only be observed in a process where nothing has
     /// configured Bedrock yet, which the Rust suite covers.
-    func testSetConfigRejectsADifferentRootPath() throws {
+    func testSetConfigRefusesDuplicateInitialization() throws {
         let other = NSTemporaryDirectory() + "bedrock-some-other-root"
 
         XCTAssertThrowsError(
             try setConfig(environment: .staging, os: .ios, rootPath: other)
         ) { error in
-            guard case FileSystemError.InvalidPath = error else {
-                return XCTFail("Expected InvalidPath, got \(error)")
+            guard case PrimitiveError.Generic = error else {
+                return XCTFail("Expected Generic, got \(error)")
             }
         }
 
-        // The committed root still works.
+        // The committed root still works, and the refused one was never created.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: other))
         let tester = FileSystemTester()
         try tester.testWriteFile(filename: "after_rejection.txt", content: "ok")
         XCTAssertEqual(try tester.testReadFile(filename: "after_rejection.txt"), "ok")
