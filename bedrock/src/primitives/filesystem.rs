@@ -17,7 +17,7 @@ use crate::primitives::PrimitiveError;
 const CHECKSUM_CHUNK_SIZE: usize = 65_536; // 64 KiB
 
 /// Directory under the root where in-flight writes are staged for atomic writes.
-const ATOMIC_STAGED_DIRECTORY: &str = ".bedrock-staged";
+pub(crate) const ATOMIC_STAGED_DIRECTORY: &str = ".bedrock-staged";
 
 /// Errors that can occur during filesystem operations
 #[derive(Debug, Error, uniffi::Error)]
@@ -433,13 +433,13 @@ mod tests {
     #[test]
     fn test_prepare_root_rejects_relative_paths() {
         for path in ["", "relative/dir", "./here"] {
-            assert_eq!(
-                prepare_root(Path::new(path)).unwrap_err(),
-                PrimitiveError::InvalidInput {
-                    attribute: "path".to_string(),
-                    error_message: "the Bedrock root path must be absolute".to_string(),
-                }
-            );
+            let error = prepare_root(Path::new(path)).unwrap_err();
+            assert!(matches!(
+                &error,
+                PrimitiveError::InvalidInput { attribute, error_message }
+                    if attribute == "path"
+                        && error_message == "the Bedrock root path must be absolute"
+            ));
         }
     }
 
@@ -468,7 +468,7 @@ mod tests {
 
         assert!(matches!(
             prepare_root(&blocker.join("root")),
-            Err(FileSystemError::IoFailure(_))
+            Err(PrimitiveError::Generic { .. })
         ));
 
         drop(fs::remove_file(&blocker));
@@ -545,7 +545,7 @@ mod tests {
                 Os::Ios,
                 "relative/bedrock".to_string()
             ),
-            Err(FileSystemError::InvalidPath(_))
+            Err(PrimitiveError::InvalidInput { .. })
         ));
         assert!(!is_initialized(), "a rejected root must not be committed");
 
@@ -553,16 +553,21 @@ mod tests {
         init_test_filesystem();
         assert!(is_initialized());
 
-        // Re-initializing with the same root is a no-op, not an error.
         let committed = get_config()
             .unwrap()
             .root_path()
             .to_string_lossy()
             .into_owned();
-        set_config(BedrockEnvironment::Production, Os::Android, committed)
-            .expect("re-initializing with the same root should be ignored");
+        assert!(matches!(
+            set_config(BedrockEnvironment::Production, Os::Android, committed),
+            Err(PrimitiveError::Generic { .. })
+        ));
+        assert_eq!(
+            get_config().unwrap().environment(),
+            BedrockEnvironment::Staging
+        );
 
-        // A later call naming a different root is rejected, and never creates it.
+        // A refused call must not create the root it named.
         let other = std::env::temp_dir().join("bedrock-rejected-second-root");
         drop(fs::remove_dir_all(&other));
         assert!(matches!(
@@ -571,9 +576,9 @@ mod tests {
                 Os::Ios,
                 other.to_string_lossy().into_owned()
             ),
-            Err(FileSystemError::InvalidPath(_))
+            Err(PrimitiveError::Generic { .. })
         ));
-        assert!(!other.exists(), "a rejected root must not be created");
+        assert!(!other.exists(), "a refused call must not create a root");
 
         // The committed root still works.
         root_filesystem()
@@ -812,7 +817,7 @@ mod tests {
         let fs = scoped("fs_staging_location");
         fs.write_file("nested/data.bin", b"payload").unwrap();
 
-        // Staging under the scope would put a `.bedrock-staging` directory inside every
+        // Staging under the scope would put a staging directory inside every
         // module's tree, out of reach of the startup sweep.
         let scope = fs.resolve_directory("").unwrap();
         assert!(!scope.join(ATOMIC_STAGED_DIRECTORY).exists());
@@ -826,14 +831,18 @@ mod tests {
 
         // A restored backup payload must not be able to name Bedrock's own scratch
         // space; the startup sweep would delete whatever landed there.
+        // Built from the constant: spelling these out let a rename silently turn this
+        // test into a no-op, which is exactly what it exists to catch.
+        let reserved = ATOMIC_STAGED_DIRECTORY;
         for path in [
-            ".bedrock-staging/planted.bin",
-            "/.bedrock-staging/planted.bin",
-            "./.bedrock-staging/planted.bin",
-            ".bedrock-staging",
+            format!("{reserved}/planted.bin"),
+            format!("/{reserved}/planted.bin"),
+            format!("./{reserved}/planted.bin"),
+            reserved.to_string(),
             // Same directory on a case-insensitive volume.
-            ".BEDROCK-Staging/planted.bin",
+            format!("{}/planted.bin", reserved.to_uppercase()),
         ] {
+            let path = path.as_str();
             assert!(
                 matches!(
                     fs.write_file(path, b"payload"),
@@ -844,7 +853,7 @@ mod tests {
         }
 
         assert!(matches!(
-            fs.list_files_at_directory(".bedrock-staging"),
+            fs.list_files_at_directory(reserved),
             Err(FileSystemError::InvalidPath(_))
         ));
     }

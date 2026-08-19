@@ -3,8 +3,8 @@ import Foundation
 
 /// Shared Bedrock initialization for the test suites.
 ///
-/// `setConfig` is a one-shot global, so every suite must go through this helper: the
-/// first caller wins and all of them need a usable root path for file operations.
+/// `setConfig` is a one-shot global that refuses every call after the first, so this
+/// helper is what makes it safe to call from each suite's `setUp`.
 enum BedrockTestSupport {
     static let rootPath: String = {
         let root = FileManager.default.temporaryDirectory
@@ -15,7 +15,11 @@ enum BedrockTestSupport {
     }()
 
     /// Initializes the global Bedrock config, if it isn't already.
+    ///
+    /// A second `setConfig` throws, and this runs before every test, so the guard is what
+    /// keeps every test after the first from failing in `setUp`.
     static func setUp() throws {
+        guard !isInitialized() else { return }
         try Bedrock.setConfig(environment: .staging, os: .ios, rootPath: rootPath)
     }
 }

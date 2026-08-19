@@ -225,6 +225,7 @@ impl From<Signature> for HexEncodedData {
 
 /// Represents primitive errors on Bedrock. These errors may not be called **from** FFI.
 #[crate::bedrock_error]
+#[derive(PartialEq, Eq)]
 pub enum PrimitiveError {
     /// The provided string is not validly encoded hex data.
     #[error("invalid hex string: {0}")]
