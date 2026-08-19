@@ -155,7 +155,7 @@ impl BedrockConfig {
 /// Initializes the global Bedrock configuration.
 ///
 /// This function should be called once at application startup before any other Bedrock operations.
-/// Subsequent calls will be ignored and print a warning.
+/// Every later call is refused with an error and the first configuration stands.
 ///
 /// # Arguments
 /// * `environment` - The environment to use for all Bedrock operations
