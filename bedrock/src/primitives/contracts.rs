@@ -1,5 +1,7 @@
 use crate::primitives::PrimitiveError;
-use crate::transactions::rpc::SponsorUserOperationResponse;
+use crate::transactions::rpc::{
+    PmSponsorUserOperationResponse, SponsorUserOperationResponse,
+};
 use alloy::hex::FromHex;
 use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes, U128};
 use alloy::sol;
@@ -273,6 +275,42 @@ impl UserOperation {
         self.call_gas_limit = sponsor_response.call_gas_limit;
         self.max_fee_per_gas = sponsor_response.max_fee_per_gas;
         self.max_priority_fee_per_gas = sponsor_response.max_priority_fee_per_gas;
+
+        self
+    }
+
+    /// Merges a V2 `pm_sponsorUserOperation` response into the `UserOperation`.
+    ///
+    /// Every field on the response is written through unconditionally — the
+    /// response is the source of truth for the post-merge `UserOp`. Gas fields
+    /// always carry values on both response shapes; paymaster fields are
+    /// `Some(...)` only on the self-sponsored shape, `None` on the
+    /// protocol-sponsored shape. A `None` clears any prior paymaster data on
+    /// the input `UserOp`, so the protocol-sponsored merge cannot accidentally
+    /// preserve stale paymaster fields from earlier mutations.
+    ///
+    /// See `bedrock/src/transactions/transaction.md` for the wire contract.
+    #[must_use]
+    pub fn with_sponsorship_data(
+        mut self,
+        sponsor_response: &PmSponsorUserOperationResponse,
+    ) -> Self {
+        // Gas fields are always populated on both response shapes.
+        self.pre_verification_gas = sponsor_response.pre_verification_gas;
+        self.verification_gas_limit = sponsor_response.verification_gas_limit;
+        self.call_gas_limit = sponsor_response.call_gas_limit;
+        self.max_fee_per_gas = sponsor_response.max_fee_per_gas;
+        self.max_priority_fee_per_gas = sponsor_response.max_priority_fee_per_gas;
+
+        // Paymaster fields: overwrite unconditionally. `None` on the
+        // protocol-sponsored shape clears any prior paymaster data, mirroring
+        // V1's `with_paymaster_data` so the two merge paths stay symmetric.
+        self.paymaster = sponsor_response.paymaster;
+        self.paymaster_data
+            .clone_from(&sponsor_response.paymaster_data);
+        self.paymaster_verification_gas_limit =
+            sponsor_response.paymaster_verification_gas_limit;
+        self.paymaster_post_op_gas_limit = sponsor_response.paymaster_post_op_gas_limit;
 
         self
     }
