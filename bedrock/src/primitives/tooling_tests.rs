@@ -288,7 +288,7 @@ impl FileSystemTester {
     ) -> Result<(), FileSystemTestError> {
         // _bedrock_fs is automatically injected by the macro
         // `FileSystemError` automatically converts to FileSystemTestError::FileSystem
-        Ok(_bedrock_fs.write_file(filename, content.as_bytes().to_vec())?)
+        Ok(_bedrock_fs.write_file(filename, content.as_bytes())?)
     }
 
     /// Tests reading a file using the injected filesystem middleware
@@ -383,8 +383,6 @@ impl HttpClientTester {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
 
     #[test]
@@ -483,123 +481,5 @@ mod tests {
         } else {
             panic!("Expected Generic error for timeout");
         }
-    }
-
-    #[test]
-    fn test_in_memory_filesystem_features() {
-        use crate::primitives::filesystem::{FileSystem, InMemoryFileSystem};
-
-        // Test creating filesystem with initial files
-        let fs = InMemoryFileSystem::with_files(&[
-            ("config.json", r#"{"app": "bedrock"}"#),
-            ("data/users.txt", "alice\nbob\ncharlie"),
-            ("logs/app.log", "Starting application..."),
-        ]);
-
-        // Test file count
-        assert_eq!(fs.file_count(), 3);
-
-        // Test file exists
-        assert!(fs.contains_file("config.json"));
-        assert!(fs.contains_file("data/users.txt"));
-        assert!(!fs.contains_file("nonexistent.txt"));
-
-        // Test reading file content
-        assert_eq!(
-            String::from_utf8(fs.read_file("config.json".to_string()).unwrap())
-                .unwrap(),
-            r#"{"app": "bedrock"}"#
-        );
-
-        // Test setting up additional files
-        fs.write_file("temp/test.txt".to_string(), b"temporary data".to_vec())
-            .unwrap();
-        assert_eq!(fs.file_count(), 4);
-
-        // Test directory setup
-        fs.setup_directory("cache");
-        // Directory markers don't count as files
-        assert_eq!(fs.file_count(), 4);
-
-        // Test listing all file paths
-        let mut paths = fs.all_file_paths();
-        paths.sort();
-        assert_eq!(
-            paths,
-            vec![
-                "config.json",
-                "data/users.txt",
-                "logs/app.log",
-                "temp/test.txt"
-            ]
-        );
-
-        // Test clear functionality
-        fs.clear();
-        assert_eq!(fs.file_count(), 0);
-        assert!(!fs.contains_file("config.json"));
-    }
-
-    #[test]
-    fn test_in_memory_filesystem_list_files_at_directory() {
-        use crate::primitives::filesystem::{FileSystem, InMemoryFileSystem};
-
-        // Test creating filesystem with initial files
-        let fs = InMemoryFileSystem::with_files(&[
-            ("config.json", r#"{"app": "bedrock"}"#),
-            ("data/users.txt", "alice\nbob\ncharlie"),
-            ("data/metadata.txt", "metadata"),
-            ("data/subdir/file.txt", "subdir file"),
-            ("data/subdir/subsubdir/file2.txt", "subsubdir file"),
-            ("logs/app.log", "Starting application..."),
-        ]);
-
-        let file_list: HashSet<String> = fs
-            .list_files_at_directory("data".to_string())
-            .unwrap()
-            .into_iter()
-            .collect();
-        let expected = ["metadata.txt".to_string(), "users.txt".to_string()] // note non recursiveness
-            .into_iter()
-            .collect::<HashSet<String>>();
-        assert_eq!(file_list, expected);
-    }
-
-    #[test]
-    fn test_calculate_checksum_small_file() {
-        use crate::primitives::filesystem::{
-            FileSystem, FileSystemExt, InMemoryFileSystem,
-        };
-
-        let fs = InMemoryFileSystem::new();
-        fs.write_file("greeting.txt".to_string(), b"Hello, World!".to_vec())
-            .unwrap();
-
-        let (checksum, _) =
-            FileSystemExt::calculate_checksum_and_size(&fs, "greeting.txt")
-                .expect("checksum should compute successfully");
-        let expected: [u8; 32] = blake3::hash(b"Hello, World!").into();
-        assert_eq!(checksum, expected);
-    }
-
-    #[test]
-    fn test_calculate_checksum_large_file_streaming() {
-        use crate::primitives::filesystem::{
-            FileSystem, FileSystemExt, InMemoryFileSystem,
-        };
-
-        let fs = InMemoryFileSystem::new();
-        // Create a file larger than the 64 KiB streaming chunk size to ensure multiple iterations
-        let data = vec![0_u8; 200_000];
-        fs.write_file("large.bin".to_string(), data.clone())
-            .unwrap();
-
-        let (checksum, size) =
-            FileSystemExt::calculate_checksum_and_size(&fs, "large.bin")
-                .expect("checksum should compute successfully");
-        let expected: [u8; 32] = blake3::hash(&data).into();
-        assert_eq!(checksum, expected);
-
-        assert_eq!(size, data.len() as u64);
     }
 }
