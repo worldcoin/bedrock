@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Once, OnceLock};
 
 use crate::bedrock_export;
-use crate::primitives::filesystem::{
-    clear_stale_staged_writes, prepare_root, FileSystemError,
-};
+use crate::primitives::filesystem::{clear_stale_staged_writes, prepare_root};
 use crate::primitives::PrimitiveError;
 
 /// Global configuration for Bedrock
