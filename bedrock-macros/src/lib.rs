@@ -187,14 +187,14 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Procedural macro that wraps `uniffi::export` and automatically injects logging context and filesystem middleware
+/// Procedural macro that wraps `uniffi::export` and automatically injects logging context and a scoped filesystem
 ///
 /// This macro automatically:
 /// 1. Forwards the attribute to `#[uniffi::export]`
 /// 2. Wraps every `pub fn` in a `LogContext`, so every record it logs (nested calls
 ///    included) is prefixed with `[Bedrock][StructName]`. `async` methods are wrapped
 ///    in `in_log_context` instead, which keeps the prefix across `.await` points
-/// 3. Injects a private `_bedrock_fs` field of type FileSystemMiddleware to the struct
+/// 3. Injects a private `_bedrock_fs` binding of type `ScopedFileSystem` into every method
 /// 4. Extracts the struct/trait name from the impl block for context
 /// 5. Automatically adds `async_runtime = "tokio"` if any async functions are detected
 ///
@@ -216,7 +216,7 @@ pub fn bedrock_error(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///     pub async fn async_method(&self) -> String {
 ///         // async_runtime = "tokio" is automatically added to uniffi::export
 ///         // the prefix holds across every `.await`, and _bedrock_fs is available here too
-///         _bedrock_fs.write_file("output.txt", b"data".to_vec()).unwrap();
+///         _bedrock_fs.write_file("output.txt", b"data").unwrap();
 ///         "async result".to_string()
 ///     }
 /// }
@@ -335,14 +335,14 @@ fn to_snake_case(s: &str) -> String {
     result
 }
 
-/// Inject logging context and filesystem middleware into a function body
+/// Inject logging context and the scoped filesystem into a function body
 fn inject_logging_and_filesystem_context(method: &mut ImplItemFn, type_name: &str) {
     // Convert type name to snake_case for filesystem prefix
     let snake_case_name = to_snake_case(type_name);
 
-    // Create the filesystem middleware statement with snake_case name
+    // Create the scoped filesystem statement with snake_case name
     let fs_stmt: Stmt = syn::parse_quote! {
-        let _bedrock_fs = crate::primitives::filesystem::create_middleware(#snake_case_name);
+        let _bedrock_fs = crate::primitives::filesystem::ScopedFileSystem::new(#snake_case_name);
     };
 
     if method.sig.asyncness.is_some() {

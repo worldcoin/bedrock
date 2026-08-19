@@ -1,10 +1,18 @@
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Once, OnceLock};
 
 use crate::bedrock_export;
+use crate::primitives::filesystem::{
+    clear_stale_staged_writes, prepare_root, FileSystemError,
+};
+use crate::primitives::PrimitiveError;
 
 /// Global configuration for Bedrock
 static CONFIG_INSTANCE: OnceLock<Arc<BedrockConfig>> = OnceLock::new();
+
+/// Guards the one-time sweep of staged writes left by a previous process.
+static FS_STAGED_SWEEP: Once = Once::new();
 
 /// Represents the environment for Bedrock operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -97,6 +105,7 @@ impl std::fmt::Display for BedrockEnvironment {
 pub struct BedrockConfig {
     environment: BedrockEnvironment,
     os: Os,
+    root_path: PathBuf,
 }
 
 #[bedrock_export]
@@ -105,18 +114,24 @@ impl BedrockConfig {
     ///
     /// # Arguments
     /// * `environment` - The environment to use for this configuration
+    /// * `os` - The platform the app is running on
+    /// * `root_path` - Absolute path to the directory Bedrock owns for its files. Should **NOT** be touched outside of Bedrock.
     ///
     /// # Examples
     ///
     /// ## Swift
     ///
     /// ```swift
-    /// let config = BedrockConfig(environment: .production)
+    /// let config = BedrockConfig(environment: .production, os: .ios, rootPath: rootURL.path)
     /// ```
     #[uniffi::constructor]
     #[must_use]
-    pub fn new(environment: BedrockEnvironment, os: Os) -> Self {
-        Self { environment, os }
+    pub fn new(environment: BedrockEnvironment, os: Os, root_path: String) -> Self {
+        Self {
+            environment,
+            os,
+            root_path: PathBuf::from(root_path),
+        }
     }
 
     /// Gets the current environment
@@ -132,6 +147,13 @@ impl BedrockConfig {
     }
 }
 
+impl BedrockConfig {
+    /// The directory Bedrock resolves all of its file operations against.
+    pub(crate) fn root_path(&self) -> &Path {
+        &self.root_path
+    }
+}
+
 /// Initializes the global Bedrock configuration.
 ///
 /// This function should be called once at application startup before any other Bedrock operations.
@@ -139,6 +161,13 @@ impl BedrockConfig {
 ///
 /// # Arguments
 /// * `environment` - The environment to use for all Bedrock operations
+/// * `os` - The platform the app is running on
+/// * `root_path` - Absolute path to the directory Bedrock owns for its
+/// files. Should **NOT** be touched outside of Bedrock.
+///
+/// # Errors
+/// - Returns an error if `root_path` is not absolute or cannot be created.
+/// - Returns an error if Bedrock is already configured. Call only once!
 ///
 /// # Examples
 ///
@@ -148,23 +177,43 @@ impl BedrockConfig {
 /// import Bedrock
 ///
 /// // In your app delegate or during app initialization
-/// setConfig(environment: .staging)
+/// try setConfig(environment: .staging, os: .ios, rootPath: rootURL.path)
 /// ```
 #[uniffi::export]
-pub fn set_config(environment: BedrockEnvironment, os: Os) {
-    let config = BedrockConfig::new(environment, os);
+pub fn set_config(
+    environment: BedrockEnvironment,
+    os: Os,
+    root_path: String,
+) -> Result<(), PrimitiveError> {
+    let config = BedrockConfig::new(environment, os, root_path);
 
-    match CONFIG_INSTANCE.set(Arc::new(config)) {
-        Ok(()) => {
-            crate::info!(
-                "Bedrock config initialized with environment: {}",
-                environment
-            );
-        }
-        Err(_) => {
-            crate::warn!("Bedrock config already initialized, ignoring");
-        }
+    if CONFIG_INSTANCE.get().is_some() {
+        return Err(PrimitiveError::Generic {
+            error_message: "already initialized".to_string(),
+        });
     }
+
+    if let Err(error) = prepare_root(config.root_path()) {
+        crate::critical!(
+            "Bedrock root directory is unusable, config not applied: {error}"
+        );
+        return Err(error);
+    }
+
+    // Before the config becomes visible so there are no race conditions
+    FS_STAGED_SWEEP.call_once(|| clear_stale_staged_writes(config.root_path()));
+
+    if CONFIG_INSTANCE.set(Arc::new(config)).is_err() {
+        return Err(PrimitiveError::Generic {
+            error_message: "already initialized".to_string(),
+        });
+    }
+
+    crate::debug!(
+        "Bedrock config initialized with environment: {}",
+        environment
+    );
+    Ok(())
 }
 
 /// Gets a reference to the global Bedrock configuration.
