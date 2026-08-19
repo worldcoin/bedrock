@@ -85,6 +85,20 @@ impl ToolingDemo {
         warn!("This is a warning message from ToolingDemo");
     }
 
+    ///Create a log record with additional attributes
+    pub fn log_with_attributes(&self, marker: &str) {
+        info!(
+            demo_marker = marker,
+            demo_source = "ToolingDemo",
+            "logging with structured attributes"
+        );
+    }
+
+    /// Log a critical message
+    pub fn log_critical(&self, marker: &str) {
+        crate::critical!(demo_marker = marker, "something needs immediate attention");
+    }
+
     /// Returns a simple result for testing.
     #[must_use]
     pub fn get_demo_result(&self) -> String {

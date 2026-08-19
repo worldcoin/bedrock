@@ -66,7 +66,12 @@ impl KeypairSigner for TestSigner {
 pub struct StdoutLogger;
 
 impl Logger for StdoutLogger {
-    fn log(&self, level: LogLevel, message: String) {
+    fn log(
+        &self,
+        level: LogLevel,
+        message: String,
+        _attributes: std::collections::HashMap<String, String>,
+    ) {
         println!("[bedrock][{level:?}] {message}");
     }
 }

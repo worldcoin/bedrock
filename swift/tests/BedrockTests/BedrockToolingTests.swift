@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 @testable import Bedrock
@@ -5,19 +6,100 @@ import XCTest
 // Foreign Tests for tooling functionality (i.e. logging and error handling)
 // The demo structs are only available in Foreign Tests and are not available in built binaries.
 
+// A single log line as the host logger received it.
+struct CapturedRecord {
+    let level: LogLevel
+    let message: String
+    let attributes: [String: String]
+}
+
+// A `Logger` implementation that records every delivered log line so tests can
+// assert on messages and structured attributes. Manual locking makes it safe to
+// hand to Rust as a `Sendable` callback interface.
+final class CapturingLogger: Logger, @unchecked Sendable {
+    // global for all tests
+    static let shared = CapturingLogger()
+
+    static func installed() -> CapturingLogger {
+        setLogger(logger: shared)
+        return shared
+    }
+
+    private let lock = NSLock()
+    private var records: [CapturedRecord] = []
+
+    func log(level: LogLevel, message: String, attributes: [String: String]) {
+        lock.lock()
+        records.append(CapturedRecord(level: level, message: message, attributes: attributes))
+        lock.unlock()
+    }
+
+    func snapshot() -> [CapturedRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return records
+    }
+}
+
 final class BedrockToolingTests: XCTestCase {
 
     func testToolingDemoLogPrefixing() throws {
         // Test the ToolingDemo to verify log prefixing works
         let demo = ToolingDemo()
-        
+
         // These calls should generate logs with [Bedrock][ToolingDemo] prefix
         demo.logMessage(message: "Testing log prefixing from Swift")
         demo.testLogLevels()
-        
+
         let result = demo.getDemoResult()
         XCTAssertTrue(result.contains("ToolingDemo"), "Result should contain the demo name")
         XCTAssertTrue(result.contains("Demo result"), "Result should contain expected text")
+    }
+
+    // Verifies structured attributes and the always-present bedrock_version
+    func testForeignLoggerReceivesAttributesAndVersion() throws {
+        let logger = CapturingLogger.installed()
+
+        let demo = ToolingDemo()
+        let marker = "swift-attr-\(UUID().uuidString)"
+        demo.logWithAttributes(marker: marker)
+
+        let attributed = try XCTUnwrap(
+            logger.snapshot().first { $0.attributes["demo_marker"] == marker },
+            "capturing logger should receive the attributed log")
+        XCTAssertEqual(attributed.attributes["demo_source"], "ToolingDemo")
+        let version = try XCTUnwrap(
+            attributed.attributes["bedrock_version"], "every log must carry bedrock_version")
+        XCTAssertFalse(version.isEmpty)
+
+        let plainMarker = "swift-plain-\(UUID().uuidString)"
+        demo.logMessage(message: plainMarker)
+        let plain = try XCTUnwrap(
+            logger.snapshot().first { $0.message.contains(plainMarker) },
+            "capturing logger should receive the plain log")
+        XCTAssertEqual(plain.attributes["bedrock_version"], version)
+        XCTAssertEqual(plain.attributes.count, 1, "version is the only attribute on a fieldless log")
+    }
+
+    // Criticals must arrive as .critical rather than as an .error carrying a
+    // "[Critical]" tag in the text, so the host can map them onto a severity above
+    // error and alert on status instead of matching the message.
+    func testCriticalLevelSurvivesTheFfiBoundary() throws {
+        let logger = CapturingLogger.installed()
+
+        let demo = ToolingDemo()
+        let marker = "swift-critical-\(UUID().uuidString)"
+        demo.logCritical(marker: marker)
+
+        let critical = try XCTUnwrap(
+            logger.snapshot().first { $0.attributes["demo_marker"] == marker },
+            "capturing logger should receive the critical log")
+        guard case .critical = critical.level else {
+            return XCTFail("criticals must use LogLevel.critical, got \(critical.level)")
+        }
+        XCTAssertFalse(
+            critical.message.contains("[Critical]"),
+            "severity belongs in the level, not as a tag in the message")
     }
 
     // MARK: - Error Handling Tests
@@ -192,28 +274,28 @@ final class BedrockToolingTests: XCTestCase {
             XCTAssertFalse(error.localizedDescription.isEmpty)
         }
     }
-    
+
     // MARK: - BedrockConfig Tests
-    
+
     func testBedrockConfigInitialization() throws {
         // Initialize config with staging environment
         try BedrockTestSupport.setUp()
-        
+
         // Verify current environment is staging
         let config = getConfig()
         XCTAssertNotNil(config, "Config should be available after initialization")
         XCTAssertEqual(config?.environment(), .staging, "Environment should be staging after initialization")
-        
+
         // Verify config is initialized
         XCTAssertTrue(isInitialized(), "Config should be initialized")
-        
+
         // Get config and verify environment
         if let config = getConfig() {
             XCTAssertEqual(config.environment(), .staging, "Config environment should be staging")
         } else {
             XCTFail("Config should be available after initialization")
         }
-        
+
         // Initializing again is refused, even with the same root: the committed config
         // is what Bedrock keeps using, so a silent no-op would hide the stray call.
         XCTAssertThrowsError(
@@ -223,36 +305,36 @@ final class BedrockToolingTests: XCTestCase {
                 return XCTFail("Expected Generic, got \(error)")
             }
         }
-        
+
         // Environment should still be staging
         let configAfterSecondInit = getConfig()
         XCTAssertEqual(configAfterSecondInit?.environment(), .staging, "Environment should remain staging after second init attempt")
     }
-    
+
     func testBedrockConfigEnvironmentTypes() throws {
         // Test creating config with different environments
         let rootPath = BedrockTestSupport.rootPath
         let stagingConfig = BedrockConfig(environment: .staging, os: .ios, rootPath: rootPath)
         XCTAssertEqual(stagingConfig.environment(), .staging, "Staging config should have staging environment")
-        
+
         let productionConfig = BedrockConfig(environment: .production, os: .ios, rootPath: rootPath)
         XCTAssertEqual(productionConfig.environment(), .production, "Production config should have production environment")
     }
-    
+
     // MARK: - Async Operation Tests
-    
+
     func testDemoAsyncOperation_Success() async throws {
         let demo = ToolingDemo()
-        
+
         // Test successful async operation with short delay
         let result = try await demo.demoAsyncOperation(delayMs: 100)
         XCTAssertTrue(result.contains("Async operation completed after 100ms"))
         XCTAssertTrue(result.contains("completed"))
     }
-    
+
     func testDemoAsyncOperation_Timeout() async throws {
         let demo = ToolingDemo()
-        
+
         // Test async operation that should timeout (over 5000ms)
         do {
             _ = try await demo.demoAsyncOperation(delayMs: 6000)
@@ -266,42 +348,42 @@ final class BedrockToolingTests: XCTestCase {
             }
         }
     }
-    
+
     func testDemoAsyncOperation_MultipleOperations() async throws {
         let demo = ToolingDemo()
-        
+
         // Test multiple async operations to ensure runtime stability
         let result1 = try await demo.demoAsyncOperation(delayMs: 50)
         let result2 = try await demo.demoAsyncOperation(delayMs: 100)
         let result3 = try await demo.demoAsyncOperation(delayMs: 150)
-        
+
         XCTAssertTrue(result1.contains("completed after 50ms"))
         XCTAssertTrue(result2.contains("completed after 100ms"))
         XCTAssertTrue(result3.contains("completed after 150ms"))
     }
-    
+
     func testDemoAsyncOperation_ConcurrentOperations() async throws {
         // This test specifically verifies that the automatic tokio runtime configuration
         // added by bedrock_export works correctly with concurrent async operations in Swift
         let demo = ToolingDemo()
-        
+
         // Run concurrent async operations to stress test the runtime
         let delays: [UInt64] = [10, 25, 50, 75, 100]
-        
+
         let results = try await withThrowingTaskGroup(of: String.self) { group in
             for delay in delays {
                 group.addTask {
                     return try await demo.demoAsyncOperation(delayMs: delay)
                 }
             }
-            
+
             var collectedResults: [String] = []
             for try await result in group {
                 collectedResults.append(result)
             }
             return collectedResults
         }
-        
+
         // Verify all operations completed successfully
         XCTAssertEqual(results.count, 5)
         for result in results {
@@ -309,19 +391,19 @@ final class BedrockToolingTests: XCTestCase {
             XCTAssertTrue(result.contains("ms"))
         }
     }
-    
+
     func testDemoAsyncOperation_RuntimeIntegration() async throws {
         // Additional test to verify sequential async operations work correctly
         let demo = ToolingDemo()
-        
+
         let delays: [UInt64] = [20, 40, 60, 80, 100]
         var results: [String] = []
-        
+
         for delay in delays {
             let result = try await demo.demoAsyncOperation(delayMs: delay)
             results.append(result)
         }
-        
+
         // Verify all operations completed successfully
         XCTAssertEqual(results.count, 5)
         for (index, result) in results.enumerated() {
@@ -329,4 +411,4 @@ final class BedrockToolingTests: XCTestCase {
             XCTAssertTrue(result.contains("completed after \(expectedDelay)ms"))
         }
     }
-} 
+}

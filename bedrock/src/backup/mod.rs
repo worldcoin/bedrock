@@ -892,8 +892,11 @@ pub enum BackupError {
     #[error("Manifest not found")]
     /// Manifest file not found.
     ManifestNotFound,
-    #[error("[Critical] Checksum for file with designator: {designator} does not match the expected value")]
+    #[error("Checksum for file with designator: {designator} does not match the expected value")]
     /// File checksum does not match the expected value.
+    ///
+    /// Raise sites log this via `crate::critical!`; the severity lives in the log
+    /// level, so the message must not carry a `[Critical]` tag.
     InvalidChecksumError {
         /// The designator associated with the file.
         designator: String,
