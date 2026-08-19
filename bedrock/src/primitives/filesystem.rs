@@ -67,6 +67,15 @@ pub(crate) fn prepare_root(root_path: &Path) -> Result<(), PrimitiveError> {
 
     fs::create_dir_all(root_path).map_err(|error| PrimitiveError::Generic {
         error_message: format!("create the Bedrock root directory: {error}"),
+    })?;
+
+    // ensures the staged directory is writable
+    fs::create_dir_all(root_path.join(ATOMIC_STAGED_DIRECTORY)).map_err(|error| {
+        PrimitiveError::Generic {
+            error_message: format!(
+                "the Bedrock root directory is not writable: {error}"
+            ),
+        }
     })
 }
 
@@ -84,7 +93,14 @@ pub(crate) fn clear_stale_staged_writes(root_path: &Path) {
 fn append_relative(target: &mut PathBuf, path: &str) -> Result<(), FileSystemError> {
     for component in Path::new(path.trim_start_matches('/')).components() {
         match component {
-            Component::Normal(segment) => target.push(segment),
+            Component::Normal(segment) => {
+                if segment.as_encoded_bytes().contains(&0) {
+                    return Err(FileSystemError::InvalidPath(
+                        "path must not contain a NUL byte".to_string(),
+                    ));
+                }
+                target.push(segment);
+            }
             Component::CurDir => (),
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 return Err(FileSystemError::InvalidPath(
@@ -147,6 +163,12 @@ fn write_atomically(
             .map_err(|error| io_failure("create staged file", &error))?;
         file.write_all(contents)
             .map_err(|error| io_failure("write staged file", &error))?;
+
+        if let Ok(existing) = fs::metadata(destination) {
+            fs::set_permissions(&staged, existing.permissions())
+                .map_err(|error| io_failure("carry over file permissions", &error))?;
+        }
+
         file.sync_all()
             .map_err(|error| io_failure("flush staged file", &error))?;
         fs::rename(&staged, destination)
@@ -441,6 +463,72 @@ mod tests {
                         && error_message == "the Bedrock root path must be absolute"
             ));
         }
+    }
+
+    #[test]
+    fn test_paths_containing_a_nul_byte_are_rejected() {
+        let fs = scoped("fs_nul");
+
+        // Lexically valid, but `std::fs` refuses it at the syscall
+        for path in ["bad\0name.bin", "dir/bad\0name.bin", "ba\0d/name.bin"] {
+            assert!(
+                matches!(
+                    fs.validate_file_path(path),
+                    Err(FileSystemError::InvalidPath(_))
+                ),
+                "expected `{}` to be rejected",
+                path.escape_debug()
+            );
+            assert!(matches!(
+                fs.write_file(path, b"payload"),
+                Err(FileSystemError::InvalidPath(_))
+            ));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_prepare_root_rejects_a_read_only_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = isolated_root("read-only-root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+
+        // A privileged user ignores the mode bits, which would make this vacuous.
+        let privileged = fs::create_dir(root.join("control")).is_ok();
+        if privileged {
+            eprintln!("skipping: running with privileges that bypass directory modes");
+        } else {
+            assert!(
+                matches!(prepare_root(&root), Err(PrimitiveError::Generic { .. })),
+                "a root that cannot be written to must be refused"
+            );
+        }
+
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        drop(fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_overwriting_keeps_the_destination_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fs_handle = scoped("fs_perms");
+        fs_handle.write_file("secret.bin", b"first").unwrap();
+
+        let path = fs_handle.resolve_file("secret.bin").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        // The rename swaps in a new inode, so without carrying the mode across the file
+        // would come back with the staging default.
+        fs_handle.write_file("secret.bin", b"second").unwrap();
+
+        assert_eq!(fs_handle.read_file("secret.bin").unwrap(), b"second");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
