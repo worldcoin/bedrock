@@ -9,9 +9,8 @@ use crate::backup::service_client::{
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
 use crate::primitives::filesystem::{
-    create_middleware, get_filesystem_raw, FileSystem,
+    init_test_filesystem, unscoped_filesystem, ScopedFileSystem,
 };
-use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -37,11 +36,12 @@ fn siegel_from_str(secret: &str) -> Arc<SiegelSession> {
     session
 }
 
+/// Points Bedrock at the shared per-process test root.
+///
+/// The root is shared by every test in the process, so each test scopes its files
+/// under a prefix of its own, exactly as modules do at runtime.
 fn ensure_fs_initialized() {
-    if crate::primitives::filesystem::get_filesystem_raw().is_err() {
-        let fs = InMemoryFileSystem::new();
-        set_filesystem(std::sync::Arc::new(fs));
-    }
+    init_test_filesystem();
 }
 
 // =========================
@@ -123,7 +123,7 @@ static TEST_API: OnceLock<Arc<FakeBackupServiceApi>> = OnceLock::new();
 
 fn init_test_globals() -> Arc<FakeBackupServiceApi> {
     // Filesystem
-    set_filesystem(Arc::new(InMemoryFileSystem::new()));
+    ensure_fs_initialized();
     // API
     TEST_API.get().cloned().unwrap_or_else(|| {
         let api = Arc::new(FakeBackupServiceApi::default());
@@ -135,14 +135,21 @@ fn init_test_globals() -> Arc<FakeBackupServiceApi> {
 
 fn write_manifest_with_prefix(manifest: &BackupManifest, prefix: &str) {
     let bytes = serde_json::to_vec(manifest).unwrap();
-    let mw = create_middleware(prefix);
-    mw.write_file("manifest.json", bytes).unwrap();
+    ScopedFileSystem::new(prefix)
+        .write_file("manifest.json", &bytes)
+        .unwrap();
 }
 
 fn get_manifest_from_disk(prefix: &str) -> BackupManifest {
-    let fs = get_filesystem_raw().unwrap().clone();
-    let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
+    let bytes = read_manifest_bytes(prefix);
     serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Reads the raw manifest written under `prefix`.
+fn read_manifest_bytes(prefix: &str) -> Vec<u8> {
+    unscoped_filesystem()
+        .read_file(&format!("{prefix}/manifest.json"))
+        .unwrap()
 }
 
 fn compute_manifest_hash(manifest: &BackupManifest) -> String {
@@ -150,15 +157,12 @@ fn compute_manifest_hash(manifest: &BackupManifest) -> String {
 }
 
 fn compute_manifest_hash_from_disk(prefix: &str) -> String {
-    let fs: Arc<dyn FileSystem> = get_filesystem_raw().unwrap().clone();
-    let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
-    let manifest: BackupManifest = serde_json::from_slice(&bytes).unwrap();
+    let manifest = get_manifest_from_disk(prefix);
     hex::encode(manifest.to_hash().unwrap())
 }
 
 fn write_global_file(path: &str, contents: &[u8]) {
-    let fs = get_filesystem_raw().unwrap().clone();
-    fs.write_file(path.to_string(), contents.to_vec()).unwrap();
+    unscoped_filesystem().write_file(path, contents).unwrap();
 }
 
 #[test]
@@ -241,8 +245,8 @@ async fn test_list_files_corrupted_manifest() {
     api.reset();
 
     // Write an invalid JSON manifest under the backup prefix
-    let mw = create_middleware("backup_test_list_corrupted");
-    mw.write_file("manifest.json", b"not-json".to_vec())
+    ScopedFileSystem::new("backup_test_list_corrupted")
+        .write_file("manifest.json", b"not-json")
         .unwrap();
 
     // Set remote hash to whatever is on disk (parsing will fail before staleness check)
@@ -291,10 +295,7 @@ async fn test_store_file_happy_path_and_commit() {
     .unwrap();
 
     // Manifest committed with one entry
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_store_1/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_store_1");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     assert_eq!(committed["manifest"]["files"].as_array().unwrap().len(), 1);
@@ -333,10 +334,7 @@ async fn test_store_file_accepts_dot_slash_path() {
     .unwrap();
 
     // Manifest committed with previous hash == m0 and one entry with normalized path
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_store_dot_path/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_store_dot_path");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     let files = committed["manifest"]["files"].as_array().unwrap();
@@ -396,10 +394,7 @@ async fn test_store_file_with_unicode_paths() {
     .unwrap();
 
     // Read manifest and verify paths are present
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_store_unicode/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_store_unicode");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     let files = committed["manifest"]["files"].as_array().unwrap();
@@ -686,10 +681,7 @@ async fn test_replace_all_files_for_designator_happy_path() {
     .unwrap();
 
     // Manifest updated and committed
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_replace_1/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_replace_1");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     // previous manifest hash field removed, verify only file set
@@ -757,10 +749,7 @@ async fn test_remove_file_happy_and_not_found() {
     .unwrap();
 
     // Manifest now contains only the document entry
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_remove_1/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_remove_1");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     let files = committed["manifest"]["files"].as_array().unwrap();
     assert_eq!(files.len(), 1);
@@ -1090,22 +1079,16 @@ fn test_unpack_writes_files_and_manifest() {
         .unwrap();
 
     // Assert: files exist at expected paths (global filesystem, no prefix)
-    let global_fs = crate::primitives::filesystem::get_filesystem_raw()
-        .unwrap()
-        .clone();
+    let global_fs = unscoped_filesystem();
     assert!(global_fs
-        .file_exists("orb_pkg/personal_custody/pcp-1234.bin".to_string())
+        .file_exists("orb_pkg/personal_custody/pcp-1234.bin")
         .unwrap());
     assert!(global_fs
-        .file_exists(
-            "document_pkg/document_personal_custody/passport-1.bin".to_string()
-        )
+        .file_exists("document_pkg/document_personal_custody/passport-1.bin")
         .unwrap());
 
     // Manifest is written under backup_manager/manifest.json
-    let manifest_bytes = global_fs
-        .read_file("backup_manager/manifest.json".to_string())
-        .unwrap();
+    let manifest_bytes = read_manifest_bytes("backup_manager");
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(manifest["version"], "V0");
     let files_array = manifest["manifest"]["files"].as_array().unwrap();
@@ -1115,6 +1098,125 @@ fn test_unpack_writes_files_and_manifest() {
     let checksum1 = &files_array[1]["checksum_hex"];
     assert!(checksum0.is_string());
     assert!(checksum1.is_string());
+}
+
+/// Seals `files` into a backup and returns the arguments
+/// `decrypt_and_unpack_sealed_backup` expects.
+fn seal_backup_for_unpacking(files: Vec<V0BackupFile>) -> (Vec<u8>, String, String) {
+    let unsealed = BackupFormat::V0(V0Backup {
+        root_secret: RootKey::new_random(),
+        files,
+    });
+    let unsealed_bytes = unsealed.to_bytes().unwrap();
+
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let sealed = backup_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &unsealed_bytes)
+        .unwrap();
+
+    let factor_sk = SecretKey::generate(&mut rand::thread_rng());
+    let encrypted_backup_keypair = factor_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &backup_sk.to_bytes())
+        .unwrap();
+
+    (
+        sealed,
+        hex::encode(encrypted_backup_keypair),
+        hex::encode(factor_sk.to_bytes()),
+    )
+}
+
+/// A backup payload carries attacker-controlled paths. One the filesystem refuses must
+/// abort the whole restore before anything is written, not part-way through it.
+#[test]
+#[serial]
+fn test_unpack_rejects_the_whole_payload_on_an_unusable_path() {
+    ensure_fs_initialized();
+    let manager = BackupManager::new();
+
+    let reserved = format!(
+        "{}/planted.bin",
+        crate::primitives::filesystem::ATOMIC_STAGED_DIRECTORY
+    );
+    for hostile_path in [reserved.as_str(), "./", "."] {
+        let good_path = format!("orb_pkg/before-{}.bin", hostile_path.len());
+        let files = vec![
+            V0BackupFile {
+                data: b"written-first".to_vec(),
+                checksum: blake3::hash(b"written-first").as_bytes().to_owned(),
+                path: good_path.clone(),
+                designator: BackupFileDesignator::OrbPkg,
+            },
+            V0BackupFile {
+                data: b"hostile".to_vec(),
+                checksum: blake3::hash(b"hostile").as_bytes().to_owned(),
+                path: hostile_path.to_string(),
+                designator: BackupFileDesignator::DocumentPkg,
+            },
+        ];
+        let (sealed, keypair, factor) = seal_backup_for_unpacking(files);
+
+        let result = manager.decrypt_and_unpack_sealed_backup(
+            &sealed,
+            keypair,
+            factor,
+            FactorType::Prf,
+        );
+        let Err(err) = result else {
+            panic!("expected `{hostile_path}` to be rejected");
+        };
+        assert!(
+            err.to_string().contains("Invalid file for backup"),
+            "unexpected error for `{hostile_path}`: {err}"
+        );
+
+        // The valid entry ahead of it must not have been written either.
+        assert!(
+            !unscoped_filesystem().file_exists(&good_path).unwrap(),
+            "`{hostile_path}` left a partially applied restore behind"
+        );
+    }
+}
+
+#[test]
+#[serial]
+fn test_unpack_rejects_two_entries_resolving_to_one_file() {
+    ensure_fs_initialized();
+    let manager = BackupManager::new();
+
+    for alias in ["orb_pkg/./aliased.bin", "orb_pkg/Aliased.bin"] {
+        let files = vec![
+            V0BackupFile {
+                data: b"first".to_vec(),
+                checksum: blake3::hash(b"first").as_bytes().to_owned(),
+                path: "orb_pkg/aliased.bin".to_string(),
+                designator: BackupFileDesignator::OrbPkg,
+            },
+            V0BackupFile {
+                data: b"second".to_vec(),
+                checksum: blake3::hash(b"second").as_bytes().to_owned(),
+                path: alias.to_string(),
+                designator: BackupFileDesignator::DocumentPkg,
+            },
+        ];
+        let (sealed, keypair, factor) = seal_backup_for_unpacking(files);
+
+        let result = manager.decrypt_and_unpack_sealed_backup(
+            &sealed,
+            keypair,
+            factor,
+            FactorType::Prf,
+        );
+        let Err(err) = result else {
+            panic!("expected `{alias}` to be rejected as an alias");
+        };
+        assert!(err.to_string().contains("Invalid file for backup"), "{err}");
+        assert!(!unscoped_filesystem()
+            .file_exists("orb_pkg/aliased.bin")
+            .unwrap());
+    }
 }
 
 #[test]
@@ -1173,23 +1275,17 @@ fn test_unpack_writes_files_and_manifest_unicode() {
         .unwrap();
 
     // Assert: files exist at expected paths (global filesystem, no prefix)
-    let global_fs = crate::primitives::filesystem::get_filesystem_raw()
-        .unwrap()
-        .clone();
+    let global_fs = unscoped_filesystem();
     assert!(global_fs
-        .file_exists("orb_pkg/personal_custody/résumé-αβγ.bin".to_string())
+        .file_exists("orb_pkg/personal_custody/résumé-αβγ.bin")
         .unwrap());
     assert!(global_fs
-        .file_exists("document_pkg/İstanbul/ŞĞÜ-çö.bin".to_string())
+        .file_exists("document_pkg/İstanbul/ŞĞÜ-çö.bin")
         .unwrap());
-    assert!(global_fs
-        .file_exists("document_pkg/ไทย/บีน.bin".to_string())
-        .unwrap());
+    assert!(global_fs.file_exists("document_pkg/ไทย/บีน.bin").unwrap());
 
     // Manifest is written under backup_manager/manifest.json and includes the paths
-    let manifest_bytes = global_fs
-        .read_file("backup_manager/manifest.json".to_string())
-        .unwrap();
+    let manifest_bytes = read_manifest_bytes("backup_manager");
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(manifest["version"], "V0");
     let files_array = manifest["manifest"]["files"].as_array().unwrap();
