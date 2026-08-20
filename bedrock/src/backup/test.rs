@@ -1180,42 +1180,43 @@ fn test_unpack_rejects_the_whole_payload_on_an_unusable_path() {
     }
 }
 
-/// Aliased entries would silently overwrite each other and leave a stale checksum.
 #[test]
 #[serial]
 fn test_unpack_rejects_two_entries_resolving_to_one_file() {
     ensure_fs_initialized();
     let manager = BackupManager::new();
 
-    let files = vec![
-        V0BackupFile {
-            data: b"first".to_vec(),
-            checksum: blake3::hash(b"first").as_bytes().to_owned(),
-            path: "orb_pkg/aliased.bin".to_string(),
-            designator: BackupFileDesignator::OrbPkg,
-        },
-        V0BackupFile {
-            data: b"second".to_vec(),
-            checksum: blake3::hash(b"second").as_bytes().to_owned(),
-            path: "orb_pkg/./aliased.bin".to_string(),
-            designator: BackupFileDesignator::DocumentPkg,
-        },
-    ];
-    let (sealed, keypair, factor) = seal_backup_for_unpacking(files);
+    for alias in ["orb_pkg/./aliased.bin", "orb_pkg/Aliased.bin"] {
+        let files = vec![
+            V0BackupFile {
+                data: b"first".to_vec(),
+                checksum: blake3::hash(b"first").as_bytes().to_owned(),
+                path: "orb_pkg/aliased.bin".to_string(),
+                designator: BackupFileDesignator::OrbPkg,
+            },
+            V0BackupFile {
+                data: b"second".to_vec(),
+                checksum: blake3::hash(b"second").as_bytes().to_owned(),
+                path: alias.to_string(),
+                designator: BackupFileDesignator::DocumentPkg,
+            },
+        ];
+        let (sealed, keypair, factor) = seal_backup_for_unpacking(files);
 
-    let result = manager.decrypt_and_unpack_sealed_backup(
-        &sealed,
-        keypair,
-        factor,
-        FactorType::Prf,
-    );
-    let Err(err) = result else {
-        panic!("expected the aliased payload to be rejected");
-    };
-    assert!(err.to_string().contains("Invalid file for backup"), "{err}");
-    assert!(!unscoped_filesystem()
-        .file_exists("orb_pkg/aliased.bin")
-        .unwrap());
+        let result = manager.decrypt_and_unpack_sealed_backup(
+            &sealed,
+            keypair,
+            factor,
+            FactorType::Prf,
+        );
+        let Err(err) = result else {
+            panic!("expected `{alias}` to be rejected as an alias");
+        };
+        assert!(err.to_string().contains("Invalid file for backup"), "{err}");
+        assert!(!unscoped_filesystem()
+            .file_exists("orb_pkg/aliased.bin")
+            .unwrap());
+    }
 }
 
 #[test]

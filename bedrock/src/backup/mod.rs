@@ -727,7 +727,7 @@ impl BackupManager {
                     ))
                 })?;
 
-            if !destinations.insert(destination) {
+            if !destinations.insert(destination.to_string_lossy().to_lowercase()) {
                 crate::error!(
                     designator = file.designator,
                     "Rejecting backup: two entries resolve to the same file"
