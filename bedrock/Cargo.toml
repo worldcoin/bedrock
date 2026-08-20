@@ -90,7 +90,7 @@ turnkey_enclave_encrypt = "0.6.1"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 uuid = { version = "1.23.0", features = ["v4"], default-features = false }
 webpki = "0.22"
-x509-cert = { version = "0.2.5", features = ["pem"] }
+x509-cert = { version = "0.3.0", features = ["pem"] }
 zeroize = "1.8"
 hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
 http = "1.4.0"
