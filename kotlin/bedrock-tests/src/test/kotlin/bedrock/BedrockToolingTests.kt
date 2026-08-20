@@ -259,7 +259,7 @@ class BedrockToolingTests {
             uniffi.bedrock.setConfig(
                 uniffi.bedrock.BedrockEnvironment.PRODUCTION,
                 uniffi.bedrock.Os.ANDROID,
-                BedrockTestSupport.rootPath,
+                BedrockTestSupport.dataDirectory,
             )
         }
 
@@ -278,7 +278,7 @@ class BedrockToolingTests {
         val stagingConfig = uniffi.bedrock.BedrockConfig(
             uniffi.bedrock.BedrockEnvironment.STAGING,
             uniffi.bedrock.Os.ANDROID,
-            BedrockTestSupport.rootPath,
+            BedrockTestSupport.dataDirectory,
         )
         assertEquals(
             uniffi.bedrock.BedrockEnvironment.STAGING,
@@ -289,7 +289,7 @@ class BedrockToolingTests {
         val productionConfig = uniffi.bedrock.BedrockConfig(
             uniffi.bedrock.BedrockEnvironment.PRODUCTION,
             uniffi.bedrock.Os.ANDROID,
-            BedrockTestSupport.rootPath,
+            BedrockTestSupport.dataDirectory,
         )
         assertEquals(
             uniffi.bedrock.BedrockEnvironment.PRODUCTION,

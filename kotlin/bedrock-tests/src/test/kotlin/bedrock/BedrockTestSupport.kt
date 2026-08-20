@@ -10,7 +10,7 @@ import java.nio.file.Files
  */
 object BedrockTestSupport {
     /** Root directory Bedrock writes to during the test run. Recreated per process. */
-    val rootPath: String by lazy {
+    val dataDirectory: String by lazy {
         val root = Files.createTempDirectory("bedrock-tests").toFile()
         Runtime.getRuntime().addShutdownHook(Thread { root.deleteRecursively() })
         root.absolutePath
@@ -28,7 +28,7 @@ object BedrockTestSupport {
         uniffi.bedrock.setConfig(
             uniffi.bedrock.BedrockEnvironment.STAGING,
             uniffi.bedrock.Os.ANDROID,
-            rootPath,
+            dataDirectory,
         )
     }
 }

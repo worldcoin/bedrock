@@ -2,6 +2,11 @@
 //!
 //! Bedrock owns its file IO directly. Passing files through the FFI boundary consumes at
 //! least 2x more memory with `UniFFI`.
+//!
+//! TODO: Due to migration with other libraries and native code, Bedrock operates in the whole
+//! data directory. A more robust approach would be that each library has its folder in the data
+//! directory, with each library being the only one who can operate on it. This requires progressive
+//! migration. For example, Bedrock's new files could start being written in a Bedrock directory.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
@@ -16,7 +21,7 @@ use crate::primitives::PrimitiveError;
 /// Size of the buffer used to stream files when checksumming.
 const CHECKSUM_CHUNK_SIZE: usize = 65_536; // 64 KiB
 
-/// Directory under the root where in-flight writes are staged for atomic writes.
+/// Directory under the data directory where in-flight writes are staged for atomic writes.
 pub(crate) const ATOMIC_STAGED_DIRECTORY: &str = ".bedrock-staged";
 
 /// Errors that can occur during filesystem operations
@@ -28,10 +33,10 @@ pub enum FileSystemError {
     /// Something went wrong with the filesystem operation
     #[error("IO failure: {0}")]
     IoFailure(String),
-    /// No root path is available because `set_config` has not been called yet
+    /// No data directory is available because `set_config` has not been called yet
     #[error("filesystem not initialized")]
     NotInitialized,
-    /// The requested path traverses outside the Bedrock root or names no file
+    /// The requested path traverses outside the Bedrock data directory or names no file
     #[error("invalid path: {0}")]
     InvalidPath(String),
 }
@@ -52,28 +57,30 @@ fn io_failure(operation: &str, error: &io::Error) -> FileSystemError {
     FileSystemError::IoFailure(format!("failed to {operation}: {error}"))
 }
 
-/// Validates the root directory and creates it if missing.
+/// Validates the data directory and creates it if missing.
 ///
 /// # Errors
 /// - If the provided path is not absolute
-/// - If unexpectedly the root directory cannot be created
-pub(crate) fn prepare_root(root_path: &Path) -> Result<(), PrimitiveError> {
-    if !root_path.is_absolute() {
+/// - If unexpectedly the data directory cannot be created
+pub(crate) fn prepare_data_directory(
+    data_directory: &Path,
+) -> Result<(), PrimitiveError> {
+    if !data_directory.is_absolute() {
         return Err(PrimitiveError::InvalidInput {
             attribute: "path".to_string(),
-            error_message: "the Bedrock root path must be absolute".to_string(),
+            error_message: "the Bedrock data directory must be absolute".to_string(),
         });
     }
 
-    fs::create_dir_all(root_path).map_err(|error| PrimitiveError::Generic {
-        error_message: format!("create the Bedrock root directory: {error}"),
+    fs::create_dir_all(data_directory).map_err(|error| PrimitiveError::Generic {
+        error_message: format!("create the Bedrock data directory: {error}"),
     })?;
 
     // ensures the staged directory is writable
-    fs::create_dir_all(root_path.join(ATOMIC_STAGED_DIRECTORY)).map_err(|error| {
+    fs::create_dir_all(data_directory.join(ATOMIC_STAGED_DIRECTORY)).map_err(|error| {
         PrimitiveError::Generic {
             error_message: format!(
-                "the Bedrock root directory is not writable: {error}"
+                "the Bedrock data directory is not writable: {error}"
             ),
         }
     })
@@ -81,8 +88,8 @@ pub(crate) fn prepare_root(root_path: &Path) -> Result<(), PrimitiveError> {
 
 /// Discards writes staged but not committed (e.g. process died). Called only
 /// at Bedrock initialization, so no Bedrock system has written files yet.
-pub(crate) fn clear_stale_staged_writes(root_path: &Path) {
-    match fs::remove_dir_all(root_path.join(ATOMIC_STAGED_DIRECTORY)) {
+pub(crate) fn clear_stale_staged_writes(data_directory: &Path) {
+    match fs::remove_dir_all(data_directory.join(ATOMIC_STAGED_DIRECTORY)) {
         Ok(()) => (),
         Err(error) if error.kind() == io::ErrorKind::NotFound => (),
         Err(error) => {
@@ -106,7 +113,8 @@ fn append_relative(target: &mut PathBuf, path: &str) -> Result<(), FileSystemErr
             Component::CurDir => (),
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 return Err(FileSystemError::InvalidPath(
-                    "path must not traverse outside the Bedrock root".to_string(),
+                    "path must not traverse outside the Bedrock data directory"
+                        .to_string(),
                 ));
             }
         }
@@ -116,11 +124,11 @@ fn append_relative(target: &mut PathBuf, path: &str) -> Result<(), FileSystemErr
 
 /// Rejects any path in an atomic staged directory. Only this module can touch it.
 fn reject_staging_directory(
-    root: &Path,
+    data_directory: &Path,
     resolved: &Path,
 ) -> Result<(), FileSystemError> {
     let reserved = resolved
-        .strip_prefix(root)
+        .strip_prefix(data_directory)
         .ok()
         .and_then(|relative| relative.components().next())
         .is_some_and(|first| {
@@ -137,7 +145,7 @@ fn reject_staging_directory(
     Ok(())
 }
 
-/// Names a staged file uniquely across the processes and threads sharing a root.
+/// Names a staged file uniquely across the processes and threads sharing a data directory.
 fn staged_file_name() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -147,15 +155,15 @@ fn staged_file_name() -> String {
 
 /// Writes `contents` to `destination` through a staged file and an atomic rename.
 fn write_atomically(
-    root: &Path,
+    data_directory: &Path,
     destination: &Path,
     contents: &[u8],
 ) -> Result<(), FileSystemError> {
-    let parent = destination.parent().unwrap_or(root);
+    let parent = destination.parent().unwrap_or(data_directory);
     fs::create_dir_all(parent)
         .map_err(|error| io_failure("create parent directory", &error))?;
 
-    let staging = root.join(ATOMIC_STAGED_DIRECTORY);
+    let staging = data_directory.join(ATOMIC_STAGED_DIRECTORY);
     fs::create_dir_all(&staging)
         .map_err(|error| io_failure("create atomic staged directory", &error))?;
     let staged = staging.join(staged_file_name());
@@ -184,28 +192,28 @@ fn write_atomically(
     result
 }
 
-/// Filesystem handle scoped to a sub-directory of the configured root.
+/// Filesystem handle scoped to a sub-directory of the data directory.
 ///
-/// Every path passed to its methods is relative to `root / prefix`. Construct one per
+/// Every path passed to its methods is relative to `data directory / prefix`. Construct one per
 /// module so files owned by different modules cannot collide; `bedrock_export` does this
 /// automatically for exported structs.
 pub struct ScopedFileSystem {
-    /// Sub-directory of the root that scopes this handle. Empty means the root itself.
+    /// Sub-directory that scopes this handle. Empty means the data directory itself.
     prefix: String,
 }
 
-/// Returns a handle at the configured root, without any module scoping.
+/// Returns a handle at the data directory, without any module scoping.
 ///
-/// Only for paths that are already qualified relative to the root, such as backup
+/// Only for paths that are already qualified relative to the data directory, such as backup
 /// manifest entries owned by other modules. Prefer the `_bedrock_fs` handle injected by
 /// `bedrock_export` for module-owned files.
 #[must_use]
-pub fn root_filesystem() -> ScopedFileSystem {
+pub fn unscoped_filesystem() -> ScopedFileSystem {
     ScopedFileSystem::new("")
 }
 
 impl ScopedFileSystem {
-    /// Creates a handle scoped to `prefix` under the configured root.
+    /// Creates a handle scoped to `prefix` under the data directory.
     #[must_use]
     pub fn new(prefix: &str) -> Self {
         Self {
@@ -213,42 +221,42 @@ impl ScopedFileSystem {
         }
     }
 
-    /// Returns the configured Bedrock root.
+    /// Returns the configured Bedrock data directory.
     ///
     /// # Errors
     /// - [`FileSystemError::NotInitialized`] if `set_config` has not been called
-    pub(crate) fn root() -> Result<PathBuf, FileSystemError> {
+    pub(crate) fn data_directory() -> Result<PathBuf, FileSystemError> {
         get_config()
-            .map(|config| config.root_path().to_path_buf())
+            .map(|config| config.data_directory().to_path_buf())
             .ok_or(FileSystemError::NotInitialized)
     }
 
     /// Resolves a path that may name a directory, including the scope root itself.
     ///
     /// # Errors
-    /// - [`FileSystemError::NotInitialized`] if no root path has been configured
+    /// - [`FileSystemError::NotInitialized`] if no data directory has been configured
     /// - [`FileSystemError::InvalidPath`] if the path escapes the scope or is reserved
     fn resolve_directory(&self, folder_path: &str) -> Result<PathBuf, FileSystemError> {
-        let root = Self::root()?;
+        let data_directory = Self::data_directory()?;
 
-        let mut resolved = root.clone();
+        let mut resolved = data_directory.clone();
         append_relative(&mut resolved, &self.prefix)?;
         append_relative(&mut resolved, folder_path)?;
 
-        reject_staging_directory(&root, &resolved)?;
+        reject_staging_directory(&data_directory, &resolved)?;
         Ok(resolved)
     }
 
     /// Resolves a path that must name a file inside the scope.
     ///
     /// # Errors
-    /// - [`FileSystemError::NotInitialized`] if no root path has been configured
+    /// - [`FileSystemError::NotInitialized`] if no data directory has been configured
     /// - [`FileSystemError::InvalidPath`] if the path escapes the scope, is reserved, or
     ///   names no file
     fn resolve_file(&self, file_path: &str) -> Result<PathBuf, FileSystemError> {
-        let root = Self::root()?;
+        let data_directory = Self::data_directory()?;
 
-        let mut scope = root.clone();
+        let mut scope = data_directory.clone();
         append_relative(&mut scope, &self.prefix)?;
 
         let mut resolved = scope.clone();
@@ -260,7 +268,7 @@ impl ScopedFileSystem {
             ));
         }
 
-        reject_staging_directory(&root, &resolved)?;
+        reject_staging_directory(&data_directory, &resolved)?;
         Ok(resolved)
     }
 
@@ -268,7 +276,7 @@ impl ScopedFileSystem {
     /// be rejected before any of them is used.
     ///
     /// # Errors
-    /// - [`FileSystemError::NotInitialized`] if no root path has been configured
+    /// - [`FileSystemError::NotInitialized`] if no data directory has been configured
     /// - [`FileSystemError::InvalidPath`] if the path escapes the scope, is reserved, or
     ///   names no file
     pub fn resolved_file_path(
@@ -314,9 +322,9 @@ impl ScopedFileSystem {
         file_path: &str,
         file_buffer: &[u8],
     ) -> Result<(), FileSystemError> {
-        let root = Self::root()?;
+        let data_directory = Self::data_directory()?;
         let destination = self.resolve_file(file_path)?;
-        write_atomically(&root, &destination, file_buffer)
+        write_atomically(&data_directory, &destination, file_buffer)
     }
 
     /// Deletes a file.
@@ -400,7 +408,7 @@ pub(crate) fn init_test_filesystem() {
     static INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
     // `get_or_init` blocks the other threads until this finishes, so no test observes a
-    // half-prepared root.
+    // half-prepared data directory.
     INITIALIZED.get_or_init(|| {
         let root =
             std::env::temp_dir().join(format!("bedrock-tests-{}", std::process::id()));
@@ -412,7 +420,7 @@ pub(crate) fn init_test_filesystem() {
             Os::Ios,
             root.to_string_lossy().into_owned(),
         )
-        .expect("configure the test filesystem root");
+        .expect("configure the test data directory");
     });
 }
 
@@ -422,7 +430,7 @@ mod tests {
 
     /// Returns a handle scoped to a directory only this test uses.
     ///
-    /// Tests share one root, so an empty prefix here would wipe every other test's files.
+    /// Tests share one data directory, so an empty prefix here would wipe every other test's files.
     fn scoped(prefix: &str) -> ScopedFileSystem {
         assert!(!prefix.is_empty(), "tests must use a prefix of their own");
 
@@ -434,21 +442,21 @@ mod tests {
         fs
     }
 
-    /// Creates a root directory used by a single test.
+    /// Creates a data directory used by a single test.
     ///
-    /// Tests that assert on staging cannot share the global root: they would observe, and
-    /// `prepare_root` would delete, writes other tests have in flight.
-    fn isolated_root(name: &str) -> PathBuf {
+    /// Tests that assert on staging cannot share the global data directory: they would observe, and
+    /// `prepare_data_directory` would delete, writes other tests have in flight.
+    fn isolated_data_directory(name: &str) -> PathBuf {
         let root =
             std::env::temp_dir().join(format!("bedrock-{name}-{}", std::process::id()));
         drop(fs::remove_dir_all(&root));
-        fs::create_dir_all(&root).expect("create isolated root");
+        fs::create_dir_all(&root).expect("create isolated data directory");
         root
     }
 
     /// Returns the names of the writes currently staged under `root`.
-    fn staged_writes_in(root: &Path) -> Vec<String> {
-        let staging = root.join(ATOMIC_STAGED_DIRECTORY);
+    fn staged_writes_in(data_directory: &Path) -> Vec<String> {
+        let staging = data_directory.join(ATOMIC_STAGED_DIRECTORY);
         let Ok(entries) = fs::read_dir(&staging) else {
             return Vec::new();
         };
@@ -461,12 +469,12 @@ mod tests {
     #[test]
     fn test_prepare_root_rejects_relative_paths() {
         for path in ["", "relative/dir", "./here"] {
-            let error = prepare_root(Path::new(path)).unwrap_err();
+            let error = prepare_data_directory(Path::new(path)).unwrap_err();
             assert!(matches!(
                 &error,
                 PrimitiveError::InvalidInput { attribute, error_message }
                     if attribute == "path"
-                        && error_message == "the Bedrock root path must be absolute"
+                        && error_message == "the Bedrock data directory must be absolute"
             ));
         }
     }
@@ -497,7 +505,7 @@ mod tests {
     fn test_prepare_root_rejects_a_read_only_root() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = isolated_root("read-only-root");
+        let root = isolated_data_directory("read-only-root");
         fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
 
         // A privileged user ignores the mode bits, which would make this vacuous.
@@ -506,8 +514,11 @@ mod tests {
             eprintln!("skipping: running with privileges that bypass directory modes");
         } else {
             assert!(
-                matches!(prepare_root(&root), Err(PrimitiveError::Generic { .. })),
-                "a root that cannot be written to must be refused"
+                matches!(
+                    prepare_data_directory(&root),
+                    Err(PrimitiveError::Generic { .. })
+                ),
+                "a data directory that cannot be written to must be refused"
             );
         }
 
@@ -544,11 +555,11 @@ mod tests {
             .join("nested");
         drop(fs::remove_dir_all(&root));
 
-        prepare_root(&root).expect("root should be created");
+        prepare_data_directory(&root).expect("root should be created");
         assert!(root.is_dir());
 
         // Idempotent: an existing root is accepted as-is.
-        prepare_root(&root).expect("existing root should be accepted");
+        prepare_data_directory(&root).expect("existing root should be accepted");
 
         drop(fs::remove_dir_all(&root));
     }
@@ -561,7 +572,7 @@ mod tests {
         fs::write(&blocker, b"not a directory").expect("create blocking file");
 
         assert!(matches!(
-            prepare_root(&blocker.join("root")),
+            prepare_data_directory(&blocker.join("root")),
             Err(PrimitiveError::Generic { .. })
         ));
 
@@ -591,15 +602,15 @@ mod tests {
         );
     }
 
-    /// Marks the child run of [`test_operations_report_not_initialized_without_a_root`].
+    /// Marks the child run of [`test_operations_report_not_initialized_without_a_data_directory`].
     const UNINITIALIZED_CHILD_ENV: &str = "BEDROCK_UNINITIALIZED_FS_CHILD";
 
     /// Full libtest path of that test, needed to re-run exactly it in the child.
     const UNINITIALIZED_TEST_NAME: &str =
-        "primitives::filesystem::tests::test_operations_report_not_initialized_without_a_root";
+        "primitives::filesystem::tests::test_operations_report_not_initialized_without_a_data_directory";
 
     #[test]
-    fn test_operations_report_not_initialized_without_a_root() {
+    fn test_operations_report_not_initialized_without_a_data_directory() {
         // Every other test installs the global config, so the unconfigured path can only
         // be exercised in a fresh process.
         if std::env::var_os(UNINITIALIZED_CHILD_ENV).is_none() {
@@ -608,28 +619,31 @@ mod tests {
         }
 
         assert!(matches!(
-            root_filesystem().read_file("anything.txt"),
+            unscoped_filesystem().read_file("anything.txt"),
             Err(FileSystemError::NotInitialized)
         ));
     }
 
-    /// Marks the child run of [`test_a_rejected_root_leaves_the_config_uncommitted`].
-    const REJECTED_ROOT_CHILD_ENV: &str = "BEDROCK_REJECTED_ROOT_CHILD";
+    /// Marks the child run of [`test_a_rejected_data_directory_leaves_the_config_uncommitted`].
+    const REJECTED_DIRECTORY_CHILD_ENV: &str = "BEDROCK_REJECTED_DIRECTORY_CHILD";
 
     /// Full libtest path of that test, needed to re-run exactly it in the child.
-    const REJECTED_ROOT_TEST_NAME: &str =
-        "primitives::filesystem::tests::test_a_rejected_root_leaves_the_config_uncommitted";
+    const REJECTED_DIRECTORY_TEST_NAME: &str =
+        "primitives::filesystem::tests::test_a_rejected_data_directory_leaves_the_config_uncommitted";
 
     #[test]
-    fn test_a_rejected_root_leaves_the_config_uncommitted() {
+    fn test_a_rejected_data_directory_leaves_the_config_uncommitted() {
         use crate::primitives::config::{
             get_config, is_initialized, set_config, BedrockEnvironment, Os,
         };
 
         // Needs a process where the config has not been committed yet: committing before
         // validating is exactly the regression this guards against.
-        if std::env::var_os(REJECTED_ROOT_CHILD_ENV).is_none() {
-            run_in_fresh_process(REJECTED_ROOT_TEST_NAME, REJECTED_ROOT_CHILD_ENV);
+        if std::env::var_os(REJECTED_DIRECTORY_CHILD_ENV).is_none() {
+            run_in_fresh_process(
+                REJECTED_DIRECTORY_TEST_NAME,
+                REJECTED_DIRECTORY_CHILD_ENV,
+            );
             return;
         }
 
@@ -641,7 +655,10 @@ mod tests {
             ),
             Err(PrimitiveError::InvalidInput { .. })
         ));
-        assert!(!is_initialized(), "a rejected root must not be committed");
+        assert!(
+            !is_initialized(),
+            "a rejected data directory must not be committed"
+        );
 
         // The caller can correct the path and try again.
         init_test_filesystem();
@@ -649,7 +666,7 @@ mod tests {
 
         let committed = get_config()
             .unwrap()
-            .root_path()
+            .data_directory()
             .to_string_lossy()
             .into_owned();
         assert!(matches!(
@@ -672,10 +689,13 @@ mod tests {
             ),
             Err(PrimitiveError::Generic { .. })
         ));
-        assert!(!other.exists(), "a refused call must not create a root");
+        assert!(
+            !other.exists(),
+            "a refused call must not create a data directory"
+        );
 
         // The committed root still works.
-        root_filesystem()
+        unscoped_filesystem()
             .write_file("still_works.txt", b"x")
             .unwrap();
     }
@@ -704,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_successful_write_leaves_nothing_staged() {
-        let root = isolated_root("staged-ok");
+        let root = isolated_data_directory("staged-ok");
         let destination = root.join("nested").join("data.bin");
 
         write_atomically(&root, &destination, b"payload").unwrap();
@@ -721,7 +741,7 @@ mod tests {
 
     #[test]
     fn test_failed_write_leaves_nothing_staged() {
-        let root = isolated_root("staged-fail");
+        let root = isolated_data_directory("staged-fail");
         // A rename cannot replace a non-empty directory with a regular file.
         let destination = root.join("occupied");
         fs::create_dir_all(destination.join("child")).unwrap();
@@ -771,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_stale_staged_writes_are_cleared() {
-        let root = isolated_root("staging-sweep");
+        let root = isolated_data_directory("staging-sweep");
         let orphan = root.join(ATOMIC_STAGED_DIRECTORY).join("99999-0.tmp");
         fs::create_dir_all(orphan.parent().unwrap()).unwrap();
         fs::write(&orphan, b"debris from a process killed mid-write").unwrap();
@@ -853,7 +873,7 @@ mod tests {
     fn test_paths_are_scoped_to_the_prefix() {
         init_test_filesystem();
         let scoped_fs = ScopedFileSystem::new("fs_scope");
-        let root_fs = root_filesystem();
+        let root_fs = unscoped_filesystem();
 
         scoped_fs.write_file("file.txt", b"scoped").unwrap();
 
@@ -921,7 +941,7 @@ mod tests {
     #[test]
     fn test_the_staging_directory_is_not_addressable() {
         init_test_filesystem();
-        let fs = root_filesystem();
+        let fs = unscoped_filesystem();
 
         // A restored backup payload must not be able to name Bedrock's own scratch
         // space; the startup sweep would delete whatever landed there.

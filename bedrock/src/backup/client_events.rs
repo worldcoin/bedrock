@@ -13,7 +13,7 @@ use crate::backup::{
 };
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
-    root_filesystem, FileSystemError, ScopedFileSystem,
+    unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
 use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader};
 use crate::HttpMethod;
@@ -495,7 +495,7 @@ impl ClientEventsReporter {
     /// # Errors
     /// Returns an error if manifest or base report cannot be read/written.
     pub fn sync_base_report_with_manifest(&self) -> Result<(), ClientEventsError> {
-        let fs = root_filesystem();
+        let fs = unscoped_filesystem();
         let mut base = self.read_base_report().unwrap_or_default();
 
         // Load manifest via manager (unchecked, no remote gate as it's not mutating the state)

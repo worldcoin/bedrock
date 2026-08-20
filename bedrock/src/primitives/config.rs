@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Once, OnceLock};
 
 use crate::bedrock_export;
-use crate::primitives::filesystem::{clear_stale_staged_writes, prepare_root};
+use crate::primitives::filesystem::{
+    clear_stale_staged_writes, prepare_data_directory,
+};
 use crate::primitives::PrimitiveError;
 
 /// Global configuration for Bedrock
@@ -103,7 +105,7 @@ impl std::fmt::Display for BedrockEnvironment {
 pub struct BedrockConfig {
     environment: BedrockEnvironment,
     os: Os,
-    root_path: PathBuf,
+    data_directory: PathBuf,
 }
 
 #[bedrock_export]
@@ -113,9 +115,8 @@ impl BedrockConfig {
     /// # Arguments
     /// * `environment` - The environment to use for this configuration
     /// * `os` - The platform the app is running on
-    /// * `root_path` - Absolute path to the directory Bedrock resolves every file against.
-    ///   Shared with the app: paths registered through `ManifestManager` are relative to it,
-    ///   and the app writes those files itself. `.bedrock-staged` is reserved.
+    /// * `data_directory` - Absolute path Bedrock resolves every file against. Shared with
+    ///   the app and other libraries; `.bedrock-staged` is reserved.
     ///
     /// # Examples
     ///
@@ -126,11 +127,15 @@ impl BedrockConfig {
     /// ```
     #[uniffi::constructor]
     #[must_use]
-    pub fn new(environment: BedrockEnvironment, os: Os, root_path: String) -> Self {
+    pub fn new(
+        environment: BedrockEnvironment,
+        os: Os,
+        data_directory: String,
+    ) -> Self {
         Self {
             environment,
             os,
-            root_path: PathBuf::from(root_path),
+            data_directory: PathBuf::from(data_directory),
         }
     }
 
@@ -149,8 +154,8 @@ impl BedrockConfig {
 
 impl BedrockConfig {
     /// The directory Bedrock resolves all of its file operations against.
-    pub(crate) fn root_path(&self) -> &Path {
-        &self.root_path
+    pub(crate) fn data_directory(&self) -> &Path {
+        &self.data_directory
     }
 }
 
@@ -162,12 +167,12 @@ impl BedrockConfig {
 /// # Arguments
 /// * `environment` - The environment to use for all Bedrock operations
 /// * `os` - The platform the app is running on
-/// * `root_path` - Absolute path to the directory Bedrock resolves every file against.
-/// Must be the directory the app's previous `FileSystem` implementation resolved
-/// relative paths against, or existing backups are orphaned.
+/// * `data_directory` - Absolute path Bedrock resolves every file against. Must be the
+/// directory the app's previous `FileSystem` implementation used, or existing backups are
+/// orphaned.
 ///
 /// # Errors
-/// - Returns an error if `root_path` is not absolute or cannot be created.
+/// - Returns an error if `data_directory` is not absolute or cannot be created.
 /// - Returns an error if Bedrock is already configured. Call only once!
 ///
 /// # Examples
@@ -184,9 +189,9 @@ impl BedrockConfig {
 pub fn set_config(
     environment: BedrockEnvironment,
     os: Os,
-    root_path: String,
+    data_directory: String,
 ) -> Result<(), PrimitiveError> {
-    let config = BedrockConfig::new(environment, os, root_path);
+    let config = BedrockConfig::new(environment, os, data_directory);
 
     if CONFIG_INSTANCE.get().is_some() {
         return Err(PrimitiveError::Generic {
@@ -194,7 +199,7 @@ pub fn set_config(
         });
     }
 
-    if let Err(error) = prepare_root(config.root_path()) {
+    if let Err(error) = prepare_data_directory(config.data_directory()) {
         crate::critical!(
             error_message = error,
             "Bedrock root directory is unusable, config not applied"
@@ -203,7 +208,7 @@ pub fn set_config(
     }
 
     // Before the config becomes visible so there are no race conditions
-    FS_STAGED_SWEEP.call_once(|| clear_stale_staged_writes(config.root_path()));
+    FS_STAGED_SWEEP.call_once(|| clear_stale_staged_writes(config.data_directory()));
 
     if CONFIG_INSTANCE.set(Arc::new(config)).is_err() {
         return Err(PrimitiveError::Generic {

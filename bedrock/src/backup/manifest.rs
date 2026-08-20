@@ -20,7 +20,7 @@ use crate::backup::{
     BackupFileDesignator, BackupManager, BackupReportEventKind, ClientEventsReporter,
 };
 use crate::primitives::filesystem::{
-    root_filesystem, FileSystemError, ScopedFileSystem,
+    unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
 use crate::root_key::RootKey;
 
@@ -385,7 +385,7 @@ impl ManifestManager {
     ) -> Result<Vec<V0BackupFile>, BackupError> {
         let mut files = Vec::with_capacity(manifest.files.len());
         // Use the global filesystem (no prefixing) to read file contents.
-        let fs = root_filesystem();
+        let fs = unscoped_filesystem();
         for entry in &manifest.files {
             let rel = Self::normalize_input_path(&entry.file_path);
             let data = fs.read_file(rel).map_err(|e| {
@@ -482,7 +482,7 @@ impl ManifestManager {
     fn checksum_and_size_for_file(
         file_path: &str,
     ) -> Result<(String, u64), BackupError> {
-        let fs = root_filesystem();
+        let fs = unscoped_filesystem();
         let normalized = Self::normalize_input_path(file_path);
         fs.calculate_checksum_and_size(normalized)
             .map(|(checksum, size)| (hex::encode(checksum), size))

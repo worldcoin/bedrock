@@ -9,7 +9,7 @@ use crate::backup::service_client::{
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
 use crate::primitives::filesystem::{
-    init_test_filesystem, root_filesystem, ScopedFileSystem,
+    init_test_filesystem, unscoped_filesystem, ScopedFileSystem,
 };
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -147,7 +147,7 @@ fn get_manifest_from_disk(prefix: &str) -> BackupManifest {
 
 /// Reads the raw manifest written under `prefix`.
 fn read_manifest_bytes(prefix: &str) -> Vec<u8> {
-    root_filesystem()
+    unscoped_filesystem()
         .read_file(&format!("{prefix}/manifest.json"))
         .unwrap()
 }
@@ -162,7 +162,7 @@ fn compute_manifest_hash_from_disk(prefix: &str) -> String {
 }
 
 fn write_global_file(path: &str, contents: &[u8]) {
-    root_filesystem().write_file(path, contents).unwrap();
+    unscoped_filesystem().write_file(path, contents).unwrap();
 }
 
 #[test]
@@ -1079,7 +1079,7 @@ fn test_unpack_writes_files_and_manifest() {
         .unwrap();
 
     // Assert: files exist at expected paths (global filesystem, no prefix)
-    let global_fs = root_filesystem();
+    let global_fs = unscoped_filesystem();
     assert!(global_fs
         .file_exists("orb_pkg/personal_custody/pcp-1234.bin")
         .unwrap());
@@ -1174,7 +1174,7 @@ fn test_unpack_rejects_the_whole_payload_on_an_unusable_path() {
 
         // The valid entry ahead of it must not have been written either.
         assert!(
-            !root_filesystem().file_exists(&good_path).unwrap(),
+            !unscoped_filesystem().file_exists(&good_path).unwrap(),
             "`{hostile_path}` left a partially applied restore behind"
         );
     }
@@ -1213,7 +1213,7 @@ fn test_unpack_rejects_two_entries_resolving_to_one_file() {
         panic!("expected the aliased payload to be rejected");
     };
     assert!(err.to_string().contains("Invalid file for backup"), "{err}");
-    assert!(!root_filesystem()
+    assert!(!unscoped_filesystem()
         .file_exists("orb_pkg/aliased.bin")
         .unwrap());
 }
@@ -1274,7 +1274,7 @@ fn test_unpack_writes_files_and_manifest_unicode() {
         .unwrap();
 
     // Assert: files exist at expected paths (global filesystem, no prefix)
-    let global_fs = root_filesystem();
+    let global_fs = unscoped_filesystem();
     assert!(global_fs
         .file_exists("orb_pkg/personal_custody/résumé-αβγ.bin")
         .unwrap());

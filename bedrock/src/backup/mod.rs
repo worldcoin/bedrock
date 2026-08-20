@@ -41,7 +41,7 @@ use crate::backup::backup_format::BackupFormat;
 use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::{
-    root_filesystem, FileSystemError, ScopedFileSystem,
+    unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::STANDARD;
@@ -698,11 +698,11 @@ impl BackupManager {
         let BackupFormat::V0(backup) = unsealed_backup;
 
         // Reported as itself rather than as an unusable payload path below.
-        ScopedFileSystem::root()?;
+        ScopedFileSystem::data_directory()?;
 
         // NOTE: we don't use the module's prefix (`backup/`) here; as this
         // unpacks files directly into their module-owned locations.
-        let fs = root_filesystem();
+        let fs = unscoped_filesystem();
         let mut manifest_entries: Vec<V0BackupManifestEntry> =
             Vec::with_capacity(backup.files.len());
 

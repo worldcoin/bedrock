@@ -166,7 +166,7 @@ class BedrockFilesystemTests {
 
         // `FileSystemTester` is exported through `bedrock_export`, so its files land under
         // the snake_case struct name inside the root the app handed to `setConfig`.
-        val expected = File(BedrockTestSupport.rootPath, "file_system_tester/scoped.txt")
+        val expected = File(BedrockTestSupport.dataDirectory, "file_system_tester/scoped.txt")
 
         assertEquals(
             "on disk",

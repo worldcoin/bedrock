@@ -299,7 +299,7 @@ final class BedrockToolingTests: XCTestCase {
         // Initializing again is refused, even with the same root: the committed config
         // is what Bedrock keeps using, so a silent no-op would hide the stray call.
         XCTAssertThrowsError(
-            try setConfig(environment: .production, os: .ios, rootPath: BedrockTestSupport.rootPath)
+            try setConfig(environment: .production, os: .ios, dataDirectory: BedrockTestSupport.dataDirectory)
         ) { error in
             guard case PrimitiveError.Generic = error else {
                 return XCTFail("Expected Generic, got \(error)")
@@ -313,11 +313,11 @@ final class BedrockToolingTests: XCTestCase {
 
     func testBedrockConfigEnvironmentTypes() throws {
         // Test creating config with different environments
-        let rootPath = BedrockTestSupport.rootPath
-        let stagingConfig = BedrockConfig(environment: .staging, os: .ios, rootPath: rootPath)
+        let dataDirectory = BedrockTestSupport.dataDirectory
+        let stagingConfig = BedrockConfig(environment: .staging, os: .ios, dataDirectory: dataDirectory)
         XCTAssertEqual(stagingConfig.environment(), .staging, "Staging config should have staging environment")
 
-        let productionConfig = BedrockConfig(environment: .production, os: .ios, rootPath: rootPath)
+        let productionConfig = BedrockConfig(environment: .production, os: .ios, dataDirectory: dataDirectory)
         XCTAssertEqual(productionConfig.environment(), .production, "Production config should have production environment")
     }
 

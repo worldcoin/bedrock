@@ -131,7 +131,7 @@ final class BedrockFilesystemTests: XCTestCase {
         let other = NSTemporaryDirectory() + "bedrock-some-other-root"
 
         XCTAssertThrowsError(
-            try setConfig(environment: .staging, os: .ios, rootPath: other)
+            try setConfig(environment: .staging, os: .ios, dataDirectory: other)
         ) { error in
             guard case PrimitiveError.Generic = error else {
                 return XCTFail("Expected Generic, got \(error)")
@@ -151,7 +151,7 @@ final class BedrockFilesystemTests: XCTestCase {
 
         // `FileSystemTester` is exported through `bedrock_export`, so its files land under
         // the snake_case struct name inside the root the app handed to `setConfig`.
-        let expected = URL(fileURLWithPath: BedrockTestSupport.rootPath)
+        let expected = URL(fileURLWithPath: BedrockTestSupport.dataDirectory)
             .appendingPathComponent("file_system_tester")
             .appendingPathComponent("scoped.txt")
 
