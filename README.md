@@ -33,10 +33,8 @@ Install the logger first, then initialize the global configuration once at app s
 ```swift
 @_exported import Bedrock
 
-let rootPath = FileManager.default
-    .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    .appendingPathComponent("bedrock")
-    .path
+// The directory your `FileSystem` implementation used to resolve relative paths against.
+let rootPath = try fileSystem.applicationSupportDirectory().path
 
 try Bedrock.setConfig(environment: .staging, os: .ios, rootPath: rootPath)
 ```
@@ -44,10 +42,26 @@ try Bedrock.setConfig(environment: .staging, os: .ios, rootPath: rootPath)
 **Kotlin:**
 
 ```kotlin
-val rootPath = File(context.filesDir, "bedrock").absolutePath
+// The directory your `FileSystem` implementation used to resolve relative paths against.
+val rootPath = File(context.filesDir, "oxide").absolutePath
 
 uniffi.bedrock.setConfig(BedrockEnvironment.STAGING, Os.ANDROID, rootPath)
 ```
+
+> [!IMPORTANT]
+> **Upgrading from `setFilesystem`.** `rootPath` replaces the base directory your
+> `FileSystem` implementation applied to the relative paths Bedrock handed it. Pass that
+> exact directory — a new one leaves Bedrock reading an empty tree, so the manifest reads
+> as missing and every existing user reports as having no backup.
+
+`rootPath` is a namespace Bedrock shares with the app, not a private one. Files registered
+through `ManifestManager` are app-written and app-owned; Bedrock only reads and checksums
+them at the relative path you register. Bedrock owns `.bedrock-staged`, which it clears at
+startup, and rejects any path naming it or escaping the root with `..`.
+
+Bedrock writes files with platform defaults, preserving an existing file's permissions when
+it replaces one. Anything else the app needs — an iOS data protection class, exclusion from
+iCloud backup — must be set on the root directory so new files inherit it.
 
 ## 🛠️ Error Handling & Logging Tooling
 

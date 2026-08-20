@@ -40,7 +40,9 @@ use crate::backup::backup_format::v0::{
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
-use crate::primitives::filesystem::{root_filesystem, FileSystemError};
+use crate::primitives::filesystem::{
+    root_filesystem, FileSystemError, ScopedFileSystem,
+};
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::STANDARD;
 use crypto_box::SecretKey;
@@ -695,6 +697,9 @@ impl BackupManager {
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
 
+        // Reported as itself rather than as an unusable payload path below.
+        ScopedFileSystem::root()?;
+
         // NOTE: we don't use the module's prefix (`backup/`) here; as this
         // unpacks files directly into their module-owned locations.
         let fs = root_filesystem();
@@ -703,20 +708,35 @@ impl BackupManager {
 
         crate::info!("Processing {} files for unpacking.", backup.files.len());
 
-        // The paths come from the sealed backup, so they are attacker-controlled. Verifying
-        // the whole payload up front ensures the user doesn't end up in a half-state.
+        // Paths come from the sealed backup, so validate all of them before writing any.
+        // A write failing later still leaves earlier files replaced and no manifest.
+        let mut destinations =
+            std::collections::HashSet::with_capacity(backup.files.len());
         for file in &backup.files {
-            fs.validate_file_path(file.path.trim_start_matches('/'))
+            let destination = fs
+                .resolved_file_path(file.path.trim_start_matches('/'))
                 .map_err(|e| {
                     crate::error!(
-                        "[BackupManager] rejecting backup: unusable path for designator {}: {e}",
-                        file.designator
+                        designator = file.designator,
+                        error_message = e,
+                        "Rejecting backup: unusable file path"
                     );
                     BackupError::InvalidFileForBackup(format!(
                         "unusable file path for designator: {}",
                         file.designator
                     ))
                 })?;
+
+            if !destinations.insert(destination) {
+                crate::error!(
+                    designator = file.designator,
+                    "Rejecting backup: two entries resolve to the same file"
+                );
+                return Err(BackupError::InvalidFileForBackup(format!(
+                    "duplicate file path for designator: {}",
+                    file.designator
+                )));
+            }
         }
 
         for file in &backup.files {

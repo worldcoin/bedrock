@@ -113,7 +113,9 @@ impl BedrockConfig {
     /// # Arguments
     /// * `environment` - The environment to use for this configuration
     /// * `os` - The platform the app is running on
-    /// * `root_path` - Absolute path to the directory Bedrock owns for its files. Should **NOT** be touched outside of Bedrock.
+    /// * `root_path` - Absolute path to the directory Bedrock resolves every file against.
+    ///   Shared with the app: paths registered through `ManifestManager` are relative to it,
+    ///   and the app writes those files itself. `.bedrock-staged` is reserved.
     ///
     /// # Examples
     ///
@@ -160,8 +162,9 @@ impl BedrockConfig {
 /// # Arguments
 /// * `environment` - The environment to use for all Bedrock operations
 /// * `os` - The platform the app is running on
-/// * `root_path` - Absolute path to the directory Bedrock owns for its
-/// files. Should **NOT** be touched outside of Bedrock.
+/// * `root_path` - Absolute path to the directory Bedrock resolves every file against.
+/// Must be the directory the app's previous `FileSystem` implementation resolved
+/// relative paths against, or existing backups are orphaned.
 ///
 /// # Errors
 /// - Returns an error if `root_path` is not absolute or cannot be created.
@@ -193,7 +196,8 @@ pub fn set_config(
 
     if let Err(error) = prepare_root(config.root_path()) {
         crate::critical!(
-            "Bedrock root directory is unusable, config not applied: {error}"
+            error_message = error,
+            "Bedrock root directory is unusable, config not applied"
         );
         return Err(error);
     }
@@ -207,10 +211,7 @@ pub fn set_config(
         });
     }
 
-    crate::debug!(
-        "Bedrock config initialized with environment: {}",
-        environment
-    );
+    crate::debug!(environment = environment, "Bedrock config initialized");
     Ok(())
 }
 

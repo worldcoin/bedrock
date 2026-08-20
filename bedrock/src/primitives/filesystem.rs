@@ -85,7 +85,9 @@ pub(crate) fn clear_stale_staged_writes(root_path: &Path) {
     match fs::remove_dir_all(root_path.join(ATOMIC_STAGED_DIRECTORY)) {
         Ok(()) => (),
         Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-        Err(error) => crate::warn!("Could not clear stale staged writes: {error}"),
+        Err(error) => {
+            crate::warn!(error_message = error, "Could not clear stale staged writes");
+        }
     }
 }
 
@@ -215,7 +217,7 @@ impl ScopedFileSystem {
     ///
     /// # Errors
     /// - [`FileSystemError::NotInitialized`] if `set_config` has not been called
-    fn root() -> Result<PathBuf, FileSystemError> {
+    pub(crate) fn root() -> Result<PathBuf, FileSystemError> {
         get_config()
             .map(|config| config.root_path().to_path_buf())
             .ok_or(FileSystemError::NotInitialized)
@@ -262,14 +264,18 @@ impl ScopedFileSystem {
         Ok(resolved)
     }
 
-    /// Checks that a path is one this handle would accept for a file operation.
+    /// Resolves a path without touching the filesystem, so a batch of untrusted paths can
+    /// be rejected before any of them is used.
     ///
     /// # Errors
     /// - [`FileSystemError::NotInitialized`] if no root path has been configured
     /// - [`FileSystemError::InvalidPath`] if the path escapes the scope, is reserved, or
     ///   names no file
-    pub fn validate_file_path(&self, file_path: &str) -> Result<(), FileSystemError> {
-        self.resolve_file(file_path).map(drop)
+    pub fn resolved_file_path(
+        &self,
+        file_path: &str,
+    ) -> Result<PathBuf, FileSystemError> {
+        self.resolve_file(file_path)
     }
 
     /// Checks whether a file exists at the given path.
@@ -473,7 +479,7 @@ mod tests {
         for path in ["bad\0name.bin", "dir/bad\0name.bin", "ba\0d/name.bin"] {
             assert!(
                 matches!(
-                    fs.validate_file_path(path),
+                    fs.resolved_file_path(path),
                     Err(FileSystemError::InvalidPath(_))
                 ),
                 "expected `{}` to be rejected",
