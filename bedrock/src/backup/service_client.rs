@@ -40,7 +40,8 @@ pub trait BackupServiceApi: Send + Sync {
 /// Only the required attributes are returned to Bedrock (avoids additional memory allocations)
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RetrieveMetadataResponsePayload {
-    /// The hex-encoded manifest hash.
+    /// The hex-encoded manifest hash, or an empty string when the account has
+    /// no backup yet (the server's `backup_not_found` case).
     pub manifest_hash: String,
     /// Encryption keys present
     pub encryption_keys: Option<Vec<BackupReportEncryptionKeyKind>>,
@@ -106,7 +107,11 @@ impl BackupServiceClient {
     }
 
     /// See `BackupServiceApi::retrieve_metadata`.
-    pub async fn get_remote_manifest_hash() -> Result<[u8; 32], BackupError> {
+    ///
+    /// Returns `Ok(None)` when the account has no remote backup (the server
+    /// responds with an empty `manifest_hash`), versus a present backup whose
+    /// hash must be validated against local state.
+    pub async fn get_remote_manifest_hash() -> Result<Option<[u8; 32]>, BackupError> {
         let api = get_api()?;
         let response = api.retrieve_metadata().await?;
 
@@ -136,6 +141,9 @@ impl BackupServiceClient {
             }
         }
         let hash = response.manifest_hash.trim_start_matches("0x");
+        if hash.is_empty() {
+            return Ok(None);
+        }
         let hash = hex::decode(hash)
             .map_err(|_| BackupError::Generic {
                 error_message:
@@ -151,6 +159,6 @@ impl BackupServiceClient {
                 error_message:
                     format!("[BackupServiceClient] invalid response from retrieve_metadata, manifest_hash is not the correct length: {hash_len}"),
             })?;
-        Ok(hash)
+        Ok(Some(hash))
     }
 }
