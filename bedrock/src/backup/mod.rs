@@ -857,6 +857,9 @@ pub enum BackupError {
     #[error("Backup version is not detected")]
     /// Backup version cannot be detected.
     VersionNotDetectedError,
+    #[error("Backup archive exceeds the maximum size")]
+    /// The files collected for a backup exceed the maximum size
+    BackupTooLargeError,
     #[error("Failed to read file name from archive")]
     /// Failed to read file name from archive entry.
     ReadFileNameError,

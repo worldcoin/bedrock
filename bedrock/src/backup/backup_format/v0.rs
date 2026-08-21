@@ -4,11 +4,16 @@ use chrono::Utc;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use tar::{Archive, Builder, Header};
 
 const VERSION_TAG: &str = "OXIDE_BACKUP_VERSION";
 const ROOT_SECRET_FILE: &str = "root_secret.json";
+
+/// Maximum number of bytes a backup archive may decompress to.
+///
+/// Defense-in-depth in case an attacker is able to provide a malicious backup.
+const MAX_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 
 /// V0 version of the backup manifest. See `BackupManifest` for more details.
 ///
@@ -81,27 +86,14 @@ impl V0Backup {
     /// Check if the backup has the correct tag for this version of the backup format.
     /// Returns Ok(true) if the correct version tag is present, Ok(false) otherwise.
     /// Returns an error if there are I/O or parsing errors when reading entries.
+    ///
+    /// # Errors
+    /// * If the archive decompresses to more than [`MAX_DECOMPRESSED_BYTES`],
+    ///   `BackupError::BackupTooLargeError` is returned.
     pub fn peek_version(bytes: &[u8]) -> Result<bool, BackupError> {
-        let gz_decoder = GzDecoder::new(Cursor::new(bytes));
-        let mut archive = Archive::new(gz_decoder);
-        let entries = archive.entries()?;
-
-        // Iterate through the files in the backup and check if the version tag is present
-        for entry in entries {
-            let mut file = entry?;
-            let path = file.path()?;
-            let path = path
-                .to_str()
-                .ok_or(BackupError::ReadFileNameError)?
-                .to_string();
-            // If the version tag is present, check if it has the correct value
-            if path == VERSION_TAG {
-                let mut version_data = Vec::new();
-                file.read_to_end(&mut version_data)?;
-                return Ok(version_data == [0]);
-            }
-        }
-        Ok(false)
+        let mut archive = bounded_archive(bytes);
+        let result = read_version_tag(&mut archive);
+        archive.into_inner().map_limit_error(result)
     }
 
     /// Deserialize the `BackupFormat` from unencrypted bytes.
@@ -112,43 +104,12 @@ impl V0Backup {
     /// * If a file cannot be decoded from CBOR, `BackupError::DecodeBackupFileError` is returned.
     /// * If a file checksum does not match, `BackupError::InvalidChecksumError` is returned.
     /// * If the root secret is invalid, `BackupError::InvalidRootSecretError` is returned.
+    /// * If the archive decompresses to more than [`MAX_DECOMPRESSED_BYTES`],
+    ///   `BackupError::BackupTooLargeError` is returned.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BackupError> {
-        let gz_decoder = GzDecoder::new(Cursor::new(bytes));
-        let mut archive = Archive::new(gz_decoder);
-
-        let mut root_secret = String::new();
-        let mut files = Vec::new();
-
-        for entry in archive.entries()? {
-            let mut file = entry?;
-            let path = file
-                .path()?
-                .to_str()
-                .ok_or(BackupError::ReadFileNameError)?
-                .to_string();
-
-            if path == ROOT_SECRET_FILE {
-                file.read_to_string(&mut root_secret)?;
-            } else if path == VERSION_TAG {
-                // Skip the version tag file, it should be checked by .peek_version
-            } else {
-                let mut data = Vec::new();
-                file.read_to_end(&mut data)?;
-
-                let file: V0BackupFile = ciborium::from_reader(Cursor::new(&data))
-                    .inspect_err(|e| {
-                        crate::error!(
-                            path = path,
-                            error_message = e,
-                            "Failed to deserialize backup file"
-                        );
-                    })?;
-
-                file.validate_checksum()?;
-
-                files.push(file);
-            }
-        }
+        let mut archive = bounded_archive(bytes);
+        let result = read_entries(&mut archive);
+        let (root_secret, files) = archive.into_inner().map_limit_error(result)?;
 
         // Validate the root secret.
         let root_secret = RootKey::from_json(&root_secret).map_err(|_| {
@@ -178,10 +139,12 @@ impl V0Backup {
     /// * If the root secret cannot be encoded to JSON, `BackupError::EncodeRootSecretError` is returned.
     /// * If a backup file cannot be CBOR-encoded, `BackupError::EncodeBackupFileError` is returned.
     /// * If any of the metadata or files cannot be written, `BackupError::IoError` is returned.
+    /// * If the archive would decompress to more than [`MAX_DECOMPRESSED_BYTES`],
+    ///   `BackupError::BackupTooLargeError` is returned.
     pub fn to_bytes(&self) -> Result<Vec<u8>, BackupError> {
         let mut result = Vec::new();
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
-        let mut archive = Builder::new(gz_builder);
+        let mut archive = Builder::new(CountingWriter::new(gz_builder));
 
         // Add a version tag to the archive
         write_to_archive(&mut archive, VERSION_TAG, &[0])?;
@@ -208,16 +171,174 @@ impl V0Backup {
 
         // Finish the archive
         archive.finish()?;
-        let encoder = archive.into_inner()?;
-        encoder.finish()?;
+        let counting_writer = archive.into_inner()?;
+
+        // Never produce a backup that `from_bytes` would then refuse to restore.
+        if counting_writer.written > MAX_DECOMPRESSED_BYTES {
+            crate::critical!(
+                uncompressed_size = counting_writer.written,
+                file_count = self.files.len(),
+                "Backup exceeds the maximum size and could not be restored"
+            );
+            return Err(BackupError::BackupTooLargeError);
+        }
+
+        counting_writer.into_inner().finish()?;
 
         Ok(result)
     }
 }
 
+/// Opens the archive through a decoder that cannot expand past [`MAX_DECOMPRESSED_BYTES`].
+fn bounded_archive(bytes: &[u8]) -> Archive<BoundedReader<GzDecoder<Cursor<&[u8]>>>> {
+    Archive::new(BoundedReader::new(GzDecoder::new(Cursor::new(bytes))))
+}
+
+/// Scans the archive for the version tag, returning whether it marks this backup version.
+fn read_version_tag<R: Read>(archive: &mut Archive<R>) -> Result<bool, BackupError> {
+    for entry in archive.entries()? {
+        let mut file = entry?;
+        let path = file.path()?;
+        let path = path
+            .to_str()
+            .ok_or(BackupError::ReadFileNameError)?
+            .to_string();
+        // If the version tag is present, check if it has the correct value
+        if path == VERSION_TAG {
+            let mut version_data = Vec::new();
+            file.read_to_end(&mut version_data)?;
+            return Ok(version_data == [0]);
+        }
+    }
+    Ok(false)
+}
+
+/// Reads the root secret JSON and every backup file out of the archive.
+fn read_entries<R: Read>(
+    archive: &mut Archive<R>,
+) -> Result<(String, Vec<V0BackupFile>), BackupError> {
+    let mut root_secret = String::new();
+    let mut files = Vec::new();
+
+    for entry in archive.entries()? {
+        let mut file = entry?;
+        let path = file
+            .path()?
+            .to_str()
+            .ok_or(BackupError::ReadFileNameError)?
+            .to_string();
+
+        if path == ROOT_SECRET_FILE {
+            file.read_to_string(&mut root_secret)?;
+        } else if path == VERSION_TAG {
+            // Skip the version tag file, it should be checked by .peek_version
+        } else {
+            let mut data = Vec::new();
+            file.read_to_end(&mut data)?;
+
+            let file: V0BackupFile = ciborium::from_reader(Cursor::new(&data))
+                .inspect_err(|e| {
+                    crate::error!(
+                        path = path,
+                        error_message = e,
+                        "Failed to deserialize backup file"
+                    );
+                })?;
+
+            file.validate_checksum()?;
+
+            files.push(file);
+        }
+    }
+
+    Ok((root_secret, files))
+}
+
+/// Reader that fails once the inner reader has produced more than [`MAX_DECOMPRESSED_BYTES`].
+///
+/// `Read::take` is not usable here: reaching the cap would look like a clean end of archive to
+/// the tar reader and silently truncate the backup.
+struct BoundedReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R> BoundedReader<R> {
+    const fn new(inner: R) -> Self {
+        // One byte of slack, so an archive of exactly the maximum size still reads cleanly.
+        Self {
+            inner,
+            remaining: MAX_DECOMPRESSED_BYTES + 1,
+        }
+    }
+
+    /// Reports a read that hit the cap as `BackupTooLargeError` instead of the opaque I/O
+    /// error the tar reader surfaced.
+    fn map_limit_error<T>(
+        self,
+        result: Result<T, BackupError>,
+    ) -> Result<T, BackupError> {
+        if result.is_err() && self.remaining == 0 {
+            crate::error!(
+                max_decompressed_bytes = MAX_DECOMPRESSED_BYTES,
+                "Backup archive exceeds the maximum decompressed size"
+            );
+            return Err(BackupError::BackupTooLargeError);
+        }
+        result
+    }
+}
+
+impl<R: Read> Read for BoundedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "backup archive exceeds the maximum decompressed size",
+            ));
+        }
+
+        let allowed = usize::try_from(self.remaining)
+            .unwrap_or(usize::MAX)
+            .min(buf.len());
+        let read = self.inner.read(&mut buf[..allowed])?;
+        self.remaining -= read as u64;
+        Ok(read)
+    }
+}
+
+/// Writer that tracks how many uncompressed bytes the archive builder has produced, so a
+/// backup that could not be restored is rejected at creation instead of at restore.
+struct CountingWriter<W> {
+    inner: W,
+    written: u64,
+}
+
+impl<W> CountingWriter<W> {
+    const fn new(inner: W) -> Self {
+        Self { inner, written: 0 }
+    }
+
+    fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.written += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Write a single file to the archive encoder.
-fn write_to_archive(
-    archive: &mut Builder<GzEncoder<&mut Vec<u8>>>,
+fn write_to_archive<W: Write>(
+    archive: &mut Builder<W>,
     name: &str,
     data: &[u8],
 ) -> Result<(), BackupError> {
@@ -499,6 +620,64 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Checksum for file with designator: orb_pkg does not match the expected value"
+        );
+    }
+
+    /// Builds an archive whose entries expand past the decompression cap. The bomb is placed
+    /// before the version tag so both read paths have to walk through it.
+    fn decompression_bomb() -> Vec<u8> {
+        let oversized = vec![0u8; usize::try_from(MAX_DECOMPRESSED_BYTES).unwrap() + 1];
+
+        let mut result = Vec::new();
+        let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
+        let mut archive = Builder::new(gz_builder);
+
+        write_to_archive(&mut archive, "bomb.bin", &oversized).unwrap();
+        write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
+
+        archive.finish().unwrap();
+        let encoder = archive.into_inner().unwrap();
+        encoder.finish().unwrap();
+
+        result
+    }
+
+    #[test]
+    fn test_peek_version_rejects_decompression_bomb() {
+        let bomb = decompression_bomb();
+        // The archive itself has to stay small, or it is not a bomb.
+        assert!(bomb.len() < 1024 * 1024);
+
+        assert_eq!(
+            V0Backup::peek_version(&bomb).unwrap_err().to_string(),
+            "Backup archive exceeds the maximum size"
+        );
+    }
+
+    #[test]
+    fn test_from_bytes_rejects_decompression_bomb() {
+        assert_eq!(
+            V0Backup::from_bytes(&decompression_bomb())
+                .unwrap_err()
+                .to_string(),
+            "Backup archive exceeds the maximum size"
+        );
+    }
+
+    #[test]
+    fn test_to_bytes_rejects_oversized_backup() {
+        let data = vec![0u8; usize::try_from(MAX_DECOMPRESSED_BYTES).unwrap() + 1];
+        let files = vec![V0BackupFile {
+            checksum: blake3::hash(&data).as_bytes().to_owned(),
+            data,
+            path: "personal_custody/huge.bin".to_string(),
+            designator: BackupFileDesignator::OrbPkg,
+        }];
+
+        let backup = V0Backup::new(RootKey::new_random(), files);
+        assert_eq!(
+            backup.to_bytes().unwrap_err().to_string(),
+            "Backup archive exceeds the maximum size"
         );
     }
 }
