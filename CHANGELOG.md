@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/worldcoin/bedrock/compare/0.6.0...0.6.1) - 2026-08-21
+
+### Fixed
+
+- treat empty retrieve_metadata manifest_hash as no remote backup ([#418](https://github.com/worldcoin/bedrock/pull/418))
+- enforces response max size for custom RPC/bundlers ([#417](https://github.com/worldcoin/bedrock/pull/417))
+
 ## [0.6.0](https://github.com/worldcoin/bedrock/compare/0.5.3...0.6.0) - 2026-08-20
 
 ### Added
