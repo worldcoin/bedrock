@@ -75,6 +75,10 @@ impl FakeBackupServiceApi {
     fn set_remote_hash(&self, hex_hash: String) {
         self.state.lock().unwrap().remote_manifest_hash_hex = Some(hex_hash);
     }
+    /// Simulates the server reporting no backup for the account (empty `manifest_hash`).
+    fn set_no_remote_backup(&self) {
+        self.state.lock().unwrap().remote_manifest_hash_hex = Some(String::new());
+    }
     fn set_sync_error_bad_status(&self, code: u64, response_body: Vec<u8>) {
         self.state.lock().unwrap().sync_error = Some(NextSyncErrorConfig {
             code,
@@ -217,6 +221,63 @@ async fn test_list_files_stale_remote() {
         .await
         .expect_err("expected stale error");
     assert_eq!(err.to_string(), "Remote manifest is ahead of local; fetch and apply latest backup before updating");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_list_files_no_remote_backup() {
+    let api = init_test_globals();
+    api.reset();
+
+    let m = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::OrbPkg,
+            file_path: "orb_pkg/personal_custody/pcp.bin".to_string(),
+            checksum_hex: hex::encode(blake3::hash(b"abc").as_bytes()),
+        }],
+    });
+    write_manifest_with_prefix(&m, "backup_test_list_no_remote");
+    api.set_no_remote_backup();
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_no_remote");
+    let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
+    assert_eq!(list, vec!["orb_pkg/personal_custody/pcp.bin".to_string()]);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_store_file_no_remote_backup_creates_backup() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Local manifest exists but the account has no remote backup yet.
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_no_remote");
+    api.set_no_remote_backup();
+
+    write_global_file("pcp/source.bin", b"hello-bytes");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_no_remote");
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "pcp/source.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // The first sync uses the default (empty) manifest hash as the current state.
+    let last = api.state.lock().unwrap().last_sync.clone().unwrap();
+    assert_eq!(
+        last.current_manifest_hash,
+        BackupManifest::default_hash_hex()
+    );
+    assert_ne!(last.new_manifest_hash, last.current_manifest_hash);
 }
 
 #[tokio::test]
