@@ -282,6 +282,51 @@ async fn test_store_file_no_remote_backup_creates_backup() {
 
 #[tokio::test]
 #[serial]
+async fn test_store_file_no_remote_backup_with_nonempty_local_manifest() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Local manifest already has an entry, but the account has no remote backup
+    // (e.g. local writes raced ahead of the first successful sync).
+    write_global_file("docs/existing.bin", b"EXISTING");
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::DocumentPkg,
+            file_path: "docs/existing.bin".to_string(),
+            checksum_hex: hex::encode(blake3::hash(b"EXISTING").as_bytes()),
+        }],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_no_remote_nonempty");
+    api.set_no_remote_backup();
+
+    write_global_file("pcp/source.bin", b"hello-bytes");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_no_remote_nonempty");
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "pcp/source.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // With no remote head, the sync parent is the default manifest hash even
+    // though the local manifest is non-empty; the upload carries both files.
+    let last = api.state.lock().unwrap().last_sync.clone().unwrap();
+    assert_eq!(
+        last.current_manifest_hash,
+        BackupManifest::default_hash_hex()
+    );
+
+    let committed = get_manifest_from_disk("backup_test_store_no_remote_nonempty");
+    assert_eq!(committed.entries_length(), 2);
+}
+
+#[tokio::test]
+#[serial]
 async fn test_list_files_missing_manifest() {
     let api = init_test_globals();
     api.reset();

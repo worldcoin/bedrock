@@ -338,8 +338,9 @@ impl ManifestManager {
 
     /// Gated manifest read that ensures local is not stale vs remote.
     ///
-    /// When the account has no remote backup, the local manifest is authoritative:
-    /// the next successful sync creates the backup from it.
+    /// When the account has no remote backup, the local manifest is authoritative for
+    /// contents, but the returned hash is the default (empty) manifest hash: with no
+    /// remote head, that is the parent the next sync must declare.
     ///
     /// # Errors
     /// Returns an error if the remote hash does not match local or if network/IO errors occur.
@@ -350,7 +351,7 @@ impl ManifestManager {
         let Some(remote_hash) = BackupServiceClient::get_remote_manifest_hash().await?
         else {
             let BackupManifest::V0(manifest) = manifest;
-            return Ok((manifest, local_hash));
+            return Ok((manifest, BackupManifest::default().to_hash()?));
         };
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
