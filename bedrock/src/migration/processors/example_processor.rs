@@ -67,13 +67,15 @@ impl MigrationProcessor for ExampleProcessor {
         //     return Ok(false);
         // }
 
-        // 3. Check feature flags if applicable
-        // if !self.config.is_migration_enabled() {
-        //     return Ok(false);
-        // }
-
-        // 4. All checks passed - migration is needed
+        // 3. All checks passed - migration is needed
         // Ok(true)
+
+        // NOTE: do NOT gate on feature flags or other transient conditions
+        // here — `Ok(false)` means "the desired end state holds" and, once
+        // the migration has been attempted, settles it as `Succeeded` until
+        // the TTL recheck. Gate rollout at registration time instead: only
+        // register the processor with the `MigrationController`
+        // (`additional_processors`) when the flag is enabled.
 
         // Placeholder: skip this example processor
         Ok(false)

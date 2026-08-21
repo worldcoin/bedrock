@@ -399,17 +399,71 @@ impl MigrationController {
                     e,
                     Utc::now().to_rfc3339()
                 );
-                false
+                // Unable to determine applicability: skip this run without
+                // modifying the stored record so the next run re-checks.
+                return MigrationRunSummary {
+                    skipped: 1,
+                    ..MigrationRunSummary::default()
+                };
             }
         };
 
         if !is_applicable {
-            // For TTL-expired succeeded migrations, renew recheck_at to avoid
-            // calling is_applicable on every app open.
-            if matches!(record.status, MigrationStatus::Succeeded) {
-                record.recheck_at =
-                    Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
-                let _ = self.save_record(&migration_id, &record);
+            match record.status {
+                // TTL recheck of an already-succeeded migration: renew
+                // recheck_at so is_applicable isn't re-run on every app open.
+                MigrationStatus::Succeeded => {
+                    record.recheck_at =
+                        Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+                    if let Err(e) = self.save_record(&migration_id, &record) {
+                        crate::error!(
+                            "migration.storage_error id={} error={:?} timestamp={}",
+                            migration_id,
+                            e,
+                            Utc::now().to_rfc3339()
+                        );
+                    }
+                }
+
+                // The migration was attempted before and the desired end state
+                // now holds, however it was reached. Settle the record as
+                // `Succeeded` so future runs skip it until the TTL recheck.
+                // This converges migrations whose effect landed after a failed
+                // attempt (e.g. a transaction submitted by `execute` that only
+                // mined after that run gave up on it).
+                MigrationStatus::InProgress | MigrationStatus::FailedRetryable => {
+                    crate::info!(
+                        "migration.settled_not_applicable id={} previous_status={:?} timestamp={}",
+                        migration_id,
+                        record.status,
+                        Utc::now().to_rfc3339()
+                    );
+                    record.status = MigrationStatus::Succeeded;
+                    record.completed_at = Some(Utc::now());
+                    record.last_error_code = None;
+                    record.last_error_message = None;
+                    record.recheck_at =
+                        Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+                    if let Err(e) = self.save_record(&migration_id, &record) {
+                        crate::error!(
+                            "migration.storage_error id={} error={:?} timestamp={}",
+                            migration_id,
+                            e,
+                            Utc::now().to_rfc3339()
+                        );
+                        return MigrationRunSummary {
+                            failed_retryable: 1,
+                            ..MigrationRunSummary::default()
+                        };
+                    }
+                }
+
+                // Never attempted: `false` may mean "not applicable yet"
+                // (e.g. feature flag off, migration source data absent), so
+                // leave the record untouched and re-check on the next run.
+                // (`FailedTerminal` never reaches here; it is filtered out by
+                // `should_attempt` above.)
+                MigrationStatus::NotStarted | MigrationStatus::FailedTerminal => {}
             }
             return MigrationRunSummary {
                 skipped: 1,
@@ -662,6 +716,7 @@ mod tests {
     /// Test processor where `is_applicable` returns false
     struct NotApplicableProcessor {
         id: String,
+        applicability_check_count: Arc<AtomicU32>,
         execution_count: Arc<AtomicU32>,
     }
 
@@ -669,8 +724,13 @@ mod tests {
         fn new(id: &str) -> Self {
             Self {
                 id: id.to_string(),
+                applicability_check_count: Arc::new(AtomicU32::new(0)),
                 execution_count: Arc::new(AtomicU32::new(0)),
             }
+        }
+
+        fn applicability_check_count(&self) -> u32 {
+            self.applicability_check_count.load(Ordering::SeqCst)
         }
 
         fn execution_count(&self) -> u32 {
@@ -685,12 +745,71 @@ mod tests {
         }
 
         async fn is_applicable(&self) -> Result<bool, MigrationError> {
+            self.applicability_check_count
+                .fetch_add(1, Ordering::SeqCst);
             Ok(false)
         }
 
         async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
             self.execution_count.fetch_add(1, Ordering::SeqCst);
             Ok(ProcessorResult::Success)
+        }
+    }
+
+    /// Test processor where `is_applicable` returns an error
+    struct ApplicabilityErrorProcessor {
+        id: String,
+        execution_count: Arc<AtomicU32>,
+    }
+
+    impl ApplicabilityErrorProcessor {
+        fn new(id: &str) -> Self {
+            Self {
+                id: id.to_string(),
+                execution_count: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        fn execution_count(&self) -> u32 {
+            self.execution_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl MigrationProcessor for ApplicabilityErrorProcessor {
+        fn migration_id(&self) -> String {
+            self.id.clone()
+        }
+
+        async fn is_applicable(&self) -> Result<bool, MigrationError> {
+            Err(MigrationError::InvalidOperation(
+                "RPC unavailable".to_string(),
+            ))
+        }
+
+        async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
+            self.execution_count.fetch_add(1, Ordering::SeqCst);
+            Ok(ProcessorResult::Success)
+        }
+    }
+
+    /// Test key-value store that serves reads from an inner store but fails
+    /// all writes
+    struct ReadOnlyKvStore {
+        inner: InMemoryDeviceKeyValueStore,
+    }
+
+    impl DeviceKeyValueStore for ReadOnlyKvStore {
+        fn get(&self, key: String) -> Result<String, KeyValueStoreError> {
+            self.inner.get(key)
+        }
+
+        fn set(&self, _key: String, _value: String) -> Result<(), KeyValueStoreError> {
+            Err(KeyValueStoreError::UpdateFailure)
+        }
+
+        fn delete(&self, _key: String) -> Result<(), KeyValueStoreError> {
+            Err(KeyValueStoreError::UpdateFailure)
         }
     }
 
@@ -1582,18 +1701,226 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_not_applicable_processor_is_skipped() {
+    async fn test_not_started_not_applicable_skips_without_settling() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
 
-        let controller =
-            MigrationController::with_processors(kv_store, vec![processor.clone()]);
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
 
         let result = controller.run_migrations().await;
         assert!(result.is_ok());
         let summary = result.unwrap();
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.succeeded, 0);
+        assert_eq!(processor.execution_count(), 0);
+
+        // A never-attempted migration is NOT settled: `false` may mean "not
+        // applicable yet" (feature flag off, source data absent), so nothing
+        // is persisted and the next run re-checks.
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        assert!(matches!(
+            kv_store.get(key),
+            Err(KeyValueStoreError::KeyNotFound)
+        ));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_failed_retryable_not_applicable_settles_as_succeeded() {
+        // Regression test: a migration stuck in FailedRetryable whose effect
+        // later landed (e.g. the relayed transaction mined after `execute`
+        // gave up polling) must converge to Succeeded once `is_applicable`
+        // reports the end state holds — not stay FailedRetryable forever.
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 1,
+            started_at: Some(Utc::now() - chrono::Duration::days(1)),
+            last_attempted_at: Some(Utc::now() - chrono::Duration::days(1)),
+            last_error_code: Some("PENDING_TIMEOUT".to_string()),
+            last_error_message: Some("still pending after polling".to_string()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
+        assert!(updated_record.completed_at.is_some());
+        assert!(updated_record.recheck_at.is_some());
+        assert!(updated_record.last_error_code.is_none());
+        assert!(updated_record.last_error_message.is_none());
+        // Settling is not an execution attempt.
+        assert_eq!(updated_record.attempts, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_in_progress_not_applicable_settles_as_succeeded() {
+        // An InProgress record (e.g. app crashed mid-migration) whose desired
+        // end state now holds also converges to Succeeded.
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+
+        let record = MigrationRecord {
+            status: MigrationStatus::InProgress,
+            attempts: 1,
+            last_attempted_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().skipped, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(matches!(updated_record.status, MigrationStatus::Succeeded));
+        assert!(updated_record.recheck_at.is_some());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_settle_save_failure_counts_as_failed_retryable() {
+        // If persisting the settled record fails, the run must report a
+        // retryable failure (consistent with the other save_record sites),
+        // not a successful skip.
+        let inner = InMemoryDeviceKeyValueStore::new();
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 1,
+            ..MigrationRecord::default()
+        };
+        inner
+            .set(
+                format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
+                serde_json::to_string(&record).unwrap(),
+            )
+            .unwrap();
+        let kv_store = Arc::new(ReadOnlyKvStore { inner });
+
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+        assert_eq!(summary.failed_retryable, 1);
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(processor.execution_count(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_applicability_error_skips_without_modifying_record() {
+        // An `is_applicable` error (e.g. transient RPC failure) must not
+        // settle the migration as Succeeded — the stored record stays
+        // untouched so the next run re-checks.
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(ApplicabilityErrorProcessor::new("test.migration.v1"));
+
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 2,
+            last_error_code: Some("PENDING_TIMEOUT".to_string()),
+            last_error_message: Some("still pending after polling".to_string()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key.clone(), serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller = MigrationController::with_processors(
+            kv_store.clone(),
+            vec![processor.clone()],
+        );
+
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().skipped, 1);
+        assert_eq!(processor.execution_count(), 0);
+
+        let record_json = kv_store.get(key).expect("Record should exist");
+        let updated_record: MigrationRecord =
+            serde_json::from_str(&record_json).expect("Should deserialize");
+        assert!(matches!(
+            updated_record.status,
+            MigrationStatus::FailedRetryable
+        ));
+        assert_eq!(updated_record.attempts, 2);
+        assert_eq!(
+            updated_record.last_error_code.as_deref(),
+            Some("PENDING_TIMEOUT")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_settled_migration_skips_applicability_check_on_next_run() {
+        let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
+        let processor = Arc::new(NotApplicableProcessor::new("test.migration.v1"));
+
+        // Start from FailedRetryable (the stuck state from the regression).
+        let record = MigrationRecord {
+            status: MigrationStatus::FailedRetryable,
+            attempts: 1,
+            last_error_code: Some("PENDING_TIMEOUT".to_string()),
+            ..MigrationRecord::default()
+        };
+        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        kv_store
+            .set(key, serde_json::to_string(&record).unwrap())
+            .unwrap();
+
+        let controller =
+            MigrationController::with_processors(kv_store, vec![processor.clone()]);
+
+        // First run settles the record as Succeeded.
+        let result = controller.run_migrations().await;
+        assert!(result.is_ok());
+        assert_eq!(processor.applicability_check_count(), 1);
+
+        // Subsequent runs skip without re-running the (potentially expensive)
+        // applicability check until the TTL recheck is due.
+        for _ in 0..3 {
+            let result = controller.run_migrations().await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().skipped, 1);
+        }
+        assert_eq!(processor.applicability_check_count(), 1);
         assert_eq!(processor.execution_count(), 0);
     }
 

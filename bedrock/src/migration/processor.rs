@@ -47,16 +47,37 @@ pub trait MigrationProcessor: Send + Sync {
     /// The version should be included in the ID itself (e.g., ".v1", ".v2")
     fn migration_id(&self) -> String;
 
-    /// Check if this migration is applicable
+    /// Check whether this migration still needs to run
     ///
-    /// This method should check **actual state** (e.g., does v4 credential exist?)
-    /// to determine if the migration needs to run. This ensures the system is
+    /// This method should check **actual state** (e.g., does the v4 credential
+    /// exist? Is the on-chain allowance in place?) and return `true` only if
+    /// the desired end state does **not** yet hold. This ensures the system is
     /// truly idempotent and handles edge cases gracefully.
+    ///
+    /// For a migration that has already been attempted (`InProgress` or
+    /// `FailedRetryable`), returning `Ok(false)` means the desired end state
+    /// now holds, regardless of how it was reached: the controller settles the
+    /// migration as `Succeeded` and skips it until the TTL recheck. In
+    /// particular, a migration whose effect landed *after* a failed attempt
+    /// (e.g. a transaction submitted by [`execute`](Self::execute) that mined
+    /// after that run gave up on it) converges to `Succeeded` this way.
+    ///
+    /// For a migration that has never been attempted (`NotStarted`),
+    /// `Ok(false)` may also mean "not applicable *yet*" (e.g. the migration's
+    /// source data has not appeared yet), so the controller leaves the record
+    /// untouched and re-checks on the next run.
+    ///
+    /// Do **not** use `Ok(false)` for transient eligibility conditions such
+    /// as feature flags — gate rollout at registration time instead, by only
+    /// registering the processor with the `MigrationController` when the
+    /// migration should run.
     ///
     /// # Returns
     /// - `Ok(true)` if the migration should run
-    /// - `Ok(false)` if the migration should be skipped
-    /// - `Err(_)` if unable to determine (migration will be skipped with error logged)
+    /// - `Ok(false)` if the migration should not run now (settled as
+    ///   `Succeeded` if previously attempted; otherwise re-checked next run)
+    /// - `Err(_)` if unable to determine (migration is skipped for this run
+    ///   with the error logged; its stored record is not modified)
     async fn is_applicable(&self) -> Result<bool, MigrationError>;
 
     /// Execute the migration
