@@ -1,3 +1,5 @@
 * @paolodamico @sideround @tomislavhoman @Dzejkop @Guardiola31337 @aurel-fr @murph @karankurbur
 .github/CODEOWNERS @paolodamico @murph
 bedrock/src/smart_account/nonce.rs @aurel-fr @crystalt
+bedrock/src/transactions/custom_bundler.rs @aurel-fr @crystalt
+bedrock/tests/test_smart_account_bundler_sponsored.rs @aurel-fr @crystalt
