@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 mod common;
@@ -7,6 +8,7 @@ use alloy::{
     signers::local::PrivateKeySigner,
 };
 use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
+use flate2::{write::GzEncoder, Compression};
 
 use bedrock::{
     primitives::http_client::set_http_client,
@@ -24,33 +26,58 @@ use bedrock::smart_account::{
 
 // ── Helpers for error-handling integration tests ──────────────────────────────
 
-/// Starts a loopback HTTP server that responds to every request with the given
-/// status code and body. Returns `http://127.0.0.1:<port>`.
-fn start_mock_http_server(status: u16, body: String) -> String {
-    use std::io::{Read, Write};
-
+/// Starts a loopback HTTP server that answers one request per connection with
+/// `respond`. Returns `http://127.0.0.1:<port>`.
+fn start_loopback_server<F>(respond: F) -> String
+where
+    F: Fn(&mut std::net::TcpStream) + Send + 'static,
+{
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
-            let body = body.clone();
             let Ok(mut stream) = stream else { break };
-            std::thread::spawn(move || {
-                let mut buf = [0u8; 8192];
-                let _ = stream.read(&mut buf);
-                let response = format!(
-                    "HTTP/1.1 {status} -\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                if let Err(e) = stream.write_all(response.as_bytes()) {
-                    eprintln!("mock HTTP server: failed to write response: {e}");
-                }
-            });
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            respond(&mut stream);
         }
     });
 
     url
+}
+
+/// Starts a loopback HTTP server that responds to every request with the given
+/// status code and body.
+fn start_mock_http_server(status: u16, body: String) -> String {
+    start_loopback_server(move |stream| {
+        let response = format!(
+            "HTTP/1.1 {status} -\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        if let Err(e) = stream.write_all(response.as_bytes()) {
+            eprintln!("mock HTTP server: failed to write response: {e}");
+        }
+    })
+}
+
+/// Starts a loopback HTTP server whose kilobyte-sized gzip body inflates to a
+/// megabyte, so the cap has to count decompressed bytes to catch it.
+fn start_gzip_bomb_http_server() -> String {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(&vec![b'a'; 1024 * 1024]).unwrap();
+    let body = encoder.finish().unwrap();
+
+    start_loopback_server(move |stream| {
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(header.as_bytes());
+        let _ = stream.write_all(&body);
+    })
 }
 
 /// A minimal `UnparsedUserOperation` whose fields are valid hex strings.
@@ -370,7 +397,9 @@ async fn test_verify_bundler_rpc_entrypoint_success() {
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "result": [entrypoint]
+            "result": [entrypoint],
+            // Pushes the body past a single read frame, covering reassembly.
+            "padding": "0".repeat(16 * 1024),
         })
         .to_string(),
     );
@@ -400,6 +429,37 @@ async fn test_verify_bundler_rpc_entrypoint_missing() {
         matches!(err, RpcError::InvalidResponse { .. }),
         "expected InvalidResponse; got {err:?}"
     );
+}
+
+#[tokio::test]
+async fn test_verify_bundler_rpc_entrypoint_rejects_over_cap_bodies() {
+    let err = verify_bundler_rpc_entrypoint(start_gzip_bomb_http_server())
+        .await
+        .expect_err("a body inflating past the cap must be rejected, not buffered");
+    let RpcError::InvalidResponse { error_message } = &err else {
+        panic!("expected InvalidResponse from the body cap; got {err:?}")
+    };
+    assert!(error_message.contains("exceeds"), "got {error_message}");
+
+    // Size must not reclassify a non-2xx, and the status has to reach the message.
+    let url = start_mock_http_server(502, "x".repeat(512 * 1024));
+    let err = verify_bundler_rpc_entrypoint(url)
+        .await
+        .expect_err("a 502 with an over-cap body must fail");
+    let RpcError::HttpError(message) = &err else {
+        panic!("expected HttpError for a non-2xx status; got {err:?}")
+    };
+    assert!(
+        message.contains("502") && message.contains("exceeds"),
+        "expected the status and the body cap; got {message}"
+    );
+
+    // A body that stops early must name the upstream status too.
+    let url = start_loopback_server(|s| {
+        let _ = s.write_all(b"HTTP/1.1 502 -\r\nContent-Length: 1000\r\n\r\npartial");
+    });
+    let err = verify_bundler_rpc_entrypoint(url).await.unwrap_err();
+    assert!(err.to_string().contains("502"), "status lost: {err}");
 }
 
 /// Live integration test that verifies a real bundler RPC supports the v0.7 EntryPoint.
