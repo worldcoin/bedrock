@@ -362,6 +362,11 @@ mod tests {
         // Only one leading "0x" is a valid prefix; a second one is not a hex digit
         // and must be rejected rather than silently stripped away.
         let hex_string = HexEncodedData::new("0x0xabcd");
+
         assert!(hex_string.is_err());
+        assert_eq!(
+            hex_string.err().unwrap().to_string(),
+            "invalid hex string: 0xabcd".to_string()
+        );
     }
 }
