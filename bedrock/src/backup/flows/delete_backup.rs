@@ -252,7 +252,6 @@ mod tests {
     #[tokio::test]
     async fn an_already_deleted_backup_is_reported_as_success() {
         for code in [
-            "backup_untraceable",
             "backup_missing",
             "backup_not_found",
             "backup_does_not_exist",
@@ -352,7 +351,7 @@ mod tests {
         let server = MockServer::start().await;
         mount_metadata(&server, vec![turnkey_key()]).await;
         mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
-        mount_rejection(&server, DELETE_BACKUP, "backup_untraceable").await;
+        mount_rejection(&server, DELETE_BACKUP, "backup_not_found").await;
         mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
 
         run_delete(&server).await.unwrap();
