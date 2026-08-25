@@ -27,14 +27,7 @@ impl BackupFlow for DeleteBackup {
         };
 
         // backup-service is authoritative, deleted first
-        match ctx.service.delete_backup(ctx.sync_factor).await {
-            Ok(()) => crate::info!("delete_backup.deleted"),
-            Err(error) if is_already_gone(&error) => {
-                // Logged as error because this shouldn't happen under normal circumstances
-                crate::error!("delete_backup.raced_with_concurrent_deletion");
-            }
-            Err(error) => return Err(error),
-        }
+        commit(ctx, suborg_id.as_deref()).await?;
 
         if let Some(suborg_id) = suborg_id {
             let cleanup = best_effort_delete_sub_org(
@@ -58,6 +51,59 @@ impl BackupFlow for DeleteBackup {
     }
 }
 
+/// Deletes the backup at the backup service, resolving a lost response rather than
+/// reporting a failure for a delete that landed.
+async fn commit(
+    ctx: &FlowContext<'_>,
+    suborg_id: Option<&str>,
+) -> Result<(), BackupOperationError> {
+    match ctx.service.delete_backup(ctx.sync_factor).await {
+        Ok(()) => {
+            crate::info!("delete_backup.deleted");
+            Ok(())
+        }
+        Err(error) if is_already_gone(&error) => {
+            // Logged as error because this shouldn't happen under normal circumstances
+            crate::error!("delete_backup.raced_with_concurrent_deletion");
+            Ok(())
+        }
+
+        Err(error @ BackupOperationError::Network { retryable: true }) => {
+            if settle_lost_response(ctx, suborg_id).await {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Re-reads the metadata to settle a delete whose response never arrived, returning
+/// whether it in fact committed.
+async fn settle_lost_response(ctx: &FlowContext<'_>, suborg_id: Option<&str>) -> bool {
+    match ctx.service.retrieve_metadata(ctx.sync_factor).await {
+        Err(error) if is_already_gone(&error) => {
+            crate::warn!("delete_backup.commit_confirmed_after_lost_response");
+            true
+        }
+        Ok(_) => {
+            crate::warn!("delete_backup.commit_did_not_land (safe to retry)");
+            false
+        }
+        Err(error) => {
+            if let Some(suborg_id) = suborg_id {
+                crate::critical!(
+                    "delete_backup.outcome_unresolved suborg_id={suborg_id} (delete may have committed) err={error:?}"
+                );
+            } else {
+                crate::warn!("delete_backup.outcome_unresolved err={error:?}");
+            }
+            false
+        }
+    }
+}
+
 /// The sub-organization holding the backup's Turnkey encryption key, if it has one.
 fn turnkey_suborg_id(metadata: &BackupMetadata) -> Option<String> {
     // `None` covers both no Turnkey key and several of them: nothing safe to tear down either way.
@@ -69,14 +115,13 @@ fn turnkey_suborg_id(metadata: &BackupMetadata) -> Option<String> {
     }
 }
 
-/// Whether the rejection means there is no backup left to delete, which is the end
-/// state this flow exists to reach. Reported as success.
 fn is_already_gone(error: &BackupOperationError) -> bool {
     // TODO: migrate to typed errors (from backup-service)
     matches!(error, BackupOperationError::BackupService { code }
         if matches!(
             code.as_str(),
-                "backup_missing"
+                "backup_untraceable"
+                | "backup_missing"
                 | "backup_not_found"
                 | "backup_does_not_exist"
         )
@@ -160,6 +205,19 @@ mod tests {
                 .set_body_json(json!({ "error": { "code": code, "message": "m" } })),
         )
         .await;
+    }
+
+    /// Metadata answers once, then reports the backup gone -- the view a
+    /// reconciliation read gets after a delete that committed.
+    async fn mount_metadata_then_deleted(server: &MockServer, keys: Vec<Value>) {
+        mount_json(server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
+        Mock::given(method("POST"))
+            .and(path(RETRIEVE_META))
+            .respond_with(ResponseTemplate::new(200).set_body_json(metadata(keys)))
+            .up_to_n_times(1)
+            .mount(server)
+            .await;
+        mount_rejection(server, RETRIEVE_META, "backup_untraceable").await;
     }
 
     async fn mount_metadata(server: &MockServer, keys: Vec<Value>) {
@@ -359,5 +417,47 @@ mod tests {
         assert!(called_paths(&server)
             .await
             .contains(&DELETE_SUB_ORG.to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_lost_response_is_settled_as_committed() {
+        let server = MockServer::start().await;
+        mount_metadata_then_deleted(&server, vec![turnkey_key()]).await;
+        mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
+        mount(&server, DELETE_BACKUP, ResponseTemplate::new(503)).await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+        run_delete(&server)
+            .await
+            .expect("a committed delete is a success");
+
+        assert!(
+            called_paths(&server)
+                .await
+                .contains(&DELETE_SUB_ORG.to_string()),
+            "the captured sub-organization must still be reclaimed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delete_that_did_not_land_stays_retryable() {
+        let server = MockServer::start().await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
+        mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
+        mount(&server, DELETE_BACKUP, ResponseTemplate::new(503)).await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+        let error = run_delete(&server).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
+        ));
+        assert!(
+            !called_paths(&server)
+                .await
+                .contains(&DELETE_SUB_ORG.to_string()),
+            "Turnkey must survive a backup that may still exist"
+        );
     }
 }

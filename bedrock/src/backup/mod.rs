@@ -574,8 +574,8 @@ impl BackupManager {
         Ok(outcome)
     }
 
-    /// Deletes the user's entire backup (BF-8). Clears all state with the
-    /// backup-service, Turnkey and local Bedrock state. Idempotent.
+    /// Deletes the user's entire backup (BF-8). Clears state with the backup-service
+    /// (authoritative), then Turnkey (best-effort) and the local Bedrock state. Idempotent.
     ///
     /// # Usage
     /// Generally only used after full World App account deletion is requested. For
