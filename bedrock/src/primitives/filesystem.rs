@@ -11,8 +11,8 @@
 use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use tempfile::NamedTempFile;
 use thiserror::Error;
 
 use crate::primitives::config::get_config;
@@ -145,15 +145,17 @@ fn reject_staging_directory(
     Ok(())
 }
 
-/// Names a staged file uniquely across the processes and threads sharing a data directory.
-fn staged_file_name() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{sequence}.tmp", std::process::id())
+/// Flushes `directory` to ensure the directory tree structure is synced
+fn sync_directory(directory: &Path) -> Result<(), FileSystemError> {
+    File::open(directory)
+        .and_then(|handle| handle.sync_all())
+        .map_err(|error| io_failure("flush destination directory", &error))
 }
 
 /// Writes `contents` to `destination` through a staged file and an atomic rename.
+///
+/// Both the contents and the rename are flushed before returning, so a power loss
+/// afterwards cannot resurrect the previous contents.
 fn write_atomically(
     data_directory: &Path,
     destination: &Path,
@@ -166,30 +168,30 @@ fn write_atomically(
     let staging = data_directory.join(ATOMIC_STAGED_DIRECTORY);
     fs::create_dir_all(&staging)
         .map_err(|error| io_failure("create atomic staged directory", &error))?;
-    let staged = staging.join(staged_file_name());
 
-    let result = (|| {
-        let mut file = File::create(&staged)
-            .map_err(|error| io_failure("create staged file", &error))?;
-        file.write_all(contents)
-            .map_err(|error| io_failure("write staged file", &error))?;
+    // Dropping the staged file deletes it, including while a panic unwinds.
+    let mut staged = NamedTempFile::new_in(&staging)
+        .map_err(|error| io_failure("create staged file", &error))?;
+    staged
+        .write_all(contents)
+        .map_err(|error| io_failure("write staged file", &error))?;
 
-        if let Ok(existing) = fs::metadata(destination) {
-            fs::set_permissions(&staged, existing.permissions())
-                .map_err(|error| io_failure("carry over file permissions", &error))?;
-        }
-
-        file.sync_all()
-            .map_err(|error| io_failure("flush staged file", &error))?;
-        fs::rename(&staged, destination)
-            .map_err(|error| io_failure("commit written file", &error))
-    })();
-
-    if result.is_err() {
-        drop(fs::remove_file(&staged)); // Best effort
+    if let Ok(existing) = fs::metadata(destination) {
+        staged
+            .as_file()
+            .set_permissions(existing.permissions())
+            .map_err(|error| io_failure("carry over file permissions", &error))?;
     }
 
-    result
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(|error| io_failure("flush staged file", &error))?;
+    staged
+        .persist(destination)
+        .map_err(|error| io_failure("commit written file", &error.error))?;
+
+    sync_directory(parent)
 }
 
 /// Filesystem handle scoped to a sub-directory of the data directory.
@@ -549,6 +551,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn test_new_files_are_not_readable_by_other_users() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fs_handle = scoped("fs_new_perms");
+        fs_handle.write_file("fresh.bin", b"payload").unwrap();
+
+        let path = fs_handle.resolve_file("fresh.bin").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
     fn test_prepare_root_creates_the_directory() {
         let root = std::env::temp_dir()
             .join(format!("bedrock-prepare-{}", std::process::id()))
@@ -792,7 +809,7 @@ mod tests {
     #[test]
     fn test_stale_staged_writes_are_cleared() {
         let root = isolated_data_directory("staging-sweep");
-        let orphan = root.join(ATOMIC_STAGED_DIRECTORY).join("99999-0.tmp");
+        let orphan = root.join(ATOMIC_STAGED_DIRECTORY).join(".tmp1a2b3c");
         fs::create_dir_all(orphan.parent().unwrap()).unwrap();
         fs::write(&orphan, b"debris from a process killed mid-write").unwrap();
 
