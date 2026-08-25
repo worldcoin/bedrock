@@ -14,7 +14,7 @@ pub struct DeleteBackup;
 impl BackupFlow for DeleteBackup {
     type Output = ();
 
-    /// Reads the metadata, deletes the backup, then reclaims Turnkey
+    /// Reads the metadata, deletes the backup, then deletes the Turnkey account
     async fn run(&self, ctx: &FlowContext<'_>) -> Result<(), BackupOperationError> {
         let suborg_id = match ctx.service.retrieve_metadata(ctx.sync_factor).await {
             Ok(metadata) => turnkey_suborg_id(&metadata),

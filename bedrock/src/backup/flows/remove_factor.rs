@@ -298,10 +298,7 @@ impl RemoveFactor {
 /// Tears down whatever Turnkey resources the removal orphaned, under its own deadline.
 ///
 /// Best-effort on both counts: the factor is already gone from the authoritative
-/// store, so neither a failure nor a timeout can change what the caller is told. It
-/// carries a deadline anyway so a wedged Turnkey cannot hold a foreground call open,
-/// and reports the orphan at `critical!` because nothing reclaims it yet (TODO in
-/// `turnkey::migrations`).
+/// store, so neither a failure nor a timeout changes the final output.
 async fn best_effort_turnkey_cleanup(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
