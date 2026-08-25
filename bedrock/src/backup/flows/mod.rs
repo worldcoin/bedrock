@@ -3,14 +3,25 @@
 //!
 //! Reference: <https://docs.toolsforhumanity.com/world-app/backup/flows>
 
+mod delete_backup;
 mod remove_factor;
 
+pub use delete_backup::DeleteBackup;
 pub use remove_factor::{RemoveFactor, RemoveFactorOutcome};
 
+use std::time::Duration;
+
 use crate::backup::backup_service::BackupServiceClient;
-use crate::backup::turnkey::TurnkeyApiClient;
-use crate::backup::BackupOperationError;
+use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
+use crate::backup::{BackupOperationError, SyncFactor};
 use crate::primitives::P256Signer;
+
+/// Deadline for a post-commit Turnkey cleanup (best-effort; backup-service is the authority).
+#[cfg(not(test))]
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Same, but for tests.
+#[cfg(test)]
+const CLEANUP_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Shared dependencies handed to every [`BackupFlow`]: the two remote clients and
 /// the caller's signers. Everything is borrowed, so the caller (and tests) own the
@@ -41,4 +52,31 @@ pub trait BackupFlow {
         &self,
         ctx: &FlowContext<'_>,
     ) -> Result<Self::Output, BackupOperationError>;
+}
+
+/// Tears down the Turnkey sub-organization.
+///
+/// Callers bound this with [`CLEANUP_TIMEOUT`] as best-effort because the backup-service
+/// is the authority.
+async fn best_effort_delete_sub_org(
+    flow: &str,
+    turnkey: &TurnkeyApiClient,
+    suborg_id: &str,
+    sync_factor: &P256Signer,
+) {
+    if let Err(error) = turnkey
+        .delete_sub_organization(suborg_id, SyncFactor(sync_factor))
+        .await
+    {
+        if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
+            crate::warn!(
+                "{flow}.turnkey_suborg_teardown_pending suborg_id={suborg_id} err={error}"
+            );
+            return;
+        }
+        crate::critical!(
+            "{flow}.turnkey_suborg_orphaned suborg_id={suborg_id} code={} err={error}",
+            error.code()
+        );
+    }
 }

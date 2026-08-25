@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use wire::{
-    Authorization, ChallengeResponse, DeleteFactorRequest, FactorScope,
-    RetrieveMetadataRequest, ServiceErrorBody,
+    Authorization, ChallengeResponse, DeleteBackupRequest, DeleteFactorRequest,
+    FactorScope, RetrieveMetadataRequest, ServiceErrorBody,
 };
 
 use crate::backup::{BackupOperationError, NeedsReauthReason};
@@ -33,6 +33,8 @@ const ATTESTATION_HEADER: &str = "attestation-token";
 
 const DELETE_FACTOR_CHALLENGE_PATH: &str = "/v1/delete-factor/challenge/keypair";
 const DELETE_FACTOR_PATH: &str = "/v1/delete-factor";
+const DELETE_BACKUP_CHALLENGE_PATH: &str = "/v1/delete-backup/challenge/keypair";
+const DELETE_BACKUP_PATH: &str = "/v1/delete-backup";
 const RETRIEVE_METADATA_CHALLENGE_PATH: &str =
     "/v1/retrieve-metadata/challenge/keypair";
 const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
@@ -43,9 +45,9 @@ const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
 /// feature is supported.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
 
-/// Deadline for fetching a delete-factor challenge. It is retried, so its own budget
-/// is several [`REQUEST_TIMEOUT`]s; it runs before anything is committed, so
-/// cancelling it is safe.
+/// Deadline for fetching the challenge of a destructive operation. It is retried, so
+/// its own budget is several [`REQUEST_TIMEOUT`]s; it runs before anything is
+/// committed, so cancelling it is safe.
 const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Deadline for the foreign attestation callback, which Bedrock cannot otherwise
@@ -201,6 +203,49 @@ impl BackupServiceClient {
             )
             .await?;
         serde_json::from_slice(&bytes).map_err(|error| deserialize_error(&error))
+    }
+
+    /// Deletes the entire backup and all its metadata, authenticated by the sync
+    /// factor.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`] on signing, transport, or backup-service
+    /// failure. A rejection naming a backup this factor cannot reach surfaces as
+    /// [`BackupOperationError::BackupService`] for the caller to classify.
+    pub async fn delete_backup(
+        &self,
+        sync_factor: &P256Signer,
+    ) -> Result<(), BackupOperationError> {
+        let challenge = match tokio::time::timeout(
+            CHALLENGE_TIMEOUT,
+            self.fetch_challenge(DELETE_BACKUP_CHALLENGE_PATH, &json!({})),
+        )
+        .await
+        {
+            Ok(challenge) => challenge?,
+            Err(_elapsed) => {
+                crate::warn!("backup_service.delete_backup.challenge_timed_out");
+                return Err(BackupOperationError::Network { retryable: true });
+            }
+        };
+        let authorization =
+            ec_keypair_authorization(sync_factor, &challenge.challenge)?;
+        let request = DeleteBackupRequest {
+            authorization,
+            challenge_token: challenge.token,
+        };
+        let body =
+            serde_json::to_vec(&request).map_err(|error| serialize_error(&error))?;
+
+        self.post_bytes(
+            "delete_backup",
+            DELETE_BACKUP_PATH,
+            body,
+            &[],
+            false, // Single-use challenge token (no retries)
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Fetches a keypair challenge from `path`. Idempotent, so retried.
@@ -487,6 +532,71 @@ mod tests {
             status_error(StatusCode::NOT_FOUND, b"not json"),
             BackupOperationError::BackupService { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn delete_backup_accepts_an_empty_204_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_CHALLENGE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "challenge": STANDARD.encode([7u8; 32]),
+                "token": "challenge-token",
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_PATH))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = BackupServiceClient::with_base_url_for_test(server.uri()).unwrap();
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+
+        client.delete_backup(&signer).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_backup_is_never_replayed() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_CHALLENGE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "challenge": STANDARD.encode([7u8; 32]),
+                "token": "challenge-token",
+            })))
+            .mount(&server)
+            .await;
+        // A status the challenge fetch *would* retry, to prove the delete does not.
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_PATH))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = BackupServiceClient::with_base_url_for_test(server.uri()).unwrap();
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let error = client.delete_backup(&signer).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
+        ));
+        let deletes = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == DELETE_BACKUP_PATH)
+            .count();
+        assert_eq!(deletes, 1, "the delete must be attempted exactly once");
     }
 
     /// The challenge token is single-use and the delete is not idempotent. Only the

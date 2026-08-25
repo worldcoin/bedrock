@@ -5,24 +5,16 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use super::{BackupFlow, FlowContext};
+use super::{best_effort_delete_sub_org, BackupFlow, FlowContext, CLEANUP_TIMEOUT};
 use crate::backup::backup_service::{
     BackupEncryptionKey, BackupFactorKind, BackupMetadata, DeleteFactorResponse,
 };
-use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
+use crate::backup::turnkey::TurnkeyApiError;
 use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::P256Signer;
 
 /// Deadline for a single Turnkey pre-flight probe
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Deadline for the post-commit Turnkey cleanup. Expiring here orphans a Turnkey
-/// resource but cannot change the outcome, which the service has already applied.
-#[cfg(not(test))]
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
-/// Shortened under test so the expiry path is exercised without a real 10s wait.
-#[cfg(test)]
-const CLEANUP_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// How many times the provider teardown re-reads and resubmits when the identity's
 /// provider set changes underneath it.
@@ -317,8 +309,13 @@ async fn best_effort_turnkey_cleanup(
 ) {
     let cleanup = async {
         if plan.is_last_oidc_factor {
-            best_effort_delete_sub_org(ctx.turnkey, &plan.suborg_id, ctx.sync_factor)
-                .await;
+            best_effort_delete_sub_org(
+                "remove_factor",
+                ctx.turnkey,
+                &plan.suborg_id,
+                ctx.sync_factor,
+            )
+            .await;
         } else if let (Some(main_factor), Some(identity)) =
             (ctx.main_factor, identity.as_ref())
         {
@@ -652,32 +649,6 @@ async fn best_effort_delete_authenticator(
     }
 }
 
-/// Tears down the Turnkey sub-organization; failures are logged (no hard failure)
-async fn best_effort_delete_sub_org(
-    turnkey: &TurnkeyApiClient,
-    suborg_id: &str,
-    sync_factor: &P256Signer,
-) {
-    if let Err(error) = turnkey
-        .delete_sub_organization(suborg_id, SyncFactor(sync_factor))
-        .await
-    {
-        // Still `PENDING` when we stopped polling: may yet complete, so not an orphan.
-        if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
-            crate::warn!(
-                "remove_factor.turnkey_suborg_teardown_pending suborg_id={suborg_id} err={error}"
-            );
-            return;
-        }
-        // `suborg_id` is only in this record now: delete-factor just dropped the
-        // Turnkey key from the metadata that held it.
-        crate::critical!(
-            "remove_factor.turnkey_suborg_orphaned suborg_id={suborg_id} code={} err={error}",
-            error.code()
-        );
-    }
-}
-
 /// Deletes every Turnkey provider backing the removed OIDC identity, **one at a
 /// time** so an already-absent audience doesn't block the rest.
 ///
@@ -831,6 +802,7 @@ mod tests {
     use super::*;
     use crate::backup::backup_service::BackupServiceClient;
     use crate::backup::turnkey::test::TestSigner;
+    use crate::backup::turnkey::TurnkeyApiClient;
     use crate::primitives::set_attestation_token_provider;
     use crate::primitives::AttestationTokenProvider;
     use crate::HttpError;

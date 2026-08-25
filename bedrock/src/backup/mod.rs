@@ -53,7 +53,7 @@ use std::str::FromStr;
 use once_cell::sync::OnceCell;
 
 use crate::backup::backup_service::BackupServiceClient;
-use crate::backup::flows::{BackupFlow, FlowContext, RemoveFactor};
+use crate::backup::flows::{BackupFlow, DeleteBackup, FlowContext, RemoveFactor};
 use crate::backup::turnkey::TurnkeyApiClient;
 use crate::primitives::config::get_config;
 use crate::primitives::{KeypairSignerError, P256Signer};
@@ -569,13 +569,41 @@ impl BackupManager {
         let outcome = result?;
 
         if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
-            if let Err(error) = Self::post_delete_backup() {
-                crate::critical!(
-                    "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
-                );
-            }
+            Self::post_delete_backup("remove_factor");
         }
         Ok(outcome)
+    }
+
+    /// Deletes the user's entire backup (BF-8). Clears all state with the
+    /// backup-service, Turnkey and local Bedrock state. Idempotent.
+    ///
+    /// # Usage
+    /// Generally only used after full World App account deletion is requested. For
+    /// business-as-usual operations, [`Self::remove_factor`] is used.
+    ///
+    /// # Native responsibilities
+    /// 1. Delete the [`SyncFactor`] stored locally.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`] for processing errors. May return
+    /// [`BackupOperationError::NeedsReauth`] if the [`SyncFactor`] is no longer authorized.
+    pub async fn delete_backup(
+        &self,
+        sync_factor: &P256Signer,
+    ) -> Result<(), BackupOperationError> {
+        let service = self.service()?;
+        let turnkey = TurnkeyApiClient::new();
+        let ctx = FlowContext {
+            service,
+            turnkey: &turnkey,
+            sync_factor,
+            main_factor: None,
+        };
+
+        DeleteBackup.run(&ctx).await?;
+
+        Self::post_delete_backup("delete_backup");
+        Ok(())
     }
 
     /// Retrieves the user's current backup metadata.
@@ -617,12 +645,12 @@ pub struct ManifestDebug {
 
 /// Internal helpers (not exported)
 impl BackupManager {
-    /// Clears the local state after a backup deletion: the manifest file
-    /// and the backup base report
+    /// Clears the local state after a backup deletion: the manifest file and the
+    /// backup base report.
     ///
-    /// # Errors
-    /// - Returns an error if the post-processing fails.
-    fn post_delete_backup() -> Result<(), BackupError> {
+    /// Infallible by design. Every caller reaches here only once the backup is gone
+    /// remotely, so there is nothing left to abort.
+    fn post_delete_backup(flow: &str) {
         crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
 
         let manifest = match ManifestManager::new().danger_delete_manifest() {
@@ -636,8 +664,16 @@ impl BackupManager {
             crate::warn!("[ClientEvents] failed to delete base report: {error:?}");
         }
 
-        manifest?;
-        report.map_err(Into::into)
+        if let Err(error) = manifest {
+            crate::critical!(
+                "{flow}.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
+            );
+        }
+        if let Err(error) = report {
+            crate::critical!(
+                "{flow}.post_delete_report_cleanup_failed (backup is deleted remotely; base report is stale) err={error:?}"
+            );
+        }
     }
 
     fn service(&self) -> Result<&BackupServiceClient, BackupOperationError> {

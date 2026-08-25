@@ -225,6 +225,16 @@ pub(super) struct DeleteFactorRequest {
     pub scope: FactorScope,
 }
 
+/// Request body for `POST /v1/delete-backup`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DeleteBackupRequest {
+    /// Sync-factor authorization over the delete-backup challenge.
+    pub authorization: Authorization,
+    /// The delete-backup challenge token.
+    pub challenge_token: String,
+}
+
 /// Request body for `POST /v1/retrieve-metadata`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
