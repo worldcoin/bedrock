@@ -83,23 +83,12 @@ impl V0Backup {
         Self { root_secret, files }
     }
 
-    /// Check if the backup has the correct tag for this version of the backup format.
-    /// Returns Ok(true) if the correct version tag is present, Ok(false) otherwise.
-    /// Returns an error if there are I/O or parsing errors when reading entries.
-    ///
-    /// # Errors
-    /// * If the archive decompresses to more than [`MAX_DECOMPRESSED_BYTES`],
-    ///   `BackupError::BackupTooLargeError` is returned.
-    pub fn peek_version(bytes: &[u8]) -> Result<bool, BackupError> {
-        let mut archive = bounded_archive(bytes);
-        let result = read_version_tag(&mut archive);
-        archive.into_inner().map_limit_error(result)
-    }
-
     /// Deserialize the `BackupFormat` from unencrypted bytes.
     ///
     /// # Errors
     /// * If the archive cannot be decompressed or read, `BackupError::IoError` is returned.
+    /// * If the version tag is absent or belongs to another format,
+    ///   `BackupError::VersionNotDetectedError` is returned.
     /// * If the file name cannot be read, `BackupError::ReadFileNameError` is returned.
     /// * If a file cannot be decoded from CBOR, `BackupError::DecodeBackupFileError` is returned.
     /// * If a file checksum does not match, `BackupError::InvalidChecksumError` is returned.
@@ -194,30 +183,12 @@ fn bounded_archive(bytes: &[u8]) -> Archive<BoundedReader<GzDecoder<Cursor<&[u8]
     Archive::new(BoundedReader::new(GzDecoder::new(Cursor::new(bytes))))
 }
 
-/// Scans the archive for the version tag, returning whether it marks this backup version.
-fn read_version_tag<R: Read>(archive: &mut Archive<R>) -> Result<bool, BackupError> {
-    let mut budget = EntryBudget::new();
-
-    for entry in archive.entries()? {
-        let mut file = entry?;
-        let path = file.path()?;
-        let path = path
-            .to_str()
-            .ok_or(BackupError::ReadFileNameError)?
-            .to_string();
-        // If the version tag is present, check if it has the correct value
-        if path == VERSION_TAG {
-            let declared_size = file.size();
-            return Ok(budget.read_entry(&mut file, declared_size)? == [0]);
-        }
-    }
-    Ok(false)
-}
-
-/// Reads the root secret JSON and every backup file out of the archive.
+/// Reads the version tag, the root secret JSON and every backup file out of the archive in a
+/// single pass.
 fn read_entries<R: Read>(
     archive: &mut Archive<R>,
 ) -> Result<(String, Vec<V0BackupFile>), BackupError> {
+    let mut version_tagged = false;
     let mut root_secret = String::new();
     let mut files = Vec::new();
     let mut budget = EntryBudget::new();
@@ -231,15 +202,18 @@ fn read_entries<R: Read>(
             .to_string();
         let declared_size = file.size();
 
-        if path == ROOT_SECRET_FILE {
+        if path == VERSION_TAG {
+            if budget.read_entry(&mut file, declared_size)? != [0] {
+                return Err(BackupError::VersionNotDetectedError);
+            }
+            version_tagged = true;
+        } else if path == ROOT_SECRET_FILE {
             let bytes = budget.read_entry(&mut file, declared_size)?;
             root_secret = String::from_utf8(bytes).map_err(|_| {
                 BackupError::IoError(
                     "root secret in backup is not valid UTF-8".to_string(),
                 )
             })?;
-        } else if path == VERSION_TAG {
-            // Skip the version tag file, it should be checked by .peek_version
         } else {
             let data = budget.read_entry(&mut file, declared_size)?;
 
@@ -256,6 +230,10 @@ fn read_entries<R: Read>(
 
             files.push(file);
         }
+    }
+
+    if !version_tagged {
+        return Err(BackupError::VersionNotDetectedError);
     }
 
     Ok((root_secret, files))
@@ -449,9 +427,6 @@ mod tests {
         );
         assert_eq!(deserialized_backup.files, files);
 
-        // Check if the version tag is present
-        assert!(V0Backup::peek_version(&bytes).unwrap());
-
         // Test with v1 key
         let v1_root_secret = RootKey::new_random();
         let v1_root_secret_json = v1_root_secret.danger_to_json().unwrap();
@@ -463,7 +438,6 @@ mod tests {
             v1_root_secret_json
         );
         assert_eq!(v1_deserialized_backup.files, vec![]);
-        assert!(V0Backup::peek_version(&v1_bytes).unwrap());
     }
 
     #[test]
@@ -481,7 +455,6 @@ mod tests {
             "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
         );
         assert_eq!(deserialized_backup.files, files);
-        assert!(V0Backup::peek_version(&bytes).unwrap());
     }
 
     #[test]
@@ -546,7 +519,10 @@ mod tests {
         let encoder = archive.into_inner().unwrap();
         encoder.finish().unwrap();
 
-        assert!(!V0Backup::peek_version(&result).unwrap());
+        assert_eq!(
+            V0Backup::from_bytes(&result).unwrap_err().to_string(),
+            "Backup version is not detected"
+        );
     }
 
     #[test]
@@ -555,13 +531,22 @@ mod tests {
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
         let mut archive = Builder::new(gz_builder);
 
-        write_to_archive(&mut archive, "file.txt", b"Hello").unwrap();
+        write_to_archive(
+            &mut archive,
+            ROOT_SECRET_FILE,
+            "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
+                .as_bytes(),
+        )
+        .unwrap();
 
         archive.finish().unwrap();
         let encoder = archive.into_inner().unwrap();
         encoder.finish().unwrap();
 
-        assert!(!V0Backup::peek_version(&result).unwrap());
+        assert_eq!(
+            V0Backup::from_bytes(&result).unwrap_err().to_string(),
+            "Backup version is not detected"
+        );
     }
 
     /// Creates a file that is not actually valid CBOR.
@@ -683,17 +668,18 @@ mod tests {
         );
     }
 
-    /// Builds an archive whose entries expand past the decompression cap. The bomb is placed
-    /// before the version tag so both read paths have to walk through it.
-    fn decompression_bomb() -> Vec<u8> {
+    /// Builds an archive whose entries expand past the decompression cap.
+    fn decompression_bomb(version_tagged: bool) -> Vec<u8> {
         let oversized = vec![0u8; usize::try_from(MAX_DECOMPRESSED_BYTES).unwrap() + 1];
 
         let mut result = Vec::new();
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
         let mut archive = Builder::new(gz_builder);
 
+        if version_tagged {
+            write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
+        }
         write_to_archive(&mut archive, "bomb.bin", &oversized).unwrap();
-        write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
 
         archive.finish().unwrap();
         let encoder = archive.into_inner().unwrap();
@@ -703,21 +689,23 @@ mod tests {
     }
 
     #[test]
-    fn test_peek_version_rejects_decompression_bomb() {
-        let bomb = decompression_bomb();
+    fn test_from_bytes_rejects_decompression_bomb() {
+        let bomb = decompression_bomb(true);
         // The archive itself has to stay small, or it is not a bomb.
         assert!(bomb.len() < 1024 * 1024);
 
         assert_eq!(
-            V0Backup::peek_version(&bomb).unwrap_err().to_string(),
+            V0Backup::from_bytes(&bomb).unwrap_err().to_string(),
             "Backup archive exceeds the maximum size"
         );
     }
 
+    /// The cap cannot depend on the version tag: the archive controls it, so an unmarked
+    /// archive has to hit the ceiling rather than the version check.
     #[test]
-    fn test_from_bytes_rejects_decompression_bomb() {
+    fn test_from_bytes_rejects_unmarked_decompression_bomb() {
         assert_eq!(
-            V0Backup::from_bytes(&decompression_bomb())
+            V0Backup::from_bytes(&decompression_bomb(false))
                 .unwrap_err()
                 .to_string(),
             "Backup archive exceeds the maximum size"
@@ -791,9 +779,9 @@ mod tests {
     }
 
     #[test]
-    fn test_peek_version_rejects_sparse_bomb() {
+    fn test_from_bytes_rejects_sparse_version_tag() {
         assert_eq!(
-            V0Backup::peek_version(&sparse_bomb(VERSION_TAG))
+            V0Backup::from_bytes(&sparse_bomb(VERSION_TAG))
                 .unwrap_err()
                 .to_string(),
             "Backup archive exceeds the maximum size"
