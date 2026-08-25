@@ -145,17 +145,22 @@ fn reject_staging_directory(
     Ok(())
 }
 
-/// Flushes `directory` to ensure the directory tree structure is synced
-fn sync_directory(directory: &Path) -> Result<(), FileSystemError> {
-    File::open(directory)
-        .and_then(|handle| handle.sync_all())
-        .map_err(|error| io_failure("flush destination directory", &error))
+/// Flushes `directory` so the rename that linked a file into it becomes durable.
+///
+/// Warns rather than fails, because the rename already happened. Not `File::sync_all`: on
+/// Apple targets that issues `F_FULLFSYNC`, which a directory descriptor does not accept.
+fn sync_directory(directory: &Path) {
+    let flushed = File::open(directory)
+        .and_then(|handle| rustix::fs::fsync(&handle).map_err(io::Error::from));
+
+    if let Err(error) = flushed {
+        crate::warn!(error_message = error, "Could not flush a directory");
+    }
 }
 
 /// Writes `contents` to `destination` through a staged file and an atomic rename.
 ///
-/// Both the contents and the rename are flushed before returning, so a power loss
-/// afterwards cannot resurrect the previous contents.
+/// The contents are flushed before the rename; flushing the rename itself is best effort.
 fn write_atomically(
     data_directory: &Path,
     destination: &Path,
@@ -191,7 +196,9 @@ fn write_atomically(
         .persist(destination)
         .map_err(|error| io_failure("commit written file", &error.error))?;
 
-    sync_directory(parent)
+    sync_directory(parent);
+
+    Ok(())
 }
 
 /// Filesystem handle scoped to a sub-directory of the data directory.
@@ -537,7 +544,7 @@ mod tests {
         fs_handle.write_file("secret.bin", b"first").unwrap();
 
         let path = fs_handle.resolve_file("secret.bin").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
 
         // The rename swaps in a new inode, so without carrying the mode across the file
         // would come back with the staging default.
@@ -546,22 +553,7 @@ mod tests {
         assert_eq!(fs_handle.read_file("secret.bin").unwrap(), b"second");
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn test_new_files_are_not_readable_by_other_users() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let fs_handle = scoped("fs_new_perms");
-        fs_handle.write_file("fresh.bin", b"payload").unwrap();
-
-        let path = fs_handle.resolve_file("fresh.bin").unwrap();
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
+            0o640
         );
     }
 

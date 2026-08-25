@@ -72,6 +72,7 @@ reqwest = { version = "0.13", default-features = false, features = [
   "http2",
 ] }
 ruint = { version = "1.20.0", default-features = false, features = ["serde"] }
+rustix = { version = "1.1.4", features = ["fs"] }
 rustls = "0.23" # used for Android (see primitives/tls.rs)
 webpki-roots = "1" # used for Android (see primitives/tls.rs)
 secrecy = { version = "0.10", features = ["serde"] }

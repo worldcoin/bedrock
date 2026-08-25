@@ -1728,6 +1728,7 @@ dependencies = [
  "rand 0.8.6",
  "reqwest 0.13.2",
  "ruint",
+ "rustix",
  "rustls",
  "secrecy",
  "serde",
