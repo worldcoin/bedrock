@@ -592,6 +592,29 @@ impl BackupManager {
     ) -> Result<BackupMetadata, BackupOperationError> {
         self.service()?.retrieve_metadata(sync_factor).await
     }
+
+    /// Clears the local state after a backup deletion: the manifest file
+    /// and the backup base report
+    ///
+    /// # Errors
+    /// - Returns an error if the post-processing fails.
+    fn post_delete_backup() -> Result<(), BackupError> {
+        crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
+
+        let manifest = match ManifestManager::new().danger_delete_manifest() {
+            Ok(())
+            | Err(BackupError::FileSystem(FileSystemError::FileDoesNotExist)) => Ok(()),
+            Err(error) => Err(error),
+        };
+
+        let report = ClientEventsReporter::new().delete_base_report();
+        if let Err(error) = &report {
+            crate::warn!("[ClientEvents] failed to delete base report: {error:?}");
+        }
+
+        manifest?;
+        report.map_err(Into::into)
+    }
 }
 
 /// A **Sync Factor** signer, has only read permissions and specific delete permissions.
@@ -617,29 +640,6 @@ pub struct ManifestDebug {
 
 /// Internal helpers (not exported)
 impl BackupManager {
-    /// Clears the local state after a backup deletion: the manifest file
-    /// and the backup base report
-    ///
-    /// # Errors
-    /// - Returns an error if the post-processing fails.
-    fn post_delete_backup() -> Result<(), BackupError> {
-        crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
-
-        let manifest = match ManifestManager::new().danger_delete_manifest() {
-            Ok(())
-            | Err(BackupError::FileSystem(FileSystemError::FileDoesNotExist)) => Ok(()),
-            Err(error) => Err(error),
-        };
-
-        let report = ClientEventsReporter::new().delete_base_report();
-        if let Err(error) = &report {
-            crate::warn!("[ClientEvents] failed to delete base report: {error:?}");
-        }
-
-        manifest?;
-        report.map_err(Into::into)
-    }
-
     fn service(&self) -> Result<&BackupServiceClient, BackupOperationError> {
         self.backup_service.get_or_try_init(|| {
             let config = get_config().ok_or_else(|| {
