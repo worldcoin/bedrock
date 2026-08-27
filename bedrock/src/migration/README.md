@@ -78,7 +78,6 @@ Two independent caps, because retrying forever burns sponsored gas.
 
 ## Notes
 
-- **Duplicate submissions are expected.** If the chain says work is outstanding, it is re-submitted, even with a transaction legitimately in flight. The nonce is read fresh, so an unmined predecessor means an unchanged nonce and only one can land.
 - **Never-needed migrations are cached.** `NotStarted` + not applicable is recorded as `Succeeded` so `recheck_at` becomes the only trigger; otherwise it would cost an RPC read on every launch forever. It is reported as `skipped`, since nothing executed.
 - **Succeeded is re-verified on a TTL.** A migration that regresses (e.g. a USDC allowance spent down) is caught and re-run.
 - **`pending_user_op_hash` is written, never read for control flow.** It exists so a retry can be traced back to the submission it supersedes.
