@@ -8,6 +8,7 @@
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -29,7 +30,7 @@ use turnkey_client::{RetryConfig, TurnkeyClient};
 
 use crate::backup::{MainFactor, SyncFactor};
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::retry::{retry_with_backoff, RetryPolicy};
+use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 
 use super::error::TurnkeyApiError;
@@ -220,6 +221,31 @@ impl TurnkeyApiClient {
     {
         retry_with_backoff(&self.retry, operation, TurnkeyApiError::is_retryable, op)
             .await
+            .map_err(|e| match e {
+                RetryError::Operation(e) => e,
+                RetryError::Timeout => TurnkeyApiError::Timeout,
+            })
+    }
+
+    /// Runs `op`, retrying transient failures with bounded backoff and jitter. Binds the
+    /// entire `op` (including retries) in a total timeout.
+    async fn with_retry_and_timeout<T, Fut>(
+        &self,
+        operation: &str,
+        total_timeout: Duration,
+        op: impl FnMut() -> Fut + Send,
+    ) -> Result<T, TurnkeyApiError>
+    where
+        Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
+    {
+        let mut policy = self.retry.clone();
+        policy.total_timeout = total_timeout;
+        retry_with_backoff(&policy, operation, TurnkeyApiError::is_retryable, op)
+            .await
+            .map_err(|e| match e {
+                RetryError::Operation(e) => e,
+                RetryError::Timeout => TurnkeyApiError::Timeout,
+            })
     }
 }
 
@@ -499,8 +525,14 @@ impl TurnkeyApiClient {
             delete_without_export: Some(true),
         };
 
+        #[cfg(not(test))]
+        let timeout = Duration::from_secs(10);
+
+        #[cfg(test)]
+        let timeout = Duration::from_millis(200);
+
         let timestamp_ms = ntp_timestamp_ms()?;
-        self.with_retry("delete_sub_organization", || async {
+        self.with_retry_and_timeout("delete_sub_organization", timeout, || async {
             client
                 .delete_sub_organization(
                     suborganization_id.to_string(),

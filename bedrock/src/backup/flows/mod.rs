@@ -9,19 +9,10 @@ mod remove_factor;
 pub use delete_backup::DeleteBackup;
 pub use remove_factor::{RemoveFactor, RemoveFactorOutcome};
 
-use std::time::Duration;
-
 use crate::backup::backup_service::BackupServiceClient;
 use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::backup::{BackupOperationError, SyncFactor};
 use crate::primitives::P256Signer;
-
-/// Deadline for a post-commit Turnkey cleanup (best-effort; backup-service is the authority).
-#[cfg(not(test))]
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
-/// Same, but for tests.
-#[cfg(test)]
-const CLEANUP_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Shared dependencies handed to every [`BackupFlow`]: the two remote clients and
 /// the caller's signers. Everything is borrowed, so the caller (and tests) own the
@@ -36,6 +27,8 @@ pub struct FlowContext<'a> {
     pub sync_factor: &'a P256Signer,
     /// An optional main-factor signer for privileged Turnkey writes.
     pub main_factor: Option<&'a P256Signer>,
+    /// The backup every metadata read in the flow is qualified with.
+    pub backup_id: &'a str,
 }
 
 /// A high-level backup operation (e.g. "Add a Main Factor", "Remove a Main Factor").
@@ -55,9 +48,6 @@ pub trait BackupFlow {
 }
 
 /// Tears down the Turnkey sub-organization.
-///
-/// Callers bound this with [`CLEANUP_TIMEOUT`] as best-effort because the backup-service
-/// is the authority.
 async fn best_effort_delete_sub_org(
     flow: &str,
     turnkey: &TurnkeyApiClient,

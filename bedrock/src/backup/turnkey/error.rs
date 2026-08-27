@@ -7,7 +7,7 @@ use turnkey_client::TurnkeyClientError;
 /// and structured logging; never returned across the FFI boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum TurnkeyApiError {
-    /// The request timed out.
+    /// The total operation timed out (including retries). Terminal.
     #[error("Turnkey request timed out")]
     Timeout,
     /// Turnkey rate-limited the request (HTTP 429).
