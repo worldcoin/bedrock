@@ -137,6 +137,25 @@ impl BackupMetadata {
             .count()
     }
 
+    /// Every Turnkey sub-organization the backup's encryption keys point at,
+    /// deduplicated
+    pub(in crate::backup) fn turnkey_suborg_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .keys
+            .iter()
+            .filter_map(|key| match key {
+                BackupEncryptionKey::Turnkey {
+                    turnkey_account_id, ..
+                } => Some(turnkey_account_id.clone()),
+                BackupEncryptionKey::Prf { .. }
+                | BackupEncryptionKey::Icloud { .. } => None,
+            })
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     /// The Turnkey encryption key, or `None` unless there is exactly one.
     ///
     /// More than one means the metadata cannot say which sub-organization a removal
@@ -243,12 +262,12 @@ pub(super) struct RetrieveMetadataRequest {
     pub authorization: Authorization,
     /// The retrieve-metadata challenge token.
     pub challenge_token: String,
-    /// The backup the caller expects to resolve. Optional, and sending it is what
-    /// makes an absence trustworthy: without it the service reports
-    /// `backup_untraceable` both for "no backup maps to this factor" and for "this
-    /// device was revoked and the backup lives on".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub backup_id: Option<String>,
+    /// The backup the caller expects to resolve, always sent.
+    ///
+    /// It buys sharper errors: the service can answer `backup_does_not_exist` versus
+    /// `unauthorized_factor` instead of collapsing "the backup is gone" and "this
+    /// device was revoked while the backup lives on" into one `backup_untraceable`.
+    pub backup_id: String,
 }
 
 /// Response body for the keypair challenge endpoints.

@@ -544,6 +544,7 @@ impl BackupManager {
         main_factor: Option<Arc<P256Signer>>,
         factor_id: String,
         user_confirmed_backup_removal: bool,
+        backup_id: String,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
         let service = self.service()?;
         let turnkey = TurnkeyApiClient::new();
@@ -552,6 +553,7 @@ impl BackupManager {
             turnkey: &turnkey,
             sync_factor,
             main_factor: main_factor.as_deref(),
+            backup_id: &backup_id,
         };
         let flow = RemoveFactor {
             factor_id,
@@ -575,7 +577,10 @@ impl BackupManager {
     }
 
     /// Deletes the user's entire backup (BF-8). Clears state with the backup-service
-    /// (authoritative), then Turnkey (best-effort) and the local Bedrock state. Idempotent.
+    /// (authoritative), then Turnkey (best-effort) and the local Bedrock state.
+    ///
+    /// NOT idempotent across calls, once a backup has been removed from the backup-service,
+    /// that's the end (the backup-service) is the source of truth.
     ///
     /// # Usage
     /// Generally only used after full World App account deletion is requested. For
@@ -590,6 +595,7 @@ impl BackupManager {
     pub async fn delete_backup(
         &self,
         sync_factor: &P256Signer,
+        backup_id: String,
     ) -> Result<(), BackupOperationError> {
         let service = self.service()?;
         let turnkey = TurnkeyApiClient::new();
@@ -598,6 +604,7 @@ impl BackupManager {
             turnkey: &turnkey,
             sync_factor,
             main_factor: None,
+            backup_id: &backup_id,
         };
 
         DeleteBackup.run(&ctx).await?;
@@ -617,8 +624,11 @@ impl BackupManager {
     pub async fn retrieve_metadata(
         &self,
         sync_factor: &P256Signer,
+        backup_id: String,
     ) -> Result<BackupMetadata, BackupOperationError> {
-        self.service()?.retrieve_metadata(sync_factor).await
+        self.service()?
+            .retrieve_metadata(sync_factor, &backup_id)
+            .await
     }
 }
 
@@ -660,9 +670,6 @@ impl BackupManager {
         };
 
         let report = ClientEventsReporter::new().delete_base_report();
-        if let Err(error) = &report {
-            crate::warn!("[ClientEvents] failed to delete base report: {error:?}");
-        }
 
         if let Err(error) = manifest {
             crate::critical!(
