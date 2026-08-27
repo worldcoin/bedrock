@@ -243,6 +243,12 @@ pub(super) struct RetrieveMetadataRequest {
     pub authorization: Authorization,
     /// The retrieve-metadata challenge token.
     pub challenge_token: String,
+    /// The backup the caller expects to resolve. Optional, and sending it is what
+    /// makes an absence trustworthy: without it the service reports
+    /// `backup_untraceable` both for "no backup maps to this factor" and for "this
+    /// device was revoked and the backup lives on".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_id: Option<String>,
 }
 
 /// Response body for the keypair challenge endpoints.

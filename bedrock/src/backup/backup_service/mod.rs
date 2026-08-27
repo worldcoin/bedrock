@@ -107,6 +107,38 @@ impl BackupServiceClient {
         &self,
         sync_factor: &P256Signer,
     ) -> Result<BackupMetadata, BackupOperationError> {
+        self.read_metadata(sync_factor, None).await
+    }
+
+    /// Whether the backup actually exists on the backup-service based on the `backup_id`. This
+    /// method particularly disambiguates between the Sync Factor being unauthorized and the backup
+    /// not existing.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`] when the answer is inconclusive
+    pub async fn backup_exists(
+        &self,
+        sync_factor: &P256Signer,
+        backup_id: &str,
+    ) -> Result<bool, BackupOperationError> {
+        match self.read_metadata(sync_factor, Some(backup_id)).await {
+            Err(BackupOperationError::BackupService { code })
+                if code == "backup_does_not_exist" || code == "backup_missing" =>
+            {
+                Ok(false)
+            }
+            // A successful read proves existence, and so does `unauthorized_factor`
+            Ok(_) | Err(BackupOperationError::NeedsReauth { .. }) => Ok(true),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Reads the metadata, optionally asserting which backup it must resolve to.
+    async fn read_metadata(
+        &self,
+        sync_factor: &P256Signer,
+        backup_id: Option<&str>,
+    ) -> Result<BackupMetadata, BackupOperationError> {
         let challenge = self
             .fetch_challenge(RETRIEVE_METADATA_CHALLENGE_PATH, &json!({}))
             .await?;
@@ -115,6 +147,7 @@ impl BackupServiceClient {
         let request = RetrieveMetadataRequest {
             authorization,
             challenge_token: challenge.token,
+            backup_id: backup_id.map(ToString::to_string),
         };
         let body =
             serde_json::to_vec(&request).map_err(|error| serialize_error(&error))?;
