@@ -1,3 +1,4 @@
+use bedrock::primitives::key_value_store::InMemoryDeviceKeyValueStore;
 use std::sync::Arc;
 
 mod common;
@@ -73,7 +74,10 @@ async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
         owner_key_hex,
         &safe_address.to_string(),
     )?);
-    let processor = Safe4337ModuleProcessor::new(safe_account);
+    let processor = Safe4337ModuleProcessor::new(
+        safe_account,
+        Arc::new(InMemoryDeviceKeyValueStore::new()),
+    );
 
     assert_eq!(
         processor.migration_id(),

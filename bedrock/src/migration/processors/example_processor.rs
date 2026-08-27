@@ -1,8 +1,6 @@
 use crate::info;
 use crate::migration::error::MigrationError;
-use crate::migration::processor::{
-    MigrationProcessor, PendingWorkStatus, ProcessorResult,
-};
+use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use async_trait::async_trait;
 
 /// Example processor skeleton showing how to implement a migration
@@ -116,15 +114,5 @@ impl MigrationProcessor for ExampleProcessor {
         // }
 
         Ok(ProcessorResult::Success)
-    }
-
-    async fn check_pending_work(
-        &self,
-        _user_op_hash: String,
-    ) -> Result<PendingWorkStatus, MigrationError> {
-        // This processor never returns ProcessorResult::Pending, so there is no
-        // submitted work to resolve. Unknown falls back to the is_applicable
-        // end-state recheck.
-        Ok(PendingWorkStatus::Unknown)
     }
 }

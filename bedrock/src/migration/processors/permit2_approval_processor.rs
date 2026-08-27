@@ -5,9 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::migration::error::MigrationError;
-use crate::migration::processor::{
-    MigrationProcessor, PendingWorkStatus, ProcessorResult,
-};
+use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::primitives::Network;
 use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
 use crate::transactions::contracts::erc20::Erc20;
@@ -128,10 +126,9 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
         let batch = BatchPermit2Approval::new(&addresses);
 
         // Fire-and-forget: submit the userOp and return Pending without waiting
-        // for it to be mined. The userOp hash is persisted on the migration record;
-        // on the next run the controller resolves it via check_pending_work (skip
-        // while still mining, surface MINED_REVERT on revert) and re-checks
-        // on-chain allowances via is_applicable to promote to Succeeded.
+        // for it to be mined. The hash is persisted for diagnostics only; the next
+        // run re-reads on-chain allowances via is_applicable, which promotes to
+        // Succeeded if they landed and re-submits if they did not.
         match batch
             .sign_and_execute(
                 &self.safe_account,
@@ -156,31 +153,6 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
                     "Failed to submit batched ERC20 approvals to Permit2: {e}"
                 ),
             }),
-        }
-    }
-
-    async fn check_pending_work(
-        &self,
-        user_op_hash: String,
-    ) -> Result<PendingWorkStatus, MigrationError> {
-        let rpc_client = get_rpc_client()
-            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-
-        let response = rpc_client
-            .wa_get_user_operation_receipt(Network::WorldChain, &user_op_hash)
-            .await
-            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-
-        match response.status.as_str() {
-            "mined_success" => {
-                info!(
-                    "Permit2 approval userOp {user_op_hash} mined successfully, txHash: {:?}",
-                    response.transaction_hash
-                );
-                Ok(PendingWorkStatus::Mined)
-            }
-            "mined_revert" | "error" => Ok(PendingWorkStatus::Reverted),
-            _ => Ok(PendingWorkStatus::StillPending),
         }
     }
 }

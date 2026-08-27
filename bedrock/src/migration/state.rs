@@ -46,16 +46,12 @@ pub struct MigrationRecord {
     /// Set to `now + TTL` on success/re-check.
     pub recheck_at: Option<DateTime<Utc>>,
 
-    /// Reference to outstanding fire-and-forget work (e.g. a userOp hash) from the
-    /// most recent `Pending` execution. Checked via
-    /// `MigrationProcessor::check_pending_work` on the next run and cleared once
-    /// the work is resolved (mined, reverted, or superseded by a new attempt).
+    /// userOp from the most recent `Pending` execution. Diagnostics only.
     #[serde(default)]
     pub pending_user_op_hash: Option<String>,
 
-    /// Number of fire-and-forget submissions that reverted on-chain. Reset on
-    /// success; when it reaches the controller's cap the migration is marked
-    /// `FailedTerminal` instead of resubmitting indefinitely.
-    #[serde(default)]
-    pub revert_count: i32,
+    /// Submissions that mined but left the end state unmet. Unmined ops and
+    /// submission failures are excluded, so infra trouble never goes terminal.
+    #[serde(default, alias = "revert_count")]
+    pub failed_landings: i32,
 }

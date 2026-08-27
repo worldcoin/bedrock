@@ -15,8 +15,7 @@ use common::{deploy_safe, setup_anvil, IERC20};
 use bedrock::{
     migration::{
         processors::permit2_approval_processor::Permit2ApprovalProcessor,
-        MigrationController, MigrationProcessor, MigrationStatus, PendingWorkStatus,
-        ProcessorResult,
+        MigrationController, MigrationProcessor, MigrationStatus, ProcessorResult,
     },
     primitives::{
         http_client::set_http_client, key_value_store::InMemoryDeviceKeyValueStore,
@@ -99,14 +98,9 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
         other => panic!("Expected ProcessorResult::Pending, got {other:?}"),
     };
 
-    // 9b) The submitted userOp must be resolvable via check_pending_work
-    // (the anvil mock mines synchronously, so it reports Mined here).
-    let pending_status = processor.check_pending_work(user_op_hash).await?;
-    assert_eq!(
-        pending_status,
-        PendingWorkStatus::Mined,
-        "Expected the submitted userOp to be mined"
-    );
+    // 9b) The hash is only an artifact of the submission; whether the work landed
+    // is proven by the on-chain allowance assertions below, not by a receipt.
+    assert!(!user_op_hash.is_empty(), "Pending must carry a userOp hash");
 
     // 10) Verify on-chain: all tokens should now have max allowance to Permit2
     let tokens: [(alloy::primitives::Address, &str); 4] = [
@@ -153,7 +147,9 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
     let controller = MigrationController::with_processors(
         kv_store,
-        vec![Arc::new(Permit2ApprovalProcessor::new(safe_account.clone()))],
+        vec![Arc::new(Permit2ApprovalProcessor::new(
+            safe_account.clone(),
+        ))],
     );
 
     // 13) Snapshot right before submitting so we can simulate the submitted
@@ -164,7 +160,10 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     // 14) First controller run: submits fire-and-forget and stays InProgress
     //     with the userOp hash persisted on the record.
     let summary = controller.run_migrations().await?;
-    assert_eq!(summary.pending, 1, "first run should submit and stay pending");
+    assert_eq!(
+        summary.pending, 1,
+        "first run should submit and stay pending"
+    );
     let record = &controller.list_all_records()?[0];
     assert!(matches!(record.status, MigrationStatus::InProgress));
     assert!(
@@ -199,7 +198,10 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     // 17) Third controller run: the resubmitted approvals landed, so the
     //     migration is promoted to Succeeded via the is_applicable recheck.
     let summary = controller.run_migrations().await?;
-    assert_eq!(summary.succeeded, 1, "third run should promote to Succeeded");
+    assert_eq!(
+        summary.succeeded, 1,
+        "third run should promote to Succeeded"
+    );
     let record = &controller.list_all_records()?[0];
     assert!(matches!(record.status, MigrationStatus::Succeeded));
     assert!(record.pending_user_op_hash.is_none());

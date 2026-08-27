@@ -9,6 +9,7 @@ use async_trait::async_trait;
 
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::primitives::Network;
 use crate::smart_account::{SafeOperation, SafeSmartAccount, SafeTransaction};
 use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
@@ -18,6 +19,14 @@ use crate::transactions::contracts::safe_module::{
 };
 use crate::transactions::rpc::{get_rpc_client, RelaySafeTransactionRequest};
 
+/// Attempts before giving up. This migration relays a Safe transaction and gets
+/// back an internal transaction id rather than a userOp hash, so the controller's
+/// receipt-based cap can never resolve it — the count lives here instead.
+const MAX_ATTEMPTS: i32 = 5;
+
+/// Store key for this processor's own attempt count.
+const ATTEMPTS_KEY: &str = "migration:wallet.safe.enable_4337_module.v1:attempts";
+
 /// Migration processor that repairs the ERC-4337 configuration of a Safe that
 /// was deployed without the [`GNOSIS_SAFE_4337_MODULE`].
 ///
@@ -25,16 +34,23 @@ use crate::transactions::rpc::{get_rpc_client, RelaySafeTransactionRequest};
 #[derive(uniffi::Object)]
 pub struct Safe4337ModuleProcessor {
     safe_account: Arc<SafeSmartAccount>,
+    kv_store: Arc<dyn DeviceKeyValueStore>,
 }
 
 #[uniffi::export]
 impl Safe4337ModuleProcessor {
     /// Creates a processor that repairs the ERC-4337 configuration of
-    /// `safe_account` (on World Chain).
+    /// `safe_account` (on World Chain). `kv_store` persists the relay count.
     #[uniffi::constructor]
     #[must_use]
-    pub fn new(safe_account: Arc<SafeSmartAccount>) -> Arc<Self> {
-        Arc::new(Self { safe_account })
+    pub fn new(
+        safe_account: Arc<SafeSmartAccount>,
+        kv_store: Arc<dyn DeviceKeyValueStore>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            safe_account,
+            kv_store,
+        })
     }
 
     /// Returns this processor as a [`MigrationProcessor`] trait object so it can
@@ -143,20 +159,31 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
     }
 
     async fn is_applicable(&self) -> Result<bool, MigrationError> {
-        // Always attempt — the on-chain check lives in `execute`, which is the
-        // idempotent source of truth. On the first run it relays the repair and
-        // stays retryable; on the next run it sees the module + fallback handler
-        // in place and returns `Success`, which is what marks the migration
-        // done. (Once `Succeeded`, the controller stops calling this until the
-        // TTL recheck.)
-        Ok(true)
+        // On-chain state is the oracle, same as every other processor: the
+        // controller promotes to Succeeded off this returning false.
+        Ok(self.fetch_repairs().await?.any())
     }
 
     async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
-        // `execute` performs the on-chain check itself: if the Safe is already
-        // configured (e.g. a repair relayed on a previous run has since mined),
-        // report success; otherwise relay the repair and stay retryable so the
-        // next run confirms it.
+        // Give up before relaying again; see MAX_ATTEMPTS. An unreadable count
+        // reads as 0 — failing open only costs extra retries.
+        let attempts: i32 = self
+            .kv_store
+            .get(ATTEMPTS_KEY.to_string())
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if attempts >= MAX_ATTEMPTS {
+            return Ok(ProcessorResult::Terminal {
+                error_code: "MAX_ATTEMPTS".to_string(),
+                error_message: format!(
+                    "Attempted the 4337 repair {attempts} times without it taking effect"
+                ),
+            });
+        }
+
+        // Re-read rather than trusting is_applicable's result: it may have been
+        // repaired in between, and this keeps the processor stateless.
         let repairs = self.fetch_repairs().await?;
         if !repairs.any() {
             return Ok(ProcessorResult::Success);
@@ -182,7 +209,7 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
             return Ok(ProcessorResult::Success);
         };
 
-        rpc_client
+        let transaction_id = rpc_client
             .relay_safe_transaction(Network::WorldChain, &request)
             .await
             .map_err(|e| {
@@ -191,20 +218,24 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
                 ))
             })?;
 
+        let _ = self
+            .kv_store
+            .set(ATTEMPTS_KEY.to_string(), (attempts + 1).to_string());
+
         crate::info!(
-            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={})",
+            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}, transaction_id={}, attempt={}/{})",
             repairs.enable_module,
-            repairs.set_fallback_handler
+            repairs.set_fallback_handler,
+            transaction_id,
+            attempts + 1,
+            MAX_ATTEMPTS
         );
 
-        // Not done yet: the relayed transaction may not have mined. Stay
-        // retryable so the next run re-reads on-chain state (above) and settles
-        // to `Success` once the repair is confirmed in place.
-        Ok(ProcessorResult::Retryable {
-            error_code: "REPAIR_RELAYED".to_string(),
-            error_message:
-                "4337 repair relayed; will confirm on the next migration run"
-                    .to_string(),
+        // Fire-and-forget, same contract as every other processor: is_applicable
+        // confirms it landed on a later run. The id is a transaction id, not a
+        // userOp hash, so the controller cannot resolve it — hence the local cap.
+        Ok(ProcessorResult::Pending {
+            user_op_hash: Some(transaction_id),
         })
     }
 }
@@ -212,6 +243,7 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitives::key_value_store::InMemoryDeviceKeyValueStore;
     use crate::transactions::contracts::multisend::IMultiSend;
 
     // A 1-of-1 owner key with a known wallet address, reused from the smart
@@ -230,7 +262,10 @@ mod tests {
             SafeSmartAccount::from_private_key_hex(TEST_KEY.to_string(), TEST_WALLET)
                 .unwrap(),
         );
-        Safe4337ModuleProcessor { safe_account }
+        Safe4337ModuleProcessor {
+            safe_account,
+            kv_store: Arc::new(InMemoryDeviceKeyValueStore::new()),
+        }
     }
 
     #[test]

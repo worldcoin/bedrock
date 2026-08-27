@@ -1,113 +1,84 @@
 ## Migration Controller
-The Migration `controller.rs` runs all registered processors **in parallel** using `futures::join_all`. Each processor contains logic around performing an individual migration and conforms to a simple interface:
+
+The Migration `controller.rs` runs all registered processors **in parallel** using `futures::join_all`. Each processor performs one migration and conforms to a three-method interface:
 
 ```rust
 trait MigrationProcessor {
     /// Unique identifier for this migration (e.g., "wallet.permit2.approval")
     fn migration_id(&self) -> String;
 
-    /// Determines whether the migration should run based on actual state.
+    /// Is the desired end state still missing? Read real state, not our records.
     async fn is_applicable(&self) -> Result<bool, MigrationError>;
 
-    /// Business logic that performs the migration.
+    /// Do the work. Must be idempotent — it is re-run until the end state holds.
     async fn execute(&self) -> Result<ProcessorResult, MigrationError>;
 }
 ```
 
-The migration system is a permanent artifact of the app and is run on app start to bring the app to an expected state. The processors are expected to be idempotent.
+The migration system is a permanent artifact of the app and runs on app start to bring the app to an expected state.
 
 > [!NOTE]
 > Unrelated to the [Turnkey account migrations](../backup/turnkey/migrations/README.md) which are specifically and solely for the Turnkey state.
 
-## States
-The `controller.rs` stores a key value mapping between the id of the migration and a record of the migration. The record most importantly contains the status of the migration, but also useful monitoring and debug information such as `started_at`, `last_attempted_at`.
+## The core rule
 
-The possible states are:
-- `NotStarted` - migration has not been performed
-- `InProgress` - migration started, but has not been confirmed complete yet (interrupted, or fire-and-forget work like an on-chain transaction is still pending)
-- `Succeeded` - migration successfully completed (subject to TTL re-check after 30 days)
-- `FailedRetryable` - migration failed, but will be retried on the next app open (e.g. there was a network error).
-- `FailedTerminal` - migration failed and represents a terminal state. It can not be retried.
+**On-chain state is the only source of truth.** Stored state is a cache or a diagnostic — it never decides whether a migration worked.
 
-For `NotStarted`, `InProgress`, and `FailedRetryable` migrations, `is_applicable()` is called to detect when they become applicable. `FailedRetryable` and `InProgress` are retried on every app open. `FailedTerminal` migrations are permanently skipped.
+A migration completes when `is_applicable()` returns `false`. There is no receipt lookup, no polling, no waiting on a submitted transaction. If the end state is not yet met, the work is simply done again — which is why **every processor must be idempotent**.
 
-### Fire-and-forget transactions
-Transaction-submitting migrations (e.g. Permit2 approvals) do not wait for their transaction to be mined. `execute()` submits the transaction and returns `ProcessorResult::Pending { user_op_hash }`, which keeps the migration `InProgress` and persists the submission reference on the record.
-
-On the next run, the controller first resolves the outstanding submission via `check_pending_work(user_op_hash)`:
-- `StillPending` → the migration is skipped this run (no duplicate submission while the transaction is mining).
-- `Reverted` → the migration is marked `FailedRetryable` with error code `MINED_REVERT` (the revert is visible in logs and on the record) and re-executes on the next run. After `MAX_MINED_REVERTS` (3) reverts the migration becomes `FailedTerminal` instead of resubmitting indefinitely; the revert counter resets on success.
-- `Mined` / `Unknown` / error → fall through to the `is_applicable()` end-state recheck below.
-
-Then `is_applicable()` re-checks the actual on-chain state:
-- If the desired end state now holds (`is_applicable()` returns `false` for an `InProgress` or `FailedRetryable` migration), the controller promotes the migration to `Succeeded`.
-- If the transaction reverted or was dropped, `is_applicable()` returns `true` and the migration re-executes.
-- If `is_applicable()` errors, the migration is skipped without any state change (an error is not proof of completion).
-
-### TTL on Succeeded migrations
-`Succeeded` migrations are re-evaluated after 30 days (`MIGRATION_SUCCESS_TTL_DAYS`). When the TTL expires, `is_applicable()` is called again. If it errors (e.g. RPC outage), the recheck is retried after a short TTL (`MIGRATION_RECHECK_ERROR_RETRY_DAYS`, 1 day) rather than on every app open:
-- If `true` → the record is reset and the migration re-runs (e.g., USDC allowance decremented below threshold)
-- If `false` or error → the migration remains skipped
-
-## State transitions
+## Flow
 
 ```mermaid
 flowchart TD
-    Start["run_migrations()<br/>(all processors in parallel)"] --> Load["Load Record"]
+    Start([App launch]) --> Gate{Stored status}
 
-    Load --> NotStarted
-    Load --> InProgressRetryable["InProgress / FailedRetryable"]
-    Load --> FailedTerminal
-    Load --> Succeeded
+    Gate -- FailedTerminal --> SkipT[skip forever]
+    Gate -- "Succeeded &<br/>recheck_at not due" --> SkipC[skip, cached]
+    Gate -- "NotStarted / InProgress /<br/>FailedRetryable / TTL due" --> Applicable{"is_applicable()"}
 
-    FailedTerminal --> SkipTerminal["SKIP (permanent)"]
+    Applicable -- Err --> SkipE[skip, no status change<br/>an error is not proof of success]
+    Applicable -- "false<br/>end state holds" --> Done[["mark Succeeded<br/>set recheck_at"]]
+    Applicable -- true --> WasPending{Previous run<br/>was InProgress?}
 
-    Succeeded --> TTLCheck{"TTL expired?<br/>(30 days)"}
-    TTLCheck -- No --> SkipTTL["SKIP"]
-    TTLCheck -- Yes --> TTLApplicable{"is_applicable()"}
-    TTLApplicable -- "false / error" --> SkipTTLFalse["SKIP"]
-    TTLApplicable -- true --> ResetRecord["Reset to NotStarted"] --> Execute
+    WasPending -- no --> Exec
+    WasPending -- yes --> Receipt{"userOp mined?"}
 
-    InProgressRetryable --> HasPending{"pending userOp hash?"}
-    HasPending -- yes --> CheckPending{"check_pending_work()"}
-    CheckPending -- StillPending --> SkipStillPending["SKIP<br/>(no duplicate submission)"]
-    CheckPending -- Reverted --> RevertCount{"revert_count >= 3?"}
-    RevertCount -- no --> RevertRetryable["FailedRetryable<br/>(MINED_REVERT, retry next bootup)"]
-    RevertCount -- yes --> RevertTerminal["FailedTerminal<br/>(MINED_REVERT, permanent)"]
-    CheckPending -- "Mined / Unknown / error" --> ApplicableIP
-    HasPending -- no --> ApplicableIP{"is_applicable()"}
-    ApplicableIP -- error --> SkipIPErr["SKIP"]
-    ApplicableIP -- "false" --> Promote["Succeeded<br/>(promoted via recheck, 30d TTL)"]
-    ApplicableIP -- true --> Execute
+    Receipt -- "no / unknown" --> Exec[["attempts += 1<br/>execute()"]]
+    Receipt -- yes --> Count[failed_landings += 1]
+    Count --> Cap{"&ge; MAX_FAILED_LANDINGS?"}
+    Cap -- yes --> Terminal[["mark FailedTerminal"]]
+    Cap -- no --> Exec
 
-    NotStarted --> Applicable{"is_applicable()"}
-    Applicable -- "false / error" --> SkipNA["SKIP"]
-    Applicable -- true --> Execute
-
-    Execute["execute()"] --> Success["Succeeded<br/>(30d TTL)"]
-    Execute --> Pending["InProgress<br/>(fire-and-forget submitted,<br/>rechecked next bootup)"]
-    Execute --> Retryable["FailedRetryable<br/>(retry next bootup)"]
-    Execute --> Terminal["FailedTerminal<br/>(permanent)"]
+    Exec --> Result{ProcessorResult}
+    Result -- Success --> Done
+    Result -- "Pending{hash}" --> InProg[["stay InProgress<br/>store hash for diagnostics"]]
+    Result -- Retryable / Err --> Retry[["mark FailedRetryable<br/>not counted against the cap"]]
+    Result -- Terminal --> Terminal
 ```
 
-1. **`NotStarted`**
-   - Calls `is_applicable()`. If true, transitions to `InProgress` and runs `execute()`.
-   - If false, remains `NotStarted` (checked again on next app start).
+## Status values
 
-2. **`InProgress` / `FailedRetryable`**
-   - Retried on every app open. For `InProgress` records with a stored pending userOp hash, `check_pending_work()` runs first: `StillPending` → skip (no duplicate submission), `Reverted` → `FailedRetryable` with `MINED_REVERT`, `Mined`/`Unknown`/error → continue below.
-   - Calls `is_applicable()`:
-     - If `false`, the desired end state already holds (e.g. a fire-and-forget transaction was mined) → promoted to `Succeeded`.
-     - If it errors, the migration is skipped with no state change.
-     - If `true`, runs `execute()`.
-   - `execute()` result determines next state: `Succeeded`, `Pending` (stays `InProgress`, stores the userOp hash), `FailedRetryable`, or `FailedTerminal`.
+| Status | Meaning | Next launch |
+| --- | --- | --- |
+| `NotStarted` | never attempted | attempt |
+| `InProgress` | **we submitted; outcome unknown** | attempt |
+| `Succeeded` | end state confirmed | skip until `recheck_at` |
+| `FailedRetryable` | submission failed — nothing reached the chain | attempt |
+| `FailedTerminal` | gave up | skip permanently |
 
-3. **`Succeeded`**
-   - Skipped within the 30-day TTL window.
-   - After TTL expiry: re-checks `is_applicable()`. If true, resets record and re-executes.
+`InProgress` vs `FailedRetryable` is the load-bearing distinction: only the former means a transaction actually went out, which is what the failure counter keys off.
 
-4. **`FailedTerminal`**
-   - Permanent. No further transitions.
+## Giving up
 
-## Parallel execution
-All processors run concurrently within a single `run_migrations()` call. Each processor has its own migration key in the KV store, so there are no data conflicts. A global process-wide lock (`MIGRATION_LOCK`) prevents concurrent `run_migrations()` calls.
+Two independent caps, because retrying forever burns sponsored gas.
+
+**`MAX_FAILED_LANDINGS` (controller, userOp migrations).** Incremented only when the previous run was `InProgress` *and* its userOp is confirmed mined *and* the end state is still unmet — i.e. it reverted, or succeeded without the intended effect. A userOp that never mined is **not** counted: that is infrastructure trouble, indistinguishable from being offline, and must not push a working migration to terminal. Likewise `FailedRetryable` is excluded, so no number of offline launches can exhaust the cap.
+
+**`MAX_ATTEMPTS` (in `safe_4337_module_processor.rs`).** That migration relays via `wa_relaySafeTransaction`, which returns an internal transaction id rather than a userOp hash, so the receipt check above can never resolve it. It therefore keeps its own attempt count in the key-value store and returns `Terminal` itself. Every other migration goes the userOp route and is covered by the controller's cap.
+
+## Notes
+
+- **Duplicate submissions are expected.** If the chain says work is outstanding, it is re-submitted, even with a transaction legitimately in flight. The nonce is read fresh, so an unmined predecessor means an unchanged nonce and only one can land.
+- **Never-needed migrations are cached.** `NotStarted` + not applicable is recorded as `Succeeded` so `recheck_at` becomes the only trigger; otherwise it would cost an RPC read on every launch forever. It is reported as `skipped`, since nothing executed.
+- **Succeeded is re-verified on a TTL.** A migration that regresses (e.g. a USDC allowance spent down) is caught and re-run.
+- **`pending_user_op_hash` is written, never read for control flow.** It exists so a retry can be traced back to the submission it supersedes.
