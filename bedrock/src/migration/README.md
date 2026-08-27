@@ -44,8 +44,8 @@ flowchart TD
     WasPending -- yes --> Receipt{"userOp mined?"}
 
     Receipt -- "no / unknown" --> Exec[["attempts += 1<br/>execute()"]]
-    Receipt -- yes --> Count[failed_landings += 1]
-    Count --> Cap{"&ge; MAX_FAILED_LANDINGS?"}
+    Receipt -- yes --> Count[revert_count += 1]
+    Count --> Cap{"&ge; MAX_REVERTS?"}
     Cap -- yes --> Terminal[["mark FailedTerminal"]]
     Cap -- no --> Exec
 
@@ -72,7 +72,7 @@ flowchart TD
 
 Two independent caps, because retrying forever burns sponsored gas.
 
-**`MAX_FAILED_LANDINGS` (controller, userOp migrations).** Incremented only when the previous run was `InProgress` *and* its userOp is confirmed mined *and* the end state is still unmet — i.e. it reverted, or succeeded without the intended effect. A userOp that never mined is **not** counted: that is infrastructure trouble, indistinguishable from being offline, and must not push a working migration to terminal. Likewise `FailedRetryable` is excluded, so no number of offline launches can exhaust the cap.
+**`MAX_REVERTS` (controller, userOp migrations).** Incremented only when the previous run was `InProgress` *and* its userOp is confirmed mined *and* the end state is still unmet — i.e. it reverted, or succeeded without the intended effect. A userOp that never mined is **not** counted: that is infrastructure trouble, indistinguishable from being offline, and must not push a working migration to terminal. Likewise `FailedRetryable` is excluded, so no number of offline launches can exhaust the cap.
 
 **`MAX_ATTEMPTS` (in `safe_4337_module_processor.rs`).** That migration relays via `wa_relaySafeTransaction`, which returns an internal transaction id rather than a userOp hash, so the receipt check above can never resolve it. It therefore keeps its own attempt count in the key-value store and returns `Terminal` itself. Every other migration goes the userOp route and is covered by the controller's cap.
 

@@ -52,6 +52,6 @@ pub struct MigrationRecord {
 
     /// Submissions that mined but left the end state unmet. Unmined ops and
     /// submission failures are excluded, so infra trouble never goes terminal.
-    #[serde(default, alias = "revert_count")]
-    pub failed_landings: i32,
+    #[serde(default)]
+    pub revert_count: i32,
 }

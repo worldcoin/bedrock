@@ -24,7 +24,7 @@ const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations aft
 const MIGRATION_RECHECK_ERROR_RETRY_DAYS: i64 = 1;
 
 /// Mined submissions that left the end state unmet before giving up.
-const MAX_FAILED_LANDINGS: i32 = 5;
+const MAX_REVERTS: i32 = 3;
 
 /// Global lock to prevent concurrent migration runs across all controller instances.
 /// This is a process-wide coordination mechanism that ensures only one migration
@@ -557,26 +557,26 @@ impl MigrationController {
         let hash = record.pending_user_op_hash.clone();
         if let Some(hash) = hash.as_deref() {
             if Self::submission_mined(hash).await {
-                record.failed_landings += 1;
+                record.revert_count += 1;
             }
         }
         crate::warn!(
-            "migration.submission_did_not_land id={} user_op_hash={} failed_landings={} timestamp={}",
+            "migration.submission_did_not_land id={} user_op_hash={} revert_count={} timestamp={}",
             migration_id,
             hash.as_deref().unwrap_or("none"),
-            record.failed_landings,
+            record.revert_count,
             Utc::now().to_rfc3339()
         );
 
-        if record.failed_landings < MAX_FAILED_LANDINGS {
+        if record.revert_count < MAX_REVERTS {
             return None;
         }
 
         crate::error!(
-            "migration.gave_up id={} user_op_hash={} failed_landings={} attempts={} timestamp={}",
+            "migration.gave_up id={} user_op_hash={} revert_count={} attempts={} timestamp={}",
             migration_id,
             hash.as_deref().unwrap_or("none"),
-            record.failed_landings,
+            record.revert_count,
             record.attempts,
             Utc::now().to_rfc3339()
         );
@@ -584,7 +584,7 @@ impl MigrationController {
         record.last_error_code = Some("LANDING_FAILED".to_string());
         record.last_error_message = Some(format!(
             "{} submissions did not take effect (last: {}), giving up",
-            record.failed_landings,
+            record.revert_count,
             hash.as_deref().unwrap_or("unknown")
         ));
         let _ = self.save_record(migration_id, record);
@@ -737,7 +737,7 @@ impl MigrationController {
         record.last_error_code = None;
         record.last_error_message = None;
         record.pending_user_op_hash = None;
-        record.failed_landings = 0;
+        record.revert_count = 0;
     }
 
     /// Save a single migration record to persistent storage
@@ -1890,7 +1890,7 @@ mod tests {
         assert_eq!(record.pending_user_op_hash.as_deref(), Some("0xnew"));
         // The receipt lookup cannot resolve a fake hash, so it fails open and
         // the unverifiable submission is not counted against the cap.
-        assert_eq!(record.failed_landings, 0);
+        assert_eq!(record.revert_count, 0);
     }
 
     #[tokio::test]
@@ -1945,15 +1945,15 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_failed_landings_cap_marks_terminal() {
+    async fn test_revert_count_cap_marks_terminal() {
         let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
         let processor = Arc::new(PendingCheckProcessor::new("test.migration.v1", true));
 
         // Already at the cap: the migration gives up instead of re-submitting.
         let record = MigrationRecord {
             status: MigrationStatus::InProgress,
-            attempts: MAX_FAILED_LANDINGS,
-            failed_landings: MAX_FAILED_LANDINGS,
+            attempts: MAX_REVERTS,
+            revert_count: MAX_REVERTS,
             pending_user_op_hash: Some("0xabc".to_string()),
             last_attempted_at: Some(Utc::now()),
             ..MigrationRecord::default()
