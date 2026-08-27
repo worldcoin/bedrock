@@ -84,16 +84,19 @@ async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
         "wallet.safe.enable_4337_module.v1"
     );
 
-    // 5) Always applicable — the on-chain check lives in `execute`.
+    // 5) Applicable: the on-chain read shows the repairs are still needed.
     assert!(processor.is_applicable().await?);
 
-    // 6) Run 1: relays the repair, not yet confirmed (stays retryable).
+    // 6) Run 1: relays the repair and reports Pending, carrying the relayed
+    //    transaction id. Not yet confirmed — is_applicable settles it later.
     assert!(
         matches!(
             processor.execute().await?,
-            ProcessorResult::Retryable { .. }
+            ProcessorResult::Pending {
+                user_op_hash: Some(_)
+            }
         ),
-        "first run should relay and report retryable"
+        "first run should relay and report pending with a transaction id"
     );
 
     // The relayed execTransaction has landed: module enabled AND handler set.
@@ -109,10 +112,19 @@ async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
         "fallback handler should be the module after the relayed repair"
     );
 
-    // 7) Run 2: sees the repair in place and marks the migration done.
+    // 7) Run 2: sees the repair already in place, so it relays nothing. It
+    //    reports Pending rather than Success — completion is proven by
+    //    is_applicable, which now reads false.
     assert!(
-        matches!(processor.execute().await?, ProcessorResult::Success),
-        "second run should confirm the repair and report success"
+        matches!(
+            processor.execute().await?,
+            ProcessorResult::Pending { user_op_hash: None }
+        ),
+        "second run should relay nothing once the repair is in place"
+    );
+    assert!(
+        !processor.is_applicable().await?,
+        "is_applicable should report the end state as met"
     );
 
     Ok(())

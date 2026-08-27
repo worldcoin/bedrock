@@ -26,6 +26,8 @@ The migration system is a permanent artifact of the app and runs on app start to
 
 A migration completes when `is_applicable()` returns `false`. There is no receipt lookup, no polling, no waiting on a submitted transaction. If the end state is not yet met, the work is simply done again — which is why **every processor must be idempotent**.
 
+`execute` therefore returns `Pending`, never `Success`. `Success` would mark the migration done on the processor's word alone, before anything confirmed it on-chain; the variant still exists on `ProcessorResult` but is unused.
+
 ## Flow
 
 ```mermaid
@@ -38,7 +40,7 @@ flowchart TD
 
     Applicable -- Err --> SkipE[skip, no status change<br/>an error is not proof of success]
     Applicable -- "false<br/>end state holds" --> Done[["mark Succeeded<br/>set recheck_at"]]
-    Applicable -- true --> WasPending{Previous run<br/>was InProgress?}
+    Applicable -- true --> WasPending{Did we submit a<br/>userOp last run?}
 
     WasPending -- no --> Exec
     WasPending -- yes --> Receipt{"userOp mined?"}
@@ -50,8 +52,7 @@ flowchart TD
     Cap -- no --> Exec
 
     Exec --> Result{ProcessorResult}
-    Result -- Success --> Done
-    Result -- "Pending{hash}" --> InProg[["stay InProgress<br/>store hash for diagnostics"]]
+    Result -- "Pending{UserOpHash}" --> InProg[["stay InProgress<br/>store hash for diagnostics"]]
     Result -- Retryable / Err --> Retry[["mark FailedRetryable<br/>not counted against the cap"]]
     Result -- Terminal --> Terminal
 ```

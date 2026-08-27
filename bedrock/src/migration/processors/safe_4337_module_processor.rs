@@ -185,8 +185,9 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
         // Re-read rather than trusting is_applicable's result: it may have been
         // repaired in between, and this keeps the processor stateless.
         let repairs = self.fetch_repairs().await?;
+        // Already repaired. Report Pending, not Success: the next run confirms it.
         if !repairs.any() {
-            return Ok(ProcessorResult::Success);
+            return Ok(ProcessorResult::Pending { user_op_hash: None });
         }
 
         let rpc_client = get_rpc_client()
@@ -206,7 +207,7 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
             })?;
 
         let Some(request) = self.build_signed_transaction(repairs, nonce)? else {
-            return Ok(ProcessorResult::Success);
+            return Ok(ProcessorResult::Pending { user_op_hash: None });
         };
 
         let transaction_id = rpc_client

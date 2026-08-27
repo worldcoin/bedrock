@@ -4,7 +4,11 @@ use async_trait::async_trait;
 /// Result of executing a migration processor
 #[derive(Debug, uniffi::Enum)]
 pub enum ProcessorResult {
-    /// Migration succeeded
+    /// Migration succeeded.
+    ///
+    /// Not used: it marks the migration Succeeded on the processor's word alone,
+    /// which on-chain state has not confirmed. Return `Pending` instead and let
+    /// `is_applicable` prove completion on the next run.
     Success,
 
     /// Migration submitted asynchronous work (e.g. an on-chain transaction) in a

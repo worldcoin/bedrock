@@ -117,8 +117,10 @@ impl MigrationProcessor for Permit2ApprovalProcessor {
     async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
         let tokens = self.tokens_needing_approval.lock().await.clone();
 
+        // Nothing to approve (state changed since is_applicable). Report Pending,
+        // not Success: the next run confirms via is_applicable.
         if tokens.is_empty() {
-            return Ok(ProcessorResult::Success);
+            return Ok(ProcessorResult::Pending { user_op_hash: None });
         }
 
         let addresses: Vec<Address> = tokens.iter().map(|(addr, _)| *addr).collect();
