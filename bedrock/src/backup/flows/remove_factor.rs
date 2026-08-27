@@ -5,10 +5,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use super::{best_effort_delete_sub_org, BackupFlow, FlowContext, CLEANUP_TIMEOUT};
+use super::{BackupFlow, FlowContext};
 use crate::backup::backup_service::{
-    BackupEncryptionKey, BackupFactorKind, BackupMetadata, DeleteFactorResponse,
+    BackupEncryptionKey, BackupFactorKind, BackupMetadata,
 };
+use crate::backup::flows::delete_backup;
 use crate::backup::turnkey::TurnkeyApiError;
 use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::P256Signer;
@@ -73,20 +74,24 @@ impl BackupFlow for RemoveFactor {
     }
 }
 
-/// What the cancel-safe phase resolved, ready for the commit.
+/// The execution plan for this operation
 enum Prepared {
     /// An OIDC removal, with the providers to tear down afterwards (`None` when the
     /// whole sub-organization goes instead).
     Oidc {
         plan: OidcRemovalPlan,
         identity: Option<OidcIdentity>,
+        turnkey_sub_org_ids: Vec<String>,
     },
     /// A passkey removal: the PRF key to drop, plus the Turnkey authenticator
     /// backing it when the backup has a Turnkey account.
     Passkey {
         prf_key: BackupEncryptionKey,
         authenticator: Option<PasskeyAuthenticator>,
+        turnkey_sub_org_ids: Vec<String>,
     },
+    /// Removing all Main Factors results in full backup deletion.
+    FullDeletion { turnkey_sub_org_ids: Vec<String> },
 }
 
 impl RemoveFactor {
@@ -97,7 +102,11 @@ impl RemoveFactor {
         &self,
         ctx: &FlowContext<'_>,
     ) -> Result<Prepared, BackupOperationError> {
-        let metadata = ctx.service.retrieve_metadata(ctx.sync_factor).await?;
+        let metadata = ctx
+            .service
+            .retrieve_metadata(ctx.sync_factor, ctx.backup_id)
+            .await?;
+        let turnkey_sub_org_ids = metadata.turnkey_suborg_ids();
         let factor = metadata.factor(&self.factor_id).ok_or_else(|| {
             crate::warn!("remove_factor.factor_not_found");
             BackupOperationError::BackupService {
@@ -105,15 +114,21 @@ impl RemoveFactor {
             }
         })?;
 
+        if metadata.main_factor_count() == 1 {
+            if !self.user_confirmed_backup_removal {
+                crate::debug!("remove_factor.would_delete_backup");
+                return Err(BackupOperationError::WouldDeleteBackup);
+            }
+
+            return Ok(Prepared::FullDeletion {
+                turnkey_sub_org_ids,
+            });
+        }
+
         // Before the confirmation gate: never ask a user to approve destroying their
         // backup for a removal that was never supported.
         if let Some(detail) = unsupported_reason(&metadata, &factor.kind) {
             return Err(BackupOperationError::Unsupported { detail });
-        }
-
-        if metadata.main_factor_count() == 1 && !self.user_confirmed_backup_removal {
-            crate::debug!("remove_factor.would_delete_backup");
-            return Err(BackupOperationError::WouldDeleteBackup);
         }
 
         match &factor.kind {
@@ -134,14 +149,12 @@ impl RemoveFactor {
                 Ok(Prepared::Passkey {
                     prf_key,
                     authenticator,
+                    turnkey_sub_org_ids,
                 })
             }
-            // Rejected by `unsupported_reason` before the confirmation gate.
+            // verified in `unsupported_reason`
             BackupFactorKind::EcKeypair { .. } => {
-                Err(BackupOperationError::Unsupported {
-                    detail: "iCloud Keychain factor removal is not yet supported"
-                        .to_string(),
-                })
+                unreachable!("eckeypair deletion not supported")
             }
         }
     }
@@ -174,7 +187,11 @@ impl RemoveFactor {
             });
         };
 
-        Ok(Prepared::Oidc { plan, identity })
+        Ok(Prepared::Oidc {
+            plan,
+            identity,
+            turnkey_sub_org_ids: metadata.turnkey_suborg_ids(),
+        })
     }
 
     /// Resolves the Turnkey authenticator registered for `credential_id`, if any to
@@ -262,73 +279,103 @@ impl RemoveFactor {
         ctx: &FlowContext<'_>,
         prepared: Prepared,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        let mut passkey_authenticator = None;
-        let (encryption_key, oidc) = match prepared {
+        if let Prepared::FullDeletion {
+            turnkey_sub_org_ids,
+        } = prepared
+        {
+            delete_backup::execute(ctx, turnkey_sub_org_ids).await?;
+            return Ok(RemoveFactorOutcome::BackupDeleted);
+        }
+
+        let (encryption_key, turnkey_sub_org_ids) = match &prepared {
             Prepared::Oidc { plan, identity } => (
                 plan.is_last_oidc_factor.then(|| plan.turnkey_key.clone()),
-                Some((plan, identity)),
+                Some((plan,)),
             ),
             Prepared::Passkey {
                 prf_key,
-                authenticator,
-            } => {
-                passkey_authenticator = authenticator;
-                (Some(prf_key), None)
-            }
+                authenticator: _,
+                turnkey_sub_org_ids,
+            } => (Some(prf_key), turnkey_sub_org_ids),
         };
 
-        // backup-service is authoritative, drop first
+        // Step 1: Delete the factor from the backup-service (authorative)
         let response = ctx
             .service
             .delete_factor(ctx.sync_factor, &self.factor_id, encryption_key)
             .await?;
 
-        if let Some((plan, identity)) = oidc {
-            best_effort_turnkey_cleanup(ctx, &plan, identity).await;
-        } else if let (Some(authenticator), Some(main_factor)) =
-            (passkey_authenticator, ctx.main_factor)
-        {
-            best_effort_delete_authenticator(ctx, &authenticator, main_factor).await;
-        }
-
-        finalize(response, self.user_confirmed_backup_removal)
-    }
-}
-
-/// Tears down whatever Turnkey resources the removal orphaned, under its own deadline.
-///
-/// Best-effort on both counts: the factor is already gone from the authoritative
-/// store, so neither a failure nor a timeout changes the final output.
-async fn best_effort_turnkey_cleanup(
-    ctx: &FlowContext<'_>,
-    plan: &OidcRemovalPlan,
-    identity: Option<OidcIdentity>,
-) {
-    let cleanup = async {
-        if plan.is_last_oidc_factor {
-            best_effort_delete_sub_org(
-                "remove_factor",
+        // Step 2A: Handle Turnkey removal iff the backup was deleted (remote race condition)
+        if response.backup_deleted {
+            delete_backup::delete_turnkey_account(
                 ctx.turnkey,
-                &plan.suborg_id,
+                turnkey_sub_org_ids,
                 ctx.sync_factor,
             )
             .await;
-        } else if let (Some(main_factor), Some(identity)) =
-            (ctx.main_factor, identity.as_ref())
-        {
-            best_effort_delete_providers(ctx, plan, identity, main_factor).await;
+            if !self.user_confirmed_backup_removal {
+                crate::critical!(
+                    "remove_factor.backup_deleted_without_confirmation (the service cascaded on a factor the caller did not flag as last)"
+                );
+            }
+            return Ok(RemoveFactorOutcome::BackupDeleted);
         }
-    };
 
-    if tokio::time::timeout(CLEANUP_TIMEOUT, cleanup)
-        .await
-        .is_err()
-    {
-        crate::critical!(
-            "remove_factor.turnkey_cleanup_timed_out suborg_id={} after {}s (factor IS removed; Turnkey resources orphaned)",
-            plan.suborg_id,
-            CLEANUP_TIMEOUT.as_secs()
-        );
+        // Step 2B: Delete the factor from Turnkey
+
+        // Step 2: Process relevant Turnkey deletion
+        turnkey_cleanup(ctx, prepared).await;
+
+        // Step 3: Return result
+        let metadata = response.backup_metadata.ok_or_else(|| {
+            crate::critical!(
+                "remove_factor.missing_response_metadata (factor IS removed; backup-service returned incorrect response)"
+            );
+            BackupOperationError::Generic {
+                error_message: "deletion suceeded but missing_response_metadata".to_string(),
+            }
+        })?;
+        crate::debug!("remove_factor.factor_removed");
+        Ok(RemoveFactorOutcome::FactorRemoved { metadata })
+    }
+}
+
+/// Performs relevant removals (either factor or entire sub-org) after a factor
+/// has been removed from the backup-service
+async fn turnkey_cleanup(ctx: &FlowContext<'_>, prepared: Prepared) {
+    match prepared {
+        Prepared::Oidc {
+            plan,
+            identity,
+            turnkey_sub_org_ids,
+        } => {
+            // Removing the last OIDC factor removes the Turnkey account (as there's no use for it anymore)
+            if plan.is_last_oidc_factor {
+                delete_backup::delete_turnkey_account(
+                    ctx.turnkey,
+                    turnkey_sub_org_ids,
+                    ctx.sync_factor,
+                )
+                .await;
+            }
+        }
+        Prepared::Passkey {
+            prf_key,
+            authenticator,
+            turnkey_sub_org_ids,
+        } => {
+            ctx.turnkey
+                .delete_authenticators(
+                    &authenticator.suborg,
+                    &authenticator.user,
+                    vec![authenticator.id.clone()],
+                    MainFactor(main_factor),
+                )
+                .await
+        }
+        Prepared::FullDeletion {
+            turnkey_sub_org_ids,
+        } => unreachable!("this arm is handled beforehand"),
     }
 }
 
@@ -348,8 +395,7 @@ struct PasskeyAuthenticator {
 
 /// Why this factor cannot be removed at all, if it cannot.
 ///
-/// Evaluated before the destructive-confirmation gate so an unsupported removal is
-/// refused without first asking the user to approve deleting their whole backup.
+/// This handles should-never-happen conceptual edge cases to avoid unexpected results.
 fn unsupported_reason(
     metadata: &BackupMetadata,
     kind: &BackupFactorKind,
@@ -374,41 +420,6 @@ fn unsupported_reason(
         }
         BackupFactorKind::Passkey { .. } | BackupFactorKind::OidcAccount { .. } => None,
     }
-}
-
-/// Maps a successful delete-factor response to the flow outcome.
-///
-/// `user_confirmed` only feeds the detection below; it cannot change the outcome,
-/// since the service has already acted by this point.
-fn finalize(
-    response: DeleteFactorResponse,
-    user_confirmed: bool,
-) -> Result<RemoveFactorOutcome, BackupOperationError> {
-    if response.backup_deleted {
-        // The request carries no confirmation flag, so a concurrent removal on another
-        // device can cascade into a deletion this user never approved. Undoable by
-        // nobody; detectable at least.
-        if user_confirmed {
-            crate::info!("remove_factor.backup_deleted");
-        } else {
-            crate::critical!(
-                "remove_factor.backup_deleted_without_confirmation (the service cascaded on a factor the caller did not flag as last)"
-            );
-        }
-        return Ok(RemoveFactorOutcome::BackupDeleted);
-    }
-    let metadata = response.backup_metadata.ok_or_else(|| {
-        // The removal committed; only our ability to report the new state failed. The
-        // caller is told it failed and its retry will hit `factor_not_found`.
-        crate::critical!(
-            "remove_factor.missing_response_metadata (factor IS removed; reporting failure)"
-        );
-        BackupOperationError::Generic {
-            error_message: "backup service returned no metadata".to_string(),
-        }
-    })?;
-    crate::info!("remove_factor.factor_removed");
-    Ok(RemoveFactorOutcome::FactorRemoved { metadata })
 }
 
 /// The Turnkey references and last-OIDC flag derived from the backup metadata.
@@ -608,44 +619,6 @@ async fn verify_main_factor(
     Ok(())
 }
 
-/// Removes the passkey's Turnkey authenticator, under the cleanup deadline.
-///
-/// Best-effort for the same reason as the OIDC teardown: the factor is already gone
-/// from the authoritative store, so nothing here can change what the caller is told.
-async fn best_effort_delete_authenticator(
-    ctx: &FlowContext<'_>,
-    authenticator: &PasskeyAuthenticator,
-    main_factor: &P256Signer,
-) {
-    let delete = ctx.turnkey.delete_authenticators(
-        &authenticator.suborg,
-        &authenticator.user,
-        vec![authenticator.id.clone()],
-        MainFactor(main_factor),
-    );
-
-    match tokio::time::timeout(CLEANUP_TIMEOUT, delete).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error @ TurnkeyApiError::ActivityPollingExceeded { .. })) => {
-            crate::warn!("remove_factor.authenticator_teardown_pending err={error}");
-        }
-        Ok(Err(error)) => {
-            // The passkey can still authorize Turnkey activities.
-            crate::critical!(
-                "remove_factor.authenticator_orphaned suborg_id={} code={} err={error}",
-                authenticator.suborg,
-                error.code()
-            );
-        }
-        Err(_elapsed) => {
-            crate::critical!(
-                "remove_factor.authenticator_teardown_timed_out suborg_id={}",
-                authenticator.suborg
-            );
-        }
-    }
-}
-
 /// Deletes every Turnkey provider backing the removed OIDC identity, **one at a
 /// time** so an already-absent audience doesn't block the rest.
 ///
@@ -819,6 +792,7 @@ mod tests {
     const DELETE_SUB_ORG: &str = "/public/v1/submit/delete_sub_organization";
     const DELETE_OAUTH: &str = "/public/v1/submit/delete_oauth_providers";
     const DELETE_AUTHENTICATORS: &str = "/public/v1/submit/delete_authenticators";
+    const TEST_BACKUP_ID: &str = "backup-1";
 
     struct FakeAttestation;
 
@@ -1096,6 +1070,7 @@ mod tests {
             service: &service,
             turnkey: &turnkey,
             sync_factor: &sync,
+            backup_id: TEST_BACKUP_ID,
             main_factor,
         };
         RemoveFactor {
@@ -2038,5 +2013,39 @@ mod tests {
             error,
             BackupOperationError::BackupService { code } if code == "factor_not_found"
         ));
+    }
+    /// A passkey that is the last main factor cascades into a full backup deletion.
+    /// The sub-organization that held the backup's encryption key must go with it --
+    /// the same teardown `DeleteBackup` performs. Before this was shared, only the
+    /// OIDC path reclaimed it and a passkey cascade silently orphaned the whole
+    /// sub-organization.
+    #[tokio::test]
+    async fn a_passkey_cascade_into_backup_deletion_reclaims_the_sub_organization() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata_keyed(
+                vec![turnkey_key(), prf_key("ek")],
+                vec![passkey_factor("f-1")],
+            ),
+        )
+        .await;
+        mount_users_with_authenticators(&server, &["cred-f-1"]).await;
+        mount_whoami(&server, "user-1").await;
+        mount_delete_authenticators(&server, "auth-cred-f-1").await;
+        mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
+        mount_delete_sub_org(&server).await;
+        let main = signer();
+
+        let outcome = run_remove(&server, "f-1", Some(&main), true).await.unwrap();
+
+        assert!(matches!(outcome, RemoveFactorOutcome::BackupDeleted));
+        assert!(
+            called_paths(&server)
+                .await
+                .contains(&DELETE_SUB_ORG.to_string()),
+            "a cascade into backup deletion must reclaim the sub-organization"
+        );
     }
 }

@@ -2,9 +2,12 @@
 
 use async_trait::async_trait;
 
-use super::{best_effort_delete_sub_org, BackupFlow, FlowContext, CLEANUP_TIMEOUT};
-use crate::backup::backup_service::{BackupEncryptionKey, BackupMetadata};
-use crate::backup::BackupOperationError;
+use super::{BackupFlow, FlowContext};
+use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
+use crate::backup::{BackupOperationError, SyncFactor};
+use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
+use crate::primitives::P256Signer;
+use std::time::Duration;
 
 /// Deletes the entire backup state from all remotes (backup-service and Turnkey)
 /// and the local Bedrock state. Permanent, can't be undone.
@@ -16,137 +19,98 @@ impl BackupFlow for DeleteBackup {
 
     /// Reads the metadata, deletes the backup, then deletes the Turnkey account
     async fn run(&self, ctx: &FlowContext<'_>) -> Result<(), BackupOperationError> {
-        let captured = match ctx.service.retrieve_metadata(ctx.sync_factor).await {
-            Ok(metadata) => Captured {
-                backup_id: metadata.id.clone(),
-                suborg_id: turnkey_suborg_id(&metadata),
-            },
-            Err(error) if is_already_gone(&error) => {
-                crate::warn!("delete_backup.nothing_to_delete (no backup reachable)");
-                return Ok(());
+        let suborg_ids = match ctx
+            .service
+            .retrieve_metadata(ctx.sync_factor, ctx.backup_id)
+            .await
+        {
+            Ok(metadata) => metadata.turnkey_suborg_ids(),
+            Err(e) => {
+                if let BackupOperationError::BackupService { code } = &e {
+                    if code == "backup_does_not_exist" {
+                        crate::warn!(
+                            "delete_backup.nothing_to_delete (backup already gone)"
+                        );
+                        return Ok(());
+                    }
+                }
+                return Err(e);
             }
-            // Aborting keeps the sub-organization reachable on a retry
-            Err(error) => return Err(error),
         };
 
-        // backup-service is authoritative, deleted first
-        commit_on_backup_service(ctx, &captured).await?;
-
-        if let Some(suborg_id) = captured.suborg_id {
-            let cleanup = best_effort_delete_sub_org(
-                "delete_backup",
-                ctx.turnkey,
-                &suborg_id,
-                ctx.sync_factor,
-            );
-            if tokio::time::timeout(CLEANUP_TIMEOUT, cleanup)
-                .await
-                .is_err()
-            {
-                crate::critical!(
-                    "delete_backup.turnkey_cleanup_timed_out suborg_id={suborg_id} after {}s (backup IS deleted; sub-organization orphaned)",
-                    CLEANUP_TIMEOUT.as_secs()
-                );
-            }
-        }
-
-        Ok(())
+        execute(ctx, suborg_ids).await
     }
 }
 
-/// Deletes the backup at the backup service, resolving a lost response rather than
-/// reporting a failure for a delete that landed.
-async fn commit_on_backup_service(
+/// Executes the complete backup deletion, from the backup-service first (authorative),
+/// and best-effort Turnkey account.
+pub(in crate::backup::flows) async fn execute(
     ctx: &FlowContext<'_>,
-    captured: &Captured,
+    suborg_ids: Vec<String>,
 ) -> Result<(), BackupOperationError> {
-    match ctx.service.delete_backup(ctx.sync_factor).await {
-        Ok(()) => {
-            crate::info!("delete_backup.deleted");
-            Ok(())
-        }
-        Err(error) if is_already_gone(&error) => {
-            // Logged as error because this shouldn't happen under normal circumstances
-            crate::error!("delete_backup.raced_with_concurrent_deletion");
-            Ok(())
-        }
+    let policy = RetryPolicy {
+        max_delay: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let mut attempts = 0u32;
 
-        Err(error @ BackupOperationError::Network { retryable: true }) => {
-            if settle_lost_response(ctx, captured).await {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Asks the service whether the backup is gone, to settle a delete whose response
-/// never arrived. Returns whether it in fact committed.
-async fn settle_lost_response(ctx: &FlowContext<'_>, captured: &Captured) -> bool {
-    match ctx
-        .service
-        .backup_exists(ctx.sync_factor, &captured.backup_id)
-        .await
-    {
-        Ok(false) => {
-            crate::warn!("delete_backup.commit_confirmed_after_lost_response");
-            true
-        }
-        // Either the delete never landed, or this device was revoked and a live backup
-        // sits under the same account. Cleaning up after either would be destructive.
-        Ok(true) => {
-            crate::warn!("delete_backup.commit_did_not_land (backup still exists)");
-            false
-        }
-        Err(error) => {
-            if let Some(suborg_id) = &captured.suborg_id {
-                crate::critical!(
-                    "delete_backup.outcome_unresolved suborg_id={suborg_id} (delete may have committed) err={error:?}"
-                );
-            } else {
-                crate::warn!("delete_backup.outcome_unresolved err={error:?}");
-            }
-            false
-        }
-    }
-}
-
-/// The ids read before the delete, which destroys the metadata holding them.
-struct Captured {
-    /// Qualifies the reconciliation read so an absence is unambiguous.
-    backup_id: String,
-    /// The Turnkey sub-organization to reclaim, if the backup had one.
-    suborg_id: Option<String>,
-}
-
-/// The sub-organization holding the backup's Turnkey encryption key, if it has one.
-fn turnkey_suborg_id(metadata: &BackupMetadata) -> Option<String> {
-    // `None` covers both no Turnkey key and several of them: nothing safe to tear down either way.
-    match metadata.turnkey_key()? {
-        BackupEncryptionKey::Turnkey {
-            turnkey_account_id, ..
-        } => Some(turnkey_account_id.clone()),
-        BackupEncryptionKey::Prf { .. } | BackupEncryptionKey::Icloud { .. } => None,
-    }
-}
-
-fn is_already_gone(error: &BackupOperationError) -> bool {
-    // TODO: migrate to typed errors (from backup-service)
-    matches!(error, BackupOperationError::BackupService { code }
-        if matches!(
-            code.as_str(),
-                "backup_untraceable"
-                | "backup_missing"
-                | "backup_not_found"
-                | "backup_does_not_exist"
-        )
+    // Step 1: Delete on backup-service (source of truth)
+    retry_with_backoff(
+        &policy,
+        "delete_backup",
+        |error| matches!(error, BackupOperationError::Network { retryable: true }),
+        || {
+            attempts += 1;
+            ctx.service.delete_backup(ctx.sync_factor)
+        },
     )
+    .await
+    .map_err(|e| match e {
+        RetryError::Timeout => BackupOperationError::Timeout,
+        RetryError::Operation(e) => e,
+    })?;
+
+    // It's theoretically possible that upon calling `/v1/delete_backup` endpoint the process
+    // fails because the backup has already been deleted (race condition). This possibility is tiny,
+    // because the metadata is checked immediately before calling this. If this happens, the error will
+    // be surfaced and it can when calling the flow again, an `Ok` result will be returned.
+
+    // Step 2: Delete on Turnkey (best-effort)
+    delete_turnkey_account(ctx.turnkey, suborg_ids, ctx.sync_factor).await;
+    Ok(())
+}
+
+/// Tears down the Turnkey sub-organization (best-effort).
+///
+/// While technically not possible to have multiple Turnkey accounts, this handles
+/// the theoretical possibility of multiple.
+pub(in crate::backup::flows) async fn delete_turnkey_account(
+    turnkey: &TurnkeyApiClient,
+    suborg_ids: Vec<String>,
+    sync_factor: &P256Signer,
+) {
+    for suborg_id in suborg_ids {
+        if let Err(error) = turnkey
+            .delete_sub_organization(&suborg_id, SyncFactor(sync_factor))
+            .await
+        {
+            if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
+                crate::warn!(
+                    "turnkey_suborg_teardown_pending suborg_id={suborg_id} err={error}"
+                );
+                return;
+            }
+            crate::critical!(
+                "turnkey_suborg_orphaned suborg_id={suborg_id} code={} err={error}",
+                error.code()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::CLEANUP_TIMEOUT;
     use super::*;
     use crate::backup::backup_service::BackupServiceClient;
     use crate::backup::turnkey::test::TestSigner;
@@ -166,6 +130,7 @@ mod tests {
     const DELETE_BACKUP_CHALLENGE: &str = "/v1/delete-backup/challenge/keypair";
     const DELETE_BACKUP: &str = "/v1/delete-backup";
     const DELETE_SUB_ORG: &str = "/public/v1/submit/delete_sub_organization";
+    const TEST_BACKUP_ID: &str = "backup-1";
 
     fn signer() -> P256Signer {
         P256Signer::verify(Arc::new(TestSigner::new())).expect("valid test signer")
@@ -224,31 +189,6 @@ mod tests {
         .await;
     }
 
-    /// Metadata answers once, then rejects with `code` -- the initial read followed
-    /// by the reconciliation read.
-    async fn mount_metadata_then(server: &MockServer, keys: Vec<Value>, code: &str) {
-        mount_json(server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
-        Mock::given(method("POST"))
-            .and(path(RETRIEVE_META))
-            .respond_with(ResponseTemplate::new(200).set_body_json(metadata(keys)))
-            .up_to_n_times(1)
-            .mount(server)
-            .await;
-        mount_rejection(server, RETRIEVE_META, code).await;
-    }
-
-    /// The parsed bodies of every metadata request, in order.
-    async fn metadata_bodies(server: &MockServer) -> Vec<Value> {
-        server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|request| request.url.path() == RETRIEVE_META)
-            .map(|request| serde_json::from_slice(&request.body).unwrap())
-            .collect()
-    }
-
     async fn mount_metadata(server: &MockServer, keys: Vec<Value>) {
         mount_json(server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
         mount_json(server, RETRIEVE_META, metadata(keys)).await;
@@ -298,13 +238,14 @@ mod tests {
             service: &service,
             turnkey: &turnkey,
             sync_factor: &sync,
+            backup_id: TEST_BACKUP_ID,
             main_factor: None,
         };
         DeleteBackup.run(&ctx).await
     }
 
     #[tokio::test]
-    async fn test_happy_path_deletes_the_backup_then_tears_down_the_sub_organization() {
+    async fn deletes_the_backup_then_tears_down_the_sub_organization() {
         let server = MockServer::start().await;
         mount_metadata(&server, vec![turnkey_key()]).await;
         mount_delete_backup(&server).await;
@@ -338,26 +279,17 @@ mod tests {
 
     #[tokio::test]
     async fn an_already_deleted_backup_is_reported_as_success() {
-        for code in [
-            "backup_missing",
-            "backup_not_found",
-            "backup_does_not_exist",
-        ] {
-            let server = MockServer::start().await;
-            mount_json(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
-            mount_rejection(&server, RETRIEVE_META, code).await;
+        let server = MockServer::start().await;
+        mount_json(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
+        mount_rejection(&server, RETRIEVE_META, "backup_missing").await;
 
-            run_delete(&server).await.unwrap_or_else(|error| {
-                panic!("{code} must be treated as already deleted, got {error:?}")
-            });
+        run_delete(&server)
+            .await
+            .expect("an already-deleted backup is a success");
 
-            assert!(
-                !called_paths(&server)
-                    .await
-                    .contains(&DELETE_BACKUP.to_string()),
-                "{code} means there is nothing to delete"
-            );
-        }
+        assert!(!called_paths(&server)
+            .await
+            .contains(&DELETE_BACKUP.to_string()));
     }
 
     /// The metadata read is the only source of the sub-organization id. Committing
@@ -413,7 +345,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_turnkey_timeout_does_not_hang_forever() {
+    async fn a_wedged_turnkey_teardown_does_not_hang_forever() {
         let server = MockServer::start().await;
         mount_metadata(&server, vec![turnkey_key()]).await;
         mount_delete_backup(&server).await;
@@ -427,89 +359,263 @@ mod tests {
         run_delete(&server).await.unwrap();
 
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < CLEANUP_TIMEOUT * 5,
             "the teardown must be abandoned at CLEANUP_TIMEOUT, took {:?}",
             started.elapsed()
         );
     }
 
+    /// A transient failure is retried in-process, so a blip does not cost the user
+    /// their account deletion -- and the captured sub-organization is still in hand
+    /// to reclaim once it succeeds.
     #[tokio::test]
-    async fn a_raced_deletion_still_clears_turnkey() {
+    async fn a_transient_failure_is_retried_then_succeeds() {
         let server = MockServer::start().await;
         mount_metadata(&server, vec![turnkey_key()]).await;
         mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
-        mount_rejection(&server, DELETE_BACKUP, "backup_not_found").await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        mount(&server, DELETE_BACKUP, ResponseTemplate::new(204)).await;
         mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
 
         run_delete(&server).await.unwrap();
 
-        assert!(called_paths(&server)
-            .await
-            .contains(&DELETE_SUB_ORG.to_string()));
+        let paths = called_paths(&server).await;
+        assert_eq!(
+            paths.iter().filter(|p| *p == DELETE_BACKUP).count(),
+            2,
+            "the delete is attempted again after a transient failure"
+        );
+        // The invariant that makes the retry legal: the challenge token is single-use,
+        // so each attempt has to fetch its own.
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|p| *p == DELETE_BACKUP_CHALLENGE)
+                .count(),
+            2,
+            "every attempt needs a fresh challenge"
+        );
+        assert!(paths.contains(&DELETE_SUB_ORG.to_string()));
     }
 
+    /// Retries are bounded. Once they run out the error surfaces and Turnkey is left
+    /// alone, since a backup that may still exist must stay decryptable.
     #[tokio::test]
-    async fn a_lost_response_is_settled_as_committed() {
+    async fn retries_are_bounded_and_then_the_error_surfaces() {
         let server = MockServer::start().await;
-        mount_metadata_then(&server, vec![turnkey_key()], "backup_does_not_exist")
-            .await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
         mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
         mount(&server, DELETE_BACKUP, ResponseTemplate::new(503)).await;
         mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
 
+        let error = run_delete(&server).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
+        ));
+        let paths = called_paths(&server).await;
+        assert_eq!(
+            paths.iter().filter(|p| *p == DELETE_BACKUP).count(),
+            RetryPolicy::default().max_attempts as usize,
+            "bounded by the shared retry policy"
+        );
+        assert!(
+            !paths.contains(&DELETE_SUB_ORG.to_string()),
+            "Turnkey must survive a backup that may still exist"
+        );
+    }
+
+    /// A non-retryable rejection is terminal: no second attempt, no teardown.
+    #[tokio::test]
+    async fn a_terminal_rejection_is_not_retried() {
+        let server = MockServer::start().await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
+        mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
+        mount_rejection(&server, DELETE_BACKUP, "invalid_challenge").await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+        let error = run_delete(&server).await.unwrap_err();
+
+        assert!(matches!(error, BackupOperationError::BackupService { .. }));
+        let paths = called_paths(&server).await;
+        assert_eq!(paths.iter().filter(|p| *p == DELETE_BACKUP).count(), 1);
+        assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
+    }
+
+    /// The backup was deleted by someone else between the read and the delete. The
+    /// sub-organization on record may back whatever replaced it, so it is left alone
+    /// rather than torn down on a guess.
+    #[tokio::test]
+    async fn a_concurrent_deletion_leaves_turnkey_intact() {
+        let server = MockServer::start().await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
+        mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
+        mount_rejection(&server, DELETE_BACKUP, "backup_untraceable").await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
         run_delete(&server)
             .await
-            .expect("a committed delete is a success");
+            .expect("already gone is a success");
+
+        assert!(
+            !called_paths(&server)
+                .await
+                .contains(&DELETE_SUB_ORG.to_string()),
+            "not ours to delete"
+        );
+    }
+    /// A revoked device gets `backup_untraceable` from the unqualified read while the
+    /// backup is still live. Accepting that as "already deleted" would report a
+    /// successful account deletion and wipe local state while the user's backup
+    /// survives remotely, so it has to stay an error.
+    #[tokio::test]
+    async fn a_revoked_device_is_not_told_the_backup_is_gone() {
+        let server = MockServer::start().await;
+        mount_json(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
+        mount_rejection(&server, RETRIEVE_META, "backup_untraceable").await;
+
+        let error = run_delete(&server).await.unwrap_err();
+
+        // Actionable rather than opaque: native can refresh the sync factor and retry.
+        assert!(matches!(
+            error,
+            BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::SyncFactorInvalid
+            }
+        ));
+        assert!(!called_paths(&server)
+            .await
+            .contains(&DELETE_BACKUP.to_string()));
+    }
+
+    /// Several Turnkey keys are not an ambiguity for a full deletion -- everything is
+    /// in scope. Refusing here would make account deletion impossible for a user with
+    /// corrupt metadata, so every sub-organization is reclaimed instead.
+    #[tokio::test]
+    async fn several_turnkey_keys_are_all_reclaimed() {
+        let server = MockServer::start().await;
+        let second_key = json!({
+            "kind": "TURNKEY",
+            "encryptedKey": "ek2",
+            "turnkeyAccountId": "suborg-2",
+            "turnkeyUserId": "user-2",
+            "turnkeyPrivateKeyId": "pk-2",
+        });
+        mount_metadata(&server, vec![turnkey_key(), second_key]).await;
+        mount_delete_backup(&server).await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+        run_delete(&server).await.unwrap();
+
+        let paths = called_paths(&server).await;
+        assert!(paths.contains(&DELETE_BACKUP.to_string()));
+        assert_eq!(
+            paths.iter().filter(|p| *p == DELETE_SUB_ORG).count(),
+            2,
+            "both sub-organizations must be reclaimed"
+        );
+    }
+    /// The service deleted the backup but its own follow-up failed, so the factor
+    /// still resolves to our backup id. That proves the delete was ours, so the
+    /// sub-organizations we read are the right ones to reclaim.
+    #[tokio::test]
+    async fn a_partial_service_delete_still_reclaims_turnkey() {
+        let server = MockServer::start().await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
+        mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
+        mount_rejection(&server, DELETE_BACKUP, "backup_missing").await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+        run_delete(&server).await.unwrap();
 
         assert!(
             called_paths(&server)
                 .await
                 .contains(&DELETE_SUB_ORG.to_string()),
-            "the captured sub-organization must still be reclaimed"
+            "backup_missing proves the id is ours"
         );
     }
 
+    /// A response lost after the delete committed: attempt 1 dies mid-flight, attempt
+    /// 2 finds nothing mapping to the factor. Since a delete of ours already went out,
+    /// that is our own commit landing -- so the sub-organization is still reclaimed
+    /// rather than orphaned with a misleading "concurrent deletion" alert.
     #[tokio::test]
-    async fn a_delete_that_did_not_land_stays_retryable() {
+    async fn a_lost_response_is_recognised_as_our_own_commit() {
         let server = MockServer::start().await;
         mount_metadata(&server, vec![turnkey_key()]).await;
         mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
-        mount(&server, DELETE_BACKUP, ResponseTemplate::new(503)).await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        mount_rejection(&server, DELETE_BACKUP, "backup_untraceable").await;
         mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
 
-        let error = run_delete(&server).await.unwrap_err();
+        run_delete(&server).await.unwrap();
 
-        assert!(matches!(
-            error,
-            BackupOperationError::Network { retryable: true }
-        ));
         assert!(
-            !called_paths(&server)
+            called_paths(&server)
                 .await
                 .contains(&DELETE_SUB_ORG.to_string()),
-            "Turnkey must survive a backup that may still exist"
+            "our own commit must still reclaim Turnkey"
         );
     }
 
+    /// A sync factor revoked between the read and the delete is rejected at the delete
+    /// step. Turnkey must be left alone: the backup is still live for whoever holds a
+    /// valid factor.
     #[tokio::test]
-    async fn a_revoked_device_cannot_tear_down_a_live_backup() {
+    async fn revocation_at_the_delete_step_leaves_turnkey_intact() {
         let server = MockServer::start().await;
-        mount_metadata_then(&server, vec![turnkey_key()], "unauthorized_factor").await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
         mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
-        mount(&server, DELETE_BACKUP, ResponseTemplate::new(503)).await;
+        mount_rejection(&server, DELETE_BACKUP, "unauthorized_factor").await;
         mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
 
         let error = run_delete(&server).await.unwrap_err();
 
         assert!(matches!(
             error,
-            BackupOperationError::Network { retryable: true }
+            BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::SyncFactorInvalid
+            }
         ));
-        assert!(
-            !called_paths(&server)
-                .await
-                .contains(&DELETE_SUB_ORG.to_string()),
-            "the live backup's sub-organization must survive"
-        );
+        assert!(!called_paths(&server)
+            .await
+            .contains(&DELETE_SUB_ORG.to_string()));
+    }
+    /// Every metadata read names the backup. That is what lets the service answer
+    /// `backup_does_not_exist` or `unauthorized_factor` instead of collapsing both
+    /// into an ambiguous `backup_untraceable`.
+    #[tokio::test]
+    async fn every_metadata_read_names_the_backup() {
+        let server = MockServer::start().await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
+        mount_delete_backup(&server).await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+        run_delete(&server).await.unwrap();
+
+        let bodies: Vec<Value> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == RETRIEVE_META)
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        assert!(!bodies.is_empty(), "the flow reads metadata");
+        for body in bodies {
+            assert_eq!(body["backupId"], TEST_BACKUP_ID);
+        }
     }
 }

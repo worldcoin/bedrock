@@ -1014,6 +1014,9 @@ pub enum NeedsReauthReason {
 /// Most variants are opaque by design (details are logged inside Bedrock).
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum BackupOperationError {
+    /// The total operation timed out (including retries). Terminal.
+    #[error("Turnkey request timed out")]
+    Timeout,
     /// The factor provided invalid or under-permissioned. Re-authenticate and retry.
     #[error("re-authentication required: {reason:?}")]
     NeedsReauth {
