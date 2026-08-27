@@ -83,6 +83,43 @@ pub struct MigrationRunSummary {
     pub pending: i32,
 }
 
+impl MigrationRunSummary {
+    fn skipped() -> Self {
+        Self {
+            skipped: 1,
+            ..Self::default()
+        }
+    }
+
+    fn succeeded() -> Self {
+        Self {
+            succeeded: 1,
+            ..Self::default()
+        }
+    }
+
+    fn pending() -> Self {
+        Self {
+            pending: 1,
+            ..Self::default()
+        }
+    }
+
+    fn failed_retryable() -> Self {
+        Self {
+            failed_retryable: 1,
+            ..Self::default()
+        }
+    }
+
+    fn failed_terminal() -> Self {
+        Self {
+            failed_terminal: 1,
+            ..Self::default()
+        }
+    }
+}
+
 /// Controller that orchestrates migration execution
 ///
 /// ## Storage Architecture
@@ -349,69 +386,13 @@ impl MigrationController {
         // Load the current record for this migration (or create new one if first time)
         let mut record = match self.load_record(&migration_id) {
             Ok(r) => r,
-            Err(e) => {
-                return {
-                    crate::error!(
-                        "migration.storage_error error={:?} timestamp={}",
-                        e,
-                        Utc::now().to_rfc3339()
-                    );
-                    MigrationRunSummary {
-                        failed_retryable: 1,
-                        ..MigrationRunSummary::default()
-                    }
-                }
-            }
+            Err(e) => return Self::storage_failure(&e),
         };
 
-        // Determine if this migration should be attempted based on its current status
-        let should_attempt = match record.status {
-            MigrationStatus::Succeeded => {
-                // Check if it's time to recheck applicability via recheck_at.
-                let recheck_due = record
-                    .recheck_at
-                    .is_some_and(|recheck_at| Utc::now() >= recheck_at);
-
-                if recheck_due {
-                    crate::info!(
-                        "migration.recheck_due id={} recheck_at={} timestamp={}",
-                        migration_id,
-                        record
-                            .recheck_at
-                            .map(|t| t.to_rfc3339())
-                            .unwrap_or_default(),
-                        Utc::now().to_rfc3339()
-                    );
-                    true
-                } else {
-                    false
-                }
-            }
-
-            MigrationStatus::FailedTerminal => {
-                // Terminal state - migration failed permanently
-                crate::info!(
-                    "migration.skipped id={} reason=terminal_failure timestamp={}",
-                    migration_id,
-                    Utc::now().to_rfc3339()
-                );
-                false
-            }
-
-            MigrationStatus::NotStarted
-            | MigrationStatus::InProgress
-            | MigrationStatus::FailedRetryable => {
-                // NotStarted: first time attempting this migration
-                // InProgress/FailedRetryable: retry on every app open
-                true
-            }
-        };
+        let should_attempt = Self::should_attempt(&migration_id, &record);
 
         if !should_attempt {
-            return MigrationRunSummary {
-                skipped: 1,
-                ..MigrationRunSummary::default()
-            };
+            return MigrationRunSummary::skipped();
         }
 
         // Check if migration is applicable based on actual state (e.g., on-chain allowances).
@@ -434,93 +415,18 @@ impl MigrationController {
                     );
                     let _ = self.save_record(&migration_id, &record);
                 }
-                return MigrationRunSummary {
-                    skipped: 1,
-                    ..MigrationRunSummary::default()
-                };
+                return MigrationRunSummary::skipped();
             }
         };
 
         if !applicable {
-            // Already succeeded: only push the TTL out, so completed_at keeps
-            // pointing at the original completion.
-            if matches!(record.status, MigrationStatus::Succeeded) {
-                record.recheck_at =
-                    Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
-                let _ = self.save_record(&migration_id, &record);
-                return MigrationRunSummary {
-                    skipped: 1,
-                    ..MigrationRunSummary::default()
-                };
-            }
-
-            // Otherwise the end state holds now: cache it as Succeeded so
-            // recheck_at becomes the only trigger. Counts as succeeded only if we
-            // had actually attempted it; a migration that was never needed reports
-            // skipped, so fresh installs don't show a burst of successes.
-            let attempted = !matches!(record.status, MigrationStatus::NotStarted);
-            crate::info!(
-                "migration.end_state_holds id={} attempted={} attempts={} timestamp={}",
-                migration_id,
-                attempted,
-                record.attempts,
-                Utc::now().to_rfc3339()
-            );
-            Self::mark_succeeded(&mut record);
-            let _ = self.save_record(&migration_id, &record);
-            return if attempted {
-                MigrationRunSummary {
-                    succeeded: 1,
-                    ..MigrationRunSummary::default()
-                }
-            } else {
-                MigrationRunSummary {
-                    skipped: 1,
-                    ..MigrationRunSummary::default()
-                }
-            };
+            return self.record_end_state_met(&migration_id, &mut record);
         }
 
-        // The previous submission left the end state unmet. Only count it if it
-        // actually mined: a dropped userOp is infrastructure noise, like being
-        // offline, and must not push a working migration to terminal.
-        if matches!(record.status, MigrationStatus::InProgress) {
-            let hash = record.pending_user_op_hash.clone();
-            if let Some(hash) = hash.as_deref() {
-                if Self::submission_mined(hash).await {
-                    record.failed_landings += 1;
-                }
-            }
-            crate::warn!(
-                "migration.submission_did_not_land id={} user_op_hash={} failed_landings={} timestamp={}",
-                migration_id,
-                hash.as_deref().unwrap_or("none"),
-                record.failed_landings,
-                Utc::now().to_rfc3339()
-            );
-
-            if record.failed_landings >= MAX_FAILED_LANDINGS {
-                crate::error!(
-                    "migration.gave_up id={} user_op_hash={} failed_landings={} attempts={} timestamp={}",
-                    migration_id,
-                    record.pending_user_op_hash.as_deref().unwrap_or("none"),
-                    record.failed_landings,
-                    record.attempts,
-                    Utc::now().to_rfc3339()
-                );
-                record.status = MigrationStatus::FailedTerminal;
-                record.last_error_code = Some("LANDING_FAILED".to_string());
-                record.last_error_message = Some(format!(
-                    "{} submissions did not take effect (last: {}), giving up",
-                    record.failed_landings,
-                    record.pending_user_op_hash.as_deref().unwrap_or("unknown")
-                ));
-                let _ = self.save_record(&migration_id, &record);
-                return MigrationRunSummary {
-                    failed_terminal: 1,
-                    ..MigrationRunSummary::default()
-                };
-            }
+        if let Some(summary) =
+            self.count_failed_landing(&migration_id, &mut record).await
+        {
+            return summary;
         }
 
         // prev_user_op_hash ties a retry to the submission it supersedes.
@@ -542,128 +448,218 @@ impl MigrationController {
 
         // Save record before execution so we don't lose progress if the app crashes mid-migration
         if let Err(e) = self.save_record(&migration_id, &record) {
-            return {
-                crate::error!(
-                    "migration.storage_error error={:?} timestamp={}",
-                    e,
-                    Utc::now().to_rfc3339()
-                );
-                MigrationRunSummary {
-                    failed_retryable: 1,
-                    ..MigrationRunSummary::default()
-                }
-            };
+            return Self::storage_failure(&e);
         }
 
         let execute_start = Utc::now();
+        let result = processor.execute().await;
+        let duration_ms = (Utc::now() - execute_start).num_milliseconds();
 
-        let outcome = match processor.execute().await {
-            Ok(ProcessorResult::Success) => {
-                let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::info!(
-                    "migration.succeeded id={} attempt={} duration_ms={} timestamp={}",
-                    migration_id,
-                    record.attempts,
-                    duration_ms,
-                    Utc::now().to_rfc3339()
-                );
-                Self::mark_succeeded(&mut record);
-                MigrationRunSummary {
-                    succeeded: 1,
-                    ..MigrationRunSummary::default()
-                }
-            }
+        // Every outcome sets the same three things; only the values differ.
+        // `hash` is Some only for Pending — anything else clears it.
+        let (status, error, hash) = match result {
+            Ok(ProcessorResult::Success) => (MigrationStatus::Succeeded, None, None),
             Ok(ProcessorResult::Pending { user_op_hash }) => {
-                let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::info!(
-                    "migration.pending id={} attempt={} user_op_hash={} duration_ms={} timestamp={}",
-                    migration_id,
-                    record.attempts,
-                    user_op_hash.as_deref().unwrap_or("none"),
-                    duration_ms,
-                    Utc::now().to_rfc3339()
-                );
-                // Stay InProgress: the next run re-checks is_applicable, which
-                // promotes to Succeeded once the work has landed.
-                record.status = MigrationStatus::InProgress;
-                record.last_error_code = None;
-                record.last_error_message = None;
-                record.pending_user_op_hash = user_op_hash;
-                MigrationRunSummary {
-                    pending: 1,
-                    ..MigrationRunSummary::default()
-                }
+                (MigrationStatus::InProgress, None, user_op_hash)
             }
             Ok(ProcessorResult::Retryable {
                 error_code,
                 error_message,
-                ..
-            }) => {
-                let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::warn!(
-                    "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
-                    migration_id, record.attempts, duration_ms, error_code, error_message, Utc::now().to_rfc3339()
-                );
-                record.status = MigrationStatus::FailedRetryable;
-                record.last_error_code = Some(error_code);
-                record.last_error_message = Some(error_message);
-                record.pending_user_op_hash = None;
-                MigrationRunSummary {
-                    failed_retryable: 1,
-                    ..MigrationRunSummary::default()
-                }
-            }
+            }) => (
+                MigrationStatus::FailedRetryable,
+                Some((error_code, error_message)),
+                None,
+            ),
             Ok(ProcessorResult::Terminal {
                 error_code,
                 error_message,
-            }) => {
-                let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::error!(
-                    "migration.failed_terminal id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
-                    migration_id, record.attempts, duration_ms, error_code, error_message, Utc::now().to_rfc3339()
-                );
-                record.status = MigrationStatus::FailedTerminal;
-                record.last_error_code = Some(error_code);
-                record.last_error_message = Some(error_message);
-                record.pending_user_op_hash = None;
-                MigrationRunSummary {
-                    failed_terminal: 1,
-                    ..MigrationRunSummary::default()
-                }
+            }) => (
+                MigrationStatus::FailedTerminal,
+                Some((error_code, error_message)),
+                None,
+            ),
+            Err(e) => (
+                MigrationStatus::FailedRetryable,
+                Some(("UNEXPECTED_ERROR".to_string(), format!("{e:?}"))),
+                None,
+            ),
+        };
+
+        match &status {
+            MigrationStatus::FailedTerminal => crate::error!(
+                "migration.failed_terminal id={} attempt={} duration_ms={} error={:?} timestamp={}",
+                migration_id, record.attempts, duration_ms, error, Utc::now().to_rfc3339()
+            ),
+            MigrationStatus::FailedRetryable => crate::warn!(
+                "migration.failed_retryable id={} attempt={} duration_ms={} error={:?} timestamp={}",
+                migration_id, record.attempts, duration_ms, error, Utc::now().to_rfc3339()
+            ),
+            _ => crate::info!(
+                "migration.executed id={} attempt={} status={:?} user_op_hash={} duration_ms={} timestamp={}",
+                migration_id,
+                record.attempts,
+                status,
+                hash.as_deref().unwrap_or("none"),
+                duration_ms,
+                Utc::now().to_rfc3339()
+            ),
+        }
+
+        let outcome = match status {
+            MigrationStatus::Succeeded => {
+                Self::mark_succeeded(&mut record);
+                MigrationRunSummary::succeeded()
             }
-            Err(e) => {
-                let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::error!(
-                    "migration.failed_unexpected id={} attempt={} duration_ms={} error={:?} timestamp={}",
-                    migration_id, record.attempts, duration_ms, e, Utc::now().to_rfc3339()
-                );
-                record.status = MigrationStatus::FailedRetryable;
-                record.last_error_code = Some("UNEXPECTED_ERROR".to_string());
-                record.last_error_message = Some(format!("{e:?}"));
+            MigrationStatus::InProgress => {
+                record.status = MigrationStatus::InProgress;
+                record.pending_user_op_hash = hash;
+                MigrationRunSummary::pending()
+            }
+            MigrationStatus::FailedTerminal => {
+                record.status = MigrationStatus::FailedTerminal;
                 record.pending_user_op_hash = None;
-                MigrationRunSummary {
-                    failed_retryable: 1,
-                    ..MigrationRunSummary::default()
-                }
+                MigrationRunSummary::failed_terminal()
+            }
+            _ => {
+                record.status = MigrationStatus::FailedRetryable;
+                record.pending_user_op_hash = None;
+                MigrationRunSummary::failed_retryable()
             }
         };
 
+        let (code, message) = error.unzip();
+        record.last_error_code = code;
+        record.last_error_message = message;
+
         // Save the final result (success/failure) to storage
         if let Err(e) = self.save_record(&migration_id, &record) {
-            return {
-                crate::error!(
-                    "migration.storage_error error={:?} timestamp={}",
-                    e,
-                    Utc::now().to_rfc3339()
-                );
-                MigrationRunSummary {
-                    failed_retryable: 1,
-                    ..MigrationRunSummary::default()
-                }
-            };
+            return Self::storage_failure(&e);
         }
 
         outcome
+    }
+
+    /// Charges the previous submission against the cap when it demonstrably
+    /// failed, returning `Some` once the migration should give up.
+    ///
+    /// Only a submission confirmed *mined* counts: one that never mined is
+    /// infrastructure noise, indistinguishable from being offline, and must not
+    /// push a working migration to terminal.
+    async fn count_failed_landing(
+        &self,
+        migration_id: &str,
+        record: &mut MigrationRecord,
+    ) -> Option<MigrationRunSummary> {
+        if !matches!(record.status, MigrationStatus::InProgress) {
+            return None;
+        }
+
+        let hash = record.pending_user_op_hash.clone();
+        if let Some(hash) = hash.as_deref() {
+            if Self::submission_mined(hash).await {
+                record.failed_landings += 1;
+            }
+        }
+        crate::warn!(
+            "migration.submission_did_not_land id={} user_op_hash={} failed_landings={} timestamp={}",
+            migration_id,
+            hash.as_deref().unwrap_or("none"),
+            record.failed_landings,
+            Utc::now().to_rfc3339()
+        );
+
+        if record.failed_landings < MAX_FAILED_LANDINGS {
+            return None;
+        }
+
+        crate::error!(
+            "migration.gave_up id={} user_op_hash={} failed_landings={} attempts={} timestamp={}",
+            migration_id,
+            hash.as_deref().unwrap_or("none"),
+            record.failed_landings,
+            record.attempts,
+            Utc::now().to_rfc3339()
+        );
+        record.status = MigrationStatus::FailedTerminal;
+        record.last_error_code = Some("LANDING_FAILED".to_string());
+        record.last_error_message = Some(format!(
+            "{} submissions did not take effect (last: {}), giving up",
+            record.failed_landings,
+            hash.as_deref().unwrap_or("unknown")
+        ));
+        let _ = self.save_record(migration_id, record);
+        Some(MigrationRunSummary::failed_terminal())
+    }
+
+    /// The chain says the work is done. Cache that as Succeeded so `recheck_at`
+    /// becomes the only trigger; reported as succeeded only if we had actually
+    /// attempted it, so fresh installs do not show a burst of successes.
+    fn record_end_state_met(
+        &self,
+        migration_id: &str,
+        record: &mut MigrationRecord,
+    ) -> MigrationRunSummary {
+        // Already succeeded: only push the TTL out, keeping the original
+        // completed_at.
+        if matches!(record.status, MigrationStatus::Succeeded) {
+            record.recheck_at =
+                Some(Utc::now() + Duration::days(MIGRATION_SUCCESS_TTL_DAYS));
+            let _ = self.save_record(migration_id, record);
+            return MigrationRunSummary::skipped();
+        }
+
+        let attempted = !matches!(record.status, MigrationStatus::NotStarted);
+        crate::info!(
+            "migration.end_state_holds id={} attempted={} attempts={} timestamp={}",
+            migration_id,
+            attempted,
+            record.attempts,
+            Utc::now().to_rfc3339()
+        );
+        Self::mark_succeeded(record);
+        let _ = self.save_record(migration_id, record);
+
+        if attempted {
+            MigrationRunSummary::succeeded()
+        } else {
+            MigrationRunSummary::skipped()
+        }
+    }
+
+    /// Should this migration be looked at this run? Succeeded migrations wait for
+    /// their TTL; terminal ones never run again.
+    fn should_attempt(migration_id: &str, record: &MigrationRecord) -> bool {
+        match record.status {
+            MigrationStatus::Succeeded => {
+                let recheck_due = record
+                    .recheck_at
+                    .is_some_and(|recheck_at| Utc::now() >= recheck_at);
+                if recheck_due {
+                    crate::info!(
+                        "migration.recheck_due id={} recheck_at={} timestamp={}",
+                        migration_id,
+                        record
+                            .recheck_at
+                            .map(|t| t.to_rfc3339())
+                            .unwrap_or_default(),
+                        Utc::now().to_rfc3339()
+                    );
+                }
+                recheck_due
+            }
+            MigrationStatus::FailedTerminal => {
+                crate::info!(
+                    "migration.skipped id={} reason=terminal_failure timestamp={}",
+                    migration_id,
+                    Utc::now().to_rfc3339()
+                );
+                false
+            }
+            // NotStarted: never tried. InProgress/FailedRetryable: retry every launch.
+            MigrationStatus::NotStarted
+            | MigrationStatus::InProgress
+            | MigrationStatus::FailedRetryable => true,
+        }
     }
 
     /// Load a single migration record from the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore)
@@ -721,6 +717,16 @@ impl MigrationController {
             Ok(r) => matches!(r.status.as_str(), "mined_success" | "mined_revert"),
             Err(_) => false,
         }
+    }
+
+    /// Storage is unusable this run; retry next launch rather than losing state.
+    fn storage_failure(e: &MigrationError) -> MigrationRunSummary {
+        crate::error!(
+            "migration.storage_error error={:?} timestamp={}",
+            e,
+            Utc::now().to_rfc3339()
+        );
+        MigrationRunSummary::failed_retryable()
     }
 
     fn mark_succeeded(record: &mut MigrationRecord) {
