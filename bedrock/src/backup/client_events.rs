@@ -13,8 +13,7 @@ use crate::backup::{
 };
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
-    create_middleware, get_filesystem_raw, FileSystemError, FileSystemExt,
-    FileSystemMiddleware,
+    unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
 use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader};
 use crate::HttpMethod;
@@ -220,13 +219,13 @@ struct EventPayload {
 
 /// Reports client events with a base report persisted under a prefixed folder.
 pub struct ClientEventsReporter {
-    /// Scoped filesystem middleware for this module (prefixes paths).
-    fs: FileSystemMiddleware,
+    /// Filesystem handle scoped to this module's directory.
+    fs: ScopedFileSystem,
 }
 
 impl ClientEventsReporter {
     #[must_use]
-    /// Constructs a new `ClientEventsReporter` with a scoped filesystem middleware.
+    /// Constructs a new `ClientEventsReporter` with a scoped filesystem handle.
     pub fn new() -> Self {
         Self::default()
     }
@@ -407,7 +406,7 @@ impl PreparedEvent {
 impl Default for ClientEventsReporter {
     fn default() -> Self {
         Self {
-            fs: create_middleware(Self::FS_PREFIX),
+            fs: ScopedFileSystem::new(Self::FS_PREFIX),
         }
     }
 }
@@ -460,7 +459,7 @@ impl ClientEventsReporter {
         let serialized =
             serde_json::to_vec(base).map_err(|_| ClientEventsError::Json)?;
         self.fs
-            .write_file(Self::BASE_FILE, serialized)
+            .write_file(Self::BASE_FILE, &serialized)
             .map_err(ClientEventsError::FileSystemError)
     }
 
@@ -496,7 +495,7 @@ impl ClientEventsReporter {
     /// # Errors
     /// Returns an error if manifest or base report cannot be read/written.
     pub fn sync_base_report_with_manifest(&self) -> Result<(), ClientEventsError> {
-        let fs = get_filesystem_raw()?;
+        let fs = unscoped_filesystem();
         let mut base = self.read_base_report().unwrap_or_default();
 
         // Load manifest via manager (unchecked, no remote gate as it's not mutating the state)

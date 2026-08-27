@@ -75,12 +75,19 @@ fn validate_rpc_url(url: &str) -> Result<(), RpcError> {
 
 // ── Low-level HTTP ────────────────────────────────────────────────────────────
 
+/// Ceiling on a bundler response body. A JSON-RPC reply is a few hundred bytes, and
+/// the endpoint is caller-supplied, so reading one unbounded lets it exhaust memory.
+const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Longest excerpt of endpoint-controlled text echoed back in an error.
+const MAX_ERROR_EXCERPT_CHARS: usize = 512;
+
 /// Makes a JSON-RPC POST request to an arbitrary URL using `reqwest`.
 ///
 /// The client is configured with a 15 s timeout to prevent indefinitely hanging requests.
 async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
     let client = REQWEST_CLIENT.get_or_try_init(build_bundler_client)?;
-    let response = client
+    let mut response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body)
@@ -90,19 +97,63 @@ async fn post_json_rpc_to_url(url: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcEr
         .map_err(|e| RpcError::HttpError(e.without_url().to_string()))?;
 
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| RpcError::HttpError(e.without_url().to_string()))?;
+    let bytes = read_capped(&mut response).await?;
 
     if !status.is_success() {
         return Err(RpcError::HttpError(format!(
             "HTTP {status}: {}",
-            String::from_utf8_lossy(&bytes)
+            error_excerpt(&String::from_utf8_lossy(&bytes))
         )));
     }
 
-    Ok(bytes.to_vec())
+    Ok(bytes)
+}
+
+/// Reads a response body a frame at a time, giving up past [`MAX_RESPONSE_BYTES`].
+/// Frames arrive already decompressed, so the cap bounds the inflated size too.
+async fn read_capped(response: &mut reqwest::Response) -> Result<Vec<u8>, RpcError> {
+    let status = response.status();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        RpcError::HttpError(format!("HTTP {status}: {}", e.without_url()))
+    })? {
+        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            crate::warn!(
+                bundler_host = response.url().host_str().unwrap_or("<unknown>"),
+                body_bytes = body.len() + chunk.len(),
+                http_status = status.as_u16(),
+                "bundler.response_exceeds_cap"
+            );
+            let error_message = format!(
+                "HTTP {status}: response exceeds {MAX_RESPONSE_BYTES} bytes: {}",
+                error_excerpt(&String::from_utf8_lossy(&body))
+            );
+            // Size must not reclassify a non-2xx away from `HttpError`.
+            return Err(if status.is_success() {
+                RpcError::InvalidResponse { error_message }
+            } else {
+                RpcError::HttpError(error_message)
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Trims endpoint-controlled text to a length worth putting in an error message,
+/// dropping the characters that would let it forge or reverse a rendered line.
+fn error_excerpt(text: &str) -> String {
+    // `is_control` misses the separators, bidi overrides and invisible joiners.
+    let mut kept = text.chars().filter(|c| {
+        !c.is_control()
+            && !matches!(*c, '\u{200e}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2069}')
+    });
+    let mut excerpt: String = kept.by_ref().take(MAX_ERROR_EXCERPT_CHARS).collect();
+    if kept.next().is_some() {
+        excerpt.push_str(" (truncated)");
+    }
+    excerpt
 }
 
 // ── Parsing helper ────────────────────────────────────────────────────────────
@@ -117,7 +168,7 @@ fn parse_json_rpc_response(response_bytes: &[u8]) -> Result<Value, RpcError> {
             serde_json::from_value(error.clone()).map_err(|_| RpcError::JsonError)?;
         return Err(RpcError::RpcResponseError {
             code: ep.code,
-            error_message: ep.message,
+            error_message: error_excerpt(&ep.message),
         });
     }
 
@@ -213,7 +264,8 @@ pub async fn verify_bundler_rpc_entrypoint(rpc_url: String) -> Result<(), RpcErr
     } else {
         Err(RpcError::InvalidResponse {
             error_message: format!(
-                "Bundler does not support the expected EntryPoint ({expected:?}); supported: {entrypoints:?}"
+                "Bundler does not support the expected EntryPoint ({expected:?}); supported: {}",
+                error_excerpt(&format!("{entrypoints:?}"))
             ),
         })
     }
@@ -296,6 +348,17 @@ mod tests {
     #[tokio::test]
     async fn build_bundler_client_succeeds() {
         build_bundler_client().expect("bundler client should build");
+    }
+
+    #[test]
+    fn test_error_excerpt_truncates_and_strips_line_breaking_characters() {
+        assert_eq!(error_excerpt("gas — ‘low’"), "gas — ‘low’");
+        assert_eq!(error_excerpt("a\nb\tc\r\0d\u{2028}e\u{202e}f"), "abcdef");
+
+        // Must count characters: a byte slice would panic mid-character.
+        let cut = "🚀".repeat(MAX_ERROR_EXCERPT_CHARS);
+        let excerpt = error_excerpt(&"🚀".repeat(MAX_ERROR_EXCERPT_CHARS + 1));
+        assert_eq!(excerpt, format!("{cut} (truncated)"));
     }
 
     #[test]

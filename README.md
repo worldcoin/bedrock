@@ -26,22 +26,26 @@ Bedrock provides a global configuration system for managing environment settings
 
 ### Initialization
 
-Initialize the global configuration once at app startup:
+Install the logger first, then initialize the global configuration once at app startup, before any other Bedrock call.
 
 **Swift:**
 
 ```swift
 @_exported import Bedrock
-Bedrock.setConfig(environment: .staging)
-// or
-import Bedrock
-setConfig(environment: .staging)
+
+// The directory your `FileSystem` implementation used to resolve relative paths against.
+let dataDirectory = try fileSystem.applicationSupportDirectory().path
+
+try Bedrock.setConfig(environment: .staging, os: .ios, dataDirectory: dataDirectory)
 ```
 
 **Kotlin:**
 
 ```kotlin
-uniffi.bedrock.setConfig(BedrockEnvironment.STAGING)
+// The directory your `FileSystem` implementation used to resolve relative paths against.
+val dataDirectory = File(context.filesDir, "oxide").absolutePath
+
+uniffi.bedrock.setConfig(BedrockEnvironment.STAGING, Os.ANDROID, dataDirectory)
 ```
 
 ## 🛠️ Error Handling & Logging Tooling
@@ -84,7 +88,7 @@ pub fn load_config(&self) -> Result<String, MyError> {
 
 ### `#[bedrock_export]` Macro
 
-Wraps `#[uniffi::export]` with automatic logging context and filesystem middleware injection:
+Wraps `#[uniffi::export]` with automatic logging context and scoped filesystem injection:
 
 ```rust
 #[bedrock_export]
@@ -93,9 +97,9 @@ impl MyStruct {
         // LogContext automatically set to "MyStruct"
         info!("This will be prefixed with [Bedrock][MyStruct]");
 
-        // Filesystem middleware available as _bedrock_fs with automatic path prefixing
+        // Scoped filesystem available as _bedrock_fs with automatic path prefixing
         // Files will be prefixed with snake_case version of struct name: "my_struct/"
-        _bedrock_fs.write_file("data.txt", b"content".to_vec()).ok();
+        _bedrock_fs.write_file("data.txt", b"content").ok();
 
         "result".to_string()
     }
@@ -107,30 +111,3 @@ impl MyStruct {
 - Automatically injects `LogContext::new("StructName")` at the start of every public method
 - Works with any `impl` block for structs or traits
 - Maintains all original `#[uniffi::export]` functionality
-
-### Context-Aware Logging
-
-Simplified logging macros that automatically use the current context:
-
-```rust
-use bedrock::{trace, debug, info, warn, error};
-
-// In a bedrock_export impl, logs will be automatically prefixed
-info!("User authenticated successfully");  // Logs: [Bedrock][MyStruct] User authenticated successfully
-debug!("Processing data: {}", value);       // Logs: [Bedrock][MyStruct] Processing data: 42
-```
-
-**Available macros:** `trace!`, `debug!`, `info!`, `warn!`, `error!`
-
-### Manual Context Management
-
-For fine-grained control over logging context:
-
-```rust
-use bedrock::logger::LogContext;
-
-{
-    let _bedrock_logger_ctx = LogContext::new("CustomContext");
-    info!("This message has custom context");  // Logs: [Bedrock][CustomContext] This message has custom context
-} // Context automatically cleared when _bedrock_logger_ctx is dropped
-```

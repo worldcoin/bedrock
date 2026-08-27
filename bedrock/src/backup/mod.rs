@@ -41,7 +41,7 @@ use crate::backup::backup_format::BackupFormat;
 use crate::backup::client_events::BackupReportInput;
 use crate::backup::manifest::BackupManifest;
 use crate::primitives::filesystem::{
-    get_filesystem_raw, FileSystemError, FileSystemExt,
+    unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::STANDARD;
@@ -740,20 +740,54 @@ impl BackupManager {
     ) -> Result<(), BackupError> {
         let BackupFormat::V0(backup) = unsealed_backup;
 
+        // Reported as itself rather than as an unusable payload path below.
+        ScopedFileSystem::data_directory()?;
+
         // NOTE: we don't use the module's prefix (`backup/`) here; as this
         // unpacks files directly into their module-owned locations.
-        let fs = get_filesystem_raw()?;
+        let fs = unscoped_filesystem();
         let mut manifest_entries: Vec<V0BackupManifestEntry> =
             Vec::with_capacity(backup.files.len());
 
         crate::info!("Processing {} files for unpacking.", backup.files.len());
+
+        // Paths come from the sealed backup, so validate all of them before writing any.
+        // A write failing later still leaves earlier files replaced and no manifest.
+        let mut destinations =
+            std::collections::HashSet::with_capacity(backup.files.len());
+        for file in &backup.files {
+            let destination = fs
+                .resolved_file_path(file.path.trim_start_matches('/'))
+                .map_err(|e| {
+                    crate::error!(
+                        designator = file.designator,
+                        error_message = e,
+                        "Rejecting backup: unusable file path"
+                    );
+                    BackupError::InvalidFileForBackup(format!(
+                        "unusable file path for designator: {}",
+                        file.designator
+                    ))
+                })?;
+
+            if !destinations.insert(destination.to_string_lossy().to_lowercase()) {
+                crate::error!(
+                    designator = file.designator,
+                    "Rejecting backup: two entries resolve to the same file"
+                );
+                return Err(BackupError::InvalidFileForBackup(format!(
+                    "duplicate file path for designator: {}",
+                    file.designator
+                )));
+            }
+        }
 
         for file in &backup.files {
             let rel_path = file.path.trim_start_matches('/');
 
             // If a file already exists, verify checksum and log discrepancies before replacing.
             let path_ref = rel_path.get(..14).unwrap_or(rel_path); // don't log the full path to avoid leaking info
-            match fs.file_exists(rel_path.to_string()) {
+            match fs.file_exists(rel_path) {
                 Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
                     Ok((local_checksum, _)) => {
                         if local_checksum != file.checksum {
@@ -777,12 +811,11 @@ impl BackupManager {
                 }
             }
 
-            fs.write_file(rel_path.to_string(), file.data.clone())
-                .map_err(|e| {
-                    let err = anyhow::Error::from(e)
-                        .context(format!("write unpacked file: {path_ref}"));
-                    BackupError::from(err)
-                })?;
+            fs.write_file(rel_path, &file.data).map_err(|e| {
+                let err = anyhow::Error::from(e)
+                    .context(format!("write unpacked file: {path_ref}"));
+                BackupError::from(err)
+            })?;
 
             let designator = file.designator.clone();
 
@@ -922,8 +955,11 @@ pub enum BackupError {
     #[error("Manifest not found")]
     /// Manifest file not found.
     ManifestNotFound,
-    #[error("[Critical] Checksum for file with designator: {designator} does not match the expected value")]
+    #[error("Checksum for file with designator: {designator} does not match the expected value")]
     /// File checksum does not match the expected value.
+    ///
+    /// Raise sites log this via `crate::critical!`; the severity lives in the log
+    /// level, so the message must not carry a `[Critical]` tag.
     InvalidChecksumError {
         /// The designator associated with the file.
         designator: String,

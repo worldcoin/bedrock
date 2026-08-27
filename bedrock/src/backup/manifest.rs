@@ -13,19 +13,16 @@ use serde::{Deserialize, Serialize};
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::service_client::BackupServiceClient;
 use crate::backup::{
+    backup_format::v0::{V0Backup, V0BackupFile},
+    BackupError,
+};
+use crate::backup::{
     BackupFileDesignator, BackupManager, BackupReportEventKind, ClientEventsReporter,
 };
 use crate::primitives::filesystem::{
-    create_middleware, FileSystemError, FileSystemExt, FileSystemMiddleware,
+    unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
 use crate::root_key::RootKey;
-use crate::{
-    backup::{
-        backup_format::v0::{V0Backup, V0BackupFile},
-        BackupError,
-    },
-    primitives::filesystem::get_filesystem_raw,
-};
 
 static DEFAULT_DIGEST_HEX: OnceCell<String> = OnceCell::new();
 
@@ -85,8 +82,8 @@ impl BackupManifest {
                     // Checksum: 32 raw bytes from hex
                     let ck_bytes = hex::decode(&entry.checksum_hex).map_err(|_| {
                         crate::critical!(
-                            "Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
-                            entry.designator
+                            designator = entry.designator,
+                            "Unable to decode checksum hex for file. Manifest entry is invalid."
                         );
                         BackupError::InvalidFileForBackup(format!(
                             "Invalid checksum encoding for designator: {}",
@@ -95,8 +92,8 @@ impl BackupManifest {
                     })?;
                     let ck_arr: [u8; 32] = ck_bytes.try_into().map_err(|_| {
                         crate::critical!(
-                            "Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
-                            entry.designator
+                            designator = entry.designator,
+                            "Decoded checksum has invalid length for file. Manifest entry is invalid."
                         );
                         BackupError::InvalidFileForBackup(format!(
                             "Invalid checksum length for designator: {}",
@@ -148,7 +145,7 @@ impl Default for BackupManifest {
 /// Documentation: <https://docs.toolsforhumanity.com/world-app/backup/structure-and-sync>
 #[derive(uniffi::Object)]
 pub struct ManifestManager {
-    file_system: FileSystemMiddleware,
+    file_system: ScopedFileSystem,
 }
 
 #[bedrock_export]
@@ -159,7 +156,7 @@ impl ManifestManager {
     pub fn new() -> Self {
         Self {
             // The prefix must follow the `BackupManager` struct name.
-            file_system: create_middleware("backup_manager"),
+            file_system: ScopedFileSystem::new("backup_manager"),
         }
     }
 
@@ -332,19 +329,27 @@ impl ManifestManager {
     #[must_use]
     pub fn new_with_prefix(prefix: &str) -> Self {
         Self {
-            file_system: FileSystemMiddleware::new(prefix),
+            file_system: ScopedFileSystem::new(prefix),
         }
     }
 
     /// Gated manifest read that ensures local is not stale vs remote.
+    ///
+    /// When the account has no remote backup, the local manifest is authoritative for
+    /// contents, but the returned hash is the default (empty) manifest hash: with no
+    /// remote head, that is the parent the next sync must declare.
     ///
     /// # Errors
     /// Returns an error if the remote hash does not match local or if network/IO errors occur.
     pub async fn load_manifest_gated(
         &self,
     ) -> Result<(V0BackupManifest, [u8; 32]), BackupError> {
-        let remote_hash = BackupServiceClient::get_remote_manifest_hash().await?;
         let (manifest, local_hash) = self.read_manifest()?;
+        let Some(remote_hash) = BackupServiceClient::get_remote_manifest_hash().await?
+        else {
+            let BackupManifest::V0(manifest) = manifest;
+            return Ok((manifest, BackupManifest::default().to_hash()?));
+        };
         if remote_hash != local_hash {
             return Err(BackupError::RemoteAheadStaleError);
         }
@@ -372,7 +377,7 @@ impl ManifestManager {
         );
 
         self.file_system
-            .write_file(Self::GLOBAL_MANIFEST_FILE, serialized)
+            .write_file(Self::GLOBAL_MANIFEST_FILE, &serialized)
             .context("write manifest.json")?;
         Ok(())
     }
@@ -388,13 +393,17 @@ impl ManifestManager {
     ) -> Result<Vec<V0BackupFile>, BackupError> {
         let mut files = Vec::with_capacity(manifest.files.len());
         // Use the global filesystem (no prefixing) to read file contents.
-        let fs = get_filesystem_raw()?;
+        let fs = unscoped_filesystem();
         for entry in &manifest.files {
             let rel = Self::normalize_input_path(&entry.file_path);
-            let data = fs.read_file(rel.to_string()).map_err(|e| {
+            let data = fs.read_file(rel).map_err(|e| {
                 let msg =
                     format!("Failed to load file from {:?}: {e}", entry.designator);
-                crate::error!("{msg}");
+                crate::error!(
+                    designator = entry.designator,
+                    error_message = e,
+                    "Failed to load file for backup"
+                );
                 BackupError::InvalidFileForBackup(msg)
             })?;
 
@@ -403,8 +412,8 @@ impl ManifestManager {
             let expected_checksum: [u8; 32] = hex::decode(&entry.checksum_hex)
                 .map_err(|_| {
                     crate::critical!(
-                        "Unable to decode checksum hex for file with designator: {}. Manifest entry is invalid.",
-                        entry.designator
+                        designator = entry.designator,
+                        "Unable to decode checksum hex for file. Manifest entry is invalid."
                     );
                     BackupError::InvalidFileForBackup(format!(
                         "Invalid checksum encoding for designator: {}",
@@ -414,8 +423,8 @@ impl ManifestManager {
                 .try_into()
                 .map_err(|_| {
                     crate::critical!(
-                        "Decoded checksum has invalid length for file with designator: {}. Manifest entry is invalid.",
-                        entry.designator
+                        designator = entry.designator,
+                        "Decoded checksum has invalid length for file. Manifest entry is invalid."
                     );
                     BackupError::InvalidFileForBackup(format!(
                         "Invalid checksum length for designator: {}",
@@ -424,6 +433,10 @@ impl ManifestManager {
                 })?;
 
             if computed_checksum != expected_checksum {
+                crate::critical!(
+                    designator = entry.designator,
+                    "Checksum for file does not match the manifest entry"
+                );
                 return Err(BackupError::InvalidChecksumError {
                     designator: entry.designator.to_string(),
                 });
@@ -477,7 +490,7 @@ impl ManifestManager {
     fn checksum_and_size_for_file(
         file_path: &str,
     ) -> Result<(String, u64), BackupError> {
-        let fs = get_filesystem_raw()?;
+        let fs = unscoped_filesystem();
         let normalized = Self::normalize_input_path(file_path);
         fs.calculate_checksum_and_size(normalized)
             .map(|(checksum, size)| (hex::encode(checksum), size))

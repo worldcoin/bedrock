@@ -66,7 +66,12 @@ impl KeypairSigner for TestSigner {
 pub struct StdoutLogger;
 
 impl Logger for StdoutLogger {
-    fn log(&self, level: LogLevel, message: String) {
+    fn log(
+        &self,
+        level: LogLevel,
+        message: String,
+        _attributes: std::collections::HashMap<String, String>,
+    ) {
         println!("[bedrock][{level:?}] {message}");
     }
 }
@@ -76,7 +81,7 @@ impl Logger for StdoutLogger {
 mod integration_tests {
     use super::{StdoutLogger, TestSigner};
     use crate::backup::turnkey::TurnkeyManager;
-    use crate::primitives::config::{set_config, BedrockEnvironment, Os};
+    use crate::primitives::filesystem::init_test_filesystem;
     use crate::primitives::logger::set_logger;
     use crate::primitives::P256Signer;
     use std::sync::Arc;
@@ -84,7 +89,7 @@ mod integration_tests {
     #[tokio::test]
     #[ignore = "integration: hits the real Turnkey API; requires real credentials"]
     async fn run_migrations_against_real_turnkey() {
-        set_config(BedrockEnvironment::Staging, Os::Ios);
+        init_test_filesystem();
         set_logger(Arc::new(StdoutLogger));
 
         let sync_key = std::env::var("TURNKEY_SYNC_KEY").unwrap();

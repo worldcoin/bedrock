@@ -61,6 +61,10 @@ impl V0BackupFile {
     pub fn validate_checksum(&self) -> Result<(), BackupError> {
         let computed_checksum = blake3::hash(&self.data);
         if &self.checksum != computed_checksum.as_bytes() {
+            crate::critical!(
+                designator = self.designator,
+                "Checksum for file in backup does not match the expected value"
+            );
             return Err(BackupError::InvalidChecksumError {
                 designator: self.designator.to_string(),
             });
@@ -132,9 +136,12 @@ impl V0Backup {
                 file.read_to_end(&mut data)?;
 
                 let file: V0BackupFile = ciborium::from_reader(Cursor::new(&data))
-                    .map_err(|e| {
-                        crate::error!("Failed to deserialize backup file {path}: {e}");
-                        e
+                    .inspect_err(|e| {
+                        crate::error!(
+                            path = path,
+                            error_message = e,
+                            "Failed to deserialize backup file"
+                        );
                     })?;
 
                 file.validate_checksum()?;
@@ -145,9 +152,17 @@ impl V0Backup {
 
         // Validate the root secret.
         let root_secret = RootKey::from_json(&root_secret).map_err(|_| {
+            // Shape only, never the secret itself: whether it looks like JSON at all,
+            // and how long it is.
+            let looks_like_json =
+                root_secret.chars().next().unwrap_or_default() == '{';
+            crate::critical!(
+                looks_like_json = looks_like_json,
+                length = root_secret.len(),
+                "Invalid root secret in decrypted backup"
+            );
             BackupError::InvalidRootSecretError(format!(
-                "[Critical] Invalid root secret in decrypted backup: {} with length {}.",
-                root_secret.chars().next().unwrap_or_default() == '{',
+                "Invalid root secret in decrypted backup: {looks_like_json} with length {}.",
                 root_secret.len()
             ))
         })?;
@@ -306,7 +321,7 @@ mod tests {
         encoder.finish().unwrap();
         assert_eq!(
             V0Backup::from_bytes(&result).unwrap_err().to_string(),
-            "Invalid root secret provided: [Critical] Invalid root secret in decrypted backup: false with length 16."
+            "Invalid root secret provided: Invalid root secret in decrypted backup: false with length 16."
         );
     }
 
@@ -334,7 +349,7 @@ mod tests {
 
         assert_eq!(
             V0Backup::from_bytes(&result).unwrap_err().to_string(),
-            "Invalid root secret provided: [Critical] Invalid root secret in decrypted backup: false with length 0."
+            "Invalid root secret provided: Invalid root secret in decrypted backup: false with length 0."
         );
     }
 
@@ -483,7 +498,7 @@ mod tests {
         let error = V0Backup::from_bytes(&result).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "[Critical] Checksum for file with designator: orb_pkg does not match the expected value"
+            "Checksum for file with designator: orb_pkg does not match the expected value"
         );
     }
 }
