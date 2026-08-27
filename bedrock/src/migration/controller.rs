@@ -554,16 +554,17 @@ impl MigrationController {
             return None;
         }
 
-        let hash = record.pending_user_op_hash.clone();
-        if let Some(hash) = hash.as_deref() {
-            if Self::submission_mined(hash).await {
-                record.revert_count += 1;
-            }
+        // No hash means the previous run submitted nothing, so there is nothing
+        // to charge against the cap.
+        let hash = record.pending_user_op_hash.clone()?;
+
+        if Self::submission_mined(&hash).await {
+            record.revert_count += 1;
         }
         crate::warn!(
             "migration.submission_did_not_land id={} user_op_hash={} revert_count={} timestamp={}",
             migration_id,
-            hash.as_deref().unwrap_or("none"),
+            hash,
             record.revert_count,
             Utc::now().to_rfc3339()
         );
@@ -575,7 +576,7 @@ impl MigrationController {
         crate::error!(
             "migration.gave_up id={} user_op_hash={} revert_count={} attempts={} timestamp={}",
             migration_id,
-            hash.as_deref().unwrap_or("none"),
+            hash,
             record.revert_count,
             record.attempts,
             Utc::now().to_rfc3339()
@@ -583,9 +584,8 @@ impl MigrationController {
         record.status = MigrationStatus::FailedTerminal;
         record.last_error_code = Some("LANDING_FAILED".to_string());
         record.last_error_message = Some(format!(
-            "{} submissions did not take effect (last: {}), giving up",
-            record.revert_count,
-            hash.as_deref().unwrap_or("unknown")
+            "{} submissions did not take effect (last: {hash}), giving up",
+            record.revert_count
         ));
         let _ = self.save_record(migration_id, record);
         Some(MigrationRunSummary::failed_terminal())
