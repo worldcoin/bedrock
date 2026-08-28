@@ -255,7 +255,7 @@ impl WalletMigrationController {
 
         // Step 2b: observe, and submit if the end state does not hold.
         let started = Utc::now();
-        let outcome = Self::reconcile(migration).await;
+        let outcome = migration.reconcile().await;
         let duration_ms = (Utc::now() - started).num_milliseconds();
 
         // Step 3: turn that outcome into the new record state.
@@ -363,19 +363,6 @@ impl WalletMigrationController {
                 MigrationRunSummary::skipped()
             }
         }
-    }
-
-    /// Observe, then submit if the end state does not hold.
-    ///
-    /// Lives here rather than on the trait so the check that decides "is there
-    /// work to do" cannot be overridden or restated by a migration.
-    async fn reconcile(
-        migration: &dyn WalletMigration,
-    ) -> Result<Reconciled, MigrationError> {
-        if migration.end_state_holds().await? {
-            return Ok(Reconciled::Converged);
-        }
-        migration.submit().await
     }
 
     /// The cap is spent: one pure observation decides done vs. dead.
@@ -623,7 +610,7 @@ mod tests {
             Ok(!self.gap.load(Ordering::SeqCst))
         }
 
-        async fn submit(&self) -> Result<Reconciled, MigrationError> {
+        async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
             let i = self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.script[i.min(self.script.len() - 1)]())
         }
@@ -767,7 +754,7 @@ mod tests {
                 }
                 Ok(false)
             }
-            async fn submit(&self) -> Result<Reconciled, MigrationError> {
+            async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
                 Ok(submitted())
             }
         }
@@ -820,8 +807,8 @@ mod tests {
             async fn end_state_holds(&self) -> Result<bool, MigrationError> {
                 Err(MigrationError::InvalidOperation("rpc down".to_string()))
             }
-            async fn submit(&self) -> Result<Reconciled, MigrationError> {
-                unreachable!("end_state_holds errors first")
+            async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+                Err(MigrationError::InvalidOperation("rpc down".to_string()))
             }
         }
 

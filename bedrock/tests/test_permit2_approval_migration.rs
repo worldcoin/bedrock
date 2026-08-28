@@ -102,7 +102,7 @@ async fn test_permit2_approval_migration_full_flow() -> anyhow::Result<()> {
     //    submission; whether the work landed is proven by the on-chain allowance
     //    assertions below, never by a receipt.
     assert!(!migration.end_state_holds().await?);
-    let reference = match migration.submit().await? {
+    let reference = match migration.reconcile().await? {
         Reconciled::Submitted { reference } => {
             reference.expect("submission must carry the userOp hash")
         }

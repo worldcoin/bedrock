@@ -117,18 +117,21 @@ impl Reconciled {
 ///
 /// # Implementing
 ///
-/// Implement the two phases. The controller wires them together, so no
-/// migration can restate or reorder the check:
+/// Both methods read through one private method named `observe` — always that
+/// name — which returns the gap. `reconcile` reuses the value it returns rather
+/// than asking the chain a second time:
 ///
 /// ```rust,ignore
 /// async fn end_state_holds(&self) -> Result<bool, MigrationError> {
 ///     Ok(self.observe().await?.is_empty())
 /// }
 ///
-/// async fn submit(&self) -> Result<Reconciled, MigrationError> {
-///     let gap = self.observe().await?;
-///     let hash = self.submit(gap).await?;
-///     Ok(Reconciled::submitted(hash))
+/// async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+///     let gap = self.observe().await?;          // the only read
+///     if gap.is_empty() {
+///         return Ok(Reconciled::Converged);
+///     }
+///     Ok(Reconciled::submitted(self.send(gap).await?))
 /// }
 /// ```
 ///
@@ -147,11 +150,11 @@ pub trait WalletMigration: Send + Sync {
 
     /// Does the desired end state already hold on chain?
     ///
-    /// A **pure read** — it observes and nothing else. The controller calls it
-    /// alone when the give-up cap is spent, to confirm before writing the
-    /// migration off rather than spending another submission.
+    /// A **pure read**, called only when the give-up cap is spent — the one
+    /// case where the controller must know without acting. The normal path uses
+    /// [`Self::reconcile`], so this costs nothing on a healthy launch.
     ///
-    /// Implement it over the same private observe method [`Self::submit`]
+    /// Implement it over the same private `observe` method [`Self::reconcile`]
     /// uses, so the two can never disagree.
     ///
     /// # Errors
@@ -160,13 +163,16 @@ pub trait WalletMigration: Send + Sync {
     /// and retried next launch.
     async fn end_state_holds(&self) -> Result<bool, MigrationError>;
 
-    /// Submit work to close the gap. Returns as soon as it is handed off.
+    /// Observe, and submit work if the end state does not hold.
+    ///
+    /// **One chain read.** This is the normal path, so it must not observe
+    /// twice — reuse the value your private observe method returned.
     ///
     /// **Must be idempotent.** Called on every launch for as long as the end
     /// state does not hold, including while an earlier submission is in flight.
     ///
     /// # Errors
     ///
-    /// If the work could not be submitted.
-    async fn submit(&self) -> Result<Reconciled, MigrationError>;
+    /// If the chain could not be read, or the work could not be submitted.
+    async fn reconcile(&self) -> Result<Reconciled, MigrationError>;
 }

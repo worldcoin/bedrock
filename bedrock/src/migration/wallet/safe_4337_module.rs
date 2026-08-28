@@ -34,9 +34,9 @@ impl Safe4337ModuleMigration {
         Self { safe_account }
     }
 
-    /// **Observe.** Reads the Safe's ERC-4337 configuration on-chain and returns
-    /// the repairs still needed — the gap.
-    async fn repairs_needed(&self) -> Result<Safe4337Repairs, MigrationError> {
+    /// **Observe.** The one chain read: the Safe's ERC-4337 configuration,
+    /// returning the repairs still needed — the gap.
+    async fn observe(&self) -> Result<Safe4337Repairs, MigrationError> {
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
         let safe = self.safe_account.wallet_address;
@@ -89,17 +89,19 @@ impl Safe4337ModuleMigration {
         })
     }
 
-    /// Builds and signs the repair `execTransaction`, or `None` if nothing needs
-    /// repairing. Separate from [`Self::reconcile`] so the calldata and signing
-    /// path is unit-testable without a live RPC client.
+    /// Builds and signs the repair `execTransaction` for `repairs`, which must
+    /// be non-empty. Separate from [`Self::reconcile`] so the calldata and
+    /// signing path is unit-testable without a live RPC client.
     fn build_signed_transaction(
         &self,
         repairs: Safe4337Repairs,
         nonce: U256,
-    ) -> Result<Option<RelaySafeTransactionRequest>, MigrationError> {
+    ) -> Result<RelaySafeTransactionRequest, MigrationError> {
         let safe_address = self.safe_account.wallet_address;
         let Some(bundle) = repairs.build_bundle(safe_address) else {
-            return Ok(None);
+            return Err(MigrationError::InvalidOperation(
+                "asked to build a 4337 repair with nothing to repair".to_string(),
+            ));
         };
 
         // gas_price = 0 → the Safe performs no refund; the relayer's outer
@@ -122,7 +124,7 @@ impl Safe4337ModuleMigration {
             .sign_transaction(Network::WorldChain as u32, safe_tx.clone())
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
 
-        Ok(Some(RelaySafeTransactionRequest {
+        Ok(RelaySafeTransactionRequest {
             safe_address: format!("{safe_address:#x}"),
             to: safe_tx.to,
             value: safe_tx.value,
@@ -135,7 +137,7 @@ impl Safe4337ModuleMigration {
             refund_receiver: safe_tx.refund_receiver,
             nonce: safe_tx.nonce,
             signatures: signature.to_hex_string(),
-        }))
+        })
     }
 }
 
@@ -146,17 +148,18 @@ impl WalletMigration for Safe4337ModuleMigration {
     }
 
     async fn end_state_holds(&self) -> Result<bool, MigrationError> {
-        Ok(!self.repairs_needed().await?.any())
+        Ok(!self.observe().await?.any())
     }
 
-    async fn submit(&self) -> Result<Reconciled, MigrationError> {
-        let repairs = self.repairs_needed().await?;
-        let nonce = self.safe_nonce().await?;
-        // Race guard only — the decision to be here was made by
-        // `end_state_holds`; the Safe may have been repaired since.
-        let Some(request) = self.build_signed_transaction(repairs, nonce)? else {
+    async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+        // The only configuration read of this pass; the gap is a local.
+        let repairs = self.observe().await?;
+        if !repairs.any() {
             return Ok(Reconciled::Converged);
-        };
+        }
+
+        let nonce = self.safe_nonce().await?;
+        let request = self.build_signed_transaction(repairs, nonce)?;
 
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
@@ -213,18 +216,18 @@ mod tests {
     }
 
     #[test]
-    fn test_no_repairs_builds_nothing() {
-        let result = migration()
+    fn test_no_repairs_is_a_caller_error() {
+        // `reconcile` returns Converged before reaching here, so an empty
+        // bundle means the caller broke the contract, not that work is done.
+        assert!(migration()
             .build_signed_transaction(Safe4337Repairs::default(), U256::ZERO)
-            .unwrap();
-        assert!(result.is_none());
+            .is_err());
     }
 
     #[test]
     fn test_signed_transaction_shape() {
         let req = migration()
             .build_signed_transaction(BOTH, U256::from(7))
-            .unwrap()
             .unwrap();
 
         assert_eq!(req.operation, SafeOperation::DelegateCall as u8);
@@ -247,7 +250,6 @@ mod tests {
                 },
                 U256::ZERO,
             )
-            .unwrap()
             .unwrap();
 
         let data = hex::decode(req.data.trim_start_matches("0x")).unwrap();
@@ -275,18 +277,15 @@ mod tests {
     fn test_signing_is_deterministic() {
         let a = migration()
             .build_signed_transaction(BOTH, U256::from(42))
-            .unwrap()
             .unwrap();
         let b = migration()
             .build_signed_transaction(BOTH, U256::from(42))
-            .unwrap()
             .unwrap();
         assert_eq!(a.signatures, b.signatures);
 
         // A different nonce binds into the Safe tx hash → different signature.
         let c = migration()
             .build_signed_transaction(BOTH, U256::from(43))
-            .unwrap()
             .unwrap();
         assert_ne!(a.signatures, c.signatures);
     }

@@ -43,11 +43,9 @@ impl Permit2ApprovalMigration {
         Self { safe_account }
     }
 
-    /// **Observe.** Reads on-chain allowances for all tokens concurrently and
-    /// returns those that still need approval — the gap.
-    async fn tokens_needing_approval(
-        &self,
-    ) -> Result<Vec<(Address, &'static str)>, MigrationError> {
+    /// **Observe.** The one chain read: allowances for all tokens, batched,
+    /// returning those that still need approval — the gap.
+    async fn observe(&self) -> Result<Vec<(Address, &'static str)>, MigrationError> {
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
 
@@ -97,13 +95,12 @@ impl WalletMigration for Permit2ApprovalMigration {
     }
 
     async fn end_state_holds(&self) -> Result<bool, MigrationError> {
-        Ok(self.tokens_needing_approval().await?.is_empty())
+        Ok(self.observe().await?.is_empty())
     }
 
-    async fn submit(&self) -> Result<Reconciled, MigrationError> {
-        let tokens = self.tokens_needing_approval().await?;
-        // Race guard only — the decision to be here was made by
-        // `end_state_holds`; the allowances may have changed since.
+    async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+        // The only chain read of this pass; the gap is a local, never a field.
+        let tokens = self.observe().await?;
         if tokens.is_empty() {
             return Ok(Reconciled::Converged);
         }

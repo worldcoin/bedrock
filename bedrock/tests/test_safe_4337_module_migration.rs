@@ -88,7 +88,7 @@ async fn test_safe_4337_module_migration_full_flow() -> anyhow::Result<()> {
     assert!(!migration.end_state_holds().await?);
     assert!(
         matches!(
-            migration.submit().await?,
+            migration.reconcile().await?,
             Reconciled::Submitted { reference: Some(_) }
         ),
         "first pass should relay and report submitted with a transaction id"
