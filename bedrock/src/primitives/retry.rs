@@ -46,9 +46,12 @@ impl RetryPolicy {
     }
 }
 
+/// Why a retried operation failed.
 #[derive(Debug)]
 pub enum RetryError<E> {
+    /// Operation reported a non-retryable error.
     Operation(E),
+    /// [`RetryPolicy::total_timeout`] elapsed before a success.
     Timeout,
 }
 
@@ -63,12 +66,13 @@ pub enum RetryError<E> {
 pub async fn retry_with_backoff<T, E, Fut>(
     policy: &RetryPolicy,
     operation: &str,
-    is_retryable: impl Fn(&E) -> bool + Send,
+    is_retryable: impl Fn(&E) -> bool + Send + Sync,
     mut op: impl FnMut() -> Fut + Send,
 ) -> Result<T, RetryError<E>>
 where
     Fut: Future<Output = Result<T, E>> + Send,
-    E: std::fmt::Display,
+    E: std::fmt::Display + Send,
+    T: Send,
 {
     let result = tokio::time::timeout(policy.total_timeout, async {
         let mut attempt: u32 = 0;
@@ -101,19 +105,16 @@ where
     })
     .await;
 
-    match result {
-        Ok(result) => result,
-        Err(_) => {
-            // The total timeout is a final resort, it should be extremely rare so logging as an error.
-            let timeout_ms = policy.total_timeout.as_millis();
-            crate::error!(
-                operation = operation,
-                timeout_ms = timeout_ms,
-                "request.total_timeout op={operation}",
-            );
-            Err(RetryError::Timeout)
-        }
-    }
+    let Ok(result) = result else {
+        let timeout_ms = policy.total_timeout.as_millis();
+        crate::warn!(
+            operation = operation,
+            timeout_ms = timeout_ms,
+            "request.total_timeout op={operation}",
+        );
+        return Err(RetryError::Timeout);
+    };
+    result
 }
 
 #[cfg(test)]
@@ -150,7 +151,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.unwrap().unwrap(), 42);
+        assert_eq!(result.unwrap(), 42);
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
@@ -158,7 +159,7 @@ mod tests {
     async fn gives_up_after_max_attempts() {
         let policy = RetryPolicy::default();
         let calls = AtomicU32::new(0);
-        let result: Result<(), &str> = retry_with_backoff(
+        let result: Result<(), RetryError<&str>> = retry_with_backoff(
             &policy,
             "op",
             |_| true,
@@ -167,10 +168,9 @@ mod tests {
                 async { Err("always") }
             },
         )
-        .await
-        .unwrap();
+        .await;
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(RetryError::Operation("always"))));
         assert_eq!(calls.load(Ordering::SeqCst), policy.max_attempts);
     }
 
@@ -178,7 +178,7 @@ mod tests {
     async fn does_not_retry_non_retryable() {
         let policy = RetryPolicy::default();
         let calls = AtomicU32::new(0);
-        let result: Result<(), &str> = retry_with_backoff(
+        let result: Result<(), RetryError<&str>> = retry_with_backoff(
             &policy,
             "op",
             |_| false,
@@ -187,15 +187,38 @@ mod tests {
                 async { Err("permanent") }
             },
         )
-        .await
-        .unwrap();
+        .await;
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(RetryError::Operation("permanent"))));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
-    async fn test_total_timeout_exceeded_raises_timeout_error() {
-        todo!("add test")
+    #[tokio::test(start_paused = true)]
+    async fn total_timeout_exceeded_raises_timeout_error() {
+        let policy = RetryPolicy {
+            total_timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
+        let calls = AtomicU32::new(0);
+        let result: Result<(), RetryError<&str>> = retry_with_backoff(
+            &policy,
+            "op",
+            |_| true,
+            || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Err("never settles")
+                }
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(RetryError::Timeout)));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the first attempt never settled, so no retry was ever reached"
+        );
     }
 }

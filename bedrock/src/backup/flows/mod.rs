@@ -47,26 +47,3 @@ pub trait BackupFlow {
     ) -> Result<Self::Output, BackupOperationError>;
 }
 
-/// Tears down the Turnkey sub-organization.
-async fn best_effort_delete_sub_org(
-    flow: &str,
-    turnkey: &TurnkeyApiClient,
-    suborg_id: &str,
-    sync_factor: &P256Signer,
-) {
-    if let Err(error) = turnkey
-        .delete_sub_organization(suborg_id, SyncFactor(sync_factor))
-        .await
-    {
-        if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
-            crate::warn!(
-                "{flow}.turnkey_suborg_teardown_pending suborg_id={suborg_id} err={error}"
-            );
-            return;
-        }
-        crate::critical!(
-            "{flow}.turnkey_suborg_orphaned suborg_id={suborg_id} code={} err={error}",
-            error.code()
-        );
-    }
-}
