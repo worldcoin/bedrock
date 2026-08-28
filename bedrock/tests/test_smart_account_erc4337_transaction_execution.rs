@@ -115,11 +115,12 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     user_op.signature = sig_with_timestamps.into();
 
     // Submit through the 4337 EntryPoint
-    let _ = entry_point
+    let pending_tx = entry_point
         .handleOps(vec![PackedUserOperation::try_from(&user_op)?], owner)
         .from(owner)
         .send()
         .await?;
+    pending_tx.get_receipt().await?;
 
     // Assert the transfer has succeeded
     let after_balance = provider.get_balance(safe_address2).await?;
