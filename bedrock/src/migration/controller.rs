@@ -1,18 +1,19 @@
 use crate::bedrock_export;
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
+use crate::migration::record_store::RecordStore;
 use crate::migration::state::{MigrationRecord, MigrationStatus};
 use crate::migration::wallet_controller::WalletMigrationController;
-use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
+use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
-use crate::warn;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-const MIGRATION_KEY_PREFIX: &str = "migration:";
+/// Namespace for native migration records.
+const NATIVE_KEY_PREFIX: &str = "migration:";
 const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations after 30 days
 
 /// Global lock to prevent concurrent migration runs across all controller instances.
@@ -143,7 +144,7 @@ impl MigrationRunSummary {
 /// timestamps, and error information.
 #[derive(uniffi::Object)]
 pub struct MigrationController {
-    kv_store: Arc<dyn DeviceKeyValueStore>,
+    records: RecordStore,
     /// Foreign (Swift/Kotlin) processors, plus any injected in tests.
     processors: Vec<Arc<dyn MigrationProcessor>>,
     /// Bedrock's own wallet migrations. Runs alongside `processors` under the
@@ -171,7 +172,7 @@ impl MigrationController {
     ) -> Arc<Self> {
         Arc::new(Self {
             wallet: WalletMigrationController::new(Arc::clone(&kv_store), safe_account),
-            kv_store,
+            records: RecordStore::new(kv_store, NATIVE_KEY_PREFIX),
             processors: additional_processors,
         })
     }
@@ -233,11 +234,8 @@ impl MigrationController {
 
         let mut deleted = 0;
         for processor in &self.processors {
-            let key = format!("{MIGRATION_KEY_PREFIX}{}", processor.migration_id());
-            match self.kv_store.delete(key) {
-                Ok(()) => deleted += 1,
-                Err(KeyValueStoreError::KeyNotFound) => {} // No record to delete
-                Err(e) => return Err(e.into()),
+            if self.records.delete(&processor.migration_id())? {
+                deleted += 1;
             }
         }
 
@@ -312,7 +310,7 @@ impl MigrationController {
                 Arc::clone(&kv_store),
                 vec![],
             ),
-            kv_store,
+            records: RecordStore::new(kv_store, NATIVE_KEY_PREFIX),
             processors,
         })
     }
@@ -609,29 +607,7 @@ impl MigrationController {
         &self,
         migration_id: &str,
     ) -> Result<MigrationRecord, MigrationError> {
-        let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
-        match self.kv_store.get(key) {
-            Ok(json) => {
-                match serde_json::from_str(&json) {
-                    Ok(record) => Ok(record),
-                    Err(e) => {
-                        // JSON is corrupted - treat as reset and let migration re-run
-                        warn!("Migration {migration_id} has corrupted JSON data, resetting: {e:?}");
-                        Ok(MigrationRecord::default())
-                    }
-                }
-            }
-            Err(KeyValueStoreError::KeyNotFound) => {
-                // First time running this migration, return new record
-                Ok(MigrationRecord::default())
-            }
-            Err(KeyValueStoreError::ParsingFailure) => {
-                // Storage layer couldn't parse the value - treat as reset
-                warn!("Migration {migration_id} has corrupted storage data, resetting");
-                Ok(MigrationRecord::default())
-            }
-            Err(e) => Err(e.into()),
-        }
+        self.records.load(migration_id)
     }
 
     /// Save a single migration record to persistent storage
@@ -641,10 +617,7 @@ impl MigrationController {
         migration_id: &str,
         record: &MigrationRecord,
     ) -> Result<(), MigrationError> {
-        let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
-        let json = serde_json::to_string(record)?;
-        self.kv_store.set(key, json)?;
-        Ok(())
+        self.records.save(migration_id, record)
     }
 }
 
@@ -656,7 +629,9 @@ mod tests {
     //! The `#[serial]` attribute ensures they don't interfere with each other.
 
     use super::*;
-    use crate::primitives::key_value_store::InMemoryDeviceKeyValueStore;
+    use crate::primitives::key_value_store::{
+        InMemoryDeviceKeyValueStore, KeyValueStoreError,
+    };
     use async_trait::async_trait;
     use serial_test::serial;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -944,8 +919,8 @@ mod tests {
         assert_eq!(result.unwrap().succeeded, 2);
 
         // Verify individual keys are stored correctly
-        let key1 = format!("{MIGRATION_KEY_PREFIX}test.migration1.v1");
-        let key2 = format!("{MIGRATION_KEY_PREFIX}test.migration2.v1");
+        let key1 = format!("{NATIVE_KEY_PREFIX}test.migration1.v1");
+        let key2 = format!("{NATIVE_KEY_PREFIX}test.migration2.v1");
 
         // Both keys should exist in the KV store
         let record1_json = kv_store.get(key1).expect("Migration 1 record should exist");
@@ -969,7 +944,7 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Manually insert corrupted JSON for this migration
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         kv_store
             .set(key.clone(), "{invalid json!!!".to_string())
             .expect("Should store corrupted data");
@@ -1082,7 +1057,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1121,7 +1096,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1163,7 +1138,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1218,7 +1193,7 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
 
         // Verify status transitioned to Succeeded
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let record_json = kv_store.get(key).expect("Record should exist");
         let record: MigrationRecord =
             serde_json::from_str(&record_json).expect("Should deserialize");
@@ -1240,7 +1215,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1281,7 +1256,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1320,7 +1295,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.succeeded.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.succeeded.v1"),
                 serde_json::to_string(&succeeded).unwrap(),
             )
             .unwrap();
@@ -1331,7 +1306,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.terminal.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.terminal.v1"),
                 serde_json::to_string(&terminal).unwrap(),
             )
             .unwrap();
@@ -1343,7 +1318,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.retryable.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.retryable.v1"),
                 serde_json::to_string(&retryable).unwrap(),
             )
             .unwrap();
@@ -1355,7 +1330,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.in_progress.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.in_progress.v1"),
                 serde_json::to_string(&in_progress).unwrap(),
             )
             .unwrap();
@@ -1407,7 +1382,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.migration.v1"),
                 serde_json::to_string(&record).unwrap(),
             )
             .unwrap();
@@ -1437,7 +1412,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.migration.v1"),
                 serde_json::to_string(&record).unwrap(),
             )
             .unwrap();
@@ -1465,12 +1440,12 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.migration1.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.migration1.v1"),
                 json.clone(),
             )
             .unwrap();
         kv_store
-            .set(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1"), json)
+            .set(format!("{NATIVE_KEY_PREFIX}test.migration2.v1"), json)
             .unwrap();
 
         let controller = MigrationController::with_processors(
@@ -1483,11 +1458,11 @@ mod tests {
 
         // Verify records are gone
         assert!(matches!(
-            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration1.v1")),
+            kv_store.get(format!("{NATIVE_KEY_PREFIX}test.migration1.v1")),
             Err(KeyValueStoreError::KeyNotFound)
         ));
         assert!(matches!(
-            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1")),
+            kv_store.get(format!("{NATIVE_KEY_PREFIX}test.migration2.v1")),
             Err(KeyValueStoreError::KeyNotFound)
         ));
     }
@@ -1603,7 +1578,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         kv_store
             .set(key.clone(), serde_json::to_string(&record).unwrap())
             .unwrap();

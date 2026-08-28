@@ -3,10 +3,10 @@ use super::wallet::safe_4337_module::Safe4337ModuleMigration;
 use super::wallet_migration::{Reconciled, WalletMigration};
 use crate::migration::controller::{MigrationRecordEntry, MigrationRunSummary};
 use crate::migration::error::MigrationError;
+use crate::migration::record_store::RecordStore;
 use crate::migration::MigrationStatus;
-use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
+use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
-use crate::warn;
 use chrono::{DateTime, Duration, Utc};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,8 @@ pub enum WalletMigrationStatus {
     /// Work was submitted and has not been observed on chain yet.
     InFlight,
 
-    /// The end state was observed. Re-checked when `recheck_at` comes due.
+    /// The end state was observed. Re-observed on every launch, since on-chain
+    /// state can drift back (e.g. a USDC allowance decaying).
     Converged,
 
     /// The last pass failed. Retried next launch; nothing is in flight.
@@ -78,29 +79,13 @@ pub struct WalletMigrationRecord {
     /// When the end state was first observed to hold.
     pub completed_at: Option<DateTime<Utc>>,
 
-    /// When to re-observe a converged migration. On-chain state can drift back
-    /// (e.g. a USDC allowance decaying), so convergence is cached, not final.
-    pub recheck_at: Option<DateTime<Utc>>,
-
     /// Reference for the most recent submission (userOp hash or relay id).
     /// Diagnostics only — never read for control flow.
     pub last_submission: Option<String>,
 }
 
-/// Own namespace, so on-chain records never collide with the FFI framework's.
+/// Own namespace, so wallet records never collide with the native framework's.
 const WALLET_KEY_PREFIX: &str = "migration:wallet:";
-
-/// How long a converged migration is trusted before re-observing.
-///
-/// A spend knob, not only an RPC knob: a recheck that finds the state drifted
-/// back will submit work on the spot.
-const SUCCESS_TTL_DAYS: i64 = 30;
-
-/// Backoff when a recheck's observation failed (e.g. an RPC outage).
-///
-/// A converged migration then neither re-observes on every app open nor waits a
-/// full [`SUCCESS_TTL_DAYS`].
-const OBSERVE_ERROR_RETRY_DAYS: i64 = 1;
 
 /// How long an in-flight submission is given to land.
 ///
@@ -122,7 +107,7 @@ const MAX_ATTEMPTS: i32 = 5;
 /// Not exported over FFI; see the [module docs](super) for why it is separate
 /// from [`MigrationController`](crate::migration::MigrationController).
 pub struct WalletMigrationController {
-    kv_store: Arc<dyn DeviceKeyValueStore>,
+    records: RecordStore,
     /// Runs first, alone. See [`Self::run`].
     prerequisite: Option<Arc<dyn WalletMigration>>,
     /// Run in parallel, once the prerequisite has converged.
@@ -140,7 +125,7 @@ impl WalletMigrationController {
             return Self::with_migrations(kv_store, vec![]);
         };
         Self {
-            kv_store,
+            records: RecordStore::new(kv_store, WALLET_KEY_PREFIX),
             // The 4337 repair relays a plain owner-signed `execTransaction`, so
             // it is the one migration that works on an unrepaired Safe — which
             // makes it everything else's prerequisite.
@@ -155,7 +140,7 @@ impl WalletMigrationController {
         migrations: Vec<Arc<dyn WalletMigration>>,
     ) -> Self {
         Self {
-            kv_store,
+            records: RecordStore::new(kv_store, WALLET_KEY_PREFIX),
             prerequisite: None,
             migrations,
         }
@@ -235,17 +220,16 @@ impl WalletMigrationController {
             Err(e) => return Self::storage_failure(&id, &e),
         };
 
-        // Step 1: is this migration due? Terminal, converged-and-fresh, and
-        // still-cooling-down records are left alone.
-        if !Self::should_attempt(&id, &record) {
+        // Step 1: terminal migrations are never looked at again.
+        if matches!(record.status, WalletMigrationStatus::GaveUp) {
             return MigrationRunSummary::skipped();
         }
 
-        // Step 2a: the cap is spent, so observe instead of reconciling. Giving
-        // up must rest on a confirmed gap, and submitting again would only add
-        // an unwatched transaction to the pile.
-        if record.attempts >= MAX_ATTEMPTS {
-            let summary = self.settle_capped(&id, &mut record, migration).await;
+        // Step 2: every other launch observes. Submitting is what gets held
+        // back — because the cap is spent, or because a submission has not had
+        // its hour to land — and then the pass observes without acting.
+        if record.attempts >= MAX_ATTEMPTS || Self::still_settling(&id, &record) {
+            let summary = self.observe_only(&id, &mut record, migration).await;
             record.last_attempted_at = Some(Utc::now());
             if let Err(e) = self.save_record(&id, &record) {
                 return Self::storage_failure(&id, &e);
@@ -253,7 +237,6 @@ impl WalletMigrationController {
             return summary;
         }
 
-        // Step 2b: observe, and submit if the end state does not hold.
         let started = Utc::now();
         let outcome = migration.reconcile().await;
         let duration_ms = (Utc::now() - started).num_milliseconds();
@@ -348,43 +331,43 @@ impl WalletMigrationController {
                 MigrationRunSummary::failed_terminal()
             }
 
-            // The observation failed, which is evidence of nothing, so the
-            // status is left alone. A converged migration whose TTL just expired
-            // gets a short backoff instead of re-observing every app open.
+            // The observation failed, which is evidence of nothing, so nothing
+            // changes. Next launch looks again.
             Err(e) => {
                 crate::error!(
                     "wallet_migration.observe_failed id={} error={:?} duration_ms={} timestamp={}",
                     id, e, duration_ms, Utc::now().to_rfc3339()
                 );
-                if matches!(record.status, WalletMigrationStatus::Converged) {
-                    record.recheck_at =
-                        Some(Utc::now() + Duration::days(OBSERVE_ERROR_RETRY_DAYS));
-                }
                 MigrationRunSummary::skipped()
             }
         }
     }
 
-    /// The cap is spent: one pure observation decides done vs. dead.
+    /// Look without acting.
     ///
-    /// Holds → it landed after all. Gap → confirmed dead. Error → no verdict,
-    /// so nothing changes. Nothing is submitted on any branch.
-    async fn settle_capped(
+    /// Used whenever submitting is not allowed. The chain still gets read every
+    /// launch, so work that landed is noticed immediately.
+    async fn observe_only(
         &self,
         id: &str,
         record: &mut WalletMigrationRecord,
         migration: &dyn WalletMigration,
     ) -> MigrationRunSummary {
         match migration.end_state_holds().await {
+            // It landed. True whether we were waiting on it or had run out of
+            // attempts — either way the work is done.
             Ok(true) => {
                 crate::info!(
-                    "wallet_migration.converged id={} attempts={} note=capped_but_landed timestamp={}",
+                    "wallet_migration.converged id={} attempts={} observed_only=true timestamp={}",
                     id, record.attempts, Utc::now().to_rfc3339()
                 );
                 Self::mark_converged(record);
                 MigrationRunSummary::succeeded()
             }
-            Ok(false) => {
+
+            // Still a gap and no attempts left: confirmed dead. Nothing was
+            // submitted to reach this verdict.
+            Ok(false) if record.attempts >= MAX_ATTEMPTS => {
                 crate::error!(
                     "wallet_migration.gave_up id={} reason=never_landed attempts={} last_submission={} timestamp={}",
                     id, record.attempts,
@@ -398,10 +381,14 @@ impl WalletMigrationController {
                 ));
                 MigrationRunSummary::failed_terminal()
             }
-            // No verdict without an observation; try again next launch.
+
+            // Still a gap, still within the submission's grace period.
+            Ok(false) => MigrationRunSummary::pending(),
+
+            // No verdict without an observation; nothing changes.
             Err(e) => {
                 crate::error!(
-                    "wallet_migration.observe_failed id={} error={:?} note=capped timestamp={}",
+                    "wallet_migration.observe_failed id={} error={:?} observed_only=true timestamp={}",
                     id, e, Utc::now().to_rfc3339()
                 );
                 MigrationRunSummary::skipped()
@@ -409,63 +396,39 @@ impl WalletMigrationController {
         }
     }
 
-    /// Record that the end state holds.
-    ///
-    /// Caches it behind `recheck_at` and starts the cap over: the gap those
+    /// Record that the end state holds, and start the cap over: the gap those
     /// attempts belonged to is closed.
     fn mark_converged(record: &mut WalletMigrationRecord) {
         record.status = WalletMigrationStatus::Converged;
         record.completed_at.get_or_insert_with(Utc::now);
-        record.recheck_at = Some(Utc::now() + Duration::days(SUCCESS_TTL_DAYS));
         record.last_error_code = None;
         record.last_error_message = None;
         record.attempts = 0;
     }
 
-    /// Is this migration due for a look this launch?
+    /// Is a submission still within its grace period?
     ///
-    /// The only place a migration is skipped without observing anything, so
-    /// every reason to stay quiet is visible here. Converged ones wait for
-    /// their TTL; terminal ones never run again; everything else runs.
-    fn should_attempt(id: &str, record: &WalletMigrationRecord) -> bool {
-        match record.status {
-            WalletMigrationStatus::Converged => {
-                let due = record.recheck_at.is_some_and(|at| Utc::now() >= at);
-                if due {
-                    crate::info!(
-                        "wallet_migration.recheck_due id={} timestamp={}",
-                        id,
-                        Utc::now().to_rfc3339()
-                    );
-                }
-                due
-            }
-            WalletMigrationStatus::GaveUp => false,
-
-            // Give an in-flight submission time to land. Re-observing now would
-            // find the same open gap and re-submit, spending an attempt to learn
-            // nothing. Past the cooldown it will never land, so retry.
-            WalletMigrationStatus::InFlight => {
-                let cooled_down = record.last_attempted_at.is_none_or(|at| {
-                    Utc::now() - at >= Duration::hours(RESUBMIT_COOLDOWN_HOURS)
-                });
-                if !cooled_down {
-                    crate::info!(
-                        "wallet_migration.cooling_down id={} last_attempted_at={} timestamp={}",
-                        id,
-                        record
-                            .last_attempted_at
-                            .map(|t| t.to_rfc3339())
-                            .unwrap_or_default(),
-                        Utc::now().to_rfc3339()
-                    );
-                }
-                cooled_down
-            }
-
-            // Nothing was submitted, so looking again costs only an observation.
-            WalletMigrationStatus::NotStarted | WalletMigrationStatus::Retrying => true,
+    /// Only gates *submitting*. Past the cooldown a transaction is never going
+    /// to mine, so the next pass resubmits.
+    fn still_settling(id: &str, record: &WalletMigrationRecord) -> bool {
+        if !matches!(record.status, WalletMigrationStatus::InFlight) {
+            return false;
         }
+        let settling = record.last_attempted_at.is_some_and(|at| {
+            Utc::now() - at < Duration::hours(RESUBMIT_COOLDOWN_HOURS)
+        });
+        if settling {
+            crate::info!(
+                "wallet_migration.settling id={} last_attempted_at={} timestamp={}",
+                id,
+                record
+                    .last_attempted_at
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+                Utc::now().to_rfc3339()
+            );
+        }
+        settling
     }
 
     /// One record per registered migration, for
@@ -501,11 +464,8 @@ impl WalletMigrationController {
     pub fn delete_records(&self) -> Result<i32, MigrationError> {
         let mut deleted = 0;
         for m in self.all() {
-            let key = format!("{WALLET_KEY_PREFIX}{}", m.migration_id());
-            match self.kv_store.delete(key) {
-                Ok(()) => deleted += 1,
-                Err(KeyValueStoreError::KeyNotFound) => {}
-                Err(e) => return Err(e.into()),
+            if self.records.delete(&m.migration_id())? {
+                deleted += 1;
             }
         }
         Ok(deleted)
@@ -517,23 +477,8 @@ impl WalletMigrationController {
         self.prerequisite.iter().chain(self.migrations.iter())
     }
 
-    /// Load a record. Corrupt or missing data reads as a reset: the chain is the
-    /// oracle, so the worst case is one redundant reconcile pass.
     fn load_record(&self, id: &str) -> Result<WalletMigrationRecord, MigrationError> {
-        match self.kv_store.get(format!("{WALLET_KEY_PREFIX}{id}")) {
-            Ok(json) => Ok(serde_json::from_str(&json).unwrap_or_else(|e| {
-                warn!("Wallet migration {id} has corrupted JSON, resetting: {e:?}");
-                WalletMigrationRecord::default()
-            })),
-            Err(KeyValueStoreError::KeyNotFound) => {
-                Ok(WalletMigrationRecord::default())
-            }
-            Err(KeyValueStoreError::ParsingFailure) => {
-                warn!("Wallet migration {id} has corrupted storage data, resetting");
-                Ok(WalletMigrationRecord::default())
-            }
-            Err(e) => Err(e.into()),
-        }
+        self.records.load(id)
     }
 
     /// Persist a record under this framework's namespace.
@@ -542,10 +487,7 @@ impl WalletMigrationController {
         id: &str,
         record: &WalletMigrationRecord,
     ) -> Result<(), MigrationError> {
-        let json = serde_json::to_string(record)?;
-        self.kv_store
-            .set(format!("{WALLET_KEY_PREFIX}{id}"), json)?;
-        Ok(())
+        self.records.save(id, record)
     }
 
     /// The store is unusable this launch.
@@ -579,6 +521,7 @@ mod tests {
         /// Whether a gap remains. Starts open; `close_gap` simulates a
         /// submission finally landing.
         gap: AtomicBool,
+        observations: AtomicUsize,
     }
 
     impl ScriptedMigration {
@@ -588,7 +531,12 @@ mod tests {
                 script,
                 calls: AtomicUsize::new(0),
                 gap: AtomicBool::new(true),
+                observations: AtomicUsize::new(0),
             })
+        }
+
+        fn observations(&self) -> usize {
+            self.observations.load(Ordering::SeqCst)
         }
 
         fn close_gap(&self) {
@@ -607,6 +555,7 @@ mod tests {
         }
 
         async fn end_state_holds(&self) -> Result<bool, MigrationError> {
+            self.observations.fetch_add(1, Ordering::SeqCst);
             Ok(!self.gap.load(Ordering::SeqCst))
         }
 
@@ -827,7 +776,10 @@ mod tests {
         let prereq = ScriptedMigration::new("prereq", vec![submitted, converged]);
         let dependent = ScriptedMigration::new("dependent", vec![converged]);
         let c = WalletMigrationController {
-            kv_store: Arc::new(InMemoryDeviceKeyValueStore::new()),
+            records: RecordStore::new(
+                Arc::new(InMemoryDeviceKeyValueStore::new()),
+                WALLET_KEY_PREFIX,
+            ),
             prerequisite: Some(prereq.clone()),
             migrations: vec![dependent.clone()],
         };
@@ -852,7 +804,10 @@ mod tests {
         let prereq = ScriptedMigration::new("prereq", vec![converged]);
         let dependent = ScriptedMigration::new("dependent", vec![submitted]);
         let c = WalletMigrationController {
-            kv_store: Arc::new(InMemoryDeviceKeyValueStore::new()),
+            records: RecordStore::new(
+                Arc::new(InMemoryDeviceKeyValueStore::new()),
+                WALLET_KEY_PREFIX,
+            ),
             prerequisite: Some(prereq.clone()),
             migrations: vec![dependent.clone()],
         };
@@ -862,7 +817,7 @@ mod tests {
 
         advance_past_cooldown(&c, "dependent");
         c.run().await;
-        assert_eq!(prereq.calls(), 1, "prerequisite waits for its TTL");
+        assert_eq!(prereq.calls(), 2, "the chain is re-read every launch");
         assert_eq!(dependent.calls(), 2, "dependent keeps retrying");
     }
 
@@ -877,8 +832,9 @@ mod tests {
         assert_eq!(m.calls(), 1);
 
         let summary = c.run().await;
-        assert_eq!(summary.skipped, 1, "still cooling down");
+        assert_eq!(summary.pending, 1, "still settling");
         assert_eq!(m.calls(), 1, "must not re-submit within the cooldown");
+        assert_eq!(m.observations(), 1, "but the chain is still read");
 
         advance_past_cooldown(&c, "in.flight");
         c.run().await;
@@ -915,11 +871,7 @@ mod tests {
             "converging closes the gap, so the count starts over"
         );
 
-        // 30 days later the state has drifted back.
-        let mut record = c.load_record("drifts").unwrap();
-        record.recheck_at = Some(Utc::now() - Duration::days(1));
-        c.save_record("drifts", &record).unwrap();
-
+        // The state drifts back; the next launch observes it and acts.
         c.run().await;
         assert_eq!(c.load_record("drifts").unwrap().attempts, 1);
     }

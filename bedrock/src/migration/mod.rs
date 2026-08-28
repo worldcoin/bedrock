@@ -14,6 +14,7 @@
 mod controller;
 mod error;
 mod processor;
+mod record_store;
 mod state;
 
 mod wallet_controller;

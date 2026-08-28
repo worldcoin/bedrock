@@ -15,6 +15,7 @@ fans out internally with `futures::join_all`.
 | Implemented in | Swift / Kotlin, owned by the platform teams | `wallet/` |
 | "Done" means | the processor said so | the chain says so |
 | Storage key | `migration:{id}` | `migration:wallet:{id}` |
+| Record store | shared `RecordStore`, different prefix | same |
 | Status enum | `MigrationStatus` (FFI) | `WalletMigrationStatus` |
 | Changing it | an FFI break, coordinated across two platforms | a normal PR |
 
@@ -98,22 +99,27 @@ reads the chain twice.
 flowchart TD
     Start([App launch]) --> Gate{Stored status}
 
-    Gate -- GaveUp --> SkipT[skip forever]
-    Gate -- "Converged &<br/>recheck_at not due" --> SkipC[skip, cached]
-    Gate -- "InFlight &<br/>within cooldown" --> SkipF[skip, let it land]
-    Gate -- "NotStarted / Retrying /<br/>cooldown or TTL elapsed" --> Rec["end_state_holds()<br/>then submit() if needed"]
+    Gate -- GaveUp --> SkipT[skip forever<br/>the only launch that reads nothing]
+    Gate -- "cap spent, or<br/>submission still settling" --> Obs["end_state_holds()<br/>look, never act"]
+    Gate -- otherwise --> Rec["reconcile()<br/>look, and submit if needed"]
 
-    Rec -- Err --> SkipE[skip, no status change<br/>an error is not proof of anything]
-    Rec -- Converged --> Done[["mark Converged<br/>set recheck_at"]]
-    Rec -- Retry --> Retry[["mark Retrying<br/>not counted against the cap"]]
-    Rec -- GiveUp --> Terminal[["mark GaveUp"]]
+    Obs -- true --> Done[["mark Converged<br/>reset the cap"]]
+    Obs -- "false, cap spent" --> Terminal[["mark GaveUp"]]
+    Obs -- "false, still settling" --> Wait[["stay InFlight"]]
+    Obs -- Err --> SkipE[no verdict, nothing changes]
+
+    Rec -- Converged --> Done
     Rec -- Submitted --> InFlight[["attempts += 1<br/>mark InFlight"]]
-
-    Gate -- "attempts &ge; MAX_ATTEMPTS" --> Settle{"end_state_holds()"}
-    Settle -- true --> Done
-    Settle -- false --> Terminal
-    Settle -- Err --> SkipE
+    Rec -- Retry --> Retry[["mark Retrying<br/>not counted against the cap"]]
+    Rec -- GiveUp --> Terminal
+    Rec -- Err --> SkipE
 ```
+
+**Every launch reads the chain**, except for a migration that has given up. What
+gets held back is *submitting*, never looking — so work that landed is noticed
+on the very next launch, and a state that drifts back is caught immediately.
+There is no success TTL and no cached "already done": the record is never
+consulted to decide whether the work is complete.
 
 ### Ordering
 
@@ -131,7 +137,7 @@ not also run them. Nothing waits on tx-sitter.
 | --- | --- | --- |
 | `NotStarted` | never reconciled | reconcile |
 | `InFlight` | submitted; not yet observed on chain | reconcile once the cooldown elapses |
-| `Converged` | end state observed | skip until `recheck_at` |
+| `Converged` | end state observed | observe again; act if it drifted |
 | `Retrying` | the pass failed; nothing was submitted | reconcile |
 | `GaveUp` | terminal | skip permanently |
 
@@ -152,9 +158,10 @@ network returns `Retry` — so no number of offline launches can exhaust it, and
 no receipt lookup is needed to tell the two apart.
 
 `RESUBMIT_COOLDOWN_HOURS` (1) is what makes that cap meaningful. An in-flight
-submission is given an hour to land; past that it never will, so the next launch
-re-observes and re-submits. Without it, a user restarting the app a few times in
-a minute would burn all five attempts before the first submission could mine.
+submission is given an hour to land before another is sent; past that it never
+will. Without it, a user restarting the app a few times in a minute would burn
+all five attempts before the first submission could mine. It gates only the
+submission — the chain is still read on every one of those launches.
 
 ## Adding a migration
 
@@ -189,12 +196,10 @@ must likewise check actual restored state, not history.
 
 ### Notes
 
-- **Never-needed migrations are cached.** A first pass that converges is recorded
-  as `Converged` so `recheck_at` is the only trigger, and reported as `skipped` —
-  nothing was done, and otherwise every fresh install would show a burst of
-  successes.
-- **Convergence is re-verified on a TTL.** A state that regresses (a USDC
-  allowance spent down) is caught and re-run. This is a spend knob, not only an
-  RPC knob: a recheck that finds drift submits on the spot.
+- **A migration that was never needed reports `skipped`, not `succeeded`.**
+  Nothing was done, and otherwise every fresh install would show a burst of
+  successes it never earned.
+- **Convergence is not final.** A state that regresses (a USDC allowance spent
+  down) is observed on the next launch and re-submitted on the spot.
 - **`last_submission` is written, never read for control flow.** It exists so a
   retry can be traced back to the submission it supersedes.
