@@ -88,7 +88,7 @@ impl MigrationProcessor for ExampleProcessor {
 
         // SUCCESS CASE:
         // let result = self.do_migration().await?;
-        // return Ok(ProcessorResult::Pending { user_op_hash: Some(hash) });
+        // return Ok(ProcessorResult::Success);
 
         // RETRYABLE ERROR (network issues, temporary failures):
         // if let Err(e) = self.api_call().await {
@@ -113,7 +113,6 @@ impl MigrationProcessor for ExampleProcessor {
         //     });
         // }
 
-        // Pending, never Success: completion is proven by is_applicable next run.
-        Ok(ProcessorResult::Pending { user_op_hash: None })
+        Ok(ProcessorResult::Success)
     }
 }

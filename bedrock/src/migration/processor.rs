@@ -2,23 +2,10 @@ use crate::migration::MigrationError;
 use async_trait::async_trait;
 
 /// Result of executing a migration processor
-#[derive(Debug, uniffi::Enum)]
+#[derive(uniffi::Enum)]
 pub enum ProcessorResult {
-    /// Migration succeeded.
-    ///
-    /// Not used: it marks the migration Succeeded on the processor's word alone,
-    /// which on-chain state has not confirmed. Return `Pending` instead and let
-    /// `is_applicable` prove completion on the next run.
+    /// Migration succeeded
     Success,
-
-    /// Migration submitted asynchronous work (e.g. an on-chain transaction) in a
-    /// fire-and-forget manner. The migration stays `InProgress`; completion is
-    /// detected on the next run when [`MigrationProcessor::is_applicable`] observes
-    /// the desired end state and the migration is promoted to `Succeeded`.
-    Pending {
-        /// userOp hash, persisted for diagnostics. Never gates control flow.
-        user_op_hash: Option<String>,
-    },
 
     /// Migration failed but can be retried
     Retryable {
@@ -70,21 +57,8 @@ pub trait MigrationProcessor: Send + Sync {
     /// - `Ok(true)` if the migration should run
     /// - `Ok(false)` if the migration should be skipped
     /// - `Err(_)` if unable to determine (migration will be skipped with error logged)
-    ///
-    /// # Contract for previously attempted migrations
-    ///
-    /// For a migration that is `InProgress` or `FailedRetryable`, the controller
-    /// interprets `Ok(false)` as **"the desired end state now holds"** and promotes
-    /// the migration to `Succeeded` (fire-and-forget completion detection). If your
-    /// `is_applicable` can return `false` for reasons other than completion (e.g. a
-    /// feature flag turned off, source data missing), gate those checks so they do
-    /// not fire for previously attempted migrations, or the record will be falsely
-    /// marked `Succeeded`.
     async fn is_applicable(&self) -> Result<bool, MigrationError>;
 
-    /// Execute the migration.
-    ///
-    /// **Must be idempotent.** It is re-run whenever `is_applicable` still
-    /// reports work outstanding, even with a userOp in flight.
+    /// Execute the migration
     async fn execute(&self) -> Result<ProcessorResult, MigrationError>;
 }

@@ -73,6 +73,12 @@ mod error;
 mod processor;
 mod state;
 
+mod wallet_controller;
+mod wallet_migration;
+
+/// The individual wallet migrations Bedrock owns.
+pub mod wallet;
+
 /// Example processors showing how to implement migrations
 pub mod processors;
 
@@ -80,5 +86,8 @@ pub mod processors;
 pub use controller::{MigrationController, MigrationRecordEntry, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
-pub use processors::safe_4337_module_processor::Safe4337ModuleProcessor;
 pub use state::{MigrationRecord, MigrationStatus};
+pub use wallet_controller::{
+    WalletMigrationController, WalletMigrationRecord, WalletMigrationStatus,
+};
+pub use wallet_migration::{Reconciled, WalletMigration};

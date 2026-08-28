@@ -1,5 +1,4 @@
 //! Migration: repair the ERC-4337 configuration of legacy Safes.
-//!
 
 use std::sync::Arc;
 
@@ -8,8 +7,7 @@ use alloy::sol_types::SolCall;
 use async_trait::async_trait;
 
 use crate::migration::error::MigrationError;
-use crate::migration::processor::{MigrationProcessor, ProcessorResult};
-use crate::primitives::key_value_store::DeviceKeyValueStore;
+use crate::migration::{Reconciled, WalletMigration};
 use crate::primitives::Network;
 use crate::smart_account::{SafeOperation, SafeSmartAccount, SafeTransaction};
 use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
@@ -19,54 +17,26 @@ use crate::transactions::contracts::safe_module::{
 };
 use crate::transactions::rpc::{get_rpc_client, RelaySafeTransactionRequest};
 
-/// Attempts before giving up. This migration relays a Safe transaction and gets
-/// back an internal transaction id rather than a userOp hash, so the controller's
-/// receipt-based cap can never resolve it — the count lives here instead.
-const MAX_ATTEMPTS: i32 = 5;
-
-/// Store key for this processor's own attempt count.
-const ATTEMPTS_KEY: &str = "migration:wallet.safe.enable_4337_module.v1:attempts";
-
-/// Migration processor that repairs the ERC-4337 configuration of a Safe that
-/// was deployed without the [`GNOSIS_SAFE_4337_MODULE`].
+/// Repairs a Safe deployed without the [`GNOSIS_SAFE_4337_MODULE`].
+///
+/// Relays an owner-signed `execTransaction`, so unlike every other migration it
+/// works on a Safe that cannot yet validate a userOp — hence their prerequisite.
 ///
 /// [`GNOSIS_SAFE_4337_MODULE`]: crate::smart_account::GNOSIS_SAFE_4337_MODULE
-#[derive(uniffi::Object)]
-pub struct Safe4337ModuleProcessor {
+pub struct Safe4337ModuleMigration {
     safe_account: Arc<SafeSmartAccount>,
-    kv_store: Arc<dyn DeviceKeyValueStore>,
 }
 
-#[uniffi::export]
-impl Safe4337ModuleProcessor {
-    /// Creates a processor that repairs the ERC-4337 configuration of
-    /// `safe_account` (on World Chain). `kv_store` persists the relay count.
-    #[uniffi::constructor]
+impl Safe4337ModuleMigration {
+    /// Creates the migration for the given Safe smart account (on World Chain).
     #[must_use]
-    pub fn new(
-        safe_account: Arc<SafeSmartAccount>,
-        kv_store: Arc<dyn DeviceKeyValueStore>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            safe_account,
-            kv_store,
-        })
+    pub const fn new(safe_account: Arc<SafeSmartAccount>) -> Self {
+        Self { safe_account }
     }
 
-    /// Returns this processor as a [`MigrationProcessor`] trait object so it can
-    /// be registered with
-    /// [`MigrationController`](crate::migration::MigrationController) via its
-    /// `additional_processors` argument.
-    #[must_use]
-    pub fn as_migration_processor(self: Arc<Self>) -> Arc<dyn MigrationProcessor> {
-        self
-    }
-}
-
-impl Safe4337ModuleProcessor {
-    /// Reads the Safe's ERC-4337 configuration on-chain and returns the repairs
-    /// needed (module enablement and/or fallback handler).
-    async fn fetch_repairs(&self) -> Result<Safe4337Repairs, MigrationError> {
+    /// **Observe.** Reads the Safe's ERC-4337 configuration on-chain and returns
+    /// the repairs still needed — the gap.
+    async fn repairs_needed(&self) -> Result<Safe4337Repairs, MigrationError> {
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
         let safe = self.safe_account.wallet_address;
@@ -100,11 +70,28 @@ impl Safe4337ModuleProcessor {
         ))
     }
 
-    /// Builds and signs the repair `execTransaction` for the given `repairs` and
-    /// on-chain `nonce`, or `None` if nothing needs repairing.
-    ///
-    /// Kept separate from [`Self::execute`] so the calldata/signing path is
-    /// unit-testable without a live RPC client.
+    /// Reads the Safe's current nonce, so the `execTransaction` is valid.
+    async fn safe_nonce(&self) -> Result<U256, MigrationError> {
+        let rpc_client = get_rpc_client()
+            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
+        let nonce_bytes = rpc_client
+            .eth_call(
+                Network::WorldChain,
+                self.safe_account.wallet_address,
+                encode_nonce().into(),
+            )
+            .await
+            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
+        ISafe::nonceCall::abi_decode_returns(&nonce_bytes).map_err(|e| {
+            MigrationError::InvalidOperation(format!(
+                "failed to decode Safe nonce: {e}"
+            ))
+        })
+    }
+
+    /// Builds and signs the repair `execTransaction`, or `None` if nothing needs
+    /// repairing. Separate from [`Self::reconcile`] so the calldata and signing
+    /// path is unit-testable without a live RPC client.
     fn build_signed_transaction(
         &self,
         repairs: Safe4337Repairs,
@@ -153,63 +140,26 @@ impl Safe4337ModuleProcessor {
 }
 
 #[async_trait]
-impl MigrationProcessor for Safe4337ModuleProcessor {
+impl WalletMigration for Safe4337ModuleMigration {
     fn migration_id(&self) -> String {
         "wallet.safe.enable_4337_module.v1".to_string()
     }
 
-    async fn is_applicable(&self) -> Result<bool, MigrationError> {
-        // On-chain state is the oracle, same as every other processor: the
-        // controller promotes to Succeeded off this returning false.
-        Ok(self.fetch_repairs().await?.any())
+    async fn end_state_holds(&self) -> Result<bool, MigrationError> {
+        Ok(!self.repairs_needed().await?.any())
     }
 
-    async fn execute(&self) -> Result<ProcessorResult, MigrationError> {
-        // Give up before relaying again; see MAX_ATTEMPTS. An unreadable count
-        // reads as 0 — failing open only costs extra retries.
-        let attempts: i32 = self
-            .kv_store
-            .get(ATTEMPTS_KEY.to_string())
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        if attempts >= MAX_ATTEMPTS {
-            return Ok(ProcessorResult::Terminal {
-                error_code: "MAX_ATTEMPTS".to_string(),
-                error_message: format!(
-                    "Attempted the 4337 repair {attempts} times without it taking effect"
-                ),
-            });
-        }
-
-        // Re-read rather than trusting is_applicable's result: it may have been
-        // repaired in between, and this keeps the processor stateless.
-        let repairs = self.fetch_repairs().await?;
-        // Already repaired. Report Pending, not Success: the next run confirms it.
-        if !repairs.any() {
-            return Ok(ProcessorResult::Pending { user_op_hash: None });
-        }
+    async fn submit(&self) -> Result<Reconciled, MigrationError> {
+        let repairs = self.repairs_needed().await?;
+        let nonce = self.safe_nonce().await?;
+        // Race guard only — the decision to be here was made by
+        // `end_state_holds`; the Safe may have been repaired since.
+        let Some(request) = self.build_signed_transaction(repairs, nonce)? else {
+            return Ok(Reconciled::Converged);
+        };
 
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-        let safe_address = self.safe_account.wallet_address;
-
-        // Read the Safe's current nonce so the execTransaction is valid.
-        let nonce_bytes = rpc_client
-            .eth_call(Network::WorldChain, safe_address, encode_nonce().into())
-            .await
-            .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-        let nonce =
-            ISafe::nonceCall::abi_decode_returns(&nonce_bytes).map_err(|e| {
-                MigrationError::InvalidOperation(format!(
-                    "failed to decode Safe nonce: {e}"
-                ))
-            })?;
-
-        let Some(request) = self.build_signed_transaction(repairs, nonce)? else {
-            return Ok(ProcessorResult::Pending { user_op_hash: None });
-        };
-
         let transaction_id = rpc_client
             .relay_safe_transaction(Network::WorldChain, &request)
             .await
@@ -219,32 +169,20 @@ impl MigrationProcessor for Safe4337ModuleProcessor {
                 ))
             })?;
 
-        let _ = self
-            .kv_store
-            .set(ATTEMPTS_KEY.to_string(), (attempts + 1).to_string());
-
         crate::info!(
-            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}, transaction_id={}, attempt={}/{})",
+            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}, transaction_id={})",
             repairs.enable_module,
             repairs.set_fallback_handler,
             transaction_id,
-            attempts + 1,
-            MAX_ATTEMPTS
         );
 
-        // Fire-and-forget, same contract as every other processor: is_applicable
-        // confirms it landed on a later run. The id is a transaction id, not a
-        // userOp hash, so the controller cannot resolve it — hence the local cap.
-        Ok(ProcessorResult::Pending {
-            user_op_hash: Some(transaction_id),
-        })
+        Ok(Reconciled::submitted(transaction_id))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitives::key_value_store::InMemoryDeviceKeyValueStore;
     use crate::transactions::contracts::multisend::IMultiSend;
 
     // A 1-of-1 owner key with a known wallet address, reused from the smart
@@ -258,28 +196,25 @@ mod tests {
         set_fallback_handler: true,
     };
 
-    fn processor() -> Safe4337ModuleProcessor {
+    fn migration() -> Safe4337ModuleMigration {
         let safe_account = Arc::new(
             SafeSmartAccount::from_private_key_hex(TEST_KEY.to_string(), TEST_WALLET)
                 .unwrap(),
         );
-        Safe4337ModuleProcessor {
-            safe_account,
-            kv_store: Arc::new(InMemoryDeviceKeyValueStore::new()),
-        }
+        Safe4337ModuleMigration::new(safe_account)
     }
 
     #[test]
     fn test_migration_id_is_versioned() {
         assert_eq!(
-            processor().migration_id(),
+            migration().migration_id(),
             "wallet.safe.enable_4337_module.v1"
         );
     }
 
     #[test]
     fn test_no_repairs_builds_nothing() {
-        let result = processor()
+        let result = migration()
             .build_signed_transaction(Safe4337Repairs::default(), U256::ZERO)
             .unwrap();
         assert!(result.is_none());
@@ -287,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_signed_transaction_shape() {
-        let req = processor()
+        let req = migration()
             .build_signed_transaction(BOTH, U256::from(7))
             .unwrap()
             .unwrap();
@@ -304,7 +239,7 @@ mod tests {
     #[test]
     fn test_module_only_repair_excludes_fallback_handler() {
         let module = *crate::smart_account::GNOSIS_SAFE_4337_MODULE;
-        let req = processor()
+        let req = migration()
             .build_signed_transaction(
                 Safe4337Repairs {
                     enable_module: true,
@@ -338,18 +273,18 @@ mod tests {
 
     #[test]
     fn test_signing_is_deterministic() {
-        let a = processor()
+        let a = migration()
             .build_signed_transaction(BOTH, U256::from(42))
             .unwrap()
             .unwrap();
-        let b = processor()
+        let b = migration()
             .build_signed_transaction(BOTH, U256::from(42))
             .unwrap()
             .unwrap();
         assert_eq!(a.signatures, b.signatures);
 
         // A different nonce binds into the Safe tx hash → different signature.
-        let c = processor()
+        let c = migration()
             .build_signed_transaction(BOTH, U256::from(43))
             .unwrap()
             .unwrap();

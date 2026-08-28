@@ -45,13 +45,4 @@ pub struct MigrationRecord {
     /// Next time to recheck a succeeded migration's applicability.
     /// Set to `now + TTL` on success/re-check.
     pub recheck_at: Option<DateTime<Utc>>,
-
-    /// userOp from the most recent `Pending` execution. Diagnostics only.
-    #[serde(default)]
-    pub pending_user_op_hash: Option<String>,
-
-    /// Submissions that mined but left the end state unmet. Unmined ops and
-    /// submission failures are excluded, so infra trouble never goes terminal.
-    #[serde(default)]
-    pub revert_count: i32,
 }

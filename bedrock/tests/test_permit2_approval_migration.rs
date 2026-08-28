@@ -14,11 +14,12 @@ use common::{deploy_safe, setup_anvil, IERC20};
 
 use bedrock::{
     migration::{
-        processors::permit2_approval_processor::Permit2ApprovalProcessor,
-        MigrationController, MigrationProcessor, MigrationStatus, ProcessorResult,
+        wallet::permit2_approval::Permit2ApprovalMigration, MigrationStatus,
+        Reconciled, WalletMigration, WalletMigrationController, WalletMigrationRecord,
     },
     primitives::{
-        http_client::set_http_client, key_value_store::InMemoryDeviceKeyValueStore,
+        http_client::set_http_client,
+        key_value_store::{DeviceKeyValueStore, InMemoryDeviceKeyValueStore},
     },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337, PERMIT2_ADDRESS},
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
@@ -27,8 +28,21 @@ use bedrock::{
     },
 };
 
+/// Rewinds the record's last-attempt time so the resubmit cooldown has elapsed,
+/// standing in for the next cold start an hour later.
+fn skip_resubmit_cooldown(kv: &InMemoryDeviceKeyValueStore, migration_id: &str) {
+    let key = format!("migration:wallet:{migration_id}");
+    let mut record: WalletMigrationRecord =
+        serde_json::from_str(&kv.get(key.clone()).unwrap()).unwrap();
+    record.last_attempted_at = record
+        .last_attempted_at
+        .map(|t| t - chrono::Duration::hours(2));
+    kv.set(key, serde_json::to_string(&record).unwrap())
+        .unwrap();
+}
+
 #[tokio::test]
-async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
+async fn test_permit2_approval_migration_full_flow() -> anyhow::Result<()> {
     // 1) Spin up anvil fork of WorldChain
     let anvil = setup_anvil();
 
@@ -68,39 +82,33 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
     let client = AnvilBackedHttpClient::new(provider.clone());
     set_http_client(Arc::new(client));
 
-    // 6) Create the processor
+    // 6) Create the migration
     let safe_account = Arc::new(SafeSmartAccount::from_private_key_hex(
         owner_key_hex,
         &safe_address.to_string(),
     )?);
-    let processor = Permit2ApprovalProcessor::new(safe_account.clone());
+    let migration = Permit2ApprovalMigration::new(safe_account.clone());
 
     // 7) Verify migration ID
-    assert_eq!(processor.migration_id(), "wallet.permit2.approval");
+    assert_eq!(migration.migration_id(), "wallet.permit2.approval");
 
-    // 8) Verify is_applicable returns true (no approvals yet)
-    assert!(
-        processor.is_applicable().await?,
-        "Processor should be applicable before approvals"
-    );
-
-    // 8b) Snapshot the pre-approval chain state so the controller-driven
+    // 7b) Snapshot the pre-approval chain state so the controller-driven
     //     lifecycle below can start from scratch.
     let pre_approval_snapshot: U256 =
         provider.raw_request("evm_snapshot".into(), ()).await?;
 
-    // 9) Execute the migration (batched MultiSend approve, fire-and-forget)
-    let result = processor.execute().await?;
-    let user_op_hash = match result {
-        ProcessorResult::Pending { user_op_hash } => {
-            user_op_hash.expect("Pending must carry the submitted userOp hash")
+    // 8) Pass 1: observes missing allowances and submits the batched MultiSend
+    //    approve, fire-and-forget. The reference is only an artifact of the
+    //    submission; whether the work landed is proven by the on-chain allowance
+    //    assertions below, never by a receipt.
+    assert!(!migration.end_state_holds().await?);
+    let reference = match migration.submit().await? {
+        Reconciled::Submitted { reference } => {
+            reference.expect("submission must carry the userOp hash")
         }
-        other => panic!("Expected ProcessorResult::Pending, got {other:?}"),
+        other => panic!("Expected Reconciled::Submitted, got {other:?}"),
     };
-
-    // 9b) The hash is only an artifact of the submission; whether the work landed
-    // is proven by the on-chain allowance assertions below, not by a receipt.
-    assert!(!user_op_hash.is_empty(), "Pending must carry a userOp hash");
+    assert!(!reference.is_empty(), "submission must carry a userOp hash");
 
     // 10) Verify on-chain: all tokens should now have max allowance to Permit2
     let tokens: [(alloy::primitives::Address, &str); 4] = [
@@ -123,15 +131,15 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
         );
     }
 
-    // 11) Verify is_applicable returns false
+    // 9) Pass 2: the end state now holds.
     assert!(
-        !processor.is_applicable().await?,
-        "Processor should not be applicable after approvals"
+        migration.end_state_holds().await?,
+        "the end state should hold once the approvals are in place"
     );
 
     // --- Fire-and-forget lifecycle with a dropped transaction (controller) ---
 
-    // 12) Roll the chain back to the pre-approval state so the migration is
+    // 10) Roll the chain back to the pre-approval state so the migration is
     //     needed again, and drive it through the full controller this time.
     let reverted: bool = provider
         .raw_request("evm_revert".into(), (pre_approval_snapshot,))
@@ -145,33 +153,29 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
         .await?;
 
     let kv_store = Arc::new(InMemoryDeviceKeyValueStore::new());
-    let controller = MigrationController::with_processors(
-        kv_store,
-        vec![Arc::new(Permit2ApprovalProcessor::new(
+    let controller = WalletMigrationController::with_migrations(
+        kv_store.clone(),
+        vec![Arc::new(Permit2ApprovalMigration::new(
             safe_account.clone(),
         ))],
     );
 
-    // 13) Snapshot right before submitting so we can simulate the submitted
+    // 11) Snapshot right before submitting so we can simulate the submitted
     //     transaction being dropped (chain moves backwards, tx never lands).
     let pre_submit_snapshot: U256 =
         provider.raw_request("evm_snapshot".into(), ()).await?;
 
-    // 14) First controller run: submits fire-and-forget and stays InProgress
-    //     with the userOp hash persisted on the record.
-    let summary = controller.run_migrations().await?;
+    // 12) First controller pass: submits fire-and-forget and stays in flight.
+    let summary = controller.run().await;
     assert_eq!(
         summary.pending, 1,
-        "first run should submit and stay pending"
+        "first pass should submit and stay pending"
     );
-    let record = &controller.list_all_records()?[0];
+    let record = &controller.list_records()?[0];
     assert!(matches!(record.status, MigrationStatus::InProgress));
-    assert!(
-        record.pending_user_op_hash.is_some(),
-        "userOp hash must be persisted on the record"
-    );
+    assert_eq!(record.attempts, 1);
 
-    // 15) Drop the submitted transaction by moving the chain backwards.
+    // 13) Drop the submitted transaction by moving the chain backwards.
     let reverted: bool = provider
         .raw_request("evm_revert".into(), (pre_submit_snapshot,))
         .await?;
@@ -187,26 +191,27 @@ async fn test_permit2_approval_processor_full_flow() -> anyhow::Result<()> {
         "the dropped transaction's approvals must be gone after the rollback"
     );
 
-    // 16) Second controller run: the receipt reports mined but the on-chain end
-    //     state does not hold, so the migration re-executes (new submission).
-    let summary = controller.run_migrations().await?;
-    assert_eq!(summary.pending, 1, "second run should re-submit");
-    let record = &controller.list_all_records()?[0];
+    // 14) Second controller pass, an hour later: the gap is open again, so it
+    //     re-submits. Nothing about the dropped submission is consulted.
+    skip_resubmit_cooldown(&kv_store, "wallet.permit2.approval");
+    let summary = controller.run().await;
+    assert_eq!(summary.pending, 1, "second pass should re-submit");
+    let record = &controller.list_records()?[0];
     assert!(matches!(record.status, MigrationStatus::InProgress));
-    assert_eq!(record.attempts, 2, "re-execution is a second attempt");
+    assert_eq!(record.attempts, 2, "re-submission is a second attempt");
 
-    // 17) Third controller run: the resubmitted approvals landed, so the
-    //     migration is promoted to Succeeded via the is_applicable recheck.
-    let summary = controller.run_migrations().await?;
+    // 15) Third controller pass: the resubmitted approvals landed, so the
+    //     observation converges and the migration is recorded complete.
+    skip_resubmit_cooldown(&kv_store, "wallet.permit2.approval");
+    let summary = controller.run().await;
     assert_eq!(
         summary.succeeded, 1,
-        "third run should promote to Succeeded"
+        "third pass should converge to Succeeded"
     );
-    let record = &controller.list_all_records()?[0];
+    let record = &controller.list_records()?[0];
     assert!(matches!(record.status, MigrationStatus::Succeeded));
-    assert!(record.pending_user_op_hash.is_none());
 
-    // 18) Final on-chain check: all allowances are max again.
+    // 16) Final on-chain check: all allowances are max again.
     for (token_address, token_name) in &tokens {
         let token = IERC20::new(*token_address, &provider);
         let allowance = token
