@@ -1,5 +1,3 @@
-//! JSON-RPC wire types used by the app-backend client.
-
 use alloy::primitives::{Address, Bytes, U128, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

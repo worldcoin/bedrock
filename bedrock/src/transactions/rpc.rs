@@ -1,8 +1,7 @@
-//! App-backend RPC client for handling 4337 `UserOperation` requests.
+//! App-backend RPC client for smart-account transactions and EVM reads.
 //!
-//! This module provides functionality to:
-//! - Request sponsorship for `UserOperations` via `wa_sponsorUserOperation`
-//! - Submit signed `UserOperations` via `eth_sendUserOperation`
+//! Supports `UserOperation` sponsorship, submission, and receipt lookup,
+//! EVM calls and storage reads, and legacy Safe transaction relay.
 //!
 //! For operations against client-provided external bundler URLs, see [`super::custom_bundler`].
 
