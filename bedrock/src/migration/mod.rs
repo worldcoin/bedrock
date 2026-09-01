@@ -29,5 +29,10 @@ pub use processor::{MigrationProcessor, ProcessorResult};
 pub use record_store::{
     MigrationRecord, MigrationRecordEntry, MigrationStatus, Submission,
 };
-pub use wallet_controller::WalletMigrationController;
 pub use wallet_migration::{WalletMigration, WalletMigrationResult};
+
+/// Exposed for integration tests only. Running this directly bypasses the
+/// process-wide lock [`MigrationController`] holds, so two callers could submit
+/// the same work twice — go through [`MigrationController::run_migrations`].
+#[cfg(feature = "test_utils")]
+pub use wallet_controller::WalletMigrationController as TestWalletMigrationController;

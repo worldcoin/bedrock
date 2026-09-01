@@ -15,8 +15,8 @@ use common::{deploy_safe, setup_anvil, IERC20};
 use bedrock::{
     migration::{
         wallet::permit2_approval::Permit2ApprovalMigration, MigrationRecord,
-        MigrationStatus, WalletMigration, WalletMigrationController,
-        WalletMigrationResult,
+        MigrationStatus, TestWalletMigrationController as WalletMigrationController,
+        WalletMigration, WalletMigrationResult,
     },
     primitives::{
         http_client::set_http_client,
@@ -29,15 +29,18 @@ use bedrock::{
     },
 };
 
-/// Rewinds the record's last-attempt time so the resubmit cooldown has elapsed,
-/// standing in for the next cold start an hour later.
+/// Backdates the submission so its resubmit cooldown has elapsed, standing in
+/// for the next cold start an hour later. The cooldown runs from when the work
+/// went out, so rewinding `last_attempted_at` would have no effect.
 fn skip_resubmit_cooldown(kv: &InMemoryDeviceKeyValueStore, migration_id: &str) {
     let key = format!("migration:wallet:{migration_id}");
     let mut record: MigrationRecord =
         serde_json::from_str(&kv.get(key.clone()).unwrap()).unwrap();
-    record.last_attempted_at = record
-        .last_attempted_at
-        .map(|t| t - chrono::Duration::hours(2));
+    let submission = record
+        .last_submission
+        .as_mut()
+        .expect("a submission must have gone out to have a cooldown");
+    submission.at -= chrono::Duration::hours(2);
     kv.set(key, serde_json::to_string(&record).unwrap())
         .unwrap();
 }

@@ -179,10 +179,10 @@ impl WalletMigration for Safe4337ModuleMigration {
         };
 
         crate::info!(
-            "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}, transaction_id={})",
-            repairs.enable_module,
-            repairs.set_fallback_handler,
-            transaction_id,
+            enable_module = repairs.enable_module,
+            set_fallback_handler = repairs.set_fallback_handler,
+            transaction_id = transaction_id,
+            "wallet_migration.safe_4337_repair_relayed"
         );
 
         Ok(WalletMigrationResult::submitted(transaction_id))

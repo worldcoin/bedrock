@@ -72,16 +72,12 @@ impl WalletMigrationController {
         }
     }
 
-    /// Number of registered migrations, prerequisite included.
+    /// Number of registered migrations, prerequisite included. Counted into the
+    /// run summary's total, so there is no `is_empty` to pair with it.
     #[must_use]
+    #[expect(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.migrations.len() + usize::from(self.prerequisite.is_some())
-    }
-
-    /// Whether any migrations are registered.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// One pass over every migration, in dependency order.

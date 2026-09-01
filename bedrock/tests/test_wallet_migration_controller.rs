@@ -18,7 +18,10 @@ use common::{
 };
 
 use bedrock::{
-    migration::{MigrationRecordEntry, MigrationStatus, WalletMigrationController},
+    migration::{
+        MigrationRecordEntry, MigrationStatus,
+        TestWalletMigrationController as WalletMigrationController,
+    },
     primitives::{
         http_client::set_http_client, key_value_store::InMemoryDeviceKeyValueStore,
     },
