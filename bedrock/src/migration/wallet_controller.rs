@@ -1,5 +1,6 @@
 use super::wallet::permit2_approval::Permit2ApprovalMigration;
 use super::wallet::safe_4337_module::Safe4337ModuleMigration;
+use super::wallet::tfh_paymaster_approval::TfhPaymasterApprovalMigration;
 use super::wallet_migration::{WalletMigration, WalletMigrationResult};
 use crate::migration::controller::MigrationRunSummary;
 use crate::migration::error::MigrationError;
@@ -50,13 +51,23 @@ impl WalletMigrationController {
         let Some(account) = safe_account else {
             return Self::with_migrations(kv_store, vec![]);
         };
+
+        let mut migrations: Vec<Arc<dyn WalletMigration>> =
+            vec![Arc::new(Permit2ApprovalMigration::new(account.clone()))];
+
+        // `None` on production, so the paymaster approval is never registered
+        // there and no record for it is ever written.
+        if let Some(paymaster) = TfhPaymasterApprovalMigration::new(account.clone()) {
+            migrations.push(Arc::new(paymaster));
+        }
+
         Self {
             records: RecordStore::new(kv_store, WALLET_KEY_PREFIX),
             // The 4337 repair relays a plain owner-signed `execTransaction`, so
             // it is the one migration that works on an unrepaired Safe — which
             // makes it everything else's prerequisite.
-            prerequisite: Some(Arc::new(Safe4337ModuleMigration::new(account.clone()))),
-            migrations: vec![Arc::new(Permit2ApprovalMigration::new(account))],
+            prerequisite: Some(Arc::new(Safe4337ModuleMigration::new(account))),
+            migrations,
         }
     }
 
