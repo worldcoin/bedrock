@@ -180,7 +180,10 @@ impl ManifestManager {
     ) -> Result<Vec<String>, BackupError> {
         let (manifest, _local_hash) = match self.load_manifest_gated().await {
             Err(BackupError::ManifestNotFound) => {
-                return if BackupServiceClient::get_remote_manifest_hash().await?.is_some() {
+                return if BackupServiceClient::get_remote_manifest_hash()
+                    .await?
+                    .is_some()
+                {
                     Err(BackupError::RemoteAheadStaleError)
                 } else {
                     Ok(Vec::new())
