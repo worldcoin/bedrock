@@ -251,7 +251,7 @@ impl WalletMigrationController {
             Err(e) => {
                 crate::error!(
                     migration_id = id,
-                    error = format!("{e:?}"),
+                    error_message = format!("{e:?}"),
                     duration_ms = duration_ms,
                     "wallet_migration.observe_failed"
                 );
@@ -306,7 +306,7 @@ impl WalletMigrationController {
             Err(e) => {
                 crate::error!(
                     migration_id = id,
-                    error = format!("{e:?}"),
+                    error_message = format!("{e:?}"),
                     observed_only = true,
                     "wallet_migration.observe_failed"
                 );
@@ -409,7 +409,7 @@ impl WalletMigrationController {
     fn storage_failure(id: &str, e: &MigrationError) -> MigrationRunSummary {
         crate::error!(
             migration_id = id,
-            error = format!("{e:?}"),
+            error_message = format!("{e:?}"),
             "wallet_migration.storage_error"
         );
         MigrationRunSummary::failed_retryable()

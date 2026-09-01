@@ -199,7 +199,7 @@ impl MigrationController {
         let mut entries = Vec::new();
         for processor in &self.processors {
             let migration_id = processor.migration_id();
-            let record: MigrationRecord = self.records.load(&migration_id)?;
+            let record = self.load_record(&migration_id)?;
             entries.push(record.into_entry(migration_id));
         }
         entries.extend(self.wallet.list_records()?);

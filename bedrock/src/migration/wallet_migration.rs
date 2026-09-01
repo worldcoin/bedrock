@@ -113,10 +113,11 @@ impl WalletMigrationResult {
 /// }
 /// ```
 ///
-/// # Timeouts and cancellation safety
+/// # Blocking
 ///
-/// Both run under a timeout, which drops the future. No `tokio::spawn` or
-/// `std::thread::spawn` outliving it, no uncleaned blocking work.
+/// Nothing bounds how long these may take, and the run holds the migration
+/// lock, so a slow read stalls every other migration. Never block the thread,
+/// and never spawn work that outlives the returned future.
 #[async_trait]
 pub trait WalletMigration: Send + Sync {
     /// Unique identifier, version included (e.g. `"wallet.permit2.approval.v1"`).

@@ -26,13 +26,14 @@ pub enum ProcessorResult {
 
 /// A migration implemented by the host platform, in Swift or Kotlin.
 ///
-/// # Timeouts and cancellation safety
+/// # Blocking and idempotency
 ///
-/// Both methods run under a 20s timeout, which drops the future; `execute`
-/// then counts as failed and `is_applicable` as skipped. So implementations:
+/// Nothing bounds how long these may take. The run is off the app-start path,
+/// but it holds the migration lock, so a slow method stalls the whole run and
+/// every migration sharing its task. Implementations:
 ///
-/// - MUST NOT outlive the future (`tokio::spawn`, `std::thread::spawn`)
-/// - MUST NOT block or call FFI without cleanup
+/// - MUST NOT block the thread or call FFI without cleanup
+/// - MUST NOT spawn work that outlives the returned future
 /// - MUST be idempotent, since partial work is retried
 #[uniffi::export(with_foreign)]
 #[async_trait]
