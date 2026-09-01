@@ -331,17 +331,17 @@ async fn test_store_file_no_remote_backup_with_nonempty_local_manifest() {
 
 #[tokio::test]
 #[serial]
-async fn test_list_files_missing_manifest() {
+async fn test_list_files_missing_manifest_is_empty() {
     let api = init_test_globals();
     api.reset();
 
-    // Do not create a manifest for this prefix
+    // A device that never created a backup has no local manifest at all. Listing must
+    // report "no files recorded" rather than ManifestNotFound: read-only backup syncs
+    // (e.g. the face PCP delete cleanup) run on such accounts, and the absence of a
+    // backup is not an error for them. Mutating methods keep surfacing ManifestNotFound.
     let mgr = ManifestManager::new_with_prefix("backup_test_list_missing");
-    let err = mgr
-        .list_files(BackupFileDesignator::OrbPkg)
-        .await
-        .expect_err("expected missing manifest error");
-    assert_eq!(err.to_string(), "Manifest not found");
+    let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
+    assert!(list.is_empty());
 }
 
 #[tokio::test]
