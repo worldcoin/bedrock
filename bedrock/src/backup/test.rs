@@ -331,17 +331,36 @@ async fn test_store_file_no_remote_backup_with_nonempty_local_manifest() {
 
 #[tokio::test]
 #[serial]
-async fn test_list_files_missing_manifest() {
+async fn test_list_files_missing_manifest_no_remote_is_empty() {
     let api = init_test_globals();
     api.reset();
 
-    // Do not create a manifest for this prefix
+    // No local manifest was ever written (account never created a backup).
+    api.set_no_remote_backup();
+
     let mgr = ManifestManager::new_with_prefix("backup_test_list_missing");
+    let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
+    assert!(list.is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn test_list_files_missing_manifest_with_remote_is_stale() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Remote backup exists but the local manifest is missing (e.g. fresh install before restore).
+    api.set_remote_hash(hex::encode(blake3::hash(b"remote-backup").as_bytes()));
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_missing_remote");
     let err = mgr
         .list_files(BackupFileDesignator::OrbPkg)
         .await
-        .expect_err("expected missing manifest error");
-    assert_eq!(err.to_string(), "Manifest not found");
+        .expect_err("expected stale error");
+    assert_eq!(
+        err.to_string(),
+        "Remote manifest is ahead of local; fetch and apply latest backup before updating"
+    );
 }
 
 #[tokio::test]

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/worldcoin/bedrock/compare/0.6.1...0.6.2) - 2026-09-01
+
+### Fixed
+
+- treat a missing local manifest as an empty list in list_files ([#428](https://github.com/worldcoin/bedrock/pull/428))
+- *(test)* await ERC-4337 transaction receipt ([#427](https://github.com/worldcoin/bedrock/pull/427))
+
+### Other
+
+- *(rpc)* split wire types and tests ([#426](https://github.com/worldcoin/bedrock/pull/426))
+
 ## [0.6.1](https://github.com/worldcoin/bedrock/compare/0.6.0...0.6.1) - 2026-08-24
 
 ### Fixed
