@@ -164,13 +164,28 @@ impl ManifestManager {
     ///
     /// The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
     ///
+    /// A missing local manifest returns an empty list when the account has no remote backup,
+    /// and `RemoteAheadStaleError` when it has one (the device must restore first).
+    ///
     /// # Errors
     /// Returns an error if the remote hash does not match local or if network/IO errors occur.
     pub async fn list_files(
         &self,
         designator: BackupFileDesignator,
     ) -> Result<Vec<String>, BackupError> {
-        let (manifest, _local_hash) = self.load_manifest_gated().await?;
+        let (manifest, _local_hash) = match self.load_manifest_gated().await {
+            Err(BackupError::ManifestNotFound) => {
+                return if BackupServiceClient::get_remote_manifest_hash()
+                    .await?
+                    .is_some()
+                {
+                    Err(BackupError::RemoteAheadStaleError)
+                } else {
+                    Ok(Vec::new())
+                };
+            }
+            result => result?,
+        };
 
         let files = manifest
             .files
