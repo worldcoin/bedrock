@@ -484,10 +484,8 @@ impl RpcClient {
     /// the `/v1/rpc/{network}` endpoint.
     ///
     /// The backend submits the transaction on-chain and pays gas on the user's
-    /// behalf. Used by the
-    /// [`Safe4337ModuleProcessor`](crate::migration::Safe4337ModuleProcessor)
-    /// migration: a module-less Safe cannot pay its own gas via ERC-4337, so the
-    /// `enableModule`/`setFallbackHandler` repair must be relayed.
+    /// behalf. Used by the `Safe4337ModuleMigration`: a module-less Safe cannot
+    /// pay its own gas via ERC-4337, so the repair must be relayed.
     ///
     /// # Returns
     /// The submitted transaction hash.
