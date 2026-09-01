@@ -15,7 +15,6 @@ mod controller;
 mod error;
 mod processor;
 mod record_store;
-mod state;
 
 mod wallet_controller;
 mod wallet_migration;
@@ -24,11 +23,9 @@ mod wallet_migration;
 pub mod wallet;
 
 // Public API exports
-pub use controller::{MigrationController, MigrationRecordEntry, MigrationRunSummary};
+pub use controller::{MigrationController, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
-pub use state::{MigrationRecord, MigrationStatus};
-pub use wallet_controller::{
-    WalletMigrationController, WalletMigrationRecord, WalletMigrationStatus,
-};
-pub use wallet_migration::{Reconciled, WalletMigration};
+pub use record_store::{MigrationRecord, MigrationRecordEntry, MigrationStatus};
+pub use wallet_controller::WalletMigrationController;
+pub use wallet_migration::{WalletMigration, WalletMigrationResult};

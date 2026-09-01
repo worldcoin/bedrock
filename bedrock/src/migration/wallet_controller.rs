@@ -1,88 +1,16 @@
 use super::wallet::permit2_approval::Permit2ApprovalMigration;
 use super::wallet::safe_4337_module::Safe4337ModuleMigration;
-use super::wallet_migration::{Reconciled, WalletMigration};
-use crate::migration::controller::{MigrationRecordEntry, MigrationRunSummary};
+use super::wallet_migration::{WalletMigration, WalletMigrationResult};
+use crate::migration::controller::MigrationRunSummary;
 use crate::migration::error::MigrationError;
-use crate::migration::record_store::RecordStore;
-use crate::migration::MigrationStatus;
+use crate::migration::record_store::{
+    MigrationRecord, MigrationRecordEntry, MigrationStatus, RecordStore,
+};
 use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use futures::future::join_all;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-/// Where a wallet migration stands.
-///
-/// Deliberately not [`MigrationStatus`], the foreign processors' published FFI
-/// vocabulary: here work is *in flight* until the chain *converges*.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WalletMigrationStatus {
-    /// Never reconciled.
-    #[default]
-    NotStarted,
-
-    /// Work was submitted and has not been observed on chain yet.
-    InFlight,
-
-    /// The end state was observed. Re-observed on every launch, since on-chain
-    /// state can drift back (e.g. a USDC allowance decaying).
-    Converged,
-
-    /// The last pass failed. Retried next launch; nothing is in flight.
-    Retrying,
-
-    /// Terminal. Never reconciled again.
-    GaveUp,
-}
-
-impl WalletMigrationStatus {
-    /// The FFI-facing equivalent, for
-    /// [`MigrationRecordEntry`](crate::migration::MigrationRecordEntry).
-    #[must_use]
-    pub const fn to_ffi(self) -> MigrationStatus {
-        match self {
-            Self::NotStarted => MigrationStatus::NotStarted,
-            Self::InFlight => MigrationStatus::InProgress,
-            Self::Converged => MigrationStatus::Succeeded,
-            Self::Retrying => MigrationStatus::FailedRetryable,
-            Self::GaveUp => MigrationStatus::FailedTerminal,
-        }
-    }
-}
-
-/// Persisted state of one wallet migration.
-///
-/// Lives under its own `migration:wallet:{id}` key. Corrupt or missing data is
-/// safe to discard: the chain is the oracle, so it costs one reconcile pass.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct WalletMigrationRecord {
-    /// Current status.
-    pub status: WalletMigrationStatus,
-
-    /// Submissions made. Only incremented when work was actually accepted, so a
-    /// failed or offline pass never advances it toward the give-up cap.
-    pub attempts: i32,
-
-    /// When the first submission was made.
-    pub started_at: Option<DateTime<Utc>>,
-
-    /// When the most recent reconcile pass ran.
-    pub last_attempted_at: Option<DateTime<Utc>>,
-
-    /// Error code from the most recent failed pass.
-    pub last_error_code: Option<String>,
-
-    /// Error message from the most recent failed pass.
-    pub last_error_message: Option<String>,
-
-    /// When the end state was first observed to hold.
-    pub completed_at: Option<DateTime<Utc>>,
-
-    /// Reference for the most recent submission (userOp hash or relay id).
-    /// Diagnostics only — never read for control flow.
-    pub last_submission: Option<String>,
-}
 
 /// Own namespace, so wallet records never collide with the native framework's.
 const WALLET_KEY_PREFIX: &str = "migration:wallet:";
@@ -95,11 +23,9 @@ const RESUBMIT_COOLDOWN_HOURS: i64 = 1;
 
 /// Submissions observed to have failed before giving up, counted per gap.
 ///
-/// Once spent, the next pass confirms on chain via
-/// [`WalletMigration::end_state_holds`] instead of submitting again.
-///
-/// A failed or offline pass returns `Retry` and does not count, so no number of
-/// offline launches exhausts this and no receipt lookup is needed.
+/// Once spent, the next pass confirms via [`WalletMigration::end_state_holds`]
+/// instead of submitting. Only accepted submissions count, so no number of
+/// offline launches exhausts this.
 const MAX_ATTEMPTS: i32 = 5;
 
 /// Runs the migrations Bedrock owns.
@@ -173,10 +99,9 @@ impl WalletMigrationController {
 
             if !self.has_converged(&prerequisite.migration_id()) {
                 crate::warn!(
-                    "wallet_migration.dependents_blocked prerequisite={} count={} timestamp={}",
-                    prerequisite.migration_id(),
-                    self.migrations.len(),
-                    Utc::now().to_rfc3339()
+                    prerequisite = prerequisite.migration_id(),
+                    blocked = self.migrations.len(),
+                    "wallet_migration.dependents_blocked"
                 );
                 summary.skipped +=
                     i32::try_from(self.migrations.len()).unwrap_or(i32::MAX);
@@ -201,8 +126,9 @@ impl WalletMigrationController {
     /// Reads the record the pass just wrote, so a submission made this launch
     /// does not count. Unreadable fails closed: dependents wait a launch.
     fn has_converged(&self, id: &str) -> bool {
-        self.load_record(id)
-            .is_ok_and(|r| matches!(r.status, WalletMigrationStatus::Converged))
+        self.records
+            .load::<MigrationRecord>(id)
+            .is_ok_and(|r| matches!(r.status, MigrationStatus::Succeeded))
     }
 
     /// One migration's full lifecycle for this launch.
@@ -215,13 +141,13 @@ impl WalletMigrationController {
     ) -> MigrationRunSummary {
         let id = migration.migration_id();
 
-        let mut record = match self.load_record(&id) {
+        let mut record = match self.records.load::<MigrationRecord>(&id) {
             Ok(r) => r,
             Err(e) => return Self::storage_failure(&id, &e),
         };
 
         // Step 1: terminal migrations are never looked at again.
-        if matches!(record.status, WalletMigrationStatus::GaveUp) {
+        if matches!(record.status, MigrationStatus::FailedTerminal) {
             return MigrationRunSummary::skipped();
         }
 
@@ -231,7 +157,7 @@ impl WalletMigrationController {
         if record.attempts >= MAX_ATTEMPTS || Self::still_settling(&id, &record) {
             let summary = self.observe_only(&id, &mut record, migration).await;
             record.last_attempted_at = Some(Utc::now());
-            if let Err(e) = self.save_record(&id, &record) {
+            if let Err(e) = self.records.save(&id, &record) {
                 return Self::storage_failure(&id, &e);
             }
             return summary;
@@ -248,7 +174,7 @@ impl WalletMigrationController {
         // Step 4: one write, after the pass. Nothing is persisted beforehand —
         // if the app dies mid-submission the next launch re-observes anyway,
         // and a lost write only costs an attempt count, which fails open.
-        if let Err(e) = self.save_record(&id, &record) {
+        if let Err(e) = self.records.save(&id, &record) {
             return Self::storage_failure(&id, &e);
         }
 
@@ -257,26 +183,20 @@ impl WalletMigrationController {
 
     /// Fold one reconcile outcome into the record: the whole state machine.
     ///
-    /// Pure — no I/O and no clock beyond `Utc::now`, so every transition is
+    /// No storage access and no clock beyond `Utc::now`, so every transition is
     /// readable and testable in one place.
     fn apply(
         id: &str,
-        record: &mut WalletMigrationRecord,
-        outcome: Result<Reconciled, MigrationError>,
+        record: &mut MigrationRecord,
+        outcome: Result<WalletMigrationResult, MigrationError>,
         duration_ms: i64,
     ) -> MigrationRunSummary {
         match outcome {
-            // Cache the result so the TTL recheck is the only thing that looks
-            // again. Reported as a success only if we submitted something, or
-            // every fresh install shows a burst of successes it never earned.
-            Ok(Reconciled::Converged) => {
+            // Reported as a success only if we submitted something, or every
+            // fresh install shows a burst of successes it never earned.
+            Ok(WalletMigrationResult::Converged) => {
                 let did_work = record.attempts > 0;
-                crate::info!(
-                    "wallet_migration.converged id={} did_work={} attempts={} duration_ms={} timestamp={}",
-                    id, did_work, record.attempts, duration_ms, Utc::now().to_rfc3339()
-                );
-                Self::mark_converged(record);
-
+                Self::mark_converged(id, record, false);
                 if did_work {
                     MigrationRunSummary::succeeded()
                 } else {
@@ -287,56 +207,53 @@ impl WalletMigrationController {
             // Reaching here means the previous submission, if any, did not take
             // effect — the gap was still open. Stop once enough accepted
             // submissions have failed to show up on chain.
-            Ok(Reconciled::Submitted { reference }) => {
+            Ok(WalletMigrationResult::Submitted { reference }) => {
                 record.attempts += 1;
                 record.started_at.get_or_insert_with(Utc::now);
                 record.last_submission = reference;
                 record.last_error_code = None;
                 record.last_error_message = None;
+                record.status = MigrationStatus::InProgress;
 
                 crate::info!(
-                    "wallet_migration.submitted id={} submission={} attempt={}/{} duration_ms={} timestamp={}",
-                    id, record.last_submission.as_deref().unwrap_or("none"),
-                    record.attempts, MAX_ATTEMPTS, duration_ms, Utc::now().to_rfc3339()
+                    migration_id = id,
+                    submission = record.last_submission.as_deref().unwrap_or("none"),
+                    attempt = record.attempts,
+                    max_attempts = MAX_ATTEMPTS,
+                    duration_ms = duration_ms,
+                    "wallet_migration.submitted"
                 );
-                record.status = WalletMigrationStatus::InFlight;
                 MigrationRunSummary::pending()
             }
 
-            Ok(Reconciled::Retry {
+            Ok(WalletMigrationResult::Retry {
                 error_code,
                 error_message,
             }) => {
                 crate::warn!(
-                    "wallet_migration.retry id={} code={} error={} duration_ms={} timestamp={}",
-                    id, error_code, error_message, duration_ms, Utc::now().to_rfc3339()
+                    migration_id = id,
+                    error_code = error_code,
+                    error_message = error_message,
+                    duration_ms = duration_ms,
+                    "wallet_migration.retry"
                 );
-                record.status = WalletMigrationStatus::Retrying;
-                record.last_error_code = Some(error_code);
-                record.last_error_message = Some(error_message);
+                Self::mark_failed(
+                    record,
+                    MigrationStatus::FailedRetryable,
+                    error_code,
+                    error_message,
+                );
                 MigrationRunSummary::failed_retryable()
-            }
-
-            Ok(Reconciled::GiveUp {
-                error_code,
-                error_message,
-            }) => {
-                crate::error!(
-                    "wallet_migration.gave_up id={} reason=migration_request code={} error={} timestamp={}",
-                    id, error_code, error_message, Utc::now().to_rfc3339()
-                );
-                record.status = WalletMigrationStatus::GaveUp;
-                record.last_error_code = Some(error_code);
-                record.last_error_message = Some(error_message);
-                MigrationRunSummary::failed_terminal()
             }
 
             // The observation failed, which is evidence of nothing, so nothing
             // changes. Next launch looks again.
             Err(e) => {
                 crate::error!(
-                    "wallet_migration.observe_failed id={} error={:?} duration_ms={} timestamp={}",
-                    id, e, duration_ms, Utc::now().to_rfc3339()
+                    migration_id = id,
+                    error = format!("{e:?}"),
+                    duration_ms = duration_ms,
+                    "wallet_migration.observe_failed"
                 );
                 MigrationRunSummary::skipped()
             }
@@ -350,18 +267,14 @@ impl WalletMigrationController {
     async fn observe_only(
         &self,
         id: &str,
-        record: &mut WalletMigrationRecord,
+        record: &mut MigrationRecord,
         migration: &dyn WalletMigration,
     ) -> MigrationRunSummary {
         match migration.end_state_holds().await {
             // It landed. True whether we were waiting on it or had run out of
             // attempts — either way the work is done.
             Ok(true) => {
-                crate::info!(
-                    "wallet_migration.converged id={} attempts={} observed_only=true timestamp={}",
-                    id, record.attempts, Utc::now().to_rfc3339()
-                );
-                Self::mark_converged(record);
+                Self::mark_converged(id, record, true);
                 MigrationRunSummary::succeeded()
             }
 
@@ -369,16 +282,20 @@ impl WalletMigrationController {
             // submitted to reach this verdict.
             Ok(false) if record.attempts >= MAX_ATTEMPTS => {
                 crate::error!(
-                    "wallet_migration.gave_up id={} reason=never_landed attempts={} last_submission={} timestamp={}",
-                    id, record.attempts,
-                    record.last_submission.as_deref().unwrap_or("none"),
-                    Utc::now().to_rfc3339()
+                    migration_id = id,
+                    reason = "never_landed",
+                    attempts = record.attempts,
+                    submission = record.last_submission.as_deref().unwrap_or("none"),
+                    "wallet_migration.gave_up"
                 );
-                record.status = WalletMigrationStatus::GaveUp;
-                record.last_error_code = Some("NEVER_LANDED".to_string());
-                record.last_error_message = Some(format!(
-                    "{MAX_ATTEMPTS} submissions did not take effect, giving up"
-                ));
+                Self::mark_failed(
+                    record,
+                    MigrationStatus::FailedTerminal,
+                    "NEVER_LANDED".to_string(),
+                    format!(
+                        "{MAX_ATTEMPTS} submissions did not take effect, giving up"
+                    ),
+                );
                 MigrationRunSummary::failed_terminal()
             }
 
@@ -388,8 +305,10 @@ impl WalletMigrationController {
             // No verdict without an observation; nothing changes.
             Err(e) => {
                 crate::error!(
-                    "wallet_migration.observe_failed id={} error={:?} observed_only=true timestamp={}",
-                    id, e, Utc::now().to_rfc3339()
+                    migration_id = id,
+                    error = format!("{e:?}"),
+                    observed_only = true,
+                    "wallet_migration.observe_failed"
                 );
                 MigrationRunSummary::skipped()
             }
@@ -398,34 +317,49 @@ impl WalletMigrationController {
 
     /// Record that the end state holds, and start the cap over: the gap those
     /// attempts belonged to is closed.
-    fn mark_converged(record: &mut WalletMigrationRecord) {
-        record.status = WalletMigrationStatus::Converged;
+    fn mark_converged(id: &str, record: &mut MigrationRecord, observed_only: bool) {
+        crate::info!(
+            migration_id = id,
+            attempts = record.attempts,
+            observed_only = observed_only,
+            "wallet_migration.converged"
+        );
+        record.status = MigrationStatus::Succeeded;
         record.completed_at.get_or_insert_with(Utc::now);
         record.last_error_code = None;
         record.last_error_message = None;
         record.attempts = 0;
     }
 
+    /// Record a failed pass. Terminal or retryable is the caller's call.
+    fn mark_failed(
+        record: &mut MigrationRecord,
+        status: MigrationStatus,
+        code: String,
+        message: String,
+    ) {
+        record.status = status;
+        record.last_error_code = Some(code);
+        record.last_error_message = Some(message);
+    }
+
     /// Is a submission still within its grace period?
     ///
     /// Only gates *submitting*. Past the cooldown a transaction is never going
     /// to mine, so the next pass resubmits.
-    fn still_settling(id: &str, record: &WalletMigrationRecord) -> bool {
-        if !matches!(record.status, WalletMigrationStatus::InFlight) {
+    fn still_settling(id: &str, record: &MigrationRecord) -> bool {
+        if !matches!(record.status, MigrationStatus::InProgress) {
             return false;
         }
-        let settling = record.last_attempted_at.is_some_and(|at| {
-            Utc::now() - at < Duration::hours(RESUBMIT_COOLDOWN_HOURS)
-        });
+        let Some(last) = record.last_attempted_at else {
+            return false;
+        };
+        let settling = Utc::now() - last < Duration::hours(RESUBMIT_COOLDOWN_HOURS);
         if settling {
             crate::info!(
-                "wallet_migration.settling id={} last_attempted_at={} timestamp={}",
-                id,
-                record
-                    .last_attempted_at
-                    .map(|t| t.to_rfc3339())
-                    .unwrap_or_default(),
-                Utc::now().to_rfc3339()
+                migration_id = id,
+                last_attempted_at = last.to_rfc3339(),
+                "wallet_migration.settling"
             );
         }
         settling
@@ -441,17 +375,8 @@ impl WalletMigrationController {
         self.all()
             .map(|m| {
                 let migration_id = m.migration_id();
-                let record = self.load_record(&migration_id)?;
-                Ok(MigrationRecordEntry {
-                    migration_id,
-                    status: record.status.to_ffi(),
-                    attempts: record.attempts,
-                    started_at: record.started_at.map(|t| t.to_rfc3339()),
-                    last_attempted_at: record.last_attempted_at.map(|t| t.to_rfc3339()),
-                    last_error_code: record.last_error_code,
-                    last_error_message: record.last_error_message,
-                    completed_at: record.completed_at.map(|t| t.to_rfc3339()),
-                })
+                let record: MigrationRecord = self.records.load(&migration_id)?;
+                Ok(record.into_entry(migration_id))
             })
             .collect()
     }
@@ -477,29 +402,15 @@ impl WalletMigrationController {
         self.prerequisite.iter().chain(self.migrations.iter())
     }
 
-    fn load_record(&self, id: &str) -> Result<WalletMigrationRecord, MigrationError> {
-        self.records.load(id)
-    }
-
-    /// Persist a record under this framework's namespace.
-    fn save_record(
-        &self,
-        id: &str,
-        record: &WalletMigrationRecord,
-    ) -> Result<(), MigrationError> {
-        self.records.save(id, record)
-    }
-
     /// The store is unusable this launch.
     ///
     /// Reported as retryable and left untouched: losing a record is cheap, but
     /// acting on a half-read one is not.
     fn storage_failure(id: &str, e: &MigrationError) -> MigrationRunSummary {
         crate::error!(
-            "wallet_migration.storage_error id={} error={:?} timestamp={}",
-            id,
-            e,
-            Utc::now().to_rfc3339()
+            migration_id = id,
+            error = format!("{e:?}"),
+            "wallet_migration.storage_error"
         );
         MigrationRunSummary::failed_retryable()
     }
@@ -512,11 +423,16 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    /// The persisted record for `id`, defaulted if there is none.
+    fn record_of(c: &WalletMigrationController, id: &str) -> MigrationRecord {
+        c.records.load(id).unwrap()
+    }
+
     /// Replays a fixed script of outcomes, one per reconcile pass, and counts
     /// how many times it was called.
     struct ScriptedMigration {
         id: String,
-        script: Vec<fn() -> Reconciled>,
+        script: Vec<fn() -> WalletMigrationResult>,
         calls: AtomicUsize,
         /// Whether a gap remains. Starts open; `close_gap` simulates a
         /// submission finally landing.
@@ -525,7 +441,7 @@ mod tests {
     }
 
     impl ScriptedMigration {
-        fn new(id: &str, script: Vec<fn() -> Reconciled>) -> Arc<Self> {
+        fn new(id: &str, script: Vec<fn() -> WalletMigrationResult>) -> Arc<Self> {
             Arc::new(Self {
                 id: id.to_string(),
                 script,
@@ -559,29 +475,29 @@ mod tests {
             Ok(!self.gap.load(Ordering::SeqCst))
         }
 
-        async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+        async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError> {
             let i = self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.script[i.min(self.script.len() - 1)]())
         }
     }
 
-    fn converged() -> Reconciled {
-        Reconciled::Converged
+    fn converged() -> WalletMigrationResult {
+        WalletMigrationResult::Converged
     }
-    fn submitted() -> Reconciled {
-        Reconciled::submitted("0xdeadbeef")
+    fn submitted() -> WalletMigrationResult {
+        WalletMigrationResult::submitted("0xdeadbeef")
     }
-    fn retry() -> Reconciled {
-        Reconciled::retry("RPC_ERROR", "offline")
+    fn retry() -> WalletMigrationResult {
+        WalletMigrationResult::retry("RPC_ERROR", "offline")
     }
 
     /// Simulate the resubmit cooldown having elapsed since the last pass.
     fn advance_past_cooldown(c: &WalletMigrationController, id: &str) {
-        let mut record = c.load_record(id).unwrap();
+        let mut record = record_of(c, id);
         record.last_attempted_at = record
             .last_attempted_at
             .map(|t| t - Duration::hours(RESUBMIT_COOLDOWN_HOURS + 1));
-        c.save_record(id, &record).unwrap();
+        c.records.save(id, &record).unwrap();
     }
 
     fn controller(
@@ -605,8 +521,11 @@ mod tests {
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.succeeded, 0);
         assert!(matches!(
-            c.load_record("never.needed").unwrap().status,
-            WalletMigrationStatus::Converged
+            c.records
+                .load::<MigrationRecord>("never.needed")
+                .unwrap()
+                .status,
+            MigrationStatus::Succeeded
         ));
     }
 
@@ -620,16 +539,22 @@ mod tests {
 
         let first = c.run().await;
         assert_eq!(first.pending, 1);
-        let record = c.load_record("submits.then.lands").unwrap();
-        assert!(matches!(record.status, WalletMigrationStatus::InFlight));
+        let record = c
+            .records
+            .load::<MigrationRecord>("submits.then.lands")
+            .unwrap();
+        assert!(matches!(record.status, MigrationStatus::InProgress));
         assert_eq!(record.attempts, 1);
 
         advance_past_cooldown(&c, "submits.then.lands");
         let second = c.run().await;
         assert_eq!(second.succeeded, 1, "the observation proves completion");
         assert!(matches!(
-            c.load_record("submits.then.lands").unwrap().status,
-            WalletMigrationStatus::Converged
+            c.records
+                .load::<MigrationRecord>("submits.then.lands")
+                .unwrap()
+                .status,
+            MigrationStatus::Succeeded
         ));
     }
 
@@ -654,8 +579,8 @@ mod tests {
             MAX_ATTEMPTS as usize,
             "the give-up pass must not submit anything"
         );
-        let record = c.load_record("never.lands").unwrap();
-        assert!(matches!(record.status, WalletMigrationStatus::GaveUp));
+        let record = record_of(&c, "never.lands");
+        assert!(matches!(record.status, MigrationStatus::FailedTerminal));
         assert_eq!(record.attempts, MAX_ATTEMPTS);
 
         advance_past_cooldown(&c, "never.lands");
@@ -680,8 +605,8 @@ mod tests {
         let summary = c.run().await;
         assert_eq!(summary.succeeded, 1);
         assert_eq!(m.calls(), MAX_ATTEMPTS as usize, "no extra submission");
-        let record = c.load_record("lands.last").unwrap();
-        assert!(matches!(record.status, WalletMigrationStatus::Converged));
+        let record = record_of(&c, "lands.last");
+        assert!(matches!(record.status, MigrationStatus::Succeeded));
         assert_eq!(record.attempts, 0, "convergence starts the cap over");
     }
 
@@ -703,7 +628,7 @@ mod tests {
                 }
                 Ok(false)
             }
-            async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+            async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError> {
                 Ok(submitted())
             }
         }
@@ -723,8 +648,11 @@ mod tests {
         let summary = c.run().await;
         assert_eq!(summary.skipped, 1);
         assert!(matches!(
-            c.load_record("cannot.observe").unwrap().status,
-            WalletMigrationStatus::InFlight
+            c.records
+                .load::<MigrationRecord>("cannot.observe")
+                .unwrap()
+                .status,
+            MigrationStatus::InProgress
         ));
     }
 
@@ -738,9 +666,9 @@ mod tests {
         for _ in 0..(MAX_ATTEMPTS * 3) {
             c.run().await;
         }
-        let record = c.load_record("offline").unwrap();
+        let record = record_of(&c, "offline");
         assert_eq!(record.attempts, 0, "nothing was ever submitted");
-        assert!(matches!(record.status, WalletMigrationStatus::Retrying));
+        assert!(matches!(record.status, MigrationStatus::FailedRetryable));
     }
 
     /// An observation error is evidence of nothing: the status is left untouched
@@ -756,7 +684,7 @@ mod tests {
             async fn end_state_holds(&self) -> Result<bool, MigrationError> {
                 Err(MigrationError::InvalidOperation("rpc down".to_string()))
             }
-            async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+            async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError> {
                 Err(MigrationError::InvalidOperation("rpc down".to_string()))
             }
         }
@@ -764,8 +692,8 @@ mod tests {
         let c = controller(vec![Arc::new(AlwaysErrors)]);
         let summary = c.run().await;
         assert_eq!(summary.skipped, 1);
-        let record = c.load_record("errors").unwrap();
-        assert!(matches!(record.status, WalletMigrationStatus::NotStarted));
+        let record = record_of(&c, "errors");
+        assert!(matches!(record.status, MigrationStatus::NotStarted));
         assert_eq!(record.attempts, 0);
     }
 
@@ -862,18 +790,27 @@ mod tests {
         advance_past_cooldown(&c, "drifts");
         c.run().await;
         assert!(matches!(
-            c.load_record("drifts").unwrap().status,
-            WalletMigrationStatus::Converged
+            record_of(&c, "drifts").status,
+            MigrationStatus::Succeeded
         ));
         assert_eq!(
-            c.load_record("drifts").unwrap().attempts,
+            c.records
+                .load::<MigrationRecord>("drifts")
+                .unwrap()
+                .attempts,
             0,
             "converging closes the gap, so the count starts over"
         );
 
         // The state drifts back; the next launch observes it and acts.
         c.run().await;
-        assert_eq!(c.load_record("drifts").unwrap().attempts, 1);
+        assert_eq!(
+            c.records
+                .load::<MigrationRecord>("drifts")
+                .unwrap()
+                .attempts,
+            1
+        );
     }
 
     /// Records live under their own namespace, so they cannot collide with the

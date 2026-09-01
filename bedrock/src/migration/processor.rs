@@ -1,7 +1,7 @@
 use crate::migration::MigrationError;
 use async_trait::async_trait;
 
-/// Result of executing a migration processor
+/// Result of executing a [`MigrationProcessor`].
 #[derive(uniffi::Enum)]
 pub enum ProcessorResult {
     /// Migration succeeded
@@ -24,39 +24,24 @@ pub enum ProcessorResult {
     },
 }
 
-/// Trait that all migration processors must implement
+/// A migration implemented by the host platform, in Swift or Kotlin.
 ///
-/// # Timeouts and Cancellation Safety
+/// # Timeouts and cancellation safety
 ///
-/// Both [`is_applicable`](Self::is_applicable) and [`execute`](Self::execute) are subject to timeouts
-/// (20 seconds in production). When a timeout occurs, the future is dropped and the migration
-/// is marked as failed (for `execute`) or skipped (for `is_applicable`).
+/// Both methods run under a 20s timeout, which drops the future; `execute`
+/// then counts as failed and `is_applicable` as skipped. So implementations:
 ///
-/// **IMPORTANT**: Implementations MUST be cancellation-safe:
-///
-/// - **DO NOT** spawn background tasks using `tokio::spawn`, `std::thread::spawn`, or similar
-///   that will continue running after the timeout
-/// - **DO NOT** use blocking operations or FFI calls without proper cleanup
-/// - **ENSURE** all work stops when the future is dropped (cooperative cancellation)
-/// - **MAKE** migrations idempotent so partial execution can be safely retried
-///
+/// - MUST NOT outlive the future (`tokio::spawn`, `std::thread::spawn`)
+/// - MUST NOT block or call FFI without cleanup
+/// - MUST be idempotent, since partial work is retried
 #[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait MigrationProcessor: Send + Sync {
-    /// Unique identifier for this migration (e.g., "worldid.account.bootstrap.v1")
-    /// The version should be included in the ID itself (e.g., ".v1", ".v2")
+    /// Unique identifier, version included (e.g. `"worldid.account.bootstrap.v1"`).
     fn migration_id(&self) -> String;
 
-    /// Check if this migration is applicable
-    ///
-    /// This method should check **actual state** (e.g., does v4 credential exist?)
-    /// to determine if the migration needs to run. This ensures the system is
-    /// truly idempotent and handles edge cases gracefully.
-    ///
-    /// # Returns
-    /// - `Ok(true)` if the migration should run
-    /// - `Ok(false)` if the migration should be skipped
-    /// - `Err(_)` if unable to determine (migration will be skipped with error logged)
+    /// Should this migration run? Check **actual state**, so the decision stays
+    /// idempotent. `Err` skips the migration with the error logged.
     async fn is_applicable(&self) -> Result<bool, MigrationError>;
 
     /// Execute the migration

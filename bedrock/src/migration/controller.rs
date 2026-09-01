@@ -2,7 +2,9 @@ use crate::bedrock_export;
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
 use crate::migration::record_store::RecordStore;
-use crate::migration::state::{MigrationRecord, MigrationStatus};
+use crate::migration::record_store::{
+    MigrationRecord, MigrationRecordEntry, MigrationStatus,
+};
 use crate::migration::wallet_controller::WalletMigrationController;
 use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
@@ -16,42 +18,9 @@ use tokio::sync::Mutex;
 const NATIVE_KEY_PREFIX: &str = "migration:";
 const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations after 30 days
 
-/// Global lock to prevent concurrent migration runs across all controller instances.
-/// This is a process-wide coordination mechanism that ensures only one migration
-/// can execute at a time, regardless of how many [`MigrationController`] instances exist.
-///
-/// **Application-level Requirements:**
-/// The calling application should ensure only one [`MigrationController`] instance is
-/// instantiated at a time. While this process-wide lock provides thread-safety within
-/// a single process, applications should use app-level constructs (singletons, dependency
-/// injection, etc.) to prevent multiple controller instances as an additional safeguard.
+/// Process-wide: only one migration run at a time, however many
+/// [`MigrationController`]s exist. Callers should still keep to one instance.
 static MIGRATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-/// A single migration record entry returned by [`MigrationController::list_all_records`].
-///
-/// FFI-facing view of a migration's persisted execution state, combining the
-/// processor's migration ID with the fields from [`MigrationRecord`] that are
-/// relevant to external consumers.
-///
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct MigrationRecordEntry {
-    /// The migration identifier (e.g. `"worldId.credentials.nfc.refresh.v2"`).
-    pub migration_id: String,
-    /// Current execution status.
-    pub status: MigrationStatus,
-    /// Number of execution attempts so far.
-    pub attempts: i32,
-    /// ISO 8601 timestamp when the migration was first started, if any.
-    pub started_at: Option<String>,
-    /// ISO 8601 timestamp of the most recent attempt, if any.
-    pub last_attempted_at: Option<String>,
-    /// Error code from the most recent failed attempt, if any.
-    pub last_error_code: Option<String>,
-    /// Error message from the most recent failed attempt, if any.
-    pub last_error_message: Option<String>,
-    /// ISO 8601 timestamp when the migration completed successfully, if any.
-    pub completed_at: Option<String>,
-}
 
 /// Summary of a migration run
 #[derive(Debug, Default, uniffi::Record)]
@@ -124,24 +93,9 @@ impl MigrationRunSummary {
     }
 }
 
-/// Controller that orchestrates migration execution
+/// Orchestrates migration execution, one [`RecordStore`] key per migration.
 ///
-/// ## Storage Architecture
-///
-/// Each migration's state is stored independently in the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore) using
-/// a namespaced key pattern: `migration:{migration_id}`.
-///
-/// For example:
-/// - `migration:worldId.credentials.poh.refresh.v1`
-/// - `migration:worldId.credentials.nfc.refresh.v1`
-///
-/// This approach ensures:
-/// - **Scalability**: No size limits on the total number of migrations
-/// - **Isolation**: Each migration's state is independent and can be managed separately
-/// - **Platform compatibility**: Avoids hitting single-key size limits in `SharedPreferences` (Android) and `UserDefaults` (iOS)
-///
-/// Each key stores a JSON-serialized `MigrationRecord` containing execution state,
-/// timestamps, and error information.
+/// See [`RecordStore`] for the storage layout and `README.md` for the model.
 #[derive(uniffi::Object)]
 pub struct MigrationController {
     records: RecordStore,
@@ -157,13 +111,8 @@ pub struct MigrationController {
 impl MigrationController {
     /// Create a new [`MigrationController`].
     ///
-    /// It runs two sets of migrations under one lock:
-    ///
-    /// - the `additional_processors` passed in — foreign
-    ///   [`MigrationProcessor`]s implemented in Swift/Kotlin;
-    /// - Bedrock's own [wallet migrations](crate::migration::wallet), loaded
-    ///   automatically. Those needing a Safe are omitted when `safe_account` is
-    ///   `None`.
+    /// Runs the `additional_processors` passed in plus Bedrock's own
+    /// [wallet migrations](crate::migration::wallet), which need `safe_account`.
     #[uniffi::constructor]
     pub fn new(
         kv_store: Arc<dyn DeviceKeyValueStore>,
@@ -177,25 +126,14 @@ impl MigrationController {
         })
     }
 
-    /// Run all registered migrations
+    /// Run all registered migrations. May take seconds; network-bound.
     ///
-    /// This is an async call that may take several seconds depending on network
-    /// conditions and the number of migrations to process.
-    ///
-    /// UniFFI handles the async runtime automatically via the `async_runtime = "tokio"` attribute.
-    ///
-    /// # Concurrency
-    ///
-    /// This method is **thread-safe** with fail-fast behavior. A global lock ensures only one
-    /// migration run can execute at a time across all `MigrationController` instances in the process.
-    ///
-    /// If another migration is already in progress when this method is called, it will return
-    /// immediately with an `InvalidOperation` error rather than waiting.
+    /// Thread-safe and fail-fast: a concurrent run errors immediately rather
+    /// than waiting on the process-wide lock.
     ///
     /// # Errors
     ///
-    /// Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
-    /// Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
+    /// `InvalidOperation` if another run is already in progress.
     pub async fn run_migrations(&self) -> Result<MigrationRunSummary, MigrationError> {
         // Try to acquire the global lock. If another migration is running, fail immediately.
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
@@ -209,22 +147,14 @@ impl MigrationController {
         // Lock automatically released when _guard is dropped
     }
 
-    /// Delete all migration records from the key-value store.
+    /// Delete all migration records, so everything runs again from scratch.
     ///
-    /// **Developer/testing use only.** This resets all migration state so that
-    /// migrations will run again from scratch on the next `run_migrations` call.
-    ///
-    /// Records that don't exist yet are silently skipped.
+    /// **Developer/testing use only.** Takes the lock; absent records are
+    /// skipped.
     ///
     /// # Errors
     ///
-    /// Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-    /// Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
-    ///
-    /// # Concurrency
-    ///
-    /// Acquires the global migration lock to prevent deleting records while
-    /// migrations are in progress.
+    /// `InvalidOperation` if a run is in progress, or the store failed.
     pub fn delete_all_records(&self) -> Result<i32, MigrationError> {
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
             MigrationError::InvalidOperation(
@@ -251,23 +181,12 @@ impl MigrationController {
         Ok(deleted)
     }
 
-    /// List the current record for every registered processor.
-    ///
-    /// Returns one [`MigrationRecordEntry`] per registered processor. Processors
-    /// that have never been attempted are included with status
-    /// [`MigrationStatus::NotStarted`] and zero attempts. Corrupted or missing
-    /// store entries are treated as a reset rather than an error.
+    /// One [`MigrationRecordEntry`] per registered migration, under the lock so
+    /// the snapshot is consistent. Never-attempted ones read as `NotStarted`.
     ///
     /// # Errors
     ///
-    /// Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-    /// Returns `MigrationError::DeviceKeyValueStoreError` only for unexpected store failures;
-    /// missing keys and parse errors are treated as resets and do not propagate.
-    ///
-    /// # Concurrency
-    ///
-    /// Acquires the global migration lock to ensure a consistent snapshot is
-    /// returned while no migration is actively modifying the records.
+    /// `InvalidOperation` if a run is in progress, or the store failed.
     pub fn list_all_records(
         &self,
     ) -> Result<Vec<MigrationRecordEntry>, MigrationError> {
@@ -280,17 +199,8 @@ impl MigrationController {
         let mut entries = Vec::new();
         for processor in &self.processors {
             let migration_id = processor.migration_id();
-            let record = self.load_record(&migration_id)?;
-            entries.push(MigrationRecordEntry {
-                migration_id,
-                status: record.status,
-                attempts: record.attempts,
-                started_at: record.started_at.map(|t| t.to_rfc3339()),
-                last_attempted_at: record.last_attempted_at.map(|t| t.to_rfc3339()),
-                last_error_code: record.last_error_code,
-                last_error_message: record.last_error_message,
-                completed_at: record.completed_at.map(|t| t.to_rfc3339()),
-            });
+            let record: MigrationRecord = self.records.load(&migration_id)?;
+            entries.push(record.into_entry(migration_id));
         }
         entries.extend(self.wallet.list_records()?);
 
@@ -595,14 +505,8 @@ impl MigrationController {
         outcome
     }
 
-    /// Load a single migration record from the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore)
-    /// Each migration is stored under its own key: `"migration:{migration_id}"`
-    ///
-    /// # Corruption Handling
-    ///
-    /// If the stored JSON is corrupted or invalid, this method treats it as a reset
-    /// and returns a new `MigrationRecord`. This prevents one corrupted record from
-    /// blocking all migrations permanently.
+    /// Load one record; corrupt or missing data reads as a reset, so a single
+    /// bad record cannot block every migration.
     fn load_record(
         &self,
         migration_id: &str,

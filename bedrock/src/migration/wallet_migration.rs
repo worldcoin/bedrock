@@ -13,7 +13,7 @@
 //! its own success and is believed; an wallet migration cannot, since the only
 //! proof its work landed is a later observation of the chain.
 //!
-//! So [`Reconciled`] has no success variant — the rule is a type here, not a doc
+//! So [`WalletMigrationResult`] has no success variant — the rule is a type here, not a doc
 //! comment, and the enum is free to change in a normal PR.
 //!
 //! # Model
@@ -21,16 +21,12 @@
 //! One method, [`WalletMigration::reconcile`], run on every launch:
 //!
 //! 1. **Observe** — read chain state and compute the gap.
-//! 2. No gap → [`Reconciled::Converged`] → recorded as converged.
-//! 3. Gap → **submit**, return [`Reconciled::Submitted`], stay in flight. The
+//! 2. No gap → [`WalletMigrationResult::Converged`] → recorded as converged.
+//! 3. Gap → **submit**, return [`WalletMigrationResult::Submitted`], stay in flight. The
 //!    next launch's observation is what proves it landed.
 //!
 //! Nothing is ever waited on and no receipt is read anywhere. Completion comes
 //! off the chain, never off a submission.
-//!
-//! These used to be `is_applicable` + `execute`, where the first stashed its
-//! answer on `self` for the second to read. Both halves now read through one
-//! private observe method and hand nothing off.
 //!
 //! # Ordering
 //!
@@ -55,7 +51,7 @@ use async_trait::async_trait;
 /// Deliberately has no "succeeded" variant: a migration is complete only when a
 /// *later* pass observes the end state.
 #[derive(Debug)]
-pub enum Reconciled {
+pub enum WalletMigrationResult {
     /// Observed state already matches the desired end state; nothing was
     /// submitted. The controller marks the migration converged.
     Converged,
@@ -75,17 +71,9 @@ pub enum Reconciled {
         /// Human-readable error message.
         error_message: String,
     },
-
-    /// Failed in a way that will not improve; the migration goes terminal.
-    GiveUp {
-        /// Error code for categorizing the failure.
-        error_code: String,
-        /// Human-readable error message.
-        error_message: String,
-    },
 }
 
-impl Reconciled {
+impl WalletMigrationResult {
     /// Work was submitted, identified by `reference` for log correlation.
     #[must_use]
     pub fn submitted(reference: impl Into<String>) -> Self {
@@ -102,47 +90,33 @@ impl Reconciled {
             error_message: message.into(),
         }
     }
-
-    /// A terminal failure.
-    #[must_use]
-    pub fn give_up(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::GiveUp {
-            error_code: code.into(),
-            error_message: message.into(),
-        }
-    }
 }
 
 /// A migration Bedrock owns, whose completion is proven by on-chain state.
 ///
 /// # Implementing
 ///
-/// Both methods read through one private method named `observe` — always that
-/// name — which returns the gap. `reconcile` reuses the value it returns rather
-/// than asking the chain a second time:
+/// Both methods read through one private `observe` — always that name —
+/// returning the gap as a value. Never stash it on `self`.
 ///
 /// ```rust,ignore
 /// async fn end_state_holds(&self) -> Result<bool, MigrationError> {
 ///     Ok(self.observe().await?.is_empty())
 /// }
 ///
-/// async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+/// async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError> {
 ///     let gap = self.observe().await?;          // the only read
 ///     if gap.is_empty() {
-///         return Ok(Reconciled::Converged);
+///         return Ok(WalletMigrationResult::Converged);
 ///     }
-///     Ok(Reconciled::submitted(self.send(gap).await?))
+///     Ok(WalletMigrationResult::submitted(self.send(gap).await?))
 /// }
 /// ```
 ///
-/// Both read through one private observe method returning the gap as a value.
-/// Never stash it on `self`: a field would only add a staleness window.
-///
 /// # Timeouts and cancellation safety
 ///
-/// Both methods run under a timeout, which drops the future. Implementations
-/// must be cooperatively cancellable: no `tokio::spawn` or `std::thread::spawn`
-/// outliving the future, no uncleaned blocking work.
+/// Both run under a timeout, which drops the future. No `tokio::spawn` or
+/// `std::thread::spawn` outliving it, no uncleaned blocking work.
 #[async_trait]
 pub trait WalletMigration: Send + Sync {
     /// Unique identifier, version included (e.g. `"wallet.permit2.approval.v1"`).
@@ -150,29 +124,21 @@ pub trait WalletMigration: Send + Sync {
 
     /// Does the desired end state already hold on chain?
     ///
-    /// A **pure read**, called only when the give-up cap is spent — the one
-    /// case where the controller must know without acting. The normal path uses
-    /// [`Self::reconcile`], so this costs nothing on a healthy launch.
-    ///
-    /// Implement it over the same private `observe` method [`Self::reconcile`]
-    /// uses, so the two can never disagree.
+    /// A pure read, called only when submitting is not allowed — the cap is
+    /// spent, or a submission is still settling. Never on a healthy launch.
     ///
     /// # Errors
     ///
-    /// If the observation could not be made. The migration is left untouched
-    /// and retried next launch.
+    /// If the observation failed. The migration is left untouched.
     async fn end_state_holds(&self) -> Result<bool, MigrationError>;
 
     /// Observe, and submit work if the end state does not hold.
     ///
-    /// **One chain read.** This is the normal path, so it must not observe
-    /// twice — reuse the value your private observe method returned.
-    ///
-    /// **Must be idempotent.** Called on every launch for as long as the end
-    /// state does not hold, including while an earlier submission is in flight.
+    /// **One chain read**, and **must be idempotent** — called every launch
+    /// while the gap is open, including with a submission already in flight.
     ///
     /// # Errors
     ///
     /// If the chain could not be read, or the work could not be submitted.
-    async fn reconcile(&self) -> Result<Reconciled, MigrationError>;
+    async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError>;
 }

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::migration::error::MigrationError;
-use crate::migration::{Reconciled, WalletMigration};
+use crate::migration::{WalletMigration, WalletMigrationResult};
 use crate::primitives::Network;
 use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
 use crate::transactions::contracts::erc20::Erc20;
@@ -98,11 +98,11 @@ impl WalletMigration for Permit2ApprovalMigration {
         Ok(self.observe().await?.is_empty())
     }
 
-    async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+    async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError> {
         // The only chain read of this pass; the gap is a local, never a field.
         let tokens = self.observe().await?;
         if tokens.is_empty() {
-            return Ok(Reconciled::Converged);
+            return Ok(WalletMigrationResult::Converged);
         }
 
         // Fire-and-forget: the hash is kept for log correlation only. The next
@@ -124,9 +124,9 @@ impl WalletMigration for Permit2ApprovalMigration {
                 info!(
                     "Submitted Permit2 approvals for {names:?}, userOpHash: {hash:?}"
                 );
-                Ok(Reconciled::submitted(format!("{hash:#x}")))
+                Ok(WalletMigrationResult::submitted(format!("{hash:#x}")))
             }
-            Err(e) => Ok(Reconciled::retry(
+            Err(e) => Ok(WalletMigrationResult::retry(
                 "RPC_ERROR",
                 format!("Failed to submit batched ERC20 approvals to Permit2: {e}"),
             )),

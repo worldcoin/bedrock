@@ -12,7 +12,8 @@ use common::{
 
 use bedrock::{
     migration::{
-        wallet::safe_4337_module::Safe4337ModuleMigration, Reconciled, WalletMigration,
+        wallet::safe_4337_module::Safe4337ModuleMigration, WalletMigration,
+        WalletMigrationResult,
     },
     primitives::http_client::set_http_client,
     smart_account::SafeSmartAccount,
@@ -89,7 +90,7 @@ async fn test_safe_4337_module_migration_full_flow() -> anyhow::Result<()> {
     assert!(
         matches!(
             migration.reconcile().await?,
-            Reconciled::Submitted { reference: Some(_) }
+            WalletMigrationResult::Submitted { reference: Some(_) }
         ),
         "first pass should relay and report submitted with a transaction id"
     );

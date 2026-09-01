@@ -7,7 +7,7 @@ use alloy::sol_types::SolCall;
 use async_trait::async_trait;
 
 use crate::migration::error::MigrationError;
-use crate::migration::{Reconciled, WalletMigration};
+use crate::migration::{WalletMigration, WalletMigrationResult};
 use crate::primitives::Network;
 use crate::smart_account::{SafeOperation, SafeSmartAccount, SafeTransaction};
 use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
@@ -151,11 +151,11 @@ impl WalletMigration for Safe4337ModuleMigration {
         Ok(!self.observe().await?.any())
     }
 
-    async fn reconcile(&self) -> Result<Reconciled, MigrationError> {
+    async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError> {
         // The only configuration read of this pass; the gap is a local.
         let repairs = self.observe().await?;
         if !repairs.any() {
-            return Ok(Reconciled::Converged);
+            return Ok(WalletMigrationResult::Converged);
         }
 
         let nonce = self.safe_nonce().await?;
@@ -179,7 +179,7 @@ impl WalletMigration for Safe4337ModuleMigration {
             transaction_id,
         );
 
-        Ok(Reconciled::submitted(transaction_id))
+        Ok(WalletMigrationResult::submitted(transaction_id))
     }
 }
 

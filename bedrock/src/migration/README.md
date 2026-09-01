@@ -16,13 +16,14 @@ fans out internally with `futures::join_all`.
 | "Done" means | the processor said so | the chain says so |
 | Storage key | `migration:{id}` | `migration:wallet:{id}` |
 | Record store | shared `RecordStore`, different prefix | same |
-| Status enum | `MigrationStatus` (FFI) | `WalletMigrationStatus` |
+| Record + status | shared `MigrationRecord` / `MigrationStatus` | same |
 | Changing it | an FFI break, coordinated across two platforms | a normal PR |
 
-They are separate because they disagree about what completion is, and because
-every enum variant the wallet side needs would otherwise be a variant the
-platform teams have to ship. Nothing is shared but the lock, the store, and the
-`MigrationRunSummary` consumers read.
+They are separate because they disagree about what completion is: the wallet
+side reads `Succeeded` as "the end state was observed this launch", which can
+drift back, where a processor's `Succeeded` is its own word taken on trust. The
+record and status types are shared because their shapes never diverged; only
+`recheck_at` (native) and `last_submission` (wallet) are one-sided.
 
 > [!NOTE]
 > Unrelated to the [Turnkey account migrations](../backup/turnkey/migrations/README.md),
@@ -54,7 +55,7 @@ receipt never changed the decision — the `is_applicable` recheck did.
 So: **on-chain state is the only source of truth.** The stored record is a
 cache and a diagnostic; it never decides whether a migration worked. A
 migration is complete when a *later* pass observes the end state — which cannot
-be known during the pass that submits the work. `Reconciled` has no success
+be known during the pass that submits the work. `WalletMigrationResult` has no success
 variant, so that rule is a type rather than a comment.
 
 Because work is re-submitted for as long as the end state does not hold,
@@ -67,7 +68,7 @@ trait WalletMigration {
     fn migration_id(&self) -> String;
 
     /// Observe and act, in ONE chain read. The normal path.
-    async fn reconcile(&self) -> Result<Reconciled, MigrationError>;
+    async fn reconcile(&self) -> Result<WalletMigrationResult, MigrationError>;
 
     /// Pure read. Called only when the give-up cap is spent.
     async fn end_state_holds(&self) -> Result<bool, MigrationError>;
@@ -78,15 +79,15 @@ trait WalletMigration {
 
 ```rust
 let gap = self.observe().await?;                 // the only read
-if gap.is_empty() { return Ok(Reconciled::Converged); }
-Ok(Reconciled::submitted(self.send(gap).await?))
+if gap.is_empty() { return Ok(WalletMigrationResult::Converged); }
+Ok(WalletMigrationResult::submitted(self.send(gap).await?))
 ```
 
 The gap is a **local**, never a field. That is what made the old
 `is_applicable` + `execute` pair unsafe: the first wrote its answer into a
 `Mutex` for the second to read, so the two could silently disagree, and
-`Safe4337ModuleProcessor` paid for a second chain read because it distrusted the
-hand-off.
+`Safe4337ModuleProcessor` paid for a second chain read because it distrusted
+the hand-off. A field would only add a staleness window.
 
 `end_state_holds` exists for the one case where the controller must know
 *without* acting: the give-up cap is spent, and it confirms on chain rather than
@@ -99,19 +100,18 @@ reads the chain twice.
 flowchart TD
     Start([App launch]) --> Gate{Stored status}
 
-    Gate -- GaveUp --> SkipT[skip forever<br/>the only launch that reads nothing]
+    Gate -- FailedTerminal --> SkipT[skip forever<br/>the only launch that reads nothing]
     Gate -- "cap spent, or<br/>submission still settling" --> Obs["end_state_holds()<br/>look, never act"]
     Gate -- otherwise --> Rec["reconcile()<br/>look, and submit if needed"]
 
-    Obs -- true --> Done[["mark Converged<br/>reset the cap"]]
-    Obs -- "false, cap spent" --> Terminal[["mark GaveUp"]]
-    Obs -- "false, still settling" --> Wait[["stay InFlight"]]
+    Obs -- true --> Done[["mark Succeeded<br/>reset the cap"]]
+    Obs -- "false, cap spent" --> Terminal[["mark FailedTerminal"]]
+    Obs -- "false, still settling" --> Wait[["stay InProgress"]]
     Obs -- Err --> SkipE[no verdict, nothing changes]
 
     Rec -- Converged --> Done
-    Rec -- Submitted --> InFlight[["attempts += 1<br/>mark InFlight"]]
-    Rec -- Retry --> Retry[["mark Retrying<br/>not counted against the cap"]]
-    Rec -- GiveUp --> Terminal
+    Rec -- Submitted --> InFlight[["attempts += 1<br/>mark InProgress"]]
+    Rec -- Retry --> Retry[["mark FailedRetryable<br/>not counted against the cap"]]
     Rec -- Err --> SkipE
 ```
 
@@ -127,29 +127,29 @@ consulted to decide whether the work is complete.
 owner-signed `execTransaction`, so it is the only migration that works on a Safe
 which cannot yet validate a userOp — every other migration submits one.
 
-It runs first and alone. Dependents run only once it has **converged**, which is
+It runs first and alone. Dependents run only once it has **succeeded**, which is
 an observation, never a submission: the cold start that relays the repair does
 not also run them. Nothing waits on tx-sitter.
 
 ### Status values
 
-| Status | Meaning | Next launch |
+| `MigrationStatus` | Wallet meaning | Next launch |
 | --- | --- | --- |
 | `NotStarted` | never reconciled | reconcile |
-| `InFlight` | submitted; not yet observed on chain | reconcile once the cooldown elapses |
-| `Converged` | end state observed | observe again; act if it drifted |
-| `Retrying` | the pass failed; nothing was submitted | reconcile |
-| `GaveUp` | terminal | skip permanently |
+| `InProgress` | submitted; not yet observed on chain | reconcile once the cooldown elapses |
+| `Succeeded` | end state observed | observe again; act if it drifted |
+| `FailedRetryable` | the pass failed; nothing was submitted | reconcile |
+| `FailedTerminal` | terminal | skip permanently |
 
-`InFlight` vs `Retrying` is load-bearing: only the former means something
-actually went out, which is what the cap and the cooldown key off.
+`InProgress` vs `FailedRetryable` is load-bearing: only the former means
+something actually went out, which is what the cap and the cooldown key off.
 
 ### Giving up, and the cooldown
 
 `MAX_ATTEMPTS` (5) counts submissions **observed to have failed**, per gap. Once
 spent, the next pass calls `end_state_holds` alone and never submits: it either
-finds the work landed after all (recorded `Converged`) or confirms the gap
-(`GaveUp`). An observation error reaches no verdict and retries next launch.
+finds the work landed after all (recorded `Succeeded`) or confirms the gap
+(`FailedTerminal`). An observation error reaches no verdict and retries next launch.
 Converging resets the count — it closes the gap, so a state that drifts back
 years later starts over.
 

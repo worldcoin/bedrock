@@ -14,8 +14,9 @@ use common::{deploy_safe, setup_anvil, IERC20};
 
 use bedrock::{
     migration::{
-        wallet::permit2_approval::Permit2ApprovalMigration, MigrationStatus,
-        Reconciled, WalletMigration, WalletMigrationController, WalletMigrationRecord,
+        wallet::permit2_approval::Permit2ApprovalMigration, MigrationRecord,
+        MigrationStatus, WalletMigration, WalletMigrationController,
+        WalletMigrationResult,
     },
     primitives::{
         http_client::set_http_client,
@@ -32,7 +33,7 @@ use bedrock::{
 /// standing in for the next cold start an hour later.
 fn skip_resubmit_cooldown(kv: &InMemoryDeviceKeyValueStore, migration_id: &str) {
     let key = format!("migration:wallet:{migration_id}");
-    let mut record: WalletMigrationRecord =
+    let mut record: MigrationRecord =
         serde_json::from_str(&kv.get(key.clone()).unwrap()).unwrap();
     record.last_attempted_at = record
         .last_attempted_at
@@ -103,10 +104,10 @@ async fn test_permit2_approval_migration_full_flow() -> anyhow::Result<()> {
     //    assertions below, never by a receipt.
     assert!(!migration.end_state_holds().await?);
     let reference = match migration.reconcile().await? {
-        Reconciled::Submitted { reference } => {
+        WalletMigrationResult::Submitted { reference } => {
             reference.expect("submission must carry the userOp hash")
         }
-        other => panic!("Expected Reconciled::Submitted, got {other:?}"),
+        other => panic!("Expected WalletMigrationResult::Submitted, got {other:?}"),
     };
     assert!(!reference.is_empty(), "submission must carry a userOp hash");
 
