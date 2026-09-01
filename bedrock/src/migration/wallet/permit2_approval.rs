@@ -6,9 +6,9 @@ use std::sync::Arc;
 use crate::migration::error::MigrationError;
 use crate::migration::{WalletMigration, WalletMigrationResult};
 use crate::primitives::Network;
-use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
-use crate::transactions::contracts::erc20::Erc20;
-use crate::transactions::contracts::permit2::{BatchPermit2Approval, PERMIT2_ADDRESS};
+use crate::smart_account::{Is4337Encodable, SafeSmartAccount, TransactionTypeId};
+use crate::transactions::contracts::erc20::{BatchErc20Approval, Erc20};
+use crate::transactions::contracts::permit2::PERMIT2_ADDRESS;
 use crate::transactions::contracts::worldchain::{
     USDC_ADDRESS, WBTC_ADDRESS, WETH_ADDRESS, WLD_ADDRESS,
 };
@@ -107,18 +107,23 @@ impl WalletMigration for Permit2ApprovalMigration {
 
         // Fire-and-forget: the hash is kept for log correlation only. The next
         // observation of the allowances is what proves they landed.
-        let addresses: Vec<Address> = tokens.iter().map(|(addr, _)| *addr).collect();
+        let approvals: Vec<(Address, U256)> =
+            tokens.iter().map(|(addr, _)| (*addr, U256::MAX)).collect();
         let names: Vec<&str> = tokens.iter().map(|(_, name)| *name).collect();
 
-        match BatchPermit2Approval::new(&addresses)
-            .sign_and_execute(
-                &self.safe_account,
-                Network::WorldChain,
-                None,
-                None,
-                RpcProviderName::Any,
-            )
-            .await
+        match BatchErc20Approval::new(
+            PERMIT2_ADDRESS,
+            &approvals,
+            TransactionTypeId::Permit2Approve,
+        )
+        .sign_and_execute(
+            &self.safe_account,
+            Network::WorldChain,
+            None,
+            None,
+            RpcProviderName::Any,
+        )
+        .await
         {
             Ok(hash) => {
                 info!(
