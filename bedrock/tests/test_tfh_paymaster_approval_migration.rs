@@ -279,6 +279,47 @@ async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()>
     );
     assert!(migration.end_state_holds().await?);
 
+    // 8) The same for USDC, which consumes allowance differently: Circle's
+    //    FiatToken decrements even from `type(uint256).max`, where a standard
+    //    ERC-20 skips the decrement there. Finite approvals sidestep that split
+    //    — both decrement below MAX — so USDC needs no special case here, and
+    //    this proves it rather than assuming it.
+    let twenty_usdc = U256::from(20_000_000u64);
+    paymaster_spends(
+        &anvil.endpoint_url(),
+        USDC_ADDRESS,
+        safe_address,
+        twenty_usdc,
+    )
+    .await?;
+    assert_eq!(
+        usdc.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
+            .call()
+            .await?,
+        usdc_target() - twenty_usdc,
+        "USDC should decrement by exactly what was pulled"
+    );
+
+    assert!(!migration.end_state_holds().await?);
+    assert!(matches!(
+        migration.reconcile().await?,
+        WalletMigrationResult::Submitted { .. }
+    ));
+    assert_eq!(
+        usdc.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
+            .call()
+            .await?,
+        usdc_target(),
+        "the USDC top-up should restore the full target"
+    );
+    assert_eq!(
+        wld.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
+            .call()
+            .await?,
+        wld_target(),
+        "WLD was at target, so the USDC top-up must leave it alone"
+    );
+
     drop(std::fs::remove_dir_all(&root));
     Ok(())
 }
