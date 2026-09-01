@@ -1,8 +1,8 @@
 //! Permit2 contract types, helpers, and batched ERC20 approvals.
 //!
 //! Contains the Permit2 `IAllowanceTransfer` interface, `PermitTransferFrom` / `TokenPermissions`
-//! EIP-712 types, `Permit2Approve` for on-chain allowance approvals, and `BatchPermit2Approval`
-//! for batching ERC20 `approve(spender, type(uint256).max)` calls via `MultiSend`.
+//! EIP-712 types and `Permit2Approve` for on-chain allowance approvals.
+//! Batching several is [`BatchErc20Approval`](super::erc20::BatchErc20Approval).
 
 use alloy::{
     dyn_abi::{Eip712Domain, TypedData},
@@ -21,8 +21,6 @@ use crate::smart_account::{
     TransactionTypeId, UserOperation,
 };
 
-use super::erc20::Erc20;
-use super::multisend::{MultiSend, MultiSendTx};
 pub use super::worldchain::PERMIT2_ADDRESS;
 
 // ---------------------------------------------------------------------------
@@ -174,86 +172,6 @@ impl Is4337Encodable for Permit2Approve {
 }
 
 // ---------------------------------------------------------------------------
-// BatchPermit2Approval (multiple ERC20 approvals via MultiSend)
-// ---------------------------------------------------------------------------
-
-/// Batched ERC20 `approve(spender, type(uint256).max)` calls via `MultiSend`.
-///
-/// Builds a single 4337 `UserOperation` that grants a spender contract max allowance
-/// on each of the given token contracts.
-pub struct BatchPermit2Approval {
-    call_data: Bytes,
-    to: Address,
-    operation: SafeOperation,
-}
-
-impl BatchPermit2Approval {
-    /// Creates a new batch of ERC20 max approvals to the Permit2 contract.
-    ///
-    /// # Arguments
-    /// * `tokens` - The ERC20 token addresses to approve.
-    #[must_use]
-    pub fn new(tokens: &[Address]) -> Self {
-        let approve_data = Erc20::encode_approve(PERMIT2_ADDRESS, U256::MAX);
-
-        let entries: Vec<MultiSendTx> = tokens
-            .iter()
-            .map(|token| MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: *token,
-                value: U256::ZERO,
-                data_length: U256::from(approve_data.len()),
-                data: approve_data.clone().into(),
-            })
-            .collect();
-
-        let bundle = MultiSend::build_bundle(&entries);
-
-        Self {
-            call_data: bundle.data.into(),
-            to: bundle.to,
-            operation: bundle.operation,
-        }
-    }
-}
-
-impl Is4337Encodable for BatchPermit2Approval {
-    type MetadataArg = ();
-
-    fn build_execute_user_op_call_data(&self) -> Bytes {
-        ISafe4337Module::executeUserOpCall {
-            to: self.to,
-            value: U256::ZERO,
-            data: self.call_data.clone(),
-            operation: self.operation as u8,
-        }
-        .abi_encode()
-        .into()
-    }
-
-    fn build_preflight_user_operation(
-        &self,
-        wallet_address: Address,
-        _metadata: Option<Self::MetadataArg>,
-    ) -> Result<UserOperation, PrimitiveError> {
-        let call_data = self.build_execute_user_op_call_data();
-
-        let key = NonceKeyV1::new(
-            TransactionTypeId::Permit2Approve,
-            InstructionFlag::Default,
-            [0u8; 10],
-        );
-        let nonce = key.encode();
-
-        Ok(UserOperation::new_with_defaults(
-            wallet_address,
-            nonce,
-            call_data,
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -261,7 +179,7 @@ impl Is4337Encodable for BatchPermit2Approval {
 mod tests {
     use super::*;
     use crate::primitives::{Network, BEDROCK_NONCE_PREFIX_CONST};
-    use crate::transactions::contracts::erc20::IErc20;
+    use crate::transactions::contracts::erc20::{BatchErc20Approval, Erc20, IErc20};
     use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
     use alloy::primitives::{address, fixed_bytes, uint};
     use std::str::FromStr;
@@ -363,8 +281,12 @@ mod tests {
     fn test_batch_execute_user_op_calldata() {
         let usdc = address!("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1");
         let weth = address!("0x4200000000000000000000000000000000000006");
-        let tokens = vec![usdc, weth];
-        let batch = BatchPermit2Approval::new(&tokens);
+        let tokens = [usdc, weth];
+        let batch = BatchErc20Approval::new(
+            PERMIT2_ADDRESS,
+            &tokens.iter().map(|t| (*t, U256::MAX)).collect::<Vec<_>>(),
+            TransactionTypeId::Permit2Approve,
+        );
 
         let call_data = batch.build_execute_user_op_call_data();
         let call_data_bytes: &[u8] = &call_data;

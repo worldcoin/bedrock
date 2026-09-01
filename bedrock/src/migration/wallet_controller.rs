@@ -7,6 +7,7 @@ use crate::migration::error::MigrationError;
 use crate::migration::record_store::{
     MigrationRecord, MigrationRecordEntry, MigrationStatus, RecordStore, Submission,
 };
+use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
 use chrono::{Duration, Utc};
@@ -55,10 +56,16 @@ impl WalletMigrationController {
         let mut migrations: Vec<Arc<dyn WalletMigration>> =
             vec![Arc::new(Permit2ApprovalMigration::new(account.clone()))];
 
-        // `None` on production, so the paymaster approval is never registered
-        // there and no record for it is ever written.
-        if let Some(paymaster) = TfhPaymasterApprovalMigration::new(account.clone()) {
-            migrations.push(Arc::new(paymaster));
+        // Staging and sandbox only, so production never runs the paymaster
+        // approval and never writes a record for it. An uninitialized config
+        // reads as production, so an unknown environment is excluded too.
+        if matches!(
+            current_environment_or_default(),
+            BedrockEnvironment::Staging | BedrockEnvironment::Sandbox
+        ) {
+            migrations.push(Arc::new(TfhPaymasterApprovalMigration::new(
+                account.clone(),
+            )));
         }
 
         Self {
@@ -527,6 +534,91 @@ mod tests {
             Arc::new(InMemoryDeviceKeyValueStore::new()),
             migrations,
         )
+    }
+
+    /// Marks the child run of [`test_production_omits_the_paymaster_approval`].
+    const PRODUCTION_CHILD_ENV: &str = "BEDROCK_WALLET_PROD_CHILD";
+    const PRODUCTION_TEST_NAME: &str =
+        "migration::wallet_controller::tests::test_production_omits_the_paymaster_approval";
+
+    /// The default set for a Safe-backed controller.
+    fn default_set() -> WalletMigrationController {
+        let account = Arc::new(
+            crate::smart_account::SafeSmartAccount::from_private_key_hex(
+                "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                    .to_string(),
+                "0x4564420674EA68fcc61b463C0494807C759d47e6",
+            )
+            .unwrap(),
+        );
+        WalletMigrationController::new(
+            Arc::new(InMemoryDeviceKeyValueStore::new()),
+            Some(account),
+        )
+    }
+
+    /// Staging registers the repair, Permit2, and the paymaster approval.
+    #[tokio::test]
+    async fn test_staging_registers_the_paymaster_approval() {
+        crate::primitives::filesystem::init_test_filesystem();
+        assert_eq!(default_set().len(), 3);
+        assert!(default_set()
+            .all()
+            .any(|m| m.migration_id() == "wallet.tfh_paymaster.approval.v1"));
+    }
+
+    /// Production registers everything *but* the paymaster approval, so no
+    /// record for it is ever written there.
+    ///
+    /// Runs in a fresh process: the config is a process-wide `OnceLock`, so the
+    /// staging value the other tests rely on cannot be replaced in place. The
+    /// uninitialized case is covered first, since it defaults to production.
+    #[test]
+    fn test_production_omits_the_paymaster_approval() {
+        use crate::primitives::config::{set_config, Os};
+
+        if std::env::var_os(PRODUCTION_CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "--nocapture", PRODUCTION_TEST_NAME])
+                .env(PRODUCTION_CHILD_ENV, "1")
+                .output()
+                .expect("re-run this test in a child process");
+            let report = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "child run failed:\n{report}{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                report.contains("1 passed"),
+                "child did not run the test, only: {report}"
+            );
+            return;
+        }
+
+        let assert_omitted = |c: WalletMigrationController| {
+            assert_eq!(c.len(), 2, "the paymaster approval must not be registered");
+            assert!(
+                !c.all()
+                    .any(|m| m.migration_id() == "wallet.tfh_paymaster.approval.v1"),
+                "the paymaster approval must not be registered"
+            );
+        };
+
+        // Uninitialized reads as production.
+        assert_omitted(default_set());
+
+        let root = std::env::temp_dir()
+            .join(format!("bedrock-wallet-prod-{}", std::process::id()));
+        set_config(
+            BedrockEnvironment::Production,
+            Os::Ios,
+            root.to_string_lossy().into_owned(),
+        )
+        .expect("configure a production test environment");
+
+        assert_omitted(default_set());
+        drop(std::fs::remove_dir_all(&root));
     }
 
     /// A migration that was never needed converges on the first pass, and is

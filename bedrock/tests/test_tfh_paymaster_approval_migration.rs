@@ -115,7 +115,8 @@ async fn paymaster_spends(
 
 #[tokio::test]
 async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()> {
-    // 1) The migration only exists off production, so configure staging first.
+    // 1) Staging: `WalletMigrationController` only registers this off
+    //    production, and `set_erc20_balance_with_slot` needs a config anyway.
     let root = std::env::temp_dir()
         .join(format!("bedrock-tfh-paymaster-it-{}", std::process::id()));
     set_config(
@@ -154,8 +155,7 @@ async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()>
         owner_key_hex,
         &safe_address.to_string(),
     )?);
-    let migration = TfhPaymasterApprovalMigration::new(safe_account)
-        .expect("staging must construct the migration");
+    let migration = TfhPaymasterApprovalMigration::new(safe_account);
     assert_eq!(migration.migration_id(), "wallet.tfh_paymaster.approval.v1");
 
     let wld = IERC20::new(WLD_ADDRESS, &provider);
