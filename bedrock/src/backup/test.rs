@@ -331,17 +331,41 @@ async fn test_store_file_no_remote_backup_with_nonempty_local_manifest() {
 
 #[tokio::test]
 #[serial]
-async fn test_list_files_missing_manifest_is_empty() {
+async fn test_list_files_missing_manifest_no_remote_is_empty() {
     let api = init_test_globals();
     api.reset();
 
-    // A device that never created a backup has no local manifest at all. Listing must
-    // report "no files recorded" rather than ManifestNotFound: read-only backup syncs
-    // (e.g. the face PCP delete cleanup) run on such accounts, and the absence of a
-    // backup is not an error for them. Mutating methods keep surfacing ManifestNotFound.
+    // A device that never created a backup has no local manifest at all. Once the remote
+    // head confirms no backup exists, listing must report "no files recorded" rather than
+    // ManifestNotFound: read-only backup syncs (e.g. the face PCP delete cleanup) run on
+    // such accounts, and the absence of a backup is not an error for them. Mutating
+    // methods keep surfacing ManifestNotFound.
+    api.set_no_remote_backup();
+
     let mgr = ManifestManager::new_with_prefix("backup_test_list_missing");
     let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
     assert!(list.is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn test_list_files_missing_manifest_with_remote_is_stale() {
+    let api = init_test_globals();
+    api.reset();
+
+    // A remote backup with no local manifest (fresh install before restore, local storage
+    // loss) must not read as "no files recorded" — the native layer has to restore first.
+    api.set_remote_hash(hex::encode(blake3::hash(b"remote-backup").as_bytes()));
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_missing_remote");
+    let err = mgr
+        .list_files(BackupFileDesignator::OrbPkg)
+        .await
+        .expect_err("expected stale error");
+    assert_eq!(
+        err.to_string(),
+        "Remote manifest is ahead of local; fetch and apply latest backup before updating"
+    );
 }
 
 #[tokio::test]

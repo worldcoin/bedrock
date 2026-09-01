@@ -165,9 +165,12 @@ impl ManifestManager {
     /// The caller must supply an HTTP client and signer to perform the gate. This method does not mutate state.
     ///
     /// A device that never wrote a manifest has no files recorded: the local `ManifestNotFound`
-    /// is reported as an empty list rather than an error, so read-only callers (such as the
-    /// personal-custody backup syncs on accounts that never created a backup) are not failed by
-    /// the mere absence of a backup. Mutating methods keep surfacing `ManifestNotFound`.
+    /// is reported as an empty list rather than an error — once the remote head confirms the
+    /// account has no backup — so read-only callers (such as the personal-custody backup syncs
+    /// on accounts that never created a backup) are not failed by the mere absence of a backup.
+    /// A remote backup with no local manifest (fresh install before restore, local storage loss)
+    /// keeps failing, with `RemoteAheadStaleError` so the native layer restores before trusting
+    /// the local view. Mutating methods keep surfacing `ManifestNotFound`.
     ///
     /// # Errors
     /// Returns an error if the remote hash does not match local or if network/IO errors occur.
@@ -176,7 +179,13 @@ impl ManifestManager {
         designator: BackupFileDesignator,
     ) -> Result<Vec<String>, BackupError> {
         let (manifest, _local_hash) = match self.load_manifest_gated().await {
-            Err(BackupError::ManifestNotFound) => return Ok(Vec::new()),
+            Err(BackupError::ManifestNotFound) => {
+                return if BackupServiceClient::get_remote_manifest_hash().await?.is_some() {
+                    Err(BackupError::RemoteAheadStaleError)
+                } else {
+                    Ok(Vec::new())
+                };
+            }
             result => result?,
         };
 
