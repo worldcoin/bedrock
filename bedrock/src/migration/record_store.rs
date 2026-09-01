@@ -62,10 +62,29 @@ pub struct MigrationRecord {
     #[serde(default)]
     pub recheck_at: Option<DateTime<Utc>>,
 
-    /// Most recent submission reference (userOp hash or relay id). Wallet only,
-    /// diagnostics only — never read for control flow.
+    /// The most recent submission, if one has gone out. Wallet only.
     #[serde(default)]
-    pub last_submission: Option<String>,
+    pub last_submission: Option<Submission>,
+}
+
+/// One submission of a wallet migration's work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Submission {
+    /// userOp hash or relay transaction id, for correlating logs. Never read
+    /// for control flow — the chain is the only oracle.
+    pub reference: Option<String>,
+
+    /// When it went out. The resubmit cooldown is measured from this, never
+    /// from `last_attempted_at`, which observe-only passes also bump.
+    pub at: DateTime<Utc>,
+}
+
+impl Submission {
+    /// The reference for logging, or `"none"` when the submitter gave none.
+    #[must_use]
+    pub fn reference_or_none(this: Option<&Self>) -> &str {
+        this.and_then(|s| s.reference.as_deref()).unwrap_or("none")
+    }
 }
 
 impl MigrationRecord {

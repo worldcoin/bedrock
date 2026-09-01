@@ -26,6 +26,8 @@ pub mod wallet;
 pub use controller::{MigrationController, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
-pub use record_store::{MigrationRecord, MigrationRecordEntry, MigrationStatus};
+pub use record_store::{
+    MigrationRecord, MigrationRecordEntry, MigrationStatus, Submission,
+};
 pub use wallet_controller::WalletMigrationController;
 pub use wallet_migration::{WalletMigration, WalletMigrationResult};

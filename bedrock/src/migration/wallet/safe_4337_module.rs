@@ -163,14 +163,20 @@ impl WalletMigration for Safe4337ModuleMigration {
 
         let rpc_client = get_rpc_client()
             .map_err(|e| MigrationError::InvalidOperation(e.to_string()))?;
-        let transaction_id = rpc_client
+        // A relay failure is a failed *submission*, not a failed observation:
+        // report it as `Retry` so the record explains why the repair is stuck.
+        let transaction_id = match rpc_client
             .relay_safe_transaction(Network::WorldChain, &request)
             .await
-            .map_err(|e| {
-                MigrationError::InvalidOperation(format!(
-                    "Failed to relay 4337 repair: {e}"
+        {
+            Ok(id) => id,
+            Err(e) => {
+                return Ok(WalletMigrationResult::retry(
+                    "RELAY_ERROR",
+                    format!("Failed to relay the 4337 repair: {e}"),
                 ))
-            })?;
+            }
+        };
 
         crate::info!(
             "Relayed Safe 4337 repair (enable_module={}, set_fallback_handler={}, transaction_id={})",

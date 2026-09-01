@@ -4,7 +4,7 @@ use super::wallet_migration::{WalletMigration, WalletMigrationResult};
 use crate::migration::controller::MigrationRunSummary;
 use crate::migration::error::MigrationError;
 use crate::migration::record_store::{
-    MigrationRecord, MigrationRecordEntry, MigrationStatus, RecordStore,
+    MigrationRecord, MigrationRecordEntry, MigrationStatus, RecordStore, Submission,
 };
 use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
@@ -154,8 +154,11 @@ impl WalletMigrationController {
         // Step 2: every other launch observes. Submitting is what gets held
         // back — because the cap is spent, or because a submission has not had
         // its hour to land — and then the pass observes without acting.
-        if record.attempts >= MAX_ATTEMPTS || Self::still_settling(&id, &record) {
-            let summary = self.observe_only(&id, &mut record, migration).await;
+        let settling = Self::still_settling(&id, &record);
+        if record.attempts >= MAX_ATTEMPTS || settling {
+            let summary = self
+                .observe_only(&id, &mut record, migration, settling)
+                .await;
             record.last_attempted_at = Some(Utc::now());
             if let Err(e) = self.records.save(&id, &record) {
                 return Self::storage_failure(&id, &e);
@@ -210,14 +213,18 @@ impl WalletMigrationController {
             Ok(WalletMigrationResult::Submitted { reference }) => {
                 record.attempts += 1;
                 record.started_at.get_or_insert_with(Utc::now);
-                record.last_submission = reference;
+                record.last_submission = Some(Submission {
+                    reference,
+                    at: Utc::now(),
+                });
                 record.last_error_code = None;
                 record.last_error_message = None;
                 record.status = MigrationStatus::InProgress;
 
                 crate::info!(
                     migration_id = id,
-                    submission = record.last_submission.as_deref().unwrap_or("none"),
+                    submission =
+                        Submission::reference_or_none(record.last_submission.as_ref()),
                     attempt = record.attempts,
                     max_attempts = MAX_ATTEMPTS,
                     duration_ms = duration_ms,
@@ -269,6 +276,7 @@ impl WalletMigrationController {
         id: &str,
         record: &mut MigrationRecord,
         migration: &dyn WalletMigration,
+        settling: bool,
     ) -> MigrationRunSummary {
         match migration.end_state_holds().await {
             // It landed. True whether we were waiting on it or had run out of
@@ -278,14 +286,16 @@ impl WalletMigrationController {
                 MigrationRunSummary::succeeded()
             }
 
-            // Still a gap and no attempts left: confirmed dead. Nothing was
-            // submitted to reach this verdict.
-            Ok(false) if record.attempts >= MAX_ATTEMPTS => {
+            // Still a gap, the cap is spent, and the last submission has had
+            // its hour: confirmed dead. `settling` is what keeps the fifth
+            // submission from being written off seconds after it went out.
+            Ok(false) if record.attempts >= MAX_ATTEMPTS && !settling => {
                 crate::error!(
                     migration_id = id,
                     reason = "never_landed",
                     attempts = record.attempts,
-                    submission = record.last_submission.as_deref().unwrap_or("none"),
+                    submission =
+                        Submission::reference_or_none(record.last_submission.as_ref()),
                     "wallet_migration.gave_up"
                 );
                 Self::mark_failed(
@@ -299,7 +309,8 @@ impl WalletMigrationController {
                 MigrationRunSummary::failed_terminal()
             }
 
-            // Still a gap, still within the submission's grace period.
+            // Still a gap: either within the grace period, or the cap is spent
+            // and the last submission still has time. Look again next launch.
             Ok(false) => MigrationRunSummary::pending(),
 
             // No verdict without an observation; nothing changes.
@@ -343,22 +354,23 @@ impl WalletMigrationController {
         record.last_error_message = Some(message);
     }
 
-    /// Is a submission still within its grace period?
+    /// Is the last submission still within its grace period?
     ///
-    /// Only gates *submitting*. Past the cooldown a transaction is never going
-    /// to mine, so the next pass resubmits.
+    /// Measured from when it *went out*, never from the last pass: observe-only
+    /// passes bump `last_attempted_at`, so keying off that would let a user who
+    /// opens the app hourly push the deadline forward forever.
     fn still_settling(id: &str, record: &MigrationRecord) -> bool {
         if !matches!(record.status, MigrationStatus::InProgress) {
             return false;
         }
-        let Some(last) = record.last_attempted_at else {
+        let Some(sent_at) = record.last_submission.as_ref().map(|s| s.at) else {
             return false;
         };
-        let settling = Utc::now() - last < Duration::hours(RESUBMIT_COOLDOWN_HOURS);
+        let settling = Utc::now() - sent_at < Duration::hours(RESUBMIT_COOLDOWN_HOURS);
         if settling {
             crate::info!(
                 migration_id = id,
-                last_attempted_at = last.to_rfc3339(),
+                submitted_at = sent_at.to_rfc3339(),
                 "wallet_migration.settling"
             );
         }
@@ -492,11 +504,12 @@ mod tests {
     }
 
     /// Simulate the resubmit cooldown having elapsed since the last pass.
+    /// Backdates the submission so its grace period has elapsed.
     fn advance_past_cooldown(c: &WalletMigrationController, id: &str) {
         let mut record = record_of(c, id);
-        record.last_attempted_at = record
-            .last_attempted_at
-            .map(|t| t - Duration::hours(RESUBMIT_COOLDOWN_HOURS + 1));
+        if let Some(s) = record.last_submission.as_mut() {
+            s.at -= Duration::hours(RESUBMIT_COOLDOWN_HOURS + 1);
+        }
         c.records.save(id, &record).unwrap();
     }
 
@@ -587,6 +600,80 @@ mod tests {
         let summary = c.run().await;
         assert_eq!(summary.skipped, 1, "terminal migrations never run again");
         assert_eq!(m.calls(), MAX_ATTEMPTS as usize);
+    }
+
+    /// The cooldown is measured from the submission, not from the last pass.
+    ///
+    /// Keying it off `last_attempted_at` let a user who opens the app more
+    /// often than hourly push the deadline forward forever: the work was never
+    /// resubmitted and the cap was never spent, so it stalled `InProgress`.
+    #[tokio::test]
+    async fn test_observe_only_passes_do_not_extend_the_cooldown() {
+        let m = ScriptedMigration::new("sub.hourly", vec![submitted]);
+        let c = controller(vec![m.clone()]);
+
+        c.run().await;
+        assert_eq!(m.calls(), 1);
+
+        // Two more launches inside the window. Each bumps `last_attempted_at`.
+        for _ in 0..2 {
+            let summary = c.run().await;
+            assert_eq!(summary.pending, 1, "still settling, so no resubmission");
+        }
+        assert_eq!(m.calls(), 1);
+        assert_eq!(m.observations(), 2, "but every launch reads the chain");
+
+        // Backdating only the submission is enough to release the cooldown,
+        // even though `last_attempted_at` was just set to now.
+        advance_past_cooldown(&c, "sub.hourly");
+        c.run().await;
+        assert_eq!(m.calls(), 2, "the window runs from the submission");
+    }
+
+    /// The submission that spends the cap still gets its grace period.
+    ///
+    /// Giving up the launch after it went out would write off a userOp that
+    /// was still seconds old — and, for the prerequisite, block every dependent
+    /// permanently.
+    #[tokio::test]
+    async fn test_the_capping_submission_gets_its_grace_period() {
+        let m = ScriptedMigration::new("cap.spent", vec![submitted]);
+        let c = controller(vec![m.clone()]);
+
+        // Spend the cap, leaving the final submission fresh.
+        for i in 0..MAX_ATTEMPTS {
+            c.run().await;
+            if i < MAX_ATTEMPTS - 1 {
+                advance_past_cooldown(&c, "cap.spent");
+            }
+        }
+        assert_eq!(m.calls(), MAX_ATTEMPTS as usize);
+        assert_eq!(record_of(&c, "cap.spent").attempts, MAX_ATTEMPTS);
+
+        // Cap spent, but the last submission has not had its hour.
+        let summary = c.run().await;
+        assert_eq!(
+            summary.pending, 1,
+            "not written off while it may still land"
+        );
+        assert!(matches!(
+            record_of(&c, "cap.spent").status,
+            MigrationStatus::InProgress
+        ));
+
+        // Once it has had its hour and still has not landed, it is dead.
+        advance_past_cooldown(&c, "cap.spent");
+        let summary = c.run().await;
+        assert_eq!(summary.failed_terminal, 1);
+        assert!(matches!(
+            record_of(&c, "cap.spent").status,
+            MigrationStatus::FailedTerminal
+        ));
+        assert_eq!(
+            m.calls(),
+            MAX_ATTEMPTS as usize,
+            "neither pass submitted anything"
+        );
     }
 
     /// If the last submission does land, the capped migration is recorded as
