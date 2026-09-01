@@ -93,9 +93,9 @@ impl MigrationRunSummary {
     }
 }
 
-/// Orchestrates migration execution, one [`RecordStore`] key per migration.
+/// Orchestrates migration execution, one `RecordStore` key per migration.
 ///
-/// See [`RecordStore`] for the storage layout and `README.md` for the model.
+/// See `record_store.rs` for the storage layout, `README.md` for the model.
 #[derive(uniffi::Object)]
 pub struct MigrationController {
     records: RecordStore,
