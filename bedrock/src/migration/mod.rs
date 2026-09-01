@@ -22,10 +22,14 @@ mod wallet_migration;
 /// The individual wallet migrations Bedrock owns.
 pub mod wallet;
 
+/// Deprecated processor shims, kept so the released FFI surface holds.
+pub mod processors;
+
 // Public API exports
 pub use controller::{MigrationController, MigrationRunSummary};
 pub use error::MigrationError;
 pub use processor::{MigrationProcessor, ProcessorResult};
+pub use processors::safe_4337_module_processor::Safe4337ModuleProcessor;
 pub use record_store::{
     MigrationRecord, MigrationRecordEntry, MigrationStatus, Submission,
 };
