@@ -2,6 +2,23 @@ use super::*;
 use alloy::primitives::{address, bytes, U128, U256};
 use serde_json::json;
 
+struct StaticHttpClient {
+    response: Vec<u8>,
+}
+
+#[async_trait::async_trait]
+impl AuthenticatedHttpClient for StaticHttpClient {
+    async fn fetch_from_app_backend(
+        &self,
+        _url: String,
+        _method: HttpMethod,
+        _headers: Vec<HttpHeader>,
+        _body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError> {
+        Ok(self.response.clone())
+    }
+}
+
 #[test]
 fn test_sponsor_response_parsing() {
     let json_response = json!({
@@ -28,17 +45,54 @@ fn test_sponsor_response_parsing() {
 }
 
 #[test]
-fn test_error_payload_parsing() {
+fn test_json_rpc_error_without_data() {
     let error_json = json!({
         "code": -32000,
         "message": "execution reverted",
         "data": null
     });
 
-    let error_payload: ErrorPayload = serde_json::from_value(error_json).unwrap();
+    let error_payload: JsonRpcError = serde_json::from_value(error_json).unwrap();
 
     assert_eq!(error_payload.code, -32000);
     assert_eq!(error_payload.message, "execution reverted");
+    assert_eq!(error_payload.data, None);
+}
+
+#[tokio::test]
+async fn test_rpc_call_preserves_structured_error_data() {
+    let data = json!({
+        "retryable": true,
+        "reason": "policy_limit",
+    });
+    let response = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "id": "tx_test",
+        "error": {
+            "code": -32000,
+            "message": "request declined",
+            "data": data,
+        },
+    }))
+    .unwrap();
+    let client = RpcClient::new(Arc::new(StaticHttpClient { response }));
+
+    let error = client
+        .rpc_call::<_, Value>(
+            Network::WorldChain,
+            RpcMethod::PmSponsorUserOperation,
+            Vec::<Value>::new(),
+            RpcProviderName::Any,
+        )
+        .await
+        .unwrap_err();
+
+    let RpcCallError::Response(error) = error else {
+        panic!("expected a JSON-RPC response error");
+    };
+    assert_eq!(error.code, -32000);
+    assert_eq!(error.message, "request declined");
+    assert_eq!(error.data, Some(data));
 }
 
 #[test]

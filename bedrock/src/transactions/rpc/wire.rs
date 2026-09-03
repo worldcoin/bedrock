@@ -88,13 +88,12 @@ impl<T> JsonRpcRequest<T> {
     }
 }
 
-/// JSON-RPC error payload, shared with [`crate::transactions::custom_bundler`].
+/// JSON-RPC error response, shared with [`crate::transactions::custom_bundler`].
 #[derive(Debug, Deserialize)]
-pub struct ErrorPayload {
+pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub data: Option<Value>,
 }
 
