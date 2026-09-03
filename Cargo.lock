@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "bedrock"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "bedrock-macros"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6297,7 +6297,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "uniffi",
 ]
@@ -7161,7 +7161,7 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "xtask"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "clap",

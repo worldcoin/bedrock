@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3](https://github.com/worldcoin/bedrock/compare/0.6.2...0.6.3) - 2026-09-03
+
+### Added
+
+- *(migration)* top up the TFH paymaster's ERC-20 allowance (staging only) ([#433](https://github.com/worldcoin/bedrock/pull/433))
+- *(migration)* track fire-and-forget userOp hashes and harden the retry loop ([#408](https://github.com/worldcoin/bedrock/pull/408))
+
+### Other
+
+- *(rpc)* preserve structured error responses ([#434](https://github.com/worldcoin/bedrock/pull/434))
+- *(deps)* bump base64 from 0.22.1 to 0.23.1 ([#430](https://github.com/worldcoin/bedrock/pull/430))
+
 ## [0.6.2](https://github.com/worldcoin/bedrock/compare/0.6.1...0.6.2) - 2026-09-01
 
 ### Fixed
