@@ -1,5 +1,5 @@
 use alloy::primitives::{Address, Bytes, U128, U256};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 /// JSON-RPC request ID
@@ -95,6 +95,49 @@ pub struct JsonRpcError {
     pub message: String,
     #[serde(default)]
     pub data: Option<Value>,
+}
+
+/// Structured details returned when protocol sponsorship is declined.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SponsorshipDeclineDetails {
+    /// ERC-20 token the user can use to pay the transaction fee.
+    pub token: Address,
+    /// Paymaster contract that accepts the fee token.
+    pub paymaster_address: Address,
+    /// Policy reason for declining protocol sponsorship.
+    pub reason: SponsorshipDeclineReason,
+}
+
+/// Reason protocol sponsorship was declined.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SponsorshipDeclineReason {
+    /// The L2 base fee exceeded the sponsorship threshold.
+    L2BaseFee,
+    /// The L1 data fee exceeded the sponsorship threshold.
+    L1DataFee,
+    /// The user's transaction count exceeded the sponsorship threshold.
+    TransactionCount,
+    /// The estimated gas usage exceeded the sponsorship threshold.
+    GasUsage,
+    /// A reason introduced by a newer sponsorship service.
+    Unknown(String),
+}
+
+impl<'de> Deserialize<'de> for SponsorshipDeclineReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "l2_base_fee" => Self::L2BaseFee,
+            "l1_data_fee" => Self::L1DataFee,
+            "tx_count" => Self::TransactionCount,
+            "gas_usage" => Self::GasUsage,
+            _ => Self::Unknown(value),
+        })
+    }
 }
 
 /// Response from `wa_sponsorUserOperation`

@@ -27,6 +27,7 @@ mod wire;
 pub use wire::{
     Id, PmSponsorUserOperationResponse, RelaySafeTransactionRequest, RpcMethod,
     RpcProviderName, SponsorUserOperationResponse, SponsorshipContext,
+    SponsorshipDeclineDetails, SponsorshipDeclineReason,
     WaGetUserOperationReceiptResponse,
 };
 pub(crate) use wire::{JsonRpcError, JsonRpcRequest};
@@ -36,6 +37,46 @@ mod tests;
 
 /// Global RPC client instance for Bedrock operations
 static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
+
+const SPONSORSHIP_DECLINED_CODE: i64 = -32602;
+const SPONSORSHIP_DECLINED_MESSAGE: &str = "sponsorship declined";
+
+/// A protocol-sponsorship decline with its JSON-RPC envelope intact.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SponsorshipDecline {
+    /// JSON-RPC error code.
+    pub code: i64,
+    /// JSON-RPC error message.
+    pub error_message: String,
+    /// Parsed sponsorship-decline data.
+    pub details: SponsorshipDeclineDetails,
+}
+
+impl TryFrom<JsonRpcError> for SponsorshipDecline {
+    type Error = JsonRpcError;
+
+    fn try_from(error: JsonRpcError) -> Result<Self, Self::Error> {
+        if error.code != SPONSORSHIP_DECLINED_CODE
+            || error.message != SPONSORSHIP_DECLINED_MESSAGE
+        {
+            return Err(error);
+        }
+
+        let Some(data) = error.data.as_ref() else {
+            return Err(error);
+        };
+        let Ok(details) = serde_json::from_value(data.clone()) else {
+            return Err(error);
+        };
+
+        Ok(Self {
+            code: error.code,
+            error_message: error.message,
+            details,
+        })
+    }
+}
+
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
 
@@ -116,6 +157,15 @@ impl From<RpcCallError> for RpcError {
     }
 }
 
+impl From<SponsorshipDecline> for RpcError {
+    fn from(decline: SponsorshipDecline) -> Self {
+        Self::RpcResponseError {
+            code: decline.code,
+            error_message: decline.error_message,
+        }
+    }
+}
+
 impl From<HttpError> for RpcError {
     fn from(e: HttpError) -> Self {
         Self::HttpError(e.to_string())
@@ -132,6 +182,12 @@ impl From<SafeSmartAccountError> for RpcError {
     fn from(e: SafeSmartAccountError) -> Self {
         Self::SafeSmartAccountError(e.to_string())
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum PmSponsorUserOperationOutcome {
+    Sponsored(PmSponsorUserOperationResponse),
+    Declined(SponsorshipDecline),
 }
 
 /// RPC client for handling 4337 `UserOperation` requests
@@ -287,19 +343,46 @@ impl RpcClient {
         entry_point: Address,
         context: &SponsorshipContext,
     ) -> Result<PmSponsorUserOperationResponse, RpcError> {
+        match self
+            .request_pm_sponsorship(network, user_operation, entry_point, context)
+            .await
+            .map_err(RpcError::from)?
+        {
+            PmSponsorUserOperationOutcome::Sponsored(response) => Ok(response),
+            PmSponsorUserOperationOutcome::Declined(decline) => Err(decline.into()),
+        }
+    }
+
+    pub(crate) async fn request_pm_sponsorship(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entry_point: Address,
+        context: &SponsorshipContext,
+    ) -> Result<PmSponsorUserOperationOutcome, RpcCallError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
             serde_json::Value::String(format!("{entry_point:?}")),
             context.to_json_value(),
         ];
-        self.rpc_call(
-            network,
-            RpcMethod::PmSponsorUserOperation,
-            params,
-            RpcProviderName::Any,
-        )
-        .await
-        .map_err(RpcError::from)
+        match self
+            .rpc_call(
+                network,
+                RpcMethod::PmSponsorUserOperation,
+                params,
+                RpcProviderName::Any,
+            )
+            .await
+        {
+            Ok(response) => Ok(PmSponsorUserOperationOutcome::Sponsored(response)),
+            Err(RpcCallError::Response(error)) => {
+                match SponsorshipDecline::try_from(error) {
+                    Ok(decline) => Ok(PmSponsorUserOperationOutcome::Declined(decline)),
+                    Err(error) => Err(RpcCallError::Response(error)),
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
