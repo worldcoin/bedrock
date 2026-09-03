@@ -96,7 +96,7 @@ async fn test_rpc_call_preserves_structured_error_data() {
 }
 
 #[tokio::test]
-async fn test_request_pm_sponsorship_returns_typed_decline() {
+async fn test_pm_sponsor_user_operation_returns_typed_decline() {
     let response = serde_json::to_vec(&json!({
         "jsonrpc": "2.0",
         "id": "tx_test",
@@ -114,7 +114,7 @@ async fn test_request_pm_sponsorship_returns_typed_decline() {
     let client = RpcClient::new(Arc::new(StaticHttpClient { response }));
 
     let outcome = client
-        .request_pm_sponsorship(
+        .pm_sponsor_user_operation(
             Network::WorldChain,
             &UserOperation::default(),
             Address::ZERO,
@@ -126,56 +126,15 @@ async fn test_request_pm_sponsorship_returns_typed_decline() {
     let PmSponsorUserOperationOutcome::Declined(decline) = outcome else {
         panic!("expected sponsorship to be declined");
     };
-    assert_eq!(decline.code, SPONSORSHIP_DECLINED_CODE);
-    assert_eq!(decline.error_message, SPONSORSHIP_DECLINED_MESSAGE);
     assert_eq!(
-        decline.details.token,
+        decline.token,
         address!("2cfc85d8e48f8eab294be644d9e25c3030863003")
     );
     assert_eq!(
-        decline.details.paymaster_address,
+        decline.paymaster_address,
         address!("0000000000000039cd5e8ae05257ce51c473ddd1")
     );
-    assert_eq!(decline.details.reason, SponsorshipDeclineReason::GasUsage);
-}
-
-#[tokio::test]
-async fn test_pm_sponsor_user_operation_preserves_public_error() {
-    let response = serde_json::to_vec(&json!({
-        "jsonrpc": "2.0",
-        "id": "tx_test",
-        "error": {
-            "code": SPONSORSHIP_DECLINED_CODE,
-            "message": SPONSORSHIP_DECLINED_MESSAGE,
-            "data": {
-                "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
-                "paymasterAddress": "0x0000000000000039cd5e8ae05257ce51c473ddd1",
-                "reason": "gas_usage",
-            },
-        },
-    }))
-    .unwrap();
-    let client = RpcClient::new(Arc::new(StaticHttpClient { response }));
-
-    let error = client
-        .pm_sponsor_user_operation(
-            Network::WorldChain,
-            &UserOperation::default(),
-            Address::ZERO,
-            &SponsorshipContext::Protocol,
-        )
-        .await
-        .unwrap_err();
-
-    let RpcError::RpcResponseError {
-        code,
-        error_message,
-    } = error
-    else {
-        panic!("expected the legacy JSON-RPC error");
-    };
-    assert_eq!(code, SPONSORSHIP_DECLINED_CODE);
-    assert_eq!(error_message, SPONSORSHIP_DECLINED_MESSAGE);
+    assert_eq!(decline.reason, SponsorshipDeclineReason::GasUsage);
 }
 
 #[test]
@@ -211,7 +170,7 @@ fn test_sponsorship_decline_preserves_unknown_reason() {
     let decline = SponsorshipDecline::try_from(error).unwrap();
 
     assert_eq!(
-        decline.details.reason,
+        decline.reason,
         SponsorshipDeclineReason::Unknown("new_policy".to_string())
     );
 }

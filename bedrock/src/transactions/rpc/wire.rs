@@ -97,10 +97,10 @@ pub struct JsonRpcError {
     pub data: Option<Value>,
 }
 
-/// Structured details returned when protocol sponsorship is declined.
+/// Self-sponsorship advisory returned when protocol sponsorship is declined.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SponsorshipDeclineDetails {
+pub struct SponsorshipDecline {
     /// ERC-20 token the user can use to pay the transaction fee.
     pub token: Address,
     /// Paymaster contract that accepts the fee token.
