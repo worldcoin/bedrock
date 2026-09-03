@@ -1,8 +1,6 @@
 //! BF-7 (remove a main factor: an OIDC account or a passkey), escalating to BF-8
 //! (delete the whole backup) when the removed factor is the last main factor.
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 
 use super::{BackupFlow, FlowContext};
@@ -12,14 +10,8 @@ use crate::backup::backup_service::{
 use crate::backup::flows::delete_backup;
 use crate::backup::turnkey::TurnkeyApiError;
 use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
+use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
-
-/// Deadline for a single Turnkey pre-flight probe
-const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// How many times the provider teardown re-reads and resubmits when the identity's
-/// provider set changes underneath it.
-const PROVIDER_TEARDOWN_ATTEMPTS: u32 = 3;
 
 /// Outcome of a successful factor removal.
 #[derive(Debug, uniffi::Enum)]
@@ -80,7 +72,10 @@ enum Prepared {
     /// whole sub-organization goes instead).
     Oidc {
         plan: OidcRemovalPlan,
-        identity: Option<OidcIdentity>,
+        /// Every provider backing the removed OIDC identity: Apple registers one per
+        /// audience, all sharing one `sub`. Empty when the sub-organization goes
+        /// instead, or when the identity is already absent from Turnkey.
+        provider_ids: Vec<String>,
         turnkey_sub_org_ids: Vec<String>,
     },
     /// A passkey removal: the PRF key to drop, plus the Turnkey authenticator
@@ -172,13 +167,20 @@ impl RemoveFactor {
     ) -> Result<Prepared, BackupOperationError> {
         let plan = plan_oidc_removal(metadata, &self.factor_id)?;
 
-        let identity = if plan.is_last_oidc_factor {
-            verify_sync_factor(ctx, &plan).await?;
-            None
-        } else if let Some(main_factor) = ctx.main_factor {
-            verify_main_factor(ctx, &plan.suborg_id, &plan.user_id, main_factor)
+        let provider_ids = if plan.is_last_oidc_factor {
+            ctx.turnkey
+                .verify_sync_factor(&plan.suborg_id, SyncFactor(ctx.sync_factor))
                 .await?;
-            resolve_oidc_identity(ctx, &plan).await?
+            Vec::new()
+        } else if let Some(main_factor) = ctx.main_factor {
+            ctx.turnkey
+                .verify_main_factor(
+                    &plan.suborg_id,
+                    &plan.user_id,
+                    MainFactor(main_factor),
+                )
+                .await?;
+            resolve_provider_ids(ctx, &plan).await?
         } else {
             // Deleting an OAuth provider requires a [`MainFactor`]
             crate::debug!("remove_factor.needs_main_factor");
@@ -189,7 +191,7 @@ impl RemoveFactor {
 
         Ok(Prepared::Oidc {
             plan,
-            identity,
+            provider_ids,
             turnkey_sub_org_ids: metadata.turnkey_suborg_ids(),
         })
     }
@@ -217,27 +219,14 @@ impl RemoveFactor {
             return Ok(None);
         };
 
-        let probe = ctx
+        // A degraded Turnkey must not block dropping the factor at the authoritative
+        // store, so an unresponsive read skips the teardown rather than failing.
+        let Some(users) = ctx
             .turnkey
-            .get_users(turnkey_account_id, SyncFactor(ctx.sync_factor));
-        let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
-            crate::warn!(
-                "remove_factor.authenticator_lookup_timed_out (Turnkey unresponsive; skipping)"
-            );
+            .probe_users(turnkey_account_id, SyncFactor(ctx.sync_factor))
+            .await?
+        else {
             return Ok(None);
-        };
-        let users = match result {
-            Ok(users) => users,
-            // Best-effort, like the teardown it feeds: a degraded Turnkey must not
-            // block dropping the factor at the authoritative store.
-            Err(error) if error.is_retryable() => {
-                crate::warn!(
-                    "remove_factor.authenticator_lookup_inconclusive code={} err={error}",
-                    error.code()
-                );
-                return Ok(None);
-            }
-            Err(error) => return Err(map_turnkey_error(&error)),
         };
 
         let Some(authenticator_id) = users
@@ -260,7 +249,12 @@ impl RemoveFactor {
                 reason: NeedsReauthReason::MainFactorRequired,
             });
         };
-        verify_main_factor(ctx, turnkey_account_id, turnkey_user_id, main_factor)
+        ctx.turnkey
+            .verify_main_factor(
+                turnkey_account_id,
+                turnkey_user_id,
+                MainFactor(main_factor),
+            )
             .await?;
 
         Ok(Some(PasskeyAuthenticator {
@@ -288,15 +282,22 @@ impl RemoveFactor {
         }
 
         let (encryption_key, turnkey_sub_org_ids) = match &prepared {
-            Prepared::Oidc { plan, identity } => (
+            Prepared::Oidc {
+                plan,
+                turnkey_sub_org_ids,
+                ..
+            } => (
                 plan.is_last_oidc_factor.then(|| plan.turnkey_key.clone()),
-                Some((plan,)),
+                turnkey_sub_org_ids.clone(),
             ),
             Prepared::Passkey {
                 prf_key,
-                authenticator: _,
                 turnkey_sub_org_ids,
-            } => (Some(prf_key), turnkey_sub_org_ids),
+                ..
+            } => (Some(prf_key.clone()), turnkey_sub_org_ids.clone()),
+            Prepared::FullDeletion { .. } => {
+                unreachable!("handled at the top of `commit`")
+            }
         };
 
         // Step 1: Delete the factor from the backup-service (authorative)
@@ -346,7 +347,7 @@ async fn turnkey_cleanup(ctx: &FlowContext<'_>, prepared: Prepared) {
     match prepared {
         Prepared::Oidc {
             plan,
-            identity,
+            provider_ids,
             turnkey_sub_org_ids,
         } => {
             // Removing the last OIDC factor removes the Turnkey account (as there's no use for it anymore)
@@ -357,33 +358,96 @@ async fn turnkey_cleanup(ctx: &FlowContext<'_>, prepared: Prepared) {
                     ctx.sync_factor,
                 )
                 .await;
+            } else if let Some(main_factor) = ctx.main_factor {
+                delete_oauth_providers(ctx, &plan, provider_ids, main_factor).await;
             }
         }
         Prepared::Passkey {
-            prf_key,
-            authenticator,
-            turnkey_sub_org_ids,
+            authenticator: Some(authenticator),
+            ..
         } => {
-            ctx.turnkey
+            let Some(main_factor) = ctx.main_factor else {
+                // `prepare_authenticator` refuses without one, so this is unreachable.
+                crate::critical!(
+                    "remove_factor.authenticator_orphaned (no main factor at cleanup)"
+                );
+                return;
+            };
+            if let Err(error) = ctx
+                .turnkey
                 .delete_authenticators(
                     &authenticator.suborg,
                     &authenticator.user,
-                    vec![authenticator.id.clone()],
+                    vec![authenticator.id],
                     MainFactor(main_factor),
                 )
                 .await
+            {
+                // The passkey can still authorize Turnkey activities.
+                crate::critical!(
+                    "remove_factor.authenticator_orphaned suborg_id={} code={} err={error}",
+                    authenticator.suborg,
+                    error.code()
+                );
+            }
         }
-        Prepared::FullDeletion {
-            turnkey_sub_org_ids,
-        } => unreachable!("this arm is handled beforehand"),
+        // No authenticator registered in Turnkey: nothing to clean up.
+        Prepared::Passkey { .. } => {}
+        Prepared::FullDeletion { .. } => {
+            unreachable!("handled at the top of `commit`")
+        }
     }
 }
 
-/// The OIDC identity a provider belongs to, captured while the target provider is
-/// still present so a later read can still find its sibling audiences.
-struct OidcIdentity {
-    issuer: String,
-    subject: String,
+/// Deletes every Turnkey provider backing the removed OIDC identity (best-effort).
+///
+/// The ids were resolved before the commit, so this is one submission retried on
+/// transient failure -- the backup-service removal is already authoritative, so a
+/// failure here is logged, never fatal.
+async fn delete_oauth_providers(
+    ctx: &FlowContext<'_>,
+    plan: &OidcRemovalPlan,
+    provider_ids: Vec<String>,
+    main_factor: &P256Signer,
+) {
+    if provider_ids.is_empty() {
+        crate::debug!("remove_factor.turnkey_providers_already_absent");
+        return;
+    }
+
+    let result = retry_with_backoff(
+        &RetryPolicy::default(),
+        "delete_oauth_providers",
+        TurnkeyApiError::is_retryable,
+        || {
+            ctx.turnkey.delete_oauth_providers(
+                &plan.suborg_id,
+                &plan.user_id,
+                provider_ids.clone(),
+                MainFactor(main_factor),
+            )
+        },
+    )
+    .await;
+
+    match result {
+        Ok(()) => {}
+        Err(RetryError::Operation(TurnkeyApiError::ActivityPollingExceeded {
+            ..
+        })) => {
+            crate::warn!(
+                "remove_factor.turnkey_provider_teardown_pending suborg_id={}",
+                plan.suborg_id
+            );
+        }
+        // The account the user asked to disconnect can still authorize.
+        Err(error) => {
+            crate::critical!(
+                "remove_factor.turnkey_provider_orphaned suborg_id={} err={error:?}",
+                plan.suborg_id
+            );
+        }
+    }
 }
 
 /// The Turnkey authenticator backing a passkey factor.
@@ -495,212 +559,19 @@ fn map_turnkey_error(error: &TurnkeyApiError) -> BackupOperationError {
     }
 }
 
-/// Confirms Turnkey still accepts the sync factor, before anything irreversible.
+/// Every Turnkey provider id backing the target provider's OIDC identity
+/// (`issuer` + `subject`) -- all of an Apple `sub`'s per-audience providers, say.
 ///
-/// `get_users` is the read the provider path already needs, so it shares the client's
-/// cache. Note this proves the signer is *registered and accepted for a read*, not
-/// that policy authorizes the delete activity that follows: a sub-organization whose
-/// `sync_factor_policy` migration never ran can pass here and still reject the
-/// teardown. It converts the common failure (a sync factor Turnkey has never seen)
-/// into an actionable error before the commit; it does not make the teardown
-/// guaranteed.
-///
-/// Only a stale signer blocks the flow. A Turnkey outage does not: the teardown this
-/// gates is best-effort, and failing here would take BF-8 down with it.
+/// Resolved before the commit so the teardown afterwards is a single submission.
+/// Returns an empty set when the identity is already absent from Turnkey.
 ///
 /// # Errors
-/// [`NeedsReauthReason::SyncFactorInvalid`] if Turnkey no longer knows the signer.
-async fn verify_sync_factor(
+/// Fails on a read error rather than falling back to the one id we were handed:
+/// deleting only that would leave the identity's sibling audiences authorized.
+async fn resolve_provider_ids(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
-) -> Result<(), BackupOperationError> {
-    let probe = ctx
-        .turnkey
-        .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor));
-    let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
-        crate::warn!(
-            "remove_factor.preflight_timed_out after {}s (Turnkey unresponsive; proceeding)",
-            PROBE_TIMEOUT.as_secs()
-        );
-        return Ok(());
-    };
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(error) if error.indicates_invalid_signer() => {
-            crate::warn!("remove_factor.sync_factor_invalid (pre-flight)");
-            Err(BackupOperationError::NeedsReauth {
-                reason: NeedsReauthReason::SyncFactorInvalid,
-            })
-        }
-        // Only a retryable service outage is tolerated. A signer that cannot stamp,
-        // or any other permanent failure, will fail the teardown the same way every
-        // time, so it aborts here while retrying is still free.
-        Err(error) if error.is_retryable() => {
-            crate::warn!(
-                "remove_factor.preflight_inconclusive code={} err={error} (Turnkey degraded; proceeding)",
-                error.code()
-            );
-            Ok(())
-        }
-        Err(error) => {
-            crate::warn!(
-                "remove_factor.preflight_failed code={} err={error}",
-                error.code()
-            );
-            Err(map_turnkey_error(&error))
-        }
-    }
-}
-
-/// Confirms the main factor authenticates as the root user that owns the providers,
-/// before anything irreversible.
-///
-/// The sync-factor probe cannot cover this: the provider deletion is stamped by the
-/// *main* factor, and that teardown is best-effort. A main factor from the wrong
-/// passkey would therefore drop the backup factor, fail the teardown, and report
-/// success while the account the user asked to disconnect stayed authorized.
-///
-/// # Errors
-/// [`NeedsReauthReason::MainFactorRequired`] if the signer is unknown to Turnkey or
-/// authenticates as a different user — in both cases the caller needs a new ceremony.
-async fn verify_main_factor(
-    ctx: &FlowContext<'_>,
-    suborg_id: &str,
-    expected_user_id: &str,
-    main_factor: &P256Signer,
-) -> Result<(), BackupOperationError> {
-    let probe = ctx
-        .turnkey
-        .whoami_user_id(suborg_id, MainFactor(main_factor));
-    let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
-        crate::warn!(
-            "remove_factor.main_factor_preflight_timed_out after {}s (proceeding)",
-            PROBE_TIMEOUT.as_secs()
-        );
-        return Ok(());
-    };
-
-    let user_id = match result {
-        Ok(user_id) => user_id,
-        Err(error) if error.indicates_invalid_signer() => {
-            crate::warn!("remove_factor.main_factor_invalid (pre-flight)");
-            return Err(BackupOperationError::NeedsReauth {
-                reason: NeedsReauthReason::MainFactorRequired,
-            });
-        }
-        // Only a retryable service outage is tolerated; see `verify_sync_factor`.
-        Err(error) if error.is_retryable() => {
-            crate::warn!(
-                "remove_factor.main_factor_preflight_inconclusive code={} err={error}",
-                error.code()
-            );
-            return Ok(());
-        }
-        Err(error) => {
-            crate::warn!(
-                "remove_factor.main_factor_preflight_failed code={} err={error}",
-                error.code()
-            );
-            return Err(map_turnkey_error(&error));
-        }
-    };
-
-    if user_id != expected_user_id {
-        // A valid Turnkey key, but not the root user that owns the OAuth providers --
-        // the user completed the ceremony with the wrong passkey.
-        crate::warn!(
-            "remove_factor.main_factor_wrong_user expected={expected_user_id} got={user_id}"
-        );
-        return Err(BackupOperationError::NeedsReauth {
-            reason: NeedsReauthReason::MainFactorRequired,
-        });
-    }
-    Ok(())
-}
-
-/// Deletes every Turnkey provider backing the removed OIDC identity, **one at a
-/// time** so an already-absent audience doesn't block the rest.
-///
-/// A single OIDC identity can back several providers: Apple registers one per
-/// audience (per client app), all sharing one `sub`. Best-effort: each failure is
-/// logged, never fatal (the backup-service removal is already authoritative).
-async fn best_effort_delete_providers(
-    ctx: &FlowContext<'_>,
-    plan: &OidcRemovalPlan,
-    identity: &OidcIdentity,
-    main_factor: &P256Signer,
-) {
-    for attempt in 1..=PROVIDER_TEARDOWN_ATTEMPTS {
-        let provider_ids = match provider_ids_for_identity(ctx, plan, identity).await {
-            Ok(provider_ids) => provider_ids,
-            Err(error) => {
-                crate::critical!(
-                    "remove_factor.turnkey_provider_orphaned suborg_id={} (could not re-read providers) err={error}",
-                    plan.suborg_id
-                );
-                return;
-            }
-        };
-
-        if provider_ids.is_empty() {
-            crate::debug!("remove_factor.turnkey_providers_already_absent");
-            return;
-        }
-
-        match ctx
-            .turnkey
-            .delete_oauth_providers(
-                &plan.suborg_id,
-                &plan.user_id,
-                provider_ids,
-                MainFactor(main_factor),
-            )
-            .await
-        {
-            Ok(()) => return,
-            // The identity's provider set changed between the read and the delete.
-            // Re-read and submit the whole set again rather than leave it half-torn.
-            Err(error) if error.is_no_matching_provider() => {
-                crate::debug!(
-                    "remove_factor.turnkey_providers_changed attempt={attempt}"
-                );
-            }
-            Err(error @ TurnkeyApiError::ActivityPollingExceeded { .. }) => {
-                crate::warn!(
-                    "remove_factor.turnkey_provider_teardown_pending suborg_id={} err={error}",
-                    plan.suborg_id
-                );
-                return;
-            }
-            Err(error) => {
-                // The account the user asked to disconnect can still authorize.
-                crate::critical!(
-                    "remove_factor.turnkey_provider_orphaned suborg_id={} code={} err={error}",
-                    plan.suborg_id,
-                    error.code()
-                );
-                return;
-            }
-        }
-    }
-
-    crate::critical!(
-        "remove_factor.turnkey_provider_orphaned suborg_id={} (provider set kept changing across {PROVIDER_TEARDOWN_ATTEMPTS} attempts)",
-        plan.suborg_id
-    );
-}
-
-/// Resolves every Turnkey provider id sharing the target provider's OIDC identity
-/// (`issuer` + `subject`): all of an Apple `sub`'s per-audience providers, for example.
-///
-/// Fails on a read error rather than falling back to the single provider, so a
-/// transient error can't leave the sibling providers orphaned. Returns an empty set
-/// if the identity is already absent from Turnkey (nothing to delete).
-async fn resolve_oidc_identity(
-    ctx: &FlowContext<'_>,
-    plan: &OidcRemovalPlan,
-) -> Result<Option<OidcIdentity>, BackupOperationError> {
+) -> Result<Vec<String>, BackupOperationError> {
     let users = ctx
         .turnkey
         .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor))
@@ -730,41 +601,17 @@ async fn resolve_oidc_identity(
             plan.suborg_id,
             plan.provider_id
         );
-        return Ok(None);
+        return Ok(Vec::new());
     };
 
-    Ok(Some(OidcIdentity {
-        issuer: target.issuer.clone(),
-        subject: target.subject.clone(),
-    }))
-}
-
-/// Every provider id currently backing `identity`, from a fresh read.
-async fn provider_ids_for_identity(
-    ctx: &FlowContext<'_>,
-    plan: &OidcRemovalPlan,
-    identity: &OidcIdentity,
-) -> Result<Vec<String>, BackupOperationError> {
-    let users = ctx
-        .turnkey
-        .get_users_fresh(&plan.suborg_id, SyncFactor(ctx.sync_factor))
-        .await
-        .map_err(|error| map_turnkey_error(&error))?;
-
-    Ok(users
+    Ok(user
+        .oauth_providers
         .iter()
-        .find(|user| user.user_id == plan.user_id)
-        .map(|user| {
-            user.oauth_providers
-                .iter()
-                .filter(|provider| {
-                    provider.issuer == identity.issuer
-                        && provider.subject == identity.subject
-                })
-                .map(|provider| provider.provider_id.clone())
-                .collect()
+        .filter(|provider| {
+            provider.issuer == target.issuer && provider.subject == target.subject
         })
-        .unwrap_or_default())
+        .map(|provider| provider.provider_id.clone())
+        .collect())
 }
 
 #[cfg(test)]
@@ -792,6 +639,8 @@ mod tests {
     const DELETE_SUB_ORG: &str = "/public/v1/submit/delete_sub_organization";
     const DELETE_OAUTH: &str = "/public/v1/submit/delete_oauth_providers";
     const DELETE_AUTHENTICATORS: &str = "/public/v1/submit/delete_authenticators";
+    const DELETE_BACKUP_CHALLENGE: &str = "/v1/delete-backup/challenge/keypair";
+    const DELETE_BACKUP: &str = "/v1/delete-backup";
     const TEST_BACKUP_ID: &str = "backup-1";
 
     struct FakeAttestation;
@@ -982,6 +831,17 @@ mod tests {
     async fn mount_metadata(server: &MockServer, meta: Value) {
         mount(server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
         mount(server, RETRIEVE_META, meta).await;
+    }
+
+    /// The endpoints the `FullDeletion` path uses: removing the last main factor now
+    /// deletes the whole backup outright instead of leaning on the service's cascade.
+    async fn mount_delete_backup(server: &MockServer) {
+        mount(server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(server)
+            .await;
     }
 
     async fn mount_delete_factor(server: &MockServer, response: Value) {
@@ -1219,66 +1079,6 @@ mod tests {
         assert_eq!(deletes, 1, "the identity must be torn down atomically");
     }
 
-    /// The target audience disappears between the pre-commit read and the teardown
-    /// (a concurrent removal, say). Its siblings must still go: the identity is
-    /// captured while the target is present, so it survives the target's absence.
-    #[tokio::test]
-    async fn provider_teardown_deletes_siblings_when_the_target_vanishes() {
-        install_attestation();
-        let server = MockServer::start().await;
-        let apple = "https://appleid.apple.com";
-        mount_metadata(
-            &server,
-            metadata(vec![
-                oidc_factor("f-apple", "p-apple-ios"),
-                oidc_factor("f-google", "p-google"),
-            ]),
-        )
-        .await;
-        mount_whoami(&server, "user-1").await;
-        // Pre-commit read sees the target; the post-commit read no longer does.
-        Mock::given(method("POST"))
-            .and(path(LIST_USERS))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "users": [main_user(vec![
-                    oauth_provider("p-apple-ios", apple, "sub-apple"),
-                    oauth_provider("p-apple-web", apple, "sub-apple"),
-                ])]
-            })))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(LIST_USERS))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "users": [main_user(vec![oauth_provider(
-                    "p-apple-web",
-                    apple,
-                    "sub-apple",
-                )])]
-            })))
-            .mount(&server)
-            .await;
-        mount_delete_factor(
-            &server,
-            json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-google", "p-google")]) }),
-        )
-        .await;
-        mount_delete_oauth(&server).await;
-        let main = signer();
-
-        let outcome = run_remove(&server, "f-apple", Some(&main), false)
-            .await
-            .unwrap();
-
-        assert!(matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }));
-        assert_eq!(
-            deleted_provider_ids(&server).await,
-            vec!["p-apple-web".to_string()],
-            "the surviving audience of the same identity must still be deleted"
-        );
-    }
-
     /// Corrupt metadata with two Turnkey keys cannot say which sub-organization a
     /// removal targets, so it must refuse rather than pick one.
     #[tokio::test]
@@ -1386,6 +1186,7 @@ mod tests {
     async fn last_oidc_removal_survives_an_unauthorized_teardown() {
         install_attestation();
         let server = MockServer::start().await;
+        mount_delete_backup(&server).await;
         mount_metadata(&server, metadata(vec![oidc_factor("f-1", "p-1")])).await;
         mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
         mount_users(&server, vec![]).await;
@@ -1443,16 +1244,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn slow_turnkey_cleanup_does_not_erase_the_committed_outcome() {
+    async fn a_failed_turnkey_cleanup_does_not_erase_the_committed_outcome() {
         install_attestation();
         let server = MockServer::start().await;
+        mount_delete_backup(&server).await;
         mount_metadata(&server, metadata(vec![oidc_factor("f-1", "p-1")])).await;
         mount_users(&server, vec![]).await;
         mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
-        // Teardown hangs well past CLEANUP_TIMEOUT.
+        // The teardown is best-effort: the factor is already gone at the
+        // authoritative store, so nothing here may change what the caller is told.
         Mock::given(method("POST"))
             .and(path(DELETE_SUB_ORG))
-            .respond_with(ResponseTemplate::new(200).set_delay(CLEANUP_TIMEOUT * 20))
+            .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
 
@@ -1460,11 +1263,17 @@ mod tests {
 
         assert!(
             matches!(outcome, RemoveFactorOutcome::BackupDeleted),
-            "the committed outcome must survive a timed-out cleanup, got {outcome:?}"
+            "the committed outcome must survive a failed cleanup, got {outcome:?}"
         );
-        assert!(called_paths(&server)
-            .await
-            .contains(&DELETE_FACTOR.to_string()));
+        let paths = called_paths(&server).await;
+        assert!(
+            paths.contains(&DELETE_BACKUP.to_string()),
+            "the last main factor deletes the backup outright"
+        );
+        assert!(
+            !paths.contains(&DELETE_FACTOR.to_string()),
+            "delete-factor is not involved once the whole backup goes"
+        );
     }
 
     /// A Turnkey outage must not block removals: the teardown it gates is best-effort,
@@ -1678,6 +1487,7 @@ mod tests {
     async fn last_passkey_confirmed_deletes_backup() {
         install_attestation();
         let server = MockServer::start().await;
+        mount_delete_backup(&server).await;
         mount_metadata(
             &server,
             metadata_keyed(vec![prf_key("prf-ek")], vec![passkey_factor("pk-1")]),
@@ -1692,8 +1502,13 @@ mod tests {
         let outcome = run_remove(&server, "pk-1", None, true).await.unwrap();
 
         assert!(matches!(outcome, RemoveFactorOutcome::BackupDeleted));
-        assert!(delete_factor_body(&server).await.contains("prf-ek"));
         let paths = called_paths(&server).await;
+        assert!(
+            paths.contains(&DELETE_BACKUP.to_string()),
+            "the last main factor deletes the backup outright"
+        );
+        assert!(!paths.contains(&DELETE_FACTOR.to_string()));
+        // A PRF-only backup has no Turnkey account, so nothing there to touch.
         assert!(!paths.contains(&LIST_USERS.to_string()));
         assert!(!paths.contains(&DELETE_OAUTH.to_string()));
         assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
@@ -1785,6 +1600,7 @@ mod tests {
     async fn last_main_factor_confirmed_deletes_backup() {
         install_attestation();
         let server = MockServer::start().await;
+        mount_delete_backup(&server).await;
         mount_metadata(&server, metadata(vec![oidc_factor("f-1", "p-1")])).await;
         mount_delete_factor(
             &server,
@@ -2023,6 +1839,7 @@ mod tests {
     async fn a_passkey_cascade_into_backup_deletion_reclaims_the_sub_organization() {
         install_attestation();
         let server = MockServer::start().await;
+        mount_delete_backup(&server).await;
         mount_metadata(
             &server,
             metadata_keyed(

@@ -110,7 +110,6 @@ pub(in crate::backup::flows) async fn delete_turnkey_account(
 
 #[cfg(test)]
 mod tests {
-    use super::super::CLEANUP_TIMEOUT;
     use super::*;
     use crate::backup::backup_service::BackupServiceClient;
     use crate::backup::turnkey::test::TestSigner;
@@ -121,7 +120,6 @@ mod tests {
     use base64::Engine;
     use serde_json::{json, Value};
     use std::sync::Arc;
-    use std::time::Duration;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -281,7 +279,7 @@ mod tests {
     async fn an_already_deleted_backup_is_reported_as_success() {
         let server = MockServer::start().await;
         mount_json(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
-        mount_rejection(&server, RETRIEVE_META, "backup_missing").await;
+        mount_rejection(&server, RETRIEVE_META, "backup_does_not_exist").await;
 
         run_delete(&server)
             .await
@@ -342,27 +340,6 @@ mod tests {
         assert!(called_paths(&server)
             .await
             .contains(&DELETE_SUB_ORG.to_string()));
-    }
-
-    #[tokio::test]
-    async fn a_wedged_turnkey_teardown_does_not_hang_forever() {
-        let server = MockServer::start().await;
-        mount_metadata(&server, vec![turnkey_key()]).await;
-        mount_delete_backup(&server).await;
-        mount_delete_sub_org(
-            &server,
-            completed_sub_org_teardown().set_delay(Duration::from_secs(30)),
-        )
-        .await;
-
-        let started = std::time::Instant::now();
-        run_delete(&server).await.unwrap();
-
-        assert!(
-            started.elapsed() < CLEANUP_TIMEOUT * 5,
-            "the teardown must be abandoned at CLEANUP_TIMEOUT, took {:?}",
-            started.elapsed()
-        );
     }
 
     /// A transient failure is retried in-process, so a blip does not cost the user
@@ -448,26 +425,26 @@ mod tests {
         assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
     }
 
-    /// The backup was deleted by someone else between the read and the delete. The
-    /// sub-organization on record may back whatever replaced it, so it is left alone
-    /// rather than torn down on a guess.
+    /// A delete-time race surfaces the error rather than guessing. `backup_untraceable`
+    /// cannot say whether our own delete landed or this device was revoked while the
+    /// backup lives on, so Turnkey is left alone and the caller retries -- the retry's
+    /// qualified read settles it.
     #[tokio::test]
-    async fn a_concurrent_deletion_leaves_turnkey_intact() {
+    async fn a_delete_time_race_surfaces_and_leaves_turnkey_intact() {
         let server = MockServer::start().await;
         mount_metadata(&server, vec![turnkey_key()]).await;
         mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
         mount_rejection(&server, DELETE_BACKUP, "backup_untraceable").await;
         mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
 
-        run_delete(&server)
-            .await
-            .expect("already gone is a success");
+        let error = run_delete(&server).await.unwrap_err();
 
+        assert!(matches!(error, BackupOperationError::BackupService { .. }));
         assert!(
             !called_paths(&server)
                 .await
                 .contains(&DELETE_SUB_ORG.to_string()),
-            "not ours to delete"
+            "not ours to delete on a guess"
         );
     }
     /// A revoked device gets `backup_untraceable` from the unqualified read while the
@@ -482,13 +459,9 @@ mod tests {
 
         let error = run_delete(&server).await.unwrap_err();
 
-        // Actionable rather than opaque: native can refresh the sync factor and retry.
-        assert!(matches!(
-            error,
-            BackupOperationError::NeedsReauth {
-                reason: NeedsReauthReason::SyncFactorInvalid
-            }
-        ));
+        // Surfaced rather than swallowed: reporting success here would tell the user
+        // their data is gone while the backup is still live remotely.
+        assert!(matches!(error, BackupOperationError::BackupService { .. }));
         assert!(!called_paths(&server)
             .await
             .contains(&DELETE_BACKUP.to_string()));
@@ -519,54 +492,6 @@ mod tests {
             paths.iter().filter(|p| *p == DELETE_SUB_ORG).count(),
             2,
             "both sub-organizations must be reclaimed"
-        );
-    }
-    /// The service deleted the backup but its own follow-up failed, so the factor
-    /// still resolves to our backup id. That proves the delete was ours, so the
-    /// sub-organizations we read are the right ones to reclaim.
-    #[tokio::test]
-    async fn a_partial_service_delete_still_reclaims_turnkey() {
-        let server = MockServer::start().await;
-        mount_metadata(&server, vec![turnkey_key()]).await;
-        mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
-        mount_rejection(&server, DELETE_BACKUP, "backup_missing").await;
-        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
-
-        run_delete(&server).await.unwrap();
-
-        assert!(
-            called_paths(&server)
-                .await
-                .contains(&DELETE_SUB_ORG.to_string()),
-            "backup_missing proves the id is ours"
-        );
-    }
-
-    /// A response lost after the delete committed: attempt 1 dies mid-flight, attempt
-    /// 2 finds nothing mapping to the factor. Since a delete of ours already went out,
-    /// that is our own commit landing -- so the sub-organization is still reclaimed
-    /// rather than orphaned with a misleading "concurrent deletion" alert.
-    #[tokio::test]
-    async fn a_lost_response_is_recognised_as_our_own_commit() {
-        let server = MockServer::start().await;
-        mount_metadata(&server, vec![turnkey_key()]).await;
-        mount_json(&server, DELETE_BACKUP_CHALLENGE, challenge_response()).await;
-        Mock::given(method("POST"))
-            .and(path(DELETE_BACKUP))
-            .respond_with(ResponseTemplate::new(503))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        mount_rejection(&server, DELETE_BACKUP, "backup_untraceable").await;
-        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
-
-        run_delete(&server).await.unwrap();
-
-        assert!(
-            called_paths(&server)
-                .await
-                .contains(&DELETE_SUB_ORG.to_string()),
-            "our own commit must still reclaim Turnkey"
         );
     }
 

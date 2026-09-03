@@ -28,12 +28,15 @@ use turnkey_client::generated::services::coordinator::public::v1::{
 };
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
-use crate::backup::{MainFactor, SyncFactor};
+use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 
 use super::error::TurnkeyApiError;
+
+/// Deadline for a single pre-flight read probe.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Adapts a [`P256Signer`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
 /// client can stamp requests with a key held in native secure storage.
@@ -218,6 +221,7 @@ impl TurnkeyApiClient {
     ) -> Result<T, TurnkeyApiError>
     where
         Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
+        T: Send,
     {
         retry_with_backoff(&self.retry, operation, TurnkeyApiError::is_retryable, op)
             .await
@@ -237,8 +241,9 @@ impl TurnkeyApiClient {
     ) -> Result<T, TurnkeyApiError>
     where
         Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
+        T: Send,
     {
-        let mut policy = self.retry.clone();
+        let mut policy = self.retry;
         policy.total_timeout = total_timeout;
         retry_with_backoff(&policy, operation, TurnkeyApiError::is_retryable, op)
             .await
@@ -307,28 +312,6 @@ impl TurnkeyApiClient {
                 .map_err(TurnkeyApiError::from)
         })
         .await
-    }
-
-    /// Lists the users of a sub-organization.
-    ///
-    /// Results are cached for the lifetime of this client.
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
-    /// Re-reads the users, discarding any cached copy first.
-    ///
-    /// For callers that must act on the current state rather than a snapshot taken
-    /// earlier in the same flow.
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
-    pub async fn get_users_fresh(
-        &self,
-        suborganization_id: &str,
-        signer: SyncFactor<'_>,
-    ) -> Result<Arc<Vec<User>>, TurnkeyApiError> {
-        self.users_cache.clear();
-        self.get_users(suborganization_id, signer).await
     }
 
     pub async fn get_users(
@@ -548,6 +531,132 @@ impl TurnkeyApiClient {
         self.users_cache.clear();
         self.policies_cache.clear();
         Ok(())
+    }
+
+    /// Confirms Turnkey still accepts the sync factor for reads on
+    /// `suborganization_id`, before a caller commits to anything irreversible.
+    ///
+    /// Note this proves the signer is registered and accepted *for a read*, not that
+    /// policy authorizes a later write: a sub-organization whose `sync_factor_policy`
+    /// migration never ran passes here and can still reject the teardown. It converts
+    /// the common failure -- a sync factor Turnkey has never seen -- into an
+    /// actionable error while retrying is still free.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::SyncFactorInvalid`] when Turnkey rejects the signer. A
+    /// degraded or unresponsive Turnkey is tolerated; see [`Self::probe`].
+    pub async fn verify_sync_factor(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<(), BackupOperationError> {
+        self.probe(
+            "sync_factor",
+            NeedsReauthReason::SyncFactorInvalid,
+            self.get_users(suborganization_id, signer),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Confirms the main factor authenticates as `expected_user_id` on
+    /// `suborganization_id`, before a caller commits to anything irreversible.
+    ///
+    /// A signer Turnkey knows but that resolves to a different user is as unusable as
+    /// an unknown one: the user completed the ceremony with the wrong passkey, and the
+    /// writes it would stamp belong to someone else.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::MainFactorRequired`] when Turnkey rejects the signer or it
+    /// authenticates as another user. A degraded Turnkey is tolerated.
+    pub async fn verify_main_factor(
+        &self,
+        suborganization_id: &str,
+        expected_user_id: &str,
+        signer: MainFactor<'_>,
+    ) -> Result<(), BackupOperationError> {
+        let reason = NeedsReauthReason::MainFactorRequired;
+        let Some(user_id) = self
+            .probe(
+                "main_factor",
+                reason,
+                self.whoami_user_id(suborganization_id, signer),
+            )
+            .await?
+        else {
+            return Ok(());
+        };
+
+        if user_id != expected_user_id {
+            crate::warn!(
+                "turnkey.main_factor_wrong_user expected={expected_user_id} got={user_id}"
+            );
+            return Err(BackupOperationError::NeedsReauth { reason });
+        }
+        Ok(())
+    }
+
+    /// Lists the sub-organization's users under the probe policy: `None` when Turnkey
+    /// is unresponsive or degraded, rather than failing the caller.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::SyncFactorInvalid`] when Turnkey rejects the signer.
+    pub async fn probe_users(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<Option<Arc<Vec<User>>>, BackupOperationError> {
+        self.probe(
+            "users",
+            NeedsReauthReason::SyncFactorInvalid,
+            self.get_users(suborganization_id, signer),
+        )
+        .await
+    }
+
+    /// Runs a bounded read probe and decides whether its failure should stop the
+    /// caller. `None` means inconclusive-but-tolerated.
+    ///
+    /// Only a signer Turnkey rejects is fatal. An unresponsive or degraded Turnkey is
+    /// not: the teardowns these probes gate are best-effort, so failing here would
+    /// take down a flow that would otherwise have succeeded.
+    async fn probe<T>(
+        &self,
+        what: &str,
+        reason: NeedsReauthReason,
+        probe: impl Future<Output = Result<T, TurnkeyApiError>>,
+    ) -> Result<Option<T>, BackupOperationError> {
+        let Ok(result) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
+            crate::warn!(
+                "turnkey.{what}_probe_timed_out after {}s (unresponsive; proceeding)",
+                PROBE_TIMEOUT.as_secs()
+            );
+            return Ok(None);
+        };
+
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.indicates_invalid_signer() => {
+                crate::warn!("turnkey.{what}_invalid (pre-flight)");
+                Err(BackupOperationError::NeedsReauth { reason })
+            }
+            Err(error) if error.is_retryable() => {
+                crate::warn!(
+                    "turnkey.{what}_probe_inconclusive code={} err={error} (degraded; proceeding)",
+                    error.code()
+                );
+                Ok(None)
+            }
+            Err(error) => {
+                crate::warn!(
+                    "turnkey.{what}_probe_failed code={} err={error}",
+                    error.code()
+                );
+                Err(BackupOperationError::Turnkey {
+                    code: error.code().to_string(),
+                })
+            }
+        }
     }
 
     /// Lists the policies of a sub-organization.
