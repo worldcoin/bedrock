@@ -20,7 +20,7 @@ use crate::{
     smart_account::{SafeSmartAccount, UserOperation, ENTRYPOINT_4337},
     transactions::{
         foreign::UnparsedUserOperation,
-        rpc::{ErrorPayload, Id, JsonRpcRequest, RpcError, RpcMethod},
+        rpc::{Id, JsonRpcError, JsonRpcRequest, RpcError, RpcMethod},
         TransactionError,
     },
 };
@@ -164,7 +164,7 @@ fn parse_json_rpc_response(response_bytes: &[u8]) -> Result<Value, RpcError> {
         serde_json::from_slice(response_bytes).map_err(|_| RpcError::JsonError)?;
 
     if let Some(error) = json.get("error") {
-        let ep: ErrorPayload =
+        let ep: JsonRpcError =
             serde_json::from_value(error.clone()).map_err(|_| RpcError::JsonError)?;
         return Err(RpcError::RpcResponseError {
             code: ep.code,

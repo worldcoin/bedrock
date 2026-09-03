@@ -18,18 +18,18 @@ use alloy::{hex::FromHex, providers::MULTICALL3_ADDRESS};
 
 pub use crate::primitives::contracts::IMulticall3;
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock};
 
 mod wire;
 
-pub(crate) use wire::{ErrorPayload, JsonRpcRequest};
 pub use wire::{
     Id, PmSponsorUserOperationResponse, RelaySafeTransactionRequest, RpcMethod,
     RpcProviderName, SponsorUserOperationResponse, SponsorshipContext,
     WaGetUserOperationReceiptResponse,
 };
+pub(crate) use wire::{JsonRpcError, JsonRpcRequest};
 
 #[cfg(test)]
 mod tests;
@@ -82,6 +82,38 @@ pub enum RpcError {
     /// Safe Smart Account operation error
     #[error("Safe Smart Account operation failed: {0}")]
     SafeSmartAccountError(String),
+}
+
+impl From<JsonRpcError> for RpcError {
+    fn from(error: JsonRpcError) -> Self {
+        Self::RpcResponseError {
+            code: error.code,
+            error_message: error.message,
+        }
+    }
+}
+
+/// Internal RPC failure that preserves structured JSON-RPC error responses.
+#[derive(Debug)]
+pub(crate) enum RpcCallError {
+    Rpc(RpcError),
+    Response(JsonRpcError),
+}
+
+impl From<RpcError> for RpcCallError {
+    fn from(error: RpcError) -> Self {
+        Self::Rpc(error)
+    }
+}
+
+impl From<RpcCallError> for RpcError {
+    fn from(error: RpcCallError) -> Self {
+        match error {
+            RpcCallError::Rpc(error) => error,
+            // Preserve the existing public error shape at API boundaries.
+            RpcCallError::Response(error) => error.into(),
+        }
+    }
 }
 
 impl From<HttpError> for RpcError {
@@ -143,10 +175,10 @@ impl RpcClient {
         method: RpcMethod,
         params: P,
         provider: RpcProviderName,
-    ) -> Result<R, RpcError>
+    ) -> Result<R, RpcCallError>
     where
         P: Serialize,
-        R: for<'de> Deserialize<'de>,
+        R: DeserializeOwned,
     {
         // unique request ID
         let id = Id::String(format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())));
@@ -171,20 +203,18 @@ impl RpcClient {
             .http_client
             .as_ref()
             .fetch_from_app_backend(endpoint, HttpMethod::Post, headers, Some(request))
-            .await?;
+            .await
+            .map_err(RpcError::from)?;
 
         let json_response: Value =
             serde_json::from_slice(&response_bytes).map_err(|_| RpcError::JsonError)?;
 
         // Check if it's an error response
         if let Some(error) = json_response.get("error") {
-            let error_payload: ErrorPayload = serde_json::from_value(error.clone())
+            let error_payload: JsonRpcError = serde_json::from_value(error.clone())
                 .map_err(|_| RpcError::JsonError)?;
 
-            return Err(RpcError::RpcResponseError {
-                code: error_payload.code,
-                error_message: error_payload.message,
-            });
+            return Err(RpcCallError::Response(error_payload));
         }
 
         json_response.get("result").map_or_else(
@@ -192,10 +222,12 @@ impl RpcClient {
                 Err(RpcError::InvalidResponse {
                     error_message: "Response missing both 'result' and 'error' fields"
                         .to_string(),
-                })
+                }
+                .into())
             },
             |result| {
-                serde_json::from_value(result.clone()).map_err(|_| RpcError::JsonError)
+                serde_json::from_value(result.clone())
+                    .map_err(|_| RpcError::JsonError.into())
             },
         )
     }
@@ -230,6 +262,7 @@ impl RpcClient {
 
         self.rpc_call(network, RpcMethod::SponsorUserOperation, params, provider)
             .await
+            .map_err(RpcError::from)
     }
 
     /// Requests sponsorship for a `UserOperation` via `pm_sponsorUserOperation` (V2)
@@ -266,6 +299,7 @@ impl RpcClient {
             RpcProviderName::Any,
         )
         .await
+        .map_err(RpcError::from)
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
@@ -363,6 +397,7 @@ impl RpcClient {
             RpcProviderName::Any,
         )
         .await
+        .map_err(RpcError::from)
     }
 
     /// Makes multiple read calls in a single `eth_call` via Multicall3 `aggregate3`.
@@ -508,6 +543,7 @@ impl RpcClient {
             RpcProviderName::Any,
         )
         .await
+        .map_err(RpcError::from)
     }
 }
 
