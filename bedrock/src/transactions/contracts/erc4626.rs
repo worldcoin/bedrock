@@ -390,6 +390,7 @@ impl Erc4626Vault {
     ///
     /// # Errors
     /// Returns an error if:
+    /// - The source and destination vault addresses are the same
     /// - The two vaults use different underlying assets
     /// - The user has no shares in the source vault
     /// - `previewRedeem` returns zero assets
@@ -403,6 +404,13 @@ impl Erc4626Vault {
         user_address: Address,
         metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
+        if from_vault_address == to_vault_address {
+            return Err(RpcError::InvalidResponse {
+                error_message: "Source and destination ERC-4626 vaults must differ"
+                    .to_string(),
+            });
+        }
+
         // 1. Query underlying asset addresses from both vaults
         let from_asset_call_data = IERC4626::assetCall {}.abi_encode();
         let from_asset_address = Self::fetch_asset_address(
@@ -1073,6 +1081,37 @@ mod tests {
         let expected_bundle = MultiSend::build_bundle(&expected_entries);
 
         assert_eq!(vault.call_data.to_vec(), expected_bundle.data);
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_same_vault_error() {
+        let vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [0u8; 10];
+
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        let result = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            vault_address,
+            vault_address,
+            U256::from(10u128.pow(18)),
+            user_address,
+            metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Source and destination ERC-4626 vaults must differ"));
     }
 
     #[tokio::test]
