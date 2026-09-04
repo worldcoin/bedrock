@@ -31,6 +31,9 @@ use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::get_config;
 use crate::primitives::P256Signer;
+use turnkey_api_key_stamper::Stamp;
+
+use self::api::KeypairSignerStamper;
 
 /// Only one migration running at a time.
 static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
@@ -55,6 +58,24 @@ impl TurnkeyManager {
     #[must_use]
     pub fn new() -> Self {
         Self
+    }
+
+    /// Produces a Turnkey API-key stamp using a key held in native secure storage.
+    ///
+    /// The signer is called with a SHA-256 digest through the existing UniFFI
+    /// callback, so its private key never crosses the FFI boundary. The returned
+    /// value is suitable for Turnkey's `X-Stamp` header.
+    pub fn stamp_with_signer(
+        &self,
+        body: String,
+        signer: &P256Signer,
+    ) -> Result<String, TurnkeyError> {
+        let _json: serde_json::Value =
+            serde_json::from_str(&body).map_err(|_| TurnkeyError::DecodeBodyError)?;
+        KeypairSignerStamper::new(signer)
+            .stamp(body.as_bytes())
+            .map(|stamp| stamp.value)
+            .map_err(|_| TurnkeyError::SigningError)
     }
 
     /// Reviews the Turnkey account state and applies any required migrations to
@@ -549,12 +570,38 @@ impl From<k256::ecdsa::Error> for TurnkeyError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backup::turnkey::test::TestSigner;
     use base64::prelude::BASE64_URL_SAFE_NO_PAD;
     use base64::Engine;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::VerifyingKey;
     use p256::PublicKey;
     use serde_json::json;
+
+    #[test]
+    fn stamp_with_signer_keeps_private_key_in_callback() {
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let body = json!({"example": 123}).to_string();
+
+        let stamp = TurnkeyManager::new()
+            .stamp_with_signer(body.clone(), &signer)
+            .unwrap();
+        let decoded = BASE64_URL_SAFE_NO_PAD.decode(stamp).unwrap();
+        let stamp: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+
+        assert_eq!(stamp["scheme"], "SIGNATURE_SCHEME_TK_API_P256");
+        let signature = p256::ecdsa::Signature::from_der(
+            &hex::decode(stamp["signature"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let public_key = PublicKey::from_sec1_bytes(
+            &hex::decode(stamp["publicKey"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert!(VerifyingKey::from(public_key)
+            .verify(body.as_bytes(), &signature)
+            .is_ok());
+    }
 
     #[test]
     fn test_derive_public_key() {
