@@ -102,11 +102,11 @@ pub struct JsonRpcError {
 pub enum PmSponsorUserOperationResponse {
     /// Sponsorship was approved with the returned gas and paymaster fields.
     Approved(PmSponsorshipApproval),
-    /// Protocol sponsorship was declined with a self-sponsorship advisory.
+    /// Sponsorship was declined with a self-sponsorship advisory.
     Declined(PmSponsorshipDecline),
 }
 
-/// Self-sponsorship advisory returned when protocol sponsorship is declined.
+/// Self-sponsorship advisory returned when sponsorship is declined.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PmSponsorshipDecline {
@@ -114,7 +114,7 @@ pub struct PmSponsorshipDecline {
     pub token: Address,
     /// Paymaster contract that accepts the fee token.
     pub paymaster_address: Address,
-    /// Policy reason for declining protocol sponsorship.
+    /// Policy reason for declining sponsorship.
     pub reason: PmSponsorshipDeclineReason,
 }
 
