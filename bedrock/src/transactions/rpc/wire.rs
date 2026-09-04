@@ -97,6 +97,15 @@ pub struct JsonRpcError {
     pub data: Option<Value>,
 }
 
+/// Response from requesting paymaster sponsorship for a user operation.
+#[derive(Debug)]
+pub enum PmSponsorUserOperationResponse {
+    /// Sponsorship was approved with the returned gas and paymaster fields.
+    Approved(PmSponsorshipApproval),
+    /// Protocol sponsorship was declined with a self-sponsorship advisory.
+    Declined(PmSponsorshipDecline),
+}
+
 /// Self-sponsorship advisory returned when protocol sponsorship is declined.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

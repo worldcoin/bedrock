@@ -25,9 +25,9 @@ use std::sync::{Arc, OnceLock};
 mod wire;
 
 pub use wire::{
-    Id, PmSponsorshipApproval, PmSponsorshipDecline, PmSponsorshipDeclineReason,
-    RelaySafeTransactionRequest, RpcMethod, RpcProviderName,
-    SponsorUserOperationResponse, SponsorshipContext,
+    Id, PmSponsorUserOperationResponse, PmSponsorshipApproval, PmSponsorshipDecline,
+    PmSponsorshipDeclineReason, RelaySafeTransactionRequest, RpcMethod,
+    RpcProviderName, SponsorUserOperationResponse, SponsorshipContext,
     WaGetUserOperationReceiptResponse,
 };
 pub(crate) use wire::{JsonRpcError, JsonRpcRequest};
@@ -158,15 +158,6 @@ impl From<SafeSmartAccountError> for RpcError {
     fn from(e: SafeSmartAccountError) -> Self {
         Self::SafeSmartAccountError(e.to_string())
     }
-}
-
-/// Response from requesting paymaster sponsorship for a user operation.
-#[derive(Debug)]
-pub enum PmSponsorUserOperationResponse {
-    /// Sponsorship was approved with the returned gas and paymaster fields.
-    Approved(PmSponsorshipApproval),
-    /// Protocol sponsorship was declined with a self-sponsorship advisory.
-    Declined(PmSponsorshipDecline),
 }
 
 /// RPC client for handling 4337 `UserOperation` requests
