@@ -14,7 +14,7 @@ use bedrock::{
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
 };
 
-// ------------------ The test for the full transaction_transfer flow ------------------
+// ------------------ The test for the full transaction transfer flow ------------------
 
 #[tokio::test]
 async fn test_transaction_transfer_full_flow_executes_user_operation(
@@ -70,23 +70,35 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
 
     set_http_client(Arc::new(client));
 
-    // 8) Execute high-level transfer via transaction_transfer
+    // 8) Prepare the transfer without signing or executing it
     let safe_account = SafeSmartAccount::from_private_key_hex(
         owner_key_hex,
         &safe_address.to_string(),
     )?;
     let amount = "1000000000000000000"; // 1 WLD
-    let _user_op_hash = safe_account
-        .transaction_transfer(
+    let prepared = safe_account
+        .prepare_transaction_transfer(
             &wld_token_address.to_string(),
             &recipient.to_string(),
             amount,
             None,
         )
         .await
-        .expect("transaction_transfer failed");
+        .expect("prepare_transaction_transfer failed");
 
-    // 9) Verify balances updated
+    assert_eq!(prepared.token_address, wld_token_address.to_string());
+    assert_eq!(prepared.recipient_address, recipient.to_string());
+    assert_eq!(prepared.amount, amount);
+    assert_eq!(wld.balanceOf(recipient).call().await?, before_recipient);
+    assert_eq!(wld.balanceOf(safe_address).call().await?, before_safe);
+
+    // 9) Sign and submit the exact operation that was prepared
+    let _user_op_hash = safe_account
+        .submit_prepared_transaction(prepared.transaction)
+        .await
+        .expect("submit_prepared_transaction failed");
+
+    // 10) Verify balances updated
     let after_recipient = wld.balanceOf(recipient).call().await?;
     let after_safe = wld.balanceOf(safe_address).call().await?;
 

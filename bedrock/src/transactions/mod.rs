@@ -10,7 +10,7 @@ use crate::{
     primitives::{HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{
         Is4337Encodable, Permit2Approve, SafeSmartAccount, UnparsedPermitTransferFrom,
-        UnparsedTokenPermissions,
+        UnparsedTokenPermissions, UserOperation, ENTRYPOINT_4337,
     },
     transactions::{
         contracts::{
@@ -18,7 +18,10 @@ use crate::{
             usd_legacy_vault::Permit2Data,
             world_gift_manager::WorldGiftManager,
         },
-        rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
+        rpc::{
+            get_rpc_client, PmSponsorUserOperationResponse, SponsorshipContext,
+            WaGetUserOperationReceiptResponse,
+        },
     },
 };
 
@@ -51,10 +54,27 @@ pub struct WorldGiftManagerResult {
     pub gift_id: Arc<HexEncodedData>,
 }
 
+/// An unsigned `UserOperation` prepared for review before signing.
+#[derive(Debug, uniffi::Object)]
+pub struct PreparedTransaction {
+    user_operation: UserOperation,
+    network: Network,
+}
+
+/// A prepared ERC-20 transfer and the action details the client should review.
+#[allow(missing_docs)]
+#[derive(Debug, uniffi::Record)]
+pub struct PreparedErc20Transfer {
+    pub transaction: Arc<PreparedTransaction>,
+    pub token_address: String,
+    pub recipient_address: String,
+    pub amount: String,
+}
+
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
-    /// Allows executing an ERC-20 token transfer **on World Chain**.
+    /// Prepares an ERC-20 transfer on World Chain without signing it.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
@@ -62,44 +82,18 @@ impl SafeSmartAccount {
     /// - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
     /// - `transfer_association`: Metadata value. The association of the transfer.
     ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::sync::Arc;
-    /// use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
-    /// use bedrock::transactions::TransactionError;
-    /// use bedrock::primitives::Network;
-    ///
-    /// # async fn example(
-    /// #     key_manager: Arc<dyn SmartAccountKeyManager>,
-    /// # ) -> Result<(), TransactionError> {
-    /// // Assume we have a configured SafeSmartAccount
-    /// # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
-    ///
-    /// // Transfer USDC on World Chain
-    /// let tx_hash = safe_account.transaction_transfer(
-    ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
-    ///     "0x1234567890123456789012345678901234567890",
-    ///     "1000000", // 1 USDC (6 decimals)
-    ///     None,
-    /// ).await?;
-    ///
-    /// println!("Transaction hash: {}", tx_hash.to_hex_string());
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    /// - Will throw an RPC error if the transaction submission fails.
+    /// - Will throw an RPC error if sponsorship preparation fails.
+    /// - Will throw an error if sponsorship is declined.
     /// - Will throw an error if the global HTTP client has not been initialized.
-    pub async fn transaction_transfer(
+    pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,
         to_address: &str,
         amount: &str,
         transfer_association: Option<TransferAssociation>,
-    ) -> Result<HexEncodedData, TransactionError> {
+    ) -> Result<PreparedErc20Transfer, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
@@ -110,13 +104,76 @@ impl SafeSmartAccount {
             association: transfer_association,
         };
 
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, Some(metadata), provider)
+        let user_operation = transaction
+            .build_preflight_user_operation(self.wallet_address, Some(metadata))?;
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to prepare transaction: {e}"),
+        })?;
+        let sponsorship = rpc_client
+            .pm_sponsor_user_operation(
+                Network::WorldChain,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                &SponsorshipContext::Protocol,
+            )
             .await
             .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute transaction: {e}"),
+                error_message: format!("Failed to prepare transaction: {e}"),
+            })?;
+
+        let PmSponsorUserOperationResponse::Approved(approval) = sponsorship else {
+            return Err(TransactionError::Generic {
+                error_message: "Sponsorship declined".to_string(),
+            });
+        };
+        let prepared_transaction = PreparedTransaction {
+            user_operation: user_operation.with_pm_sponsorship_approval(&approval),
+            network: Network::WorldChain,
+        };
+
+        Ok(PreparedErc20Transfer {
+            transaction: Arc::new(prepared_transaction),
+            token_address: token_address.to_string(),
+            recipient_address: to_address.to_string(),
+            amount: amount.to_string(),
+        })
+    }
+
+    /// Signs and submits a previously prepared transaction.
+    ///
+    /// # Errors
+    /// - Will throw an error if the transaction was prepared for another account.
+    /// - Will throw an RPC error if signing or submission fails.
+    /// - Will throw an error if the global HTTP client has not been initialized.
+    pub async fn submit_prepared_transaction(
+        &self,
+        prepared_transaction: Arc<PreparedTransaction>,
+    ) -> Result<HexEncodedData, TransactionError> {
+        if prepared_transaction.user_operation.sender != self.wallet_address {
+            return Err(TransactionError::Generic {
+                error_message: "Prepared transaction belongs to another account"
+                    .to_string(),
+            });
+        }
+
+        let mut user_operation = prepared_transaction.user_operation.clone();
+        self.sign_user_operation(&mut user_operation, prepared_transaction.network)
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to sign transaction: {e}"),
+            })?;
+
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to submit transaction: {e}"),
+        })?;
+        let user_op_hash = rpc_client
+            .send_user_operation_v2(
+                prepared_transaction.network,
+                &user_operation,
+                *ENTRYPOINT_4337,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to submit transaction: {e}"),
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
