@@ -476,7 +476,28 @@ impl Erc4626Vault {
             });
         }
 
-        // 6. Encode redeem (source) + approve + deposit (destination)
+        // 6–7. Encode redeem + approve + deposit and build the MultiSend bundle
+        Ok(Self::build_migrate_transaction(
+            from_vault_address,
+            to_vault_address,
+            from_asset_address,
+            user_address,
+            actual_share_amount,
+            preview_assets,
+            metadata,
+        ))
+    }
+
+    /// Builds the `MultiSend` (`redeem` → `approve` → `deposit`) migrate transaction.
+    fn build_migrate_transaction(
+        from_vault_address: Address,
+        to_vault_address: Address,
+        from_asset_address: Address,
+        user_address: Address,
+        actual_share_amount: U256,
+        preview_assets: U256,
+        metadata: [u8; 10],
+    ) -> Self {
         let redeem_data = IERC4626::redeemCall {
             shares: actual_share_amount,
             receiver: user_address,
@@ -492,7 +513,6 @@ impl Erc4626Vault {
         }
         .abi_encode();
 
-        // 7. Build the MultiSend bundle (redeem + approve + deposit)
         let entries = vec![
             MultiSendTx {
                 operation: SafeOperation::Call as u8,
@@ -519,13 +539,13 @@ impl Erc4626Vault {
 
         let bundle = MultiSend::build_bundle(&entries);
 
-        Ok(Self {
+        Self {
             call_data: bundle.data.into(),
             action: TransactionTypeId::ERC4626Migrate,
             to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
             operation: SafeOperation::DelegateCall,
             metadata,
-        })
+        }
     }
 }
 
