@@ -71,9 +71,7 @@ enum Prepared {
     /// whole sub-organization goes instead).
     Oidc {
         plan: OidcRemovalPlan,
-        /// Every provider backing the removed OIDC identity: Apple registers one per
-        /// audience, all sharing one `sub`. Empty when the sub-organization goes
-        /// instead, or when the identity is already absent from Turnkey.
+        /// OIDC Providers that must be removed (Turnkey IDs)
         provider_ids: Vec<String>,
         turnkey_sub_org_ids: Vec<String>,
     },
@@ -84,7 +82,7 @@ enum Prepared {
         authenticator: Option<PasskeyAuthenticator>,
         turnkey_sub_org_ids: Vec<String>,
     },
-    /// Removing all Main Factors results in full backup deletion.
+    /// Removing all [`MainFactor`]s -> full backup deletion.
     FullDeletion { turnkey_sub_org_ids: Vec<String> },
 }
 
@@ -108,9 +106,6 @@ impl RemoveFactor {
             }
         })?;
 
-        // Before the confirmation gate: never ask a user to approve destroying their
-        // backup for a removal that was never supported. A sole iCloud factor would
-        // otherwise escalate straight to BF-8 and delete the backup on confirmation.
         if let Some(detail) = unsupported_reason(&metadata, &factor.kind) {
             return Err(BackupOperationError::Unsupported { detail });
         }
@@ -318,11 +313,9 @@ impl RemoveFactor {
         }
 
         // Step 2B: Delete the factor from Turnkey
-
-        // Step 2: Process relevant Turnkey deletion
         turnkey_cleanup(ctx, prepared).await;
 
-        // Step 3: Return result
+        // Step 3: Result
         let metadata = response.backup_metadata.ok_or_else(|| {
             crate::critical!(
                 "remove_factor.missing_response_metadata (factor IS removed; backup-service returned incorrect response)"
@@ -1820,13 +1813,9 @@ mod tests {
             BackupOperationError::BackupService { code } if code == "factor_not_found"
         ));
     }
-    /// A passkey that is the last main factor cascades into a full backup deletion.
-    /// The sub-organization that held the backup's encryption key must go with it --
-    /// the same teardown `DeleteBackup` performs. Before this was shared, only the
-    /// OIDC path reclaimed it and a passkey cascade silently orphaned the whole
-    /// sub-organization.
+
     #[tokio::test]
-    async fn a_passkey_cascade_into_backup_deletion_reclaims_the_sub_organization() {
+    async fn removing_a_passkey_as_last_main_factor_deletes_the_backup() {
         install_attestation();
         let server = MockServer::start().await;
         mount_delete_backup(&server).await;
@@ -1848,18 +1837,13 @@ mod tests {
         let outcome = run_remove(&server, "f-1", Some(&main), true).await.unwrap();
 
         assert!(matches!(outcome, RemoveFactorOutcome::BackupDeleted));
-        assert!(
-            called_paths(&server)
-                .await
-                .contains(&DELETE_SUB_ORG.to_string()),
-            "a cascade into backup deletion must reclaim the sub-organization"
-        );
+        assert!(called_paths(&server)
+            .await
+            .contains(&DELETE_SUB_ORG.to_string()),);
     }
-    /// A sole iCloud factor is unsupported, and being sole must not turn it into a
-    /// destructive one: the unsupported check has to run before the last-factor
-    /// escalation, or confirming the prompt would delete the whole backup.
+
     #[tokio::test]
-    async fn a_sole_unsupported_factor_never_escalates_to_backup_deletion() {
+    async fn ec_keypair_cannot_be_the_last_main_factor_removal() {
         install_attestation();
         let server = MockServer::start().await;
         mount_delete_backup(&server).await;
