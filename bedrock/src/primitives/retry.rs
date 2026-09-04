@@ -14,8 +14,8 @@ pub struct RetryPolicy {
     pub base_delay: Duration,
     /// Ceiling on any single backoff delay.
     pub max_delay: Duration,
-    /// The maximum time the entire request (including retries) may take. This is a
-    /// last resort stop-gap to prevent handing requests.
+    /// The maximum time the entire request (including retries) may take. A last
+    /// resort stop-gap to prevent hanging requests.
     pub total_timeout: Duration,
 }
 

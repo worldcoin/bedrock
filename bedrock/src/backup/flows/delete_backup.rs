@@ -59,15 +59,7 @@ pub(in crate::backup::flows) async fn execute(
     retry_with_backoff(
         &policy,
         "delete_backup",
-        // A `Timeout` is the transport's own budget expiring, which a fresh attempt
-        // (with a fresh challenge) can still get past.
-        |error| {
-            matches!(
-                error,
-                BackupOperationError::Network { retryable: true }
-                    | BackupOperationError::Timeout
-            )
-        },
+        |error| matches!(error, BackupOperationError::Network { retryable: true }),
         || ctx.service.delete_backup(ctx.sync_factor),
     )
     .await

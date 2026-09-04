@@ -1112,8 +1112,6 @@ impl From<KeypairSignerError> for BackupOperationError {
 
 impl From<TurnkeyApiError> for BackupOperationError {
     fn from(inner: TurnkeyApiError) -> Self {
-        // Keep the transient/permanent split: callers decide whether retrying is
-        // worth anything from `retryable`, which a flat `Turnkey` would hide.
         if inner.is_retryable() {
             return Self::Network { retryable: true };
         }

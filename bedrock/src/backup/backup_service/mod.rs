@@ -45,9 +45,7 @@ const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
 /// feature is supported.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
 
-/// Deadline covering every challenge fetch. Applied once, inside
-/// [`BackupServiceClient::fetch_challenge`]: a challenge runs before anything is
-/// committed, so cancelling one is always safe, and no operation needs its own.
+/// Max timeout for fetching challenges. Fail fast!
 const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Deadline for the foreign attestation callback, which Bedrock cannot otherwise
@@ -97,14 +95,10 @@ impl BackupServiceClient {
         Ok(Self { http, base_url })
     }
 
-    /// Retrieves the current backup metadata, authenticated by the sync factor and
-    /// qualified with `backup_id`.
+    /// Retrieves the current backup metadata.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`] on signing, transport, or backup-service
-    /// failure. An `unauthorized_factor` rejection surfaces as
-    /// [`BackupOperationError::NeedsReauth`]; `backup_does_not_exist` means the named
-    /// backup is gone, and `backup_id_mismatch` that the factor resolves to another.
+    /// See [`BackupOperationError`].
     pub async fn retrieve_metadata(
         &self,
         sync_factor: &P256Signer,
@@ -141,8 +135,7 @@ impl BackupServiceClient {
     /// Turnkey encryption key from the metadata.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`] on signing, attestation, transport, or
-    /// backup-service failure.
+    /// See  See [`BackupOperationError`].
     pub async fn delete_factor(
         &self,
         sync_factor: &P256Signer,
@@ -200,13 +193,10 @@ impl BackupServiceClient {
         serde_json::from_slice(&bytes).map_err(|error| deserialize_error(&error))
     }
 
-    /// Deletes the entire backup and all its metadata, authenticated by the sync
-    /// factor.
+    /// Deletes the entire backup.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`] on signing, transport, or backup-service
-    /// failure. A rejection naming a backup this factor cannot reach surfaces as
-    /// [`BackupOperationError::BackupService`] for the caller to classify.
+    /// See [`BackupOperationError`].
     pub async fn delete_backup(
         &self,
         sync_factor: &P256Signer,
@@ -234,8 +224,7 @@ impl BackupServiceClient {
         .map(|_| ())
     }
 
-    /// Fetches a keypair challenge from `path`, bounded by [`CHALLENGE_TIMEOUT`].
-    /// Idempotent, so retried.
+    /// Fetches a keypair challenge from `path`
     async fn fetch_challenge(
         &self,
         path: &str,

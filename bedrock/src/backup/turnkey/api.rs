@@ -176,7 +176,15 @@ impl TurnkeyApiClient {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            retry: RetryPolicy::default(),
+            // Above the SDK's own activity-polling window (~12.5s of backoff plus
+            // six round trips) so its `ActivityPollingExceeded` surfaces instead of
+            // being pre-empted by this budget. Callers branch on that variant to tell
+            // "still settling" apart from "orphaned", and a `critical!` is wired to
+            // the latter.
+            retry: RetryPolicy {
+                total_timeout: Duration::from_secs(30),
+                ..RetryPolicy::default()
+            },
             users_cache: OrgCache::new("user"),
             policies_cache: OrgCache::new("policy"),
             base_url: None,
@@ -221,28 +229,6 @@ impl TurnkeyApiClient {
         T: Send,
     {
         retry_with_backoff(&self.retry, operation, TurnkeyApiError::is_retryable, op)
-            .await
-            .map_err(|e| match e {
-                RetryError::Operation(e) => e,
-                RetryError::Timeout => TurnkeyApiError::Timeout,
-            })
-    }
-
-    /// Runs `op`, retrying transient failures with bounded backoff and jitter. Binds the
-    /// entire `op` (including retries) in a total timeout.
-    async fn with_retry_and_timeout<T, Fut>(
-        &self,
-        operation: &str,
-        total_timeout: Duration,
-        op: impl FnMut() -> Fut + Send,
-    ) -> Result<T, TurnkeyApiError>
-    where
-        Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
-        T: Send,
-    {
-        let mut policy = self.retry;
-        policy.total_timeout = total_timeout;
-        retry_with_backoff(&policy, operation, TurnkeyApiError::is_retryable, op)
             .await
             .map_err(|e| match e {
                 RetryError::Operation(e) => e,
@@ -505,14 +491,8 @@ impl TurnkeyApiClient {
             delete_without_export: Some(true),
         };
 
-        #[cfg(not(test))]
-        let timeout = Duration::from_secs(10);
-
-        #[cfg(test)]
-        let timeout = Duration::from_millis(200);
-
         let timestamp_ms = ntp_timestamp_ms()?;
-        self.with_retry_and_timeout("delete_sub_organization", timeout, || async {
+        self.with_retry("delete_sub_organization", || async {
             client
                 .delete_sub_organization(
                     suborganization_id.to_string(),
