@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate`) with `previewRedeem` asset snapshot
+
 ## [0.7.2](https://github.com/worldcoin/bedrock/compare/0.7.1...0.7.2) - 2026-09-17
 
 ### Added
