@@ -86,15 +86,12 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
         .await
         .expect("prepare_transaction_transfer failed");
 
-    assert_eq!(prepared.token_address, wld_token_address.to_string());
-    assert_eq!(prepared.recipient_address, recipient.to_string());
-    assert_eq!(prepared.amount, amount);
     assert_eq!(wld.balanceOf(recipient).call().await?, before_recipient);
     assert_eq!(wld.balanceOf(safe_address).call().await?, before_safe);
 
     // 9) Sign and submit the exact operation that was prepared
     let _user_op_hash = safe_account
-        .submit_prepared_transaction(prepared.transaction)
+        .submit_prepared_transaction(prepared)
         .await
         .expect("submit_prepared_transaction failed");
 

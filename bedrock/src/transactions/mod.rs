@@ -61,16 +61,6 @@ pub struct PreparedTransaction {
     network: Network,
 }
 
-/// A prepared ERC-20 transfer and the action details the client should review.
-#[allow(missing_docs)]
-#[derive(Debug, uniffi::Record)]
-pub struct PreparedErc20Transfer {
-    pub transaction: Arc<PreparedTransaction>,
-    pub token_address: String,
-    pub recipient_address: String,
-    pub amount: String,
-}
-
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
@@ -93,7 +83,7 @@ impl SafeSmartAccount {
         to_address: &str,
         amount: &str,
         transfer_association: Option<TransferAssociation>,
-    ) -> Result<PreparedErc20Transfer, TransactionError> {
+    ) -> Result<Arc<PreparedTransaction>, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
@@ -131,12 +121,7 @@ impl SafeSmartAccount {
             network: Network::WorldChain,
         };
 
-        Ok(PreparedErc20Transfer {
-            transaction: Arc::new(prepared_transaction),
-            token_address: token_address.to_string(),
-            recipient_address: to_address.to_string(),
-            amount: amount.to_string(),
-        })
+        Ok(Arc::new(prepared_transaction))
     }
 
     /// Signs and submits a previously prepared transaction.
