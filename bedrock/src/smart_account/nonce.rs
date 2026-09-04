@@ -48,6 +48,8 @@ pub enum TransactionTypeId {
     USDVaultMigration = 140,
     /// ERC-20 approve for the TFH multi-token paymaster
     TfhPaymasterApprove = 141,
+    /// ERC-4626 vault migration to another ERC-4626 vault
+    ERC4626Migrate = 142,
 }
 
 impl TransactionTypeId {

@@ -413,6 +413,67 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
+    /// Migrates shares from one ERC4626 vault to another on World Chain.
+    ///
+    /// This builds one atomic bundle with:
+    /// 1. `redeem(shares)` on the source vault
+    /// 2. `approve(assets)` on the underlying token for the destination vault
+    /// 3. `deposit(assets)` into the destination vault
+    ///
+    /// The `assets` amount is snapshotted with `previewRedeem` when building the transaction.
+    /// If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
+    ///
+    /// # Arguments
+    /// - `from_vault_address`: The source ERC4626 vault address.
+    /// - `to_vault_address`: The destination ERC4626 vault address.
+    /// - `share_amount`: The amount of shares to migrate as a stringified integer.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
+    /// - Returns [`TransactionError::Generic`] if transaction creation or submission fails.
+    pub async fn transaction_erc4626_migrate(
+        &self,
+        from_vault_address: &str,
+        to_vault_address: &str,
+        share_amount: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let from_vault_address =
+            Address::parse_from_ffi(from_vault_address, "from_vault_address")?;
+        let to_vault_address =
+            Address::parse_from_ffi(to_vault_address, "to_vault_address")?;
+        let share_amount = U256::parse_from_ffi(share_amount, "share_amount")?;
+        let receiver = self.wallet_address;
+
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::erc4626::Erc4626Vault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                from_vault_address,
+                to_vault_address,
+                share_amount,
+                receiver,
+                [0u8; 10], // metadata
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create ERC4626 migrate: {e}"),
+            })?;
+
+        let provider = RpcProviderName::Any;
+
+        let user_op_hash = transaction
+            .sign_and_execute(self, Network::WorldChain, None, None, provider)
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute ERC4626 migrate: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
     /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
     ///
     /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
