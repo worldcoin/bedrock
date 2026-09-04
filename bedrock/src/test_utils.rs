@@ -269,7 +269,7 @@ where
 
         match method {
             // Respond with minimal, sane gas values and no paymaster
-            "wa_sponsorUserOperation" => {
+            "wa_sponsorUserOperation" | "pm_sponsorUserOperation" => {
                 let result = SponsorUserOperationResponseLite {
                     paymaster: None,
                     paymaster_data: None,
