@@ -65,7 +65,14 @@ impl TurnkeyManager {
     /// The signer is called with a SHA-256 digest through the existing UniFFI
     /// callback, so its private key never crosses the FFI boundary. The returned
     /// value is suitable for Turnkey's `X-Stamp` header.
-    pub fn stamp_with_signer(body: String, signer: &P256Signer) -> Result<String, TurnkeyError> {
+    // UniFFI only exports methods, not associated functions. `TurnkeyManager` is
+    // stateless, so the receiver is otherwise intentionally unused.
+    #[allow(clippy::unused_self)]
+    pub fn stamp_with_signer(
+        &self,
+        body: String,
+        signer: &P256Signer,
+    ) -> Result<String, TurnkeyError> {
         let body = body.into_bytes();
         let _json: serde_json::Value =
             serde_json::from_slice(&body).map_err(|_| TurnkeyError::DecodeBodyError)?;
