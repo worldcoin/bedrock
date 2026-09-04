@@ -972,56 +972,17 @@ mod tests {
         let user_address =
             Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
         let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-
         let share_amount = U256::from(10u128.pow(18));
         let preview_assets = U256::from(1_200_000_000_000_000_000u64);
 
-        let anvil = Anvil::new().spawn();
-        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
-        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
-
-        let from_asset_call_data = IERC4626::assetCall {}.abi_encode();
-        let mut padded_asset = [0u8; 32];
-        padded_asset[12..32].copy_from_slice(asset_address.as_slice());
-        let asset_response = format!("0x{}", hex::encode(padded_asset));
-        http_client.set_response_for_address_and_data(
+        let test_rpc_client = setup_migrate_rpc_client(
             from_vault_address,
-            format!("0x{}", hex::encode(from_asset_call_data.clone())),
-            asset_response.clone(),
-        );
-        http_client.set_response_for_address_and_data(
             to_vault_address,
-            format!("0x{}", hex::encode(from_asset_call_data)),
-            asset_response,
+            asset_address,
+            user_address,
+            share_amount,
+            preview_assets,
         );
-
-        let share_balance_call_data = IErc20::balanceOfCall {
-            account: user_address,
-        }
-        .abi_encode();
-        let mut padded_shares = [0u8; 32];
-        padded_shares[..32].copy_from_slice(&share_amount.to_be_bytes::<32>());
-        let shares_response = format!("0x{}", hex::encode(padded_shares));
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(share_balance_call_data)),
-            shares_response,
-        );
-
-        let preview_redeem_call_data = IERC4626::previewRedeemCall {
-            shares: share_amount,
-        }
-        .abi_encode();
-        let mut padded_assets = [0u8; 32];
-        padded_assets[..32].copy_from_slice(&preview_assets.to_be_bytes::<32>());
-        let preview_assets_response = format!("0x{}", hex::encode(padded_assets));
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(preview_redeem_call_data)),
-            preview_assets_response,
-        );
-
-        let test_rpc_client = RpcClient::new(Arc::new(http_client));
 
         let vault = Erc4626Vault::migrate(
             &test_rpc_client,
@@ -1035,52 +996,74 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(vault.operation as u8, SafeOperation::DelegateCall as u8);
-        assert_eq!(
-            vault.to,
-            crate::transactions::contracts::multisend::MULTISEND_ADDRESS
+        let expected = Erc4626Vault::build_migrate_transaction(
+            from_vault_address,
+            to_vault_address,
+            asset_address,
+            user_address,
+            share_amount,
+            preview_assets,
+            metadata,
         );
-        assert_eq!(vault.action, TransactionTypeId::ERC4626Migrate);
 
-        let expected_redeem_data = IERC4626::redeemCall {
+        assert_eq!(vault.operation as u8, expected.operation as u8);
+        assert_eq!(vault.to, expected.to);
+        assert_eq!(vault.action, expected.action);
+        assert_eq!(vault.call_data, expected.call_data);
+    }
+
+    fn setup_migrate_rpc_client(
+        from_vault_address: Address,
+        to_vault_address: Address,
+        asset_address: Address,
+        user_address: Address,
+        share_amount: U256,
+        preview_assets: U256,
+    ) -> RpcClient {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+
+        let asset_call_data = IERC4626::assetCall {}.abi_encode();
+        let mut padded_asset = [0u8; 32];
+        padded_asset[12..32].copy_from_slice(asset_address.as_slice());
+        let asset_response = format!("0x{}", hex::encode(padded_asset));
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(asset_call_data.clone())),
+            asset_response.clone(),
+        );
+        http_client.set_response_for_address_and_data(
+            to_vault_address,
+            format!("0x{}", hex::encode(asset_call_data)),
+            asset_response,
+        );
+
+        let share_balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let mut padded_shares = [0u8; 32];
+        padded_shares[..32].copy_from_slice(&share_amount.to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(share_balance_call_data)),
+            format!("0x{}", hex::encode(padded_shares)),
+        );
+
+        let preview_redeem_call_data = IERC4626::previewRedeemCall {
             shares: share_amount,
-            receiver: user_address,
-            owner: user_address,
         }
         .abi_encode();
-        let expected_approve_data =
-            Erc20::encode_approve(to_vault_address, preview_assets);
-        let expected_deposit_data = IERC4626::depositCall {
-            assets: preview_assets,
-            receiver: user_address,
-        }
-        .abi_encode();
-        let expected_entries = vec![
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: from_vault_address,
-                value: U256::ZERO,
-                data_length: U256::from(expected_redeem_data.len()),
-                data: expected_redeem_data.into(),
-            },
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: asset_address,
-                value: U256::ZERO,
-                data_length: U256::from(expected_approve_data.len()),
-                data: expected_approve_data.into(),
-            },
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: to_vault_address,
-                value: U256::ZERO,
-                data_length: U256::from(expected_deposit_data.len()),
-                data: expected_deposit_data.into(),
-            },
-        ];
-        let expected_bundle = MultiSend::build_bundle(&expected_entries);
+        let mut padded_assets = [0u8; 32];
+        padded_assets[..32].copy_from_slice(&preview_assets.to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(preview_redeem_call_data)),
+            format!("0x{}", hex::encode(padded_assets)),
+        );
 
-        assert_eq!(vault.call_data.to_vec(), expected_bundle.data);
+        RpcClient::new(Arc::new(http_client))
     }
 
     #[tokio::test]
