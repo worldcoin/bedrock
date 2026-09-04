@@ -214,10 +214,21 @@ impl RemoveFactor {
             return Ok(None);
         };
 
-        let users = ctx
+        let users = match ctx
             .turnkey
             .get_users(turnkey_account_id, SyncFactor(ctx.sync_factor))
-            .await?;
+            .await
+        {
+            Ok(users) => users,
+            // Actionable: [`SyncFactor`] can be refreshed with a [`MainFactor`]
+            Err(error) if error.indicates_invalid_signer() => {
+                crate::warn!("remove_factor.authenticator_lookup_sync_factor_invalid");
+                return Err(BackupOperationError::NeedsReauth {
+                    reason: NeedsReauthReason::SyncFactorInvalid,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
 
         let Some(authenticator_id) = users
             .iter()
@@ -1863,5 +1874,73 @@ mod tests {
         let paths = called_paths(&server).await;
         assert!(!paths.contains(&DELETE_BACKUP.to_string()));
         assert!(!paths.contains(&DELETE_FACTOR.to_string()));
+    }
+
+    #[tokio::test]
+    async fn authenticator_lookup_surfaces_an_invalid_sync_factor_as_reauth() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            // One passkey plus an OIDC factor: a supported, non-last-factor removal.
+            metadata_keyed(
+                vec![turnkey_key(), prf_key("ek")],
+                vec![passkey_factor("pk-1"), oidc_factor("f-1", "p-1")],
+            ),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(LIST_USERS))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_string("PUBLIC_KEY_NOT_FOUND"),
+            )
+            .mount(&server)
+            .await;
+
+        let error = run_remove(&server, "pk-1", None, false).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::SyncFactorInvalid
+            }
+        ));
+    }
+
+    /// A degraded Turnkey must not block a removal the backup service can complete:
+    /// the authenticator teardown it feeds is best-effort, so an inconclusive lookup
+    /// skips it rather than failing the whole flow.
+    #[tokio::test]
+    async fn a_degraded_authenticator_lookup_still_drops_the_factor() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_metadata(
+            &server,
+            metadata_keyed(
+                vec![turnkey_key(), prf_key("ek")],
+                vec![passkey_factor("pk-1"), oidc_factor("f-1", "p-1")],
+            ),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(LIST_USERS))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        mount_delete_factor(
+            &server,
+            json!({ "backupDeleted": false, "backupMetadata": metadata_keyed(vec![turnkey_key()], vec![oidc_factor("f-1", "p-1")]) }),
+        )
+        .await;
+
+        let outcome = run_remove(&server, "pk-1", None, false).await.unwrap();
+
+        assert!(matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }));
+        let paths = called_paths(&server).await;
+        assert!(paths.contains(&DELETE_FACTOR.to_string()));
+        assert!(
+            !paths.contains(&DELETE_AUTHENTICATORS.to_string()),
+            "the teardown is skipped, not retried into a failure"
+        );
     }
 }
