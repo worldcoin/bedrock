@@ -45,10 +45,10 @@ const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
 /// feature is supported.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
 
-/// Deadline for fetching the challenge of a destructive operation. It is retried, so
-/// its own budget is several [`REQUEST_TIMEOUT`]s; it runs before anything is
-/// committed, so cancelling it is safe.
-const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Deadline covering every challenge fetch. Applied once, inside
+/// [`BackupServiceClient::fetch_challenge`]: a challenge runs before anything is
+/// committed, so cancelling one is always safe, and no operation needs its own.
+const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Deadline for the foreign attestation callback, which Bedrock cannot otherwise
 /// bound and which sits in the commit path.
@@ -149,21 +149,12 @@ impl BackupServiceClient {
         factor_id: &str,
         encryption_key: Option<BackupEncryptionKey>,
     ) -> Result<DeleteFactorResponse, BackupOperationError> {
-        let challenge = match tokio::time::timeout(
-            CHALLENGE_TIMEOUT,
-            self.fetch_challenge(
+        let challenge = self
+            .fetch_challenge(
                 DELETE_FACTOR_CHALLENGE_PATH,
                 &json!({ "factorId": factor_id }),
-            ),
-        )
-        .await
-        {
-            Ok(challenge) => challenge?,
-            Err(_elapsed) => {
-                crate::warn!("backup_service.delete_factor.challenge_timed_out");
-                return Err(BackupOperationError::Network { retryable: true });
-            }
-        };
+            )
+            .await?;
         let authorization =
             ec_keypair_authorization(sync_factor, &challenge.challenge)?;
         let request = DeleteFactorRequest {
@@ -220,18 +211,9 @@ impl BackupServiceClient {
         &self,
         sync_factor: &P256Signer,
     ) -> Result<(), BackupOperationError> {
-        let challenge = match tokio::time::timeout(
-            CHALLENGE_TIMEOUT,
-            self.fetch_challenge(DELETE_BACKUP_CHALLENGE_PATH, &json!({})),
-        )
-        .await
-        {
-            Ok(challenge) => challenge?,
-            Err(_elapsed) => {
-                crate::warn!("backup_service.delete_backup.challenge_timed_out");
-                return Err(BackupOperationError::Network { retryable: true });
-            }
-        };
+        let challenge = self
+            .fetch_challenge(DELETE_BACKUP_CHALLENGE_PATH, &json!({}))
+            .await?;
         let authorization =
             ec_keypair_authorization(sync_factor, &challenge.challenge)?;
         let request = DeleteBackupRequest {
@@ -252,7 +234,8 @@ impl BackupServiceClient {
         .map(|_| ())
     }
 
-    /// Fetches a keypair challenge from `path`. Idempotent, so retried.
+    /// Fetches a keypair challenge from `path`, bounded by [`CHALLENGE_TIMEOUT`].
+    /// Idempotent, so retried.
     async fn fetch_challenge(
         &self,
         path: &str,
@@ -260,8 +243,12 @@ impl BackupServiceClient {
     ) -> Result<ChallengeResponse, BackupOperationError> {
         let bytes =
             serde_json::to_vec(body).map_err(|error| serialize_error(&error))?;
-        let raw = self.post_bytes("challenge", path, bytes, &[], true).await?;
-        serde_json::from_slice(&raw).map_err(|error| deserialize_error(&error))
+        let fetch = self.post_bytes("challenge", path, bytes, &[], true);
+        let Ok(raw) = tokio::time::timeout(CHALLENGE_TIMEOUT, fetch).await else {
+            crate::warn!("backup_service.challenge_timed_out path={path}");
+            return Err(BackupOperationError::Network { retryable: true });
+        };
+        serde_json::from_slice(&raw?).map_err(|error| deserialize_error(&error))
     }
 
     /// POSTs raw `body` bytes, retrying transient failures when `retry` is set.

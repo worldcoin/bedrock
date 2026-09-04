@@ -86,6 +86,7 @@ where
 
                     if attempt >= policy.max_attempts || !is_retryable(&error) {
                         crate::warn!(
+                            operation = operation,
                             "request.failed op={operation} attempts={attempt} err={error}"
                         );
                         return Err(RetryError::Operation(error));

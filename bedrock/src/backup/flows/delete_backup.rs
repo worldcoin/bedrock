@@ -48,21 +48,27 @@ pub(in crate::backup::flows) async fn execute(
     ctx: &FlowContext<'_>,
     suborg_ids: Vec<String>,
 ) -> Result<(), BackupOperationError> {
+    // An attempt can spend `CHALLENGE_TIMEOUT` (5s) plus `REQUEST_TIMEOUT` (7s), so
+    // the default 15s budget would expire mid-retry. This fits all three attempts.
     let policy = RetryPolicy {
-        max_delay: Duration::from_secs(30),
+        total_timeout: Duration::from_secs(45),
         ..Default::default()
     };
-    let mut attempts = 0u32;
 
     // Step 1: Delete on backup-service (source of truth)
     retry_with_backoff(
         &policy,
         "delete_backup",
-        |error| matches!(error, BackupOperationError::Network { retryable: true }),
-        || {
-            attempts += 1;
-            ctx.service.delete_backup(ctx.sync_factor)
+        // A `Timeout` is the transport's own budget expiring, which a fresh attempt
+        // (with a fresh challenge) can still get past.
+        |error| {
+            matches!(
+                error,
+                BackupOperationError::Network { retryable: true }
+                    | BackupOperationError::Timeout
+            )
         },
+        || ctx.service.delete_backup(ctx.sync_factor),
     )
     .await
     .map_err(|e| match e {
@@ -98,7 +104,8 @@ pub(in crate::backup::flows) async fn delete_turnkey_account(
                 crate::warn!(
                     "turnkey_suborg_teardown_pending suborg_id={suborg_id} err={error}"
                 );
-                return;
+                // Pending is the verdict for this id alone; the rest still need submitting.
+                continue;
             }
             crate::critical!(
                 "turnkey_suborg_orphaned suborg_id={suborg_id} code={} err={error}",

@@ -137,8 +137,6 @@ impl BackupMetadata {
             .count()
     }
 
-    /// Every Turnkey sub-organization the backup's encryption keys point at,
-    /// deduplicated
     pub(in crate::backup) fn turnkey_suborg_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self
             .keys
@@ -262,11 +260,7 @@ pub(super) struct RetrieveMetadataRequest {
     pub authorization: Authorization,
     /// The retrieve-metadata challenge token.
     pub challenge_token: String,
-    /// The backup the caller expects to resolve, always sent.
-    ///
-    /// It buys sharper errors: the service can answer `backup_does_not_exist` versus
-    /// `unauthorized_factor` instead of collapsing "the backup is gone" and "this
-    /// device was revoked while the backup lives on" into one `backup_untraceable`.
+    /// The backup id (derived from the root key).
     pub backup_id: String,
 }
 

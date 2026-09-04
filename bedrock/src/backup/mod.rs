@@ -54,7 +54,7 @@ use once_cell::sync::OnceCell;
 
 use crate::backup::backup_service::BackupServiceClient;
 use crate::backup::flows::{BackupFlow, DeleteBackup, FlowContext, RemoveFactor};
-use crate::backup::turnkey::TurnkeyApiClient;
+use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::primitives::config::get_config;
 use crate::primitives::{KeypairSignerError, P256Signer};
 
@@ -579,9 +579,6 @@ impl BackupManager {
     /// Deletes the user's entire backup (BF-8). Clears state with the backup-service
     /// (authoritative), then Turnkey (best-effort) and the local Bedrock state.
     ///
-    /// NOT idempotent across calls, once a backup has been removed from the backup-service,
-    /// that's the end (the backup-service) is the source of truth.
-    ///
     /// # Usage
     /// Generally only used after full World App account deletion is requested. For
     /// business-as-usual operations, [`Self::remove_factor`] is used.
@@ -1039,9 +1036,10 @@ pub enum NeedsReauthReason {
     /// The operation needs a [`MainFactor`] that was not supplied. The user needs to
     /// authenticate.
     MainFactorRequired,
-    /// The sync factor is no longer valid: not registered in Turnkey, or no longer
-    /// authorized by the backup service. Native must re-auth a [`MainFactor`], refresh
-    /// the sync factor, and re-invoke.
+    /// Provided [`MainFactor`] is not valid (either Turnkey or backup-service). Rare.
+    MainFactorInvalid,
+    /// Provided [`SyncFactor`] is not valid (either Turnkey or backup-service). Can be
+    /// fixed with a [`MainFactor`] re-auth.
     SyncFactorInvalid,
 }
 
@@ -1109,6 +1107,19 @@ pub enum BackupOperationError {
 impl From<KeypairSignerError> for BackupOperationError {
     fn from(inner: KeypairSignerError) -> Self {
         Self::Signer { inner }
+    }
+}
+
+impl From<TurnkeyApiError> for BackupOperationError {
+    fn from(inner: TurnkeyApiError) -> Self {
+        // Keep the transient/permanent split: callers decide whether retrying is
+        // worth anything from `retryable`, which a flat `Turnkey` would hide.
+        if inner.is_retryable() {
+            return Self::Network { retryable: true };
+        }
+        Self::Turnkey {
+            code: inner.code().to_string(),
+        }
     }
 }
 

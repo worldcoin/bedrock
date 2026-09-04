@@ -10,7 +10,6 @@ use crate::backup::backup_service::{
 use crate::backup::flows::delete_backup;
 use crate::backup::turnkey::TurnkeyApiError;
 use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
-use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 
 /// Outcome of a successful factor removal.
@@ -109,6 +108,13 @@ impl RemoveFactor {
             }
         })?;
 
+        // Before the confirmation gate: never ask a user to approve destroying their
+        // backup for a removal that was never supported. A sole iCloud factor would
+        // otherwise escalate straight to BF-8 and delete the backup on confirmation.
+        if let Some(detail) = unsupported_reason(&metadata, &factor.kind) {
+            return Err(BackupOperationError::Unsupported { detail });
+        }
+
         if metadata.main_factor_count() == 1 {
             if !self.user_confirmed_backup_removal {
                 crate::debug!("remove_factor.would_delete_backup");
@@ -118,12 +124,6 @@ impl RemoveFactor {
             return Ok(Prepared::FullDeletion {
                 turnkey_sub_org_ids,
             });
-        }
-
-        // Before the confirmation gate: never ask a user to approve destroying their
-        // backup for a removal that was never supported.
-        if let Some(detail) = unsupported_reason(&metadata, &factor.kind) {
-            return Err(BackupOperationError::Unsupported { detail });
         }
 
         match &factor.kind {
@@ -219,15 +219,10 @@ impl RemoveFactor {
             return Ok(None);
         };
 
-        // A degraded Turnkey must not block dropping the factor at the authoritative
-        // store, so an unresponsive read skips the teardown rather than failing.
-        let Some(users) = ctx
+        let users = ctx
             .turnkey
-            .probe_users(turnkey_account_id, SyncFactor(ctx.sync_factor))
-            .await?
-        else {
-            return Ok(None);
-        };
+            .get_users(turnkey_account_id, SyncFactor(ctx.sync_factor))
+            .await?;
 
         let Some(authenticator_id) = users
             .iter()
@@ -401,9 +396,11 @@ async fn turnkey_cleanup(ctx: &FlowContext<'_>, prepared: Prepared) {
 
 /// Deletes every Turnkey provider backing the removed OIDC identity (best-effort).
 ///
-/// The ids were resolved before the commit, so this is one submission retried on
-/// transient failure -- the backup-service removal is already authoritative, so a
-/// failure here is logged, never fatal.
+/// One submission, not a retry loop: [`TurnkeyApiClient::delete_oauth_providers`]
+/// already retries internally, and it does so behind a single `timestamp_ms` so the
+/// activity fingerprint stays stable. Re-invoking it from out here would recompute
+/// that timestamp and resubmit an ambiguous delete as a *distinct* destructive
+/// activity.
 async fn delete_oauth_providers(
     ctx: &FlowContext<'_>,
     plan: &OidcRemovalPlan,
@@ -415,36 +412,29 @@ async fn delete_oauth_providers(
         return;
     }
 
-    let result = retry_with_backoff(
-        &RetryPolicy::default(),
-        "delete_oauth_providers",
-        TurnkeyApiError::is_retryable,
-        || {
-            ctx.turnkey.delete_oauth_providers(
-                &plan.suborg_id,
-                &plan.user_id,
-                provider_ids.clone(),
-                MainFactor(main_factor),
-            )
-        },
-    )
-    .await;
-
-    match result {
+    match ctx
+        .turnkey
+        .delete_oauth_providers(
+            &plan.suborg_id,
+            &plan.user_id,
+            provider_ids,
+            MainFactor(main_factor),
+        )
+        .await
+    {
         Ok(()) => {}
-        Err(RetryError::Operation(TurnkeyApiError::ActivityPollingExceeded {
-            ..
-        })) => {
+        Err(error @ TurnkeyApiError::ActivityPollingExceeded { .. }) => {
             crate::warn!(
-                "remove_factor.turnkey_provider_teardown_pending suborg_id={}",
+                "remove_factor.turnkey_provider_teardown_pending suborg_id={} err={error}",
                 plan.suborg_id
             );
         }
         // The account the user asked to disconnect can still authorize.
         Err(error) => {
             crate::critical!(
-                "remove_factor.turnkey_provider_orphaned suborg_id={} err={error:?}",
-                plan.suborg_id
+                "remove_factor.turnkey_provider_orphaned suborg_id={} code={} err={error}",
+                plan.suborg_id,
+                error.code()
             );
         }
     }
@@ -1439,10 +1429,10 @@ mod tests {
             matches!(
                 error,
                 BackupOperationError::NeedsReauth {
-                    reason: NeedsReauthReason::MainFactorRequired
+                    reason: NeedsReauthReason::MainFactorInvalid
                 }
             ),
-            "expected MainFactorRequired, got {error:?}"
+            "expected MainFactorInvalid, got {error:?}"
         );
         let paths = called_paths(&server).await;
         assert!(!paths.contains(&DELETE_FACTOR.to_string()));
@@ -1642,10 +1632,10 @@ mod tests {
             matches!(
                 error,
                 BackupOperationError::NeedsReauth {
-                    reason: NeedsReauthReason::MainFactorRequired
+                    reason: NeedsReauthReason::MainFactorInvalid
                 }
             ),
-            "expected MainFactorRequired, got {error:?}"
+            "expected MainFactorInvalid, got {error:?}"
         );
         let paths = called_paths(&server).await;
         assert!(
@@ -1682,10 +1672,10 @@ mod tests {
             matches!(
                 error,
                 BackupOperationError::NeedsReauth {
-                    reason: NeedsReauthReason::MainFactorRequired
+                    reason: NeedsReauthReason::MainFactorInvalid
                 }
             ),
-            "expected MainFactorRequired, got {error:?}"
+            "expected MainFactorInvalid, got {error:?}"
         );
         assert!(!called_paths(&server)
             .await
@@ -1864,5 +1854,30 @@ mod tests {
                 .contains(&DELETE_SUB_ORG.to_string()),
             "a cascade into backup deletion must reclaim the sub-organization"
         );
+    }
+    /// A sole iCloud factor is unsupported, and being sole must not turn it into a
+    /// destructive one: the unsupported check has to run before the last-factor
+    /// escalation, or confirming the prompt would delete the whole backup.
+    #[tokio::test]
+    async fn a_sole_unsupported_factor_never_escalates_to_backup_deletion() {
+        install_attestation();
+        let server = MockServer::start().await;
+        mount_delete_backup(&server).await;
+        mount_metadata(
+            &server,
+            metadata_keyed(vec![prf_key("ek")], vec![eckeypair_factor("ec-1")]),
+        )
+        .await;
+
+        // Confirmed, which is what makes the ordering load-bearing.
+        let error = run_remove(&server, "ec-1", None, true).await.unwrap_err();
+
+        assert!(
+            matches!(error, BackupOperationError::Unsupported { .. }),
+            "got {error:?}"
+        );
+        let paths = called_paths(&server).await;
+        assert!(!paths.contains(&DELETE_BACKUP.to_string()));
+        assert!(!paths.contains(&DELETE_FACTOR.to_string()));
     }
 }

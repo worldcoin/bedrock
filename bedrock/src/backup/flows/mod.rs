@@ -10,8 +10,8 @@ pub use delete_backup::DeleteBackup;
 pub use remove_factor::{RemoveFactor, RemoveFactorOutcome};
 
 use crate::backup::backup_service::BackupServiceClient;
-use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
-use crate::backup::{BackupOperationError, SyncFactor};
+use crate::backup::turnkey::TurnkeyApiClient;
+use crate::backup::BackupOperationError;
 use crate::primitives::P256Signer;
 
 /// Shared dependencies handed to every [`BackupFlow`]: the two remote clients and
@@ -27,7 +27,7 @@ pub struct FlowContext<'a> {
     pub sync_factor: &'a P256Signer,
     /// An optional main-factor signer for privileged Turnkey writes.
     pub main_factor: Option<&'a P256Signer>,
-    /// The backup every metadata read in the flow is qualified with.
+    /// The backup account id, derived from the root key.
     pub backup_id: &'a str,
 }
 
@@ -46,4 +46,3 @@ pub trait BackupFlow {
         ctx: &FlowContext<'_>,
     ) -> Result<Self::Output, BackupOperationError>;
 }
-
