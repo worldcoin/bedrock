@@ -176,13 +176,8 @@ impl TurnkeyApiClient {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            // Above the SDK's own activity-polling window (~12.5s of backoff plus
-            // six round trips) so its `ActivityPollingExceeded` surfaces instead of
-            // being pre-empted by this budget. Callers branch on that variant to tell
-            // "still settling" apart from "orphaned", and a `critical!` is wired to
-            // the latter.
             retry: RetryPolicy {
-                total_timeout: Duration::from_secs(30),
+                total_timeout: Duration::from_secs(30), // some leeway to activity polling
                 ..RetryPolicy::default()
             },
             users_cache: OrgCache::new("user"),
