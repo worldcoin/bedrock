@@ -91,7 +91,7 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
 
     // 9) Sign and submit the exact operation that was prepared
     let _user_op_hash = safe_account
-        .submit_prepared_transaction(prepared)
+        .submit_prepared_transaction(&prepared)
         .await
         .expect("submit_prepared_transaction failed");
 

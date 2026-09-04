@@ -83,7 +83,7 @@ impl SafeSmartAccount {
         to_address: &str,
         amount: &str,
         transfer_association: Option<TransferAssociation>,
-    ) -> Result<Arc<PreparedTransaction>, TransactionError> {
+    ) -> Result<PreparedTransaction, TransactionError> {
         let token_address = Address::parse_from_ffi(token_address, "token_address")?;
         let to_address = Address::parse_from_ffi(to_address, "address")?;
         let amount = U256::parse_from_ffi(amount, "amount")?;
@@ -121,7 +121,7 @@ impl SafeSmartAccount {
             network: Network::WorldChain,
         };
 
-        Ok(Arc::new(prepared_transaction))
+        Ok(prepared_transaction)
     }
 
     /// Signs and submits a previously prepared transaction.
@@ -132,7 +132,7 @@ impl SafeSmartAccount {
     /// - Will throw an error if the global HTTP client has not been initialized.
     pub async fn submit_prepared_transaction(
         &self,
-        prepared_transaction: Arc<PreparedTransaction>,
+        prepared_transaction: &PreparedTransaction,
     ) -> Result<HexEncodedData, TransactionError> {
         if prepared_transaction.user_operation.sender != self.wallet_address {
             return Err(TransactionError::Generic {
