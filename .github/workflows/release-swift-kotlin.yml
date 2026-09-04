@@ -53,7 +53,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
       - name: Build the Swift project
@@ -143,7 +143,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
           targets: ${{ matrix.settings.target }}
 
       - name: Install Cross
@@ -179,7 +179,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
 
       - name: Setup Java
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0 https://github.com/actions/setup-java/releases/tag/v5.7.0
