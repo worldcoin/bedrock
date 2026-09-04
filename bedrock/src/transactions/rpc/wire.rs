@@ -100,18 +100,18 @@ pub struct JsonRpcError {
 /// Self-sponsorship advisory returned when protocol sponsorship is declined.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SponsorshipDecline {
+pub struct PmSponsorshipDecline {
     /// ERC-20 token the user can use to pay the transaction fee.
     pub token: Address,
     /// Paymaster contract that accepts the fee token.
     pub paymaster_address: Address,
     /// Policy reason for declining protocol sponsorship.
-    pub reason: SponsorshipDeclineReason,
+    pub reason: PmSponsorshipDeclineReason,
 }
 
-/// Reason protocol sponsorship was declined.
+/// Reason a `pm_sponsorUserOperation` request was declined.
 #[derive(Debug, PartialEq, Eq)]
-pub enum SponsorshipDeclineReason {
+pub enum PmSponsorshipDeclineReason {
     /// The L2 base fee exceeded the sponsorship threshold.
     L2BaseFee,
     /// The L1 data fee exceeded the sponsorship threshold.
@@ -124,7 +124,7 @@ pub enum SponsorshipDeclineReason {
     Unknown(String),
 }
 
-impl<'de> Deserialize<'de> for SponsorshipDeclineReason {
+impl<'de> Deserialize<'de> for PmSponsorshipDeclineReason {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -166,7 +166,7 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
-/// Response from `pm_sponsorUserOperation` (V2)
+/// Approved sponsorship fields returned by `pm_sponsorUserOperation` (V2).
 ///
 /// Paymaster fields (`paymaster`, `paymaster_data`,
 /// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
@@ -176,7 +176,7 @@ pub struct SponsorUserOperationResponse {
 /// `Option<T>` so both shapes deserialize.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PmSponsorUserOperationResponse {
+pub struct PmSponsorshipApproval {
     /// Call gas limit
     pub call_gas_limit: U128,
     /// Verification gas limit

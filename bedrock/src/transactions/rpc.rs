@@ -25,9 +25,10 @@ use std::sync::{Arc, OnceLock};
 mod wire;
 
 pub use wire::{
-    Id, PmSponsorUserOperationResponse, RelaySafeTransactionRequest, RpcMethod,
-    RpcProviderName, SponsorUserOperationResponse, SponsorshipContext,
-    SponsorshipDecline, SponsorshipDeclineReason, WaGetUserOperationReceiptResponse,
+    Id, PmSponsorshipApproval, PmSponsorshipDecline, PmSponsorshipDeclineReason,
+    RelaySafeTransactionRequest, RpcMethod, RpcProviderName,
+    SponsorUserOperationResponse, SponsorshipContext,
+    WaGetUserOperationReceiptResponse,
 };
 pub(crate) use wire::{JsonRpcError, JsonRpcRequest};
 
@@ -40,7 +41,7 @@ static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
 const SPONSORSHIP_DECLINED_CODE: i64 = -32602;
 const SPONSORSHIP_DECLINED_MESSAGE: &str = "sponsorship declined";
 
-impl TryFrom<JsonRpcError> for SponsorshipDecline {
+impl TryFrom<JsonRpcError> for PmSponsorshipDecline {
     type Error = JsonRpcError;
 
     fn try_from(error: JsonRpcError) -> Result<Self, Self::Error> {
@@ -159,13 +160,13 @@ impl From<SafeSmartAccountError> for RpcError {
     }
 }
 
-/// Result of requesting paymaster sponsorship for a user operation.
+/// Response from requesting paymaster sponsorship for a user operation.
 #[derive(Debug)]
-pub enum PmSponsorUserOperationOutcome {
+pub enum PmSponsorUserOperationResponse {
     /// Sponsorship was approved with the returned gas and paymaster fields.
-    Sponsored(PmSponsorUserOperationResponse),
+    Approved(PmSponsorshipApproval),
     /// Protocol sponsorship was declined with a self-sponsorship advisory.
-    Declined(SponsorshipDecline),
+    Declined(PmSponsorshipDecline),
 }
 
 /// RPC client for handling 4337 `UserOperation` requests
@@ -320,7 +321,7 @@ impl RpcClient {
         user_operation: &UserOperation,
         entry_point: Address,
         context: &SponsorshipContext,
-    ) -> Result<PmSponsorUserOperationOutcome, RpcError> {
+    ) -> Result<PmSponsorUserOperationResponse, RpcError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
             serde_json::Value::String(format!("{entry_point:?}")),
@@ -335,10 +336,12 @@ impl RpcClient {
             )
             .await
         {
-            Ok(response) => Ok(PmSponsorUserOperationOutcome::Sponsored(response)),
+            Ok(response) => Ok(PmSponsorUserOperationResponse::Approved(response)),
             Err(RpcCallError::Response(error)) => {
-                match SponsorshipDecline::try_from(error) {
-                    Ok(decline) => Ok(PmSponsorUserOperationOutcome::Declined(decline)),
+                match PmSponsorshipDecline::try_from(error) {
+                    Ok(decline) => {
+                        Ok(PmSponsorUserOperationResponse::Declined(decline))
+                    }
                     Err(error) => Err(error.into()),
                 }
             }

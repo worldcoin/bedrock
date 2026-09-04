@@ -123,7 +123,7 @@ async fn test_pm_sponsor_user_operation_returns_typed_decline() {
         .await
         .unwrap();
 
-    let PmSponsorUserOperationOutcome::Declined(decline) = outcome else {
+    let PmSponsorUserOperationResponse::Declined(decline) = outcome else {
         panic!("expected sponsorship to be declined");
     };
     assert_eq!(
@@ -134,7 +134,7 @@ async fn test_pm_sponsor_user_operation_returns_typed_decline() {
         decline.paymaster_address,
         address!("0000000000000039cd5e8ae05257ce51c473ddd1")
     );
-    assert_eq!(decline.reason, SponsorshipDeclineReason::GasUsage);
+    assert_eq!(decline.reason, PmSponsorshipDeclineReason::GasUsage);
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn test_malformed_sponsorship_decline_preserves_rpc_error() {
         data: Some(data.clone()),
     };
 
-    let error = SponsorshipDecline::try_from(error).unwrap_err();
+    let error = PmSponsorshipDecline::try_from(error).unwrap_err();
 
     assert_eq!(error.data, Some(data));
 }
@@ -167,11 +167,11 @@ fn test_sponsorship_decline_preserves_unknown_reason() {
         })),
     };
 
-    let decline = SponsorshipDecline::try_from(error).unwrap();
+    let decline = PmSponsorshipDecline::try_from(error).unwrap();
 
     assert_eq!(
         decline.reason,
-        SponsorshipDeclineReason::Unknown("new_policy".to_string())
+        PmSponsorshipDeclineReason::Unknown("new_policy".to_string())
     );
 }
 
@@ -361,8 +361,7 @@ fn test_pm_sponsor_response_parsing() {
         "maxFeePerGas": "0x0",
         "maxPriorityFeePerGas": "0x0",
     });
-    let r: PmSponsorUserOperationResponse =
-        serde_json::from_value(no_paymaster).unwrap();
+    let r: PmSponsorshipApproval = serde_json::from_value(no_paymaster).unwrap();
     assert_eq!(r.call_gas_limit, U128::ZERO);
     assert_eq!(r.verification_gas_limit, U128::ZERO);
     assert_eq!(r.pre_verification_gas, U256::ZERO);
@@ -386,8 +385,7 @@ fn test_pm_sponsor_response_parsing() {
         "paymasterPostOpGasLimit": "0x706e",
         "paymasterData": "0x01000066d1a1a4",
     });
-    let r: PmSponsorUserOperationResponse =
-        serde_json::from_value(with_paymaster).unwrap();
+    let r: PmSponsorshipApproval = serde_json::from_value(with_paymaster).unwrap();
     assert_eq!(
         r.paymaster,
         Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
