@@ -45,7 +45,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
 
       - name: Check code formatting
         run: cargo fmt -- --check
@@ -75,7 +75,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
           targets: aarch64-apple-ios-sim,aarch64-apple-ios,x86_64-apple-ios
 
       - name: Build Swift bindings
@@ -123,7 +123,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
 
       - name: Download Swift build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 https://github.com/actions/download-artifact/releases/tag/v8.0.1
@@ -155,7 +155,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1 https://github.com/foundry-rs/foundry-toolchain/releases/tag/v1.9.1
@@ -193,7 +193,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1 https://github.com/EmbarkStudios/cargo-deny-action/releases/tag/v2.1.1
         with:
           command: check ${{ matrix.checks }}
-          rust-version: stable
+          rust-version: 1.97.1
 
   kotlin-build-and-test:
     name: Build and Test Kotlin Bindings
@@ -209,7 +209,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # 2026-07-16
         with:
-          toolchain: stable
+          toolchain: 1.97.1
 
       - name: Build and test Kotlin bindings
         run: cargo xtask kotlin test
