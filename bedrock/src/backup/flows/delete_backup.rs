@@ -92,7 +92,7 @@ pub(in crate::backup::flows) async fn delete_turnkey_account(
                 continue;
             }
             crate::critical!(
-                "turnkey_suborg_orphaned suborg_id={suborg_id} code={} err={error}",
+                "turnkey_suborg could not be deleted code={} err={error}",
                 error.code()
             );
         }
