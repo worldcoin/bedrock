@@ -135,7 +135,7 @@ impl BackupServiceClient {
     /// Turnkey encryption key from the metadata.
     ///
     /// # Errors
-    /// See  See [`BackupOperationError`].
+    /// See [`BackupOperationError`].
     pub async fn delete_factor(
         &self,
         sync_factor: &P256Signer,
@@ -545,7 +545,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_backup_is_never_replayed() {
+    async fn delete_backup_is_not_replayed() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
