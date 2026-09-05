@@ -1,5 +1,5 @@
-//! BF-7 (remove a main factor: an OIDC account or a passkey), escalating to BF-8
-//! (delete the whole backup) when the removed factor is the last main factor.
+//! BF-7 [`MainFactor`] deletion. When removing the last one,
+//! the entire backup is deleted (it can't be used).
 
 use async_trait::async_trait;
 
@@ -7,41 +7,35 @@ use super::{BackupFlow, FlowContext};
 use crate::backup::backup_service::{
     BackupEncryptionKey, BackupFactorKind, BackupMetadata,
 };
-use crate::backup::flows::delete_backup;
+use crate::backup::flows::{delete_backup, DeleteBackup};
 use crate::backup::turnkey::TurnkeyApiError;
-use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
+use crate::backup::{
+    BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor, TurnkeyMeta,
+};
 use crate::primitives::P256Signer;
 
 /// Outcome of a successful factor removal.
 #[derive(Debug, uniffi::Enum)]
 pub enum RemoveFactorOutcome {
-    /// The factor was removed and the backup survives; carries the refreshed
-    /// metadata.
+    /// The factor was removed, returns the updated backup metadata.
     FactorRemoved {
-        /// Backup metadata after the removal (helps update the UI)
+        /// Updated backup metadata (helps update the UI)
         metadata: BackupMetadata,
     },
     /// The removed factor was the last [`MainFactor`], so the entire backup was
-    /// deleted (the user had confirmed).
+    /// deleted.
     ///
     /// # Native responsibilities
-    /// Bedrock clears the state it owns (the local manifest and the backup event
-    /// report). The sync factor lives in native secure storage and the backup it
-    /// authenticated is gone, so on receiving this the caller MUST:
-    /// 1. Delete its stored sync-factor keypair (iOS `keyManagementService`, Android
-    ///    `LocalSyncFactorStore`). Keeping it strands a credential every subsequent
-    ///    backup call would fail against.
+    /// 1. Delete its stored [`SyncFactor`] keypair.
     /// 2. Update whatever "backup enabled" state it shows the user.
     BackupDeleted,
 }
 
-/// Removes the [`MainFactor`] `factor_id`, driving the backup service and, for OIDC
-/// factors, Turnkey.
+/// Removes the [`MainFactor`] with `factor_id`
 pub struct RemoveFactor {
     /// The id of the factor to remove.
     pub factor_id: String,
-    /// Set only after the user confirmed that removing the last [`MainFactor`] deletes
-    /// the entire backup.
+    /// Set if the user approved full backup deletion
     pub user_confirmed_backup_removal: bool,
 }
 
@@ -49,64 +43,57 @@ pub struct RemoveFactor {
 impl BackupFlow for RemoveFactor {
     type Output = RemoveFactorOutcome;
 
-    /// Runs in two phases, split at the irreversible backup-service delete.
-    ///
-    /// Everything before the commit is cancel-safe, so it carries the deadline.
-    /// Everything from the commit on does not: a deadline there would discard an
-    /// outcome the service has already applied, leaving the caller with a retryable
-    /// error for work that succeeded. The commit bounds itself with per-request
-    /// timeouts instead, and the cleanup after it carries its own.
     async fn run(
         &self,
         ctx: &FlowContext<'_>,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        let prepared = self.prepare(ctx).await?;
-        self.commit(ctx, prepared).await
+        let plan = self.plan(ctx).await?;
+        self.commit(ctx, plan).await
     }
 }
 
 /// The execution plan for this operation
-enum Prepared {
-    /// An OIDC removal, with the providers to tear down afterwards (`None` when the
-    /// whole sub-organization goes instead).
+enum Plan {
+    /// Removing an OIDC factor.
     Oidc {
-        plan: OidcRemovalPlan,
-        /// OIDC Providers that must be removed (Turnkey IDs)
+        turnkey_account: TurnkeyMeta,
+        /// The encrypted backup key to remove.
+        backup_encryption_key: BackupEncryptionKey,
+        /// OIDC Provider IDs that must be removed (Turnkey IDs).
         provider_ids: Vec<String>,
-        turnkey_sub_org_ids: Vec<String>,
+        /// When removing the last OIDC factor, the Turnkey account is deleted (as it's no longer used).
+        is_last_oidc_factor: bool,
     },
-    /// A passkey removal: the PRF key to drop, plus the Turnkey authenticator
-    /// backing it when the backup has a Turnkey account.
+    /// Removing a passkey.
     Passkey {
-        prf_key: BackupEncryptionKey,
-        authenticator: Option<PasskeyAuthenticator>,
-        turnkey_sub_org_ids: Vec<String>,
+        backup_encryption_key: BackupEncryptionKey,
+        /// All metadata to remove the passkey from Turnkey. `None` if the user has no Turnkey account.
+        turnkey: Option<TurnkeyPasskeyMeta>,
     },
-    /// Removing all [`MainFactor`]s -> full backup deletion.
-    FullDeletion { turnkey_sub_org_ids: Vec<String> },
+    /// Delete the entire backup everywhere.
+    FullDeletion {},
+}
+
+/// The metadata required to delete the passkey (i.e. authenticator) from Turnkey.
+#[derive(Clone)]
+struct TurnkeyPasskeyMeta {
+    turnkey_account: TurnkeyMeta,
+    /// The Turnkey ID of the passkey that needs to be removed.
+    authenticator_id: String,
 }
 
 impl RemoveFactor {
-    /// Reads state and validates every precondition that is knowable in advance.
-    ///
-    /// Cancel-safe: performs no writes, so abandoning it costs only the reads.
-    async fn prepare(
-        &self,
-        ctx: &FlowContext<'_>,
-    ) -> Result<Prepared, BackupOperationError> {
+    /// Reads state and validates pre-conditions, cancel-safe.
+    async fn plan(&self, ctx: &FlowContext<'_>) -> Result<Plan, BackupOperationError> {
         let metadata = ctx
             .service
             .retrieve_metadata(ctx.sync_factor, ctx.backup_id)
             .await?;
-        let turnkey_sub_org_ids = metadata.turnkey_suborg_ids();
-        let factor = metadata.factor(&self.factor_id).ok_or_else(|| {
-            crate::warn!("remove_factor.factor_not_found");
-            BackupOperationError::BackupService {
-                code: "factor_not_found".to_string(),
-            }
-        })?;
+        let factor = metadata
+            .factor(&self.factor_id)
+            .ok_or(BackupOperationError::InvalidFactorId)?;
 
-        if let Some(detail) = unsupported_reason(&metadata, &factor.kind) {
+        if let Some(detail) = is_removal_supported(&metadata, &factor.kind) {
             return Err(BackupOperationError::Unsupported { detail });
         }
 
@@ -116,107 +103,110 @@ impl RemoveFactor {
                 return Err(BackupOperationError::WouldDeleteBackup);
             }
 
-            return Ok(Prepared::FullDeletion {
-                turnkey_sub_org_ids,
-            });
+            return Ok(Plan::FullDeletion {});
         }
 
         match &factor.kind {
-            BackupFactorKind::OidcAccount { .. } => {
-                self.prepare_oidc(ctx, &metadata).await
+            BackupFactorKind::OidcAccount {
+                turnkey_provider_id,
+                ..
+            } => {
+                self.plan_oidc(ctx, &metadata, turnkey_provider_id.as_str())
+                    .await
             }
             BackupFactorKind::Passkey { credential_id, .. } => {
-                let prf_key = metadata.single_prf_key().cloned().ok_or_else(|| {
-                    crate::warn!("remove_factor.missing_prf_key");
-                    BackupOperationError::Unsupported {
-                        detail: "the passkey has no PRF encryption key to drop"
-                            .to_string(),
-                    }
-                })?;
-                let authenticator = self
-                    .prepare_authenticator(ctx, &metadata, credential_id)
+                let backup_encryption_key =
+                    metadata.single_prf_key().cloned().ok_or_else(|| {
+                        crate::warn!(
+                            "remove_factor.missing_backup_encryption_key for passkey"
+                        );
+                        BackupOperationError::Unsupported {
+                            detail: "passkey has no PRF encryption key to drop"
+                                .to_string(),
+                        }
+                    })?;
+                let turnkey = self
+                    .plan_passkey_on_turnkey(ctx, &metadata, credential_id)
                     .await?;
-                Ok(Prepared::Passkey {
-                    prf_key,
-                    authenticator,
-                    turnkey_sub_org_ids,
+                Ok(Plan::Passkey {
+                    backup_encryption_key,
+                    turnkey,
                 })
             }
-            // verified in `unsupported_reason`
             BackupFactorKind::EcKeypair { .. } => {
-                unreachable!("eckeypair deletion not supported")
+                unreachable!("eckeypair deletion not supported") // verified in `is_removal_supported`
             }
         }
     }
 
-    /// Probes Turnkey so the teardown failures that are knowable in advance surface
-    /// while retrying is still safe.
-    ///
-    /// A transient failure is fatal only on the provider path, which needs the read's
-    /// data (deleting just the id we were handed would orphan sibling audiences); the
-    /// last-OIDC path needs only its verdict.
-    async fn prepare_oidc(
+    /// Plan for an OIDC factor removal.
+    async fn plan_oidc(
         &self,
         ctx: &FlowContext<'_>,
         metadata: &BackupMetadata,
-    ) -> Result<Prepared, BackupOperationError> {
-        let plan = plan_oidc_removal(metadata, &self.factor_id)?;
+        turnkey_provider_id: &str,
+    ) -> Result<Plan, BackupOperationError> {
+        let (turnkey_account, backup_encryption_key) =
+            metadata.turnkey_account().ok_or_else(|| {
+                // Critical consistency. A backup with multiple Turnkey accounts.
+                crate::critical!("remove_factor.missing_unique_turnkey_key");
+                BackupOperationError::BackupService {
+                    code: "missing_turnkey_key".to_string(),
+                }
+            })?;
 
-        let provider_ids = if plan.is_last_oidc_factor {
+        let is_last_oidc_factor = metadata.oidc_factor_count() == 1;
+
+        let provider_ids = if is_last_oidc_factor {
             ctx.turnkey
-                .verify_sync_factor(&plan.suborg_id, SyncFactor(ctx.sync_factor))
+                .verify_sync_factor(&turnkey_account.id, SyncFactor(ctx.sync_factor))
                 .await?;
-            Vec::new()
+            vec![turnkey_provider_id.to_string()]
         } else if let Some(main_factor) = ctx.main_factor {
             ctx.turnkey
                 .verify_main_factor(
-                    &plan.suborg_id,
-                    &plan.user_id,
+                    &turnkey_account.id,
+                    &turnkey_account.auth_user_main_id,
                     MainFactor(main_factor),
                 )
                 .await?;
-            resolve_provider_ids(ctx, &plan).await?
+            resolve_all_turnkey_provider_ids(ctx, &turnkey_account, turnkey_provider_id)
+                .await?
         } else {
-            // Deleting an OAuth provider requires a [`MainFactor`]
+            // Deleting an OAuth provider from Turnkey requires a [`MainFactor`]
             crate::debug!("remove_factor.needs_main_factor");
             return Err(BackupOperationError::NeedsReauth {
                 reason: NeedsReauthReason::MainFactorRequired,
             });
         };
 
-        Ok(Prepared::Oidc {
-            plan,
+        Ok(Plan::Oidc {
+            turnkey_account,
+            backup_encryption_key: backup_encryption_key.clone(),
             provider_ids,
-            turnkey_sub_org_ids: metadata.turnkey_suborg_ids(),
+            is_last_oidc_factor,
         })
     }
 
-    /// Resolves the Turnkey authenticator registered for `credential_id`, if any to
-    /// remove also from Turnkey.
+    /// Plans a passkey removal from Turnkey. Returns `None` if the user does not have
+    /// a Turnkey account (a Turnkey account only exists if the user has an OIDC factor).
     ///
     /// # Errors
-    /// [`NeedsReauthReason::MainFactorRequired`] when the authenticator exists but no
-    /// main factor was supplied: authenticators live on the root user, so deleting one
-    /// needs the same signer an OAuth provider deletion does.
-    async fn prepare_authenticator(
+    /// See [`BackupOperationError`]. [`BackupOperationError::NeedsReauth`] is possible
+    /// if a [`MainFactor`] is not provided.
+    async fn plan_passkey_on_turnkey(
         &self,
         ctx: &FlowContext<'_>,
         metadata: &BackupMetadata,
         credential_id: &str,
-    ) -> Result<Option<PasskeyAuthenticator>, BackupOperationError> {
-        // No Turnkey account: the passkey was never registered there.
-        let Some(BackupEncryptionKey::Turnkey {
-            turnkey_account_id,
-            turnkey_user_id,
-            ..
-        }) = metadata.turnkey_key()
-        else {
+    ) -> Result<Option<TurnkeyPasskeyMeta>, BackupOperationError> {
+        let Some((turnkey_account, _)) = metadata.turnkey_account() else {
             return Ok(None);
         };
 
         let users = match ctx
             .turnkey
-            .get_users(turnkey_account_id, SyncFactor(ctx.sync_factor))
+            .get_users(&turnkey_account.id, SyncFactor(ctx.sync_factor))
             .await
         {
             Ok(users) => users,
@@ -232,7 +222,7 @@ impl RemoveFactor {
 
         let Some(authenticator_id) = users
             .iter()
-            .find(|user| user.user_id == *turnkey_user_id)
+            .find(|user| user.user_id == *turnkey_account.auth_user_main_id)
             .and_then(|user| {
                 user.authenticators
                     .iter()
@@ -245,24 +235,25 @@ impl RemoveFactor {
         };
 
         let Some(main_factor) = ctx.main_factor else {
-            crate::debug!("remove_factor.authenticator_needs_main_factor");
+            crate::warn!("remove_factor.authenticator_needs_main_factor");
             return Err(BackupOperationError::NeedsReauth {
                 reason: NeedsReauthReason::MainFactorRequired,
             });
         };
         ctx.turnkey
             .verify_main_factor(
-                turnkey_account_id,
-                turnkey_user_id,
+                &turnkey_account.id,
+                &turnkey_account.auth_user_main_id,
                 MainFactor(main_factor),
             )
             .await?;
 
-        Ok(Some(PasskeyAuthenticator {
-            suborg: turnkey_account_id.clone(),
-            user: turnkey_user_id.clone(),
-            id: authenticator_id,
-        }))
+        let meta = TurnkeyPasskeyMeta {
+            turnkey_account,
+            authenticator_id,
+        };
+
+        Ok(Some(meta))
     }
 
     /// Applies the removal at the authoritative store, then cleans up Turnkey.
@@ -272,49 +263,55 @@ impl RemoveFactor {
     async fn commit(
         &self,
         ctx: &FlowContext<'_>,
-        prepared: Prepared,
+        plan: Plan,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        if let Prepared::FullDeletion {
-            turnkey_sub_org_ids,
-        } = prepared
-        {
-            delete_backup::execute(ctx, turnkey_sub_org_ids).await?;
+        if let Plan::FullDeletion {} = plan {
+            DeleteBackup.run(ctx).await?;
             return Ok(RemoveFactorOutcome::BackupDeleted);
         }
 
-        let (encryption_key, turnkey_sub_org_ids) = match &prepared {
-            Prepared::Oidc {
-                plan,
-                turnkey_sub_org_ids,
+        let (backup_encryption_key, turnkey_account) = match &plan {
+            Plan::Oidc {
+                backup_encryption_key,
+                turnkey_account,
+                is_last_oidc_factor,
                 ..
             } => (
-                plan.is_last_oidc_factor.then(|| plan.turnkey_key.clone()),
-                turnkey_sub_org_ids.clone(),
+                is_last_oidc_factor.then(|| backup_encryption_key.clone()),
+                Some(turnkey_account.clone()),
             ),
-            Prepared::Passkey {
-                prf_key,
-                turnkey_sub_org_ids,
+            Plan::Passkey {
+                backup_encryption_key,
+                turnkey,
                 ..
-            } => (Some(prf_key.clone()), turnkey_sub_org_ids.clone()),
-            Prepared::FullDeletion { .. } => {
-                unreachable!("handled at the top of `commit`")
+            } => (
+                Some(backup_encryption_key.clone()),
+                turnkey.map(|v| v.turnkey_account.clone()),
+            ),
+            Plan::FullDeletion { .. } => {
+                unreachable!("handled above")
             }
         };
 
-        // Step 1: Delete the factor from the backup-service (authorative)
+        // Step 1: Commit backup-service (authorative)
         let response = ctx
             .service
-            .delete_factor(ctx.sync_factor, &self.factor_id, encryption_key)
+            .delete_factor(ctx.sync_factor, &self.factor_id, backup_encryption_key)
             .await?;
 
-        // Step 2A: Handle Turnkey removal iff the backup was deleted (remote race condition)
+        // Step 2: Commit Turnkey
+
+        //  Step 2A: Delete the whole Turnkey account if the backup was deleted (remote race condition)
         if response.backup_deleted {
-            delete_backup::delete_turnkey_account(
-                ctx.turnkey,
-                turnkey_sub_org_ids,
-                ctx.sync_factor,
-            )
-            .await;
+            if let Some(turnkey_account) = turnkey_account {
+                delete_backup::delete_turnkey_account(
+                    ctx.turnkey,
+                    vec![turnkey_account.id],
+                    ctx.sync_factor,
+                )
+                .await;
+            }
+
             if !self.user_confirmed_backup_removal {
                 crate::critical!(
                     "remove_factor.backup_deleted_without_confirmation (the service cascaded on a factor the caller did not flag as last)"
@@ -324,7 +321,7 @@ impl RemoveFactor {
         }
 
         // Step 2B: Delete the factor from Turnkey
-        turnkey_cleanup(ctx, prepared).await;
+        turnkey_commit(ctx, plan).await;
 
         // Step 3: Result
         let metadata = response.backup_metadata.ok_or_else(|| {
@@ -340,74 +337,68 @@ impl RemoveFactor {
     }
 }
 
-/// Performs relevant removals (either factor or entire sub-org) after a factor
-/// has been removed from the backup-service
-async fn turnkey_cleanup(ctx: &FlowContext<'_>, prepared: Prepared) {
-    match prepared {
-        Prepared::Oidc {
-            plan,
+/// Executes the factor removal from the Turnkey account.
+async fn turnkey_commit(ctx: &FlowContext<'_>, plan: Plan) {
+    match plan {
+        Plan::Oidc {
+            turnkey_account,
             provider_ids,
-            turnkey_sub_org_ids,
+            is_last_oidc_factor,
+            ..
         } => {
-            // Removing the last OIDC factor removes the Turnkey account (as there's no use for it anymore)
-            if plan.is_last_oidc_factor {
+            // Removing the last OIDC factor -> delete the Turnkey account (there's no use for it anymore)
+            if is_last_oidc_factor {
                 delete_backup::delete_turnkey_account(
                     ctx.turnkey,
-                    turnkey_sub_org_ids,
+                    vec![turnkey_account.id],
                     ctx.sync_factor,
                 )
                 .await;
             } else if let Some(main_factor) = ctx.main_factor {
-                delete_oauth_providers(ctx, &plan, provider_ids, main_factor).await;
+                delete_oauth_providers(
+                    ctx,
+                    &turnkey_account,
+                    provider_ids,
+                    main_factor,
+                )
+                .await;
             }
         }
-        Prepared::Passkey {
-            authenticator: Some(authenticator),
+        Plan::Passkey {
+            turnkey: Some(turnkey),
             ..
         } => {
             let Some(main_factor) = ctx.main_factor else {
-                // `prepare_authenticator` refuses without one, so this is unreachable.
-                crate::critical!(
-                    "remove_factor.authenticator_orphaned (no main factor at cleanup)"
-                );
+                crate::critical!("internal unreachable inconsistency");
                 return;
             };
             if let Err(error) = ctx
                 .turnkey
                 .delete_authenticators(
-                    &authenticator.suborg,
-                    &authenticator.user,
-                    vec![authenticator.id],
+                    &turnkey.turnkey_account.id,
+                    &turnkey.turnkey_account.auth_user_main_id,
+                    vec![turnkey.authenticator_id],
                     MainFactor(main_factor),
                 )
                 .await
             {
-                // The passkey can still authorize Turnkey activities.
-                crate::critical!(
-                    "remove_factor.authenticator_orphaned suborg_id={} code={} err={error}",
-                    authenticator.suborg,
+                crate::error!(
+                    "remove_factor.authenticator_orphaned code={} err={error}",
                     error.code()
                 );
             }
         }
-        // No authenticator registered in Turnkey: nothing to clean up.
-        Prepared::Passkey { .. } => {}
-        Prepared::FullDeletion { .. } => {
+        Plan::Passkey { .. } => {}
+        Plan::FullDeletion { .. } => {
             unreachable!("handled at the top of `commit`")
         }
     }
 }
 
-/// Deletes every Turnkey provider backing the removed OIDC identity (best-effort).
-///
-/// One submission, not a retry loop: [`TurnkeyApiClient::delete_oauth_providers`]
-/// already retries internally, and it does so behind a single `timestamp_ms` so the
-/// activity fingerprint stays stable. Re-invoking it from out here would recompute
-/// that timestamp and resubmit an ambiguous delete as a *distinct* destructive
-/// activity.
+/// Deletes each OIDC provider in `provider_ids` from the Turnkey account.
 async fn delete_oauth_providers(
     ctx: &FlowContext<'_>,
-    plan: &OidcRemovalPlan,
+    turnkey_account: &TurnkeyMeta,
     provider_ids: Vec<String>,
     main_factor: &P256Signer,
 ) {
@@ -419,8 +410,8 @@ async fn delete_oauth_providers(
     match ctx
         .turnkey
         .delete_oauth_providers(
-            &plan.suborg_id,
-            &plan.user_id,
+            &turnkey_account.id,
+            &turnkey_account.auth_user_main_id,
             provider_ids,
             MainFactor(main_factor),
         )
@@ -428,33 +419,20 @@ async fn delete_oauth_providers(
     {
         Ok(()) => {}
         Err(error @ TurnkeyApiError::ActivityPollingExceeded { .. }) => {
-            crate::warn!(
-                "remove_factor.turnkey_provider_teardown_pending suborg_id={} err={error}",
-                plan.suborg_id
-            );
+            crate::warn!("remove_factor.turnkey_provider_teardown_pending err={error}");
         }
-        // The account the user asked to disconnect can still authorize.
         Err(error) => {
-            crate::critical!(
-                "remove_factor.turnkey_provider_orphaned suborg_id={} code={} err={error}",
-                plan.suborg_id,
+            // Inconsistency will be resolved with a migration
+            crate::error!(
+                "remove_factor.turnkey_provider_orphaned code={} err={error}",
                 error.code()
             );
         }
     }
 }
 
-/// The Turnkey authenticator backing a passkey factor.
-struct PasskeyAuthenticator {
-    suborg: String,
-    user: String,
-    id: String,
-}
-
-/// Why this factor cannot be removed at all, if it cannot.
-///
-/// This handles should-never-happen conceptual edge cases to avoid unexpected results.
-fn unsupported_reason(
+/// Can the requested factor be removed? If not, why.
+fn is_removal_supported(
     metadata: &BackupMetadata,
     kind: &BackupFactorKind,
 ) -> Option<String> {
@@ -463,77 +441,20 @@ fn unsupported_reason(
             crate::warn!("remove_factor.keychain_removal_unsupported");
             Some("iCloud Keychain factor removal is not yet supported".to_string())
         }
-        // The exported metadata does not link a passkey to its PRF key, so with
-        // several passkeys Bedrock cannot tell which key to drop.
         BackupFactorKind::Passkey { .. } if metadata.passkey_factor_count() > 1 => {
-            crate::warn!("remove_factor.multiple_passkeys_unsupported");
+            // Theoretical invariant, multiple passkeys are not supported.
+            crate::critical!("remove_factor.multiple_passkeys_unsupported");
             Some(
                 "removing a passkey is unsupported while several passkeys exist"
                     .to_string(),
             )
         }
         BackupFactorKind::Passkey { .. } if metadata.single_prf_key().is_none() => {
-            crate::warn!("remove_factor.missing_prf_key");
+            crate::critical!("remove_factor.missing_prf_key");
             Some("the passkey has no PRF encryption key to drop".to_string())
         }
         BackupFactorKind::Passkey { .. } | BackupFactorKind::OidcAccount { .. } => None,
     }
-}
-
-/// The Turnkey references and last-OIDC flag derived from the backup metadata.
-struct OidcRemovalPlan {
-    provider_id: String,
-    suborg_id: String,
-    user_id: String,
-    turnkey_key: BackupEncryptionKey,
-    is_last_oidc_factor: bool,
-}
-
-/// Derives the Turnkey references and the last-OIDC flag for the OIDC `factor_id`.
-fn plan_oidc_removal(
-    metadata: &BackupMetadata,
-    factor_id: &str,
-) -> Result<OidcRemovalPlan, BackupOperationError> {
-    let provider_id = metadata
-        .factor(factor_id)
-        .and_then(|factor| factor.turnkey_provider_id())
-        .ok_or_else(|| {
-            crate::error!("remove_factor.factor_not_oidc");
-            BackupOperationError::BackupService {
-                code: "factor_not_oidc".to_string(),
-            }
-        })?
-        .to_string();
-
-    let turnkey_key = metadata.turnkey_key().cloned().ok_or_else(|| {
-        // An OIDC factor with no Turnkey key: the remote account is internally
-        // inconsistent and no removal can proceed until someone looks at it.
-        crate::critical!(
-            "remove_factor.missing_turnkey_key (OIDC factor present with no Turnkey key)"
-        );
-        BackupOperationError::BackupService {
-            code: "missing_turnkey_key".to_string(),
-        }
-    })?;
-    let BackupEncryptionKey::Turnkey {
-        turnkey_account_id,
-        turnkey_user_id,
-        ..
-    } = &turnkey_key
-    else {
-        crate::critical!("remove_factor.turnkey_key_wrong_kind");
-        return Err(BackupOperationError::BackupService {
-            code: "missing_turnkey_key".to_string(),
-        });
-    };
-
-    Ok(OidcRemovalPlan {
-        provider_id,
-        suborg_id: turnkey_account_id.clone(),
-        user_id: turnkey_user_id.clone(),
-        is_last_oidc_factor: metadata.oidc_factor_count() == 1,
-        turnkey_key,
-    })
 }
 
 /// Maps a Turnkey read failure. An invalid signer becomes a re-auth signal;
@@ -553,47 +474,39 @@ fn map_turnkey_error(error: &TurnkeyApiError) -> BackupOperationError {
     }
 }
 
-/// Every Turnkey provider id backing the target provider's OIDC identity
-/// (`issuer` + `subject`) -- all of an Apple `sub`'s per-audience providers, say.
-///
-/// Resolved before the commit so the teardown afterwards is a single submission.
-/// Returns an empty set when the identity is already absent from Turnkey.
-///
-/// # Errors
-/// Fails on a read error rather than falling back to the one id we were handed:
-/// deleting only that would leave the identity's sibling audiences authorized.
-async fn resolve_provider_ids(
+/// Obtains the list of all `provider_id`s to remove from Turnkey based on the factor being
+/// removed. Explicitly for Apple, multiple providers are used to support all clients.
+async fn resolve_all_turnkey_provider_ids(
     ctx: &FlowContext<'_>,
-    plan: &OidcRemovalPlan,
+    turnkey_meta: &TurnkeyMeta,
+    turnkey_provider_id: &str,
 ) -> Result<Vec<String>, BackupOperationError> {
     let users = ctx
         .turnkey
-        .get_users(&plan.suborg_id, SyncFactor(ctx.sync_factor))
+        .get_users(&turnkey_meta.id, SyncFactor(ctx.sync_factor))
         .await
         .map_err(|error| map_turnkey_error(&error))?;
 
-    let Some(user) = users.iter().find(|user| user.user_id == plan.user_id) else {
+    let Some(user) = users
+        .iter()
+        .find(|user| user.user_id == turnkey_meta.auth_user_main_id)
+    else {
+        // Logged as critical because it means that an ID registered with the backup-service is not in Turnkey.
         crate::critical!(
-            "remove_factor.turnkey_user_missing suborg_id={} user_id={} (aborting before commit)",
-            plan.suborg_id,
-            plan.user_id
+            "remove_factor.turnkey_user_missing suborg_id={} (aborting)",
+            turnkey_meta.id,
         );
-        return Err(BackupOperationError::Turnkey {
-            code: "turnkey_user_not_found".to_string(),
-        });
+        return Err(BackupOperationError::Consistency);
     };
 
     let Some(target) = user
         .oauth_providers
         .iter()
-        .find(|provider| provider.provider_id == plan.provider_id)
+        .find(|provider| provider.provider_id == *turnkey_provider_id)
     else {
-        // Without the target we cannot derive `issuer`+`subject`, so any sibling
-        // audience of the same identity is unreachable and stays authorized.
-        crate::critical!(
-            "remove_factor.turnkey_provider_already_absent suborg_id={} provider={} (siblings of this identity cannot be identified)",
-            plan.suborg_id,
-            plan.provider_id
+        crate::error!(
+            "remove_factor.turnkey_provider_already_absent suborg_id={} (siblings cannot be identified)",
+            turnkey_meta.id,
         );
         return Ok(Vec::new());
     };

@@ -40,7 +40,7 @@ pub trait BackupFlow {
     /// Executes the flow.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`] or `NeedsReauth` if applicable.
+    /// See [`BackupOperationError`].
     async fn run(
         &self,
         ctx: &FlowContext<'_>,

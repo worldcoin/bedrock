@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use super::{BackupFlow, FlowContext};
 use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
-use crate::backup::{BackupOperationError, SyncFactor};
+use crate::backup::{BackupEncryptionKey, BackupOperationError, SyncFactor};
 use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 use std::time::Duration;
@@ -24,7 +24,26 @@ impl BackupFlow for DeleteBackup {
             .retrieve_metadata(ctx.sync_factor, ctx.backup_id)
             .await
         {
-            Ok(metadata) => metadata.turnkey_suborg_ids(),
+            Ok(metadata) => {
+                // Backup deletion is the only flow that handles the theoretical invariant
+                // of a user having multiple Turnkey accounts
+                let mut ids: Vec<String> = metadata
+                    .keys
+                    .iter()
+                    .filter_map(|key| {
+                        if let BackupEncryptionKey::Turnkey {
+                            turnkey_account_id, ..
+                        } = key
+                        {
+                            Some(turnkey_account_id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                ids.dedup();
+                ids
+            }
             Err(e) => {
                 if let BackupOperationError::BackupService { code } = &e {
                     if code == "backup_does_not_exist" {
@@ -38,13 +57,13 @@ impl BackupFlow for DeleteBackup {
             }
         };
 
-        execute(ctx, suborg_ids).await
+        commit(ctx, suborg_ids).await
     }
 }
 
 /// Executes the complete backup deletion, from the backup-service first (authorative),
 /// and best-effort Turnkey account.
-pub(in crate::backup::flows) async fn execute(
+async fn commit(
     ctx: &FlowContext<'_>,
     suborg_ids: Vec<String>,
 ) -> Result<(), BackupOperationError> {

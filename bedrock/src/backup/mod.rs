@@ -1096,6 +1096,12 @@ pub enum BackupOperationError {
         /// Human-readable description of what is unsupported.
         detail: String,
     },
+    /// The provided `factor_id` is invalid.
+    #[error("invalid factor id")]
+    InvalidFactorId,
+    /// There's some discrepancy or inconsistency that cannot be manually resolved. Can't continue.
+    #[error("consistency error")]
+    Consistency,
     /// An unexpected internal error. By default, no reason to log (Bedrock already handles it).
     #[error("{error_message}")]
     Generic {
@@ -1179,4 +1185,13 @@ pub struct BackupAccount {
     ///
     /// This public key can be used to authenticate with a specific backup.
     public_key: String,
+}
+
+/// High-level metadata to perform management operations on a Turnkey account.
+#[derive(Clone)]
+struct TurnkeyMeta {
+    /// The Turnkey ID of the account (sub-organization) of the backup.
+    id: String,
+    /// The Turnkey ID of the `auth_user_main`.
+    auth_user_main_id: String,
 }

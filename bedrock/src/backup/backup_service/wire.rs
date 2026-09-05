@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::backup::TurnkeyMeta;
+
 /// Backup metadata as returned by the backup service
 #[derive(Debug, Clone, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
@@ -137,40 +139,33 @@ impl BackupMetadata {
             .count()
     }
 
-    pub(in crate::backup) fn turnkey_suborg_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self
-            .keys
-            .iter()
-            .filter_map(|key| match key {
-                BackupEncryptionKey::Turnkey {
-                    turnkey_account_id, ..
-                } => Some(turnkey_account_id.clone()),
-                BackupEncryptionKey::Prf { .. }
-                | BackupEncryptionKey::Icloud { .. } => None,
-            })
-            .collect();
-        ids.sort();
-        ids.dedup();
-        ids
-    }
+    /// The Turnkey or `None` unless there is exactly one.
+    pub(in crate::backup) fn turnkey_account(
+        &self,
+    ) -> Option<(TurnkeyMeta, &BackupEncryptionKey)> {
+        let mut turnkey_keys = self.keys.iter().filter_map(|key| match key {
+            BackupEncryptionKey::Turnkey {
+                turnkey_account_id,
+                turnkey_user_id,
+                ..
+            } => Some((
+                key,
+                TurnkeyMeta {
+                    id: turnkey_account_id.clone(),
+                    auth_user_main_id: turnkey_user_id.clone(),
+                },
+            )),
+            _ => None,
+        });
 
-    /// The Turnkey encryption key, or `None` unless there is exactly one.
-    ///
-    /// More than one means the metadata cannot say which sub-organization a removal
-    /// targets, so callers must refuse rather than pick.
-    pub(in crate::backup) fn turnkey_key(&self) -> Option<&BackupEncryptionKey> {
-        let mut turnkey_keys = self
-            .keys
-            .iter()
-            .filter(|key| matches!(key, BackupEncryptionKey::Turnkey { .. }));
-        let key = turnkey_keys.next()?;
+        let (key, meta) = turnkey_keys.next()?;
+
         if turnkey_keys.next().is_some() {
-            crate::critical!(
-                "backup_metadata.multiple_turnkey_keys (cannot resolve which sub-organization a removal targets)"
-            );
+            crate::critical!("backup_metadata.multiple_turnkey_keys");
             return None;
         }
-        Some(key)
+
+        Some((meta, key))
     }
 
     /// The single PRF encryption key, or `None` unless there is exactly one. A
