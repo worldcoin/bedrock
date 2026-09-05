@@ -265,7 +265,7 @@ impl RemoveFactor {
         ctx: &FlowContext<'_>,
         plan: Plan,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        if let Plan::FullDeletion {} = plan {
+        if matches!(plan, Plan::FullDeletion {}) {
             DeleteBackup.run(ctx).await?;
             return Ok(RemoveFactorOutcome::BackupDeleted);
         }
@@ -286,7 +286,7 @@ impl RemoveFactor {
                 ..
             } => (
                 Some(backup_encryption_key.clone()),
-                turnkey.map(|v| v.turnkey_account.clone()),
+                turnkey.as_ref().map(|v| v.turnkey_account.clone()),
             ),
             Plan::FullDeletion { .. } => {
                 unreachable!("handled above")
@@ -355,7 +355,7 @@ async fn turnkey_commit(ctx: &FlowContext<'_>, plan: Plan) {
                 )
                 .await;
             } else if let Some(main_factor) = ctx.main_factor {
-                delete_oauth_providers(
+                delete_oauth_providers_from_turnkey(
                     ctx,
                     &turnkey_account,
                     provider_ids,
@@ -396,7 +396,7 @@ async fn turnkey_commit(ctx: &FlowContext<'_>, plan: Plan) {
 }
 
 /// Deletes each OIDC provider in `provider_ids` from the Turnkey account.
-async fn delete_oauth_providers(
+async fn delete_oauth_providers_from_turnkey(
     ctx: &FlowContext<'_>,
     turnkey_account: &TurnkeyMeta,
     provider_ids: Vec<String>,
@@ -1186,7 +1186,7 @@ mod tests {
     /// A Turnkey outage must not block removals: the teardown it gates is best-effort,
     /// and BF-8 would go down with it while the backup service is healthy.
     #[tokio::test]
-    async fn last_oidc_removal_proceeds_when_the_preflight_is_inconclusive() {
+    async fn last_oidc_removal_aborts_when_the_preflight_is_inconclusive() {
         install_attestation();
         let server = MockServer::start().await;
         mount_metadata(
@@ -1206,18 +1206,18 @@ mod tests {
         .await;
         mount_delete_sub_org(&server).await;
 
-        let outcome = run_remove(&server, "f-1", None, false).await.unwrap();
+        let error = run_remove(&server, "f-1", None, false).await.unwrap_err();
 
-        assert!(
-            matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }),
-            "a Turnkey outage must not block a removal the backup service can complete"
-        );
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
+        ));
         let paths = called_paths(&server).await;
-        assert!(paths.contains(&DELETE_FACTOR.to_string()));
         assert!(
-            paths.contains(&DELETE_SUB_ORG.to_string()),
-            "the teardown must still be attempted after an inconclusive probe"
+            !paths.contains(&DELETE_FACTOR.to_string()),
+            "nothing may be committed on a premise the plan could not verify"
         );
+        assert!(!paths.contains(&DELETE_SUB_ORG.to_string()));
     }
 
     /// Unlike the last-OIDC path, this one needs the read's data: without it the only
@@ -1628,12 +1628,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        // The code is the only thing native can match on, and `map_turnkey_error`
-        // yields the same variant for any non-retryable Turnkey failure, so pin it.
-        let BackupOperationError::Turnkey { code } = &error else {
-            panic!("expected a Turnkey error, got {error:?}");
-        };
-        assert_eq!(code, "turnkey_user_not_found");
+        assert!(matches!(error, BackupOperationError::Consistency),);
         let paths = called_paths(&server).await;
         assert!(
             !paths.contains(&DELETE_FACTOR.to_string()),
@@ -1694,6 +1689,7 @@ mod tests {
             )],
         )
         .await;
+        mount_whoami(&server, "user-1").await;
         mount_delete_factor(
             &server,
             json!({ "backupDeleted": false, "backupMetadata": metadata(vec![oidc_factor("f-2", "p-2")]) }),
@@ -1732,10 +1728,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(
-            error,
-            BackupOperationError::BackupService { code } if code == "factor_not_found"
-        ));
+        assert!(matches!(error, BackupOperationError::InvalidFactorId));
     }
 
     #[tokio::test]
@@ -1820,11 +1813,8 @@ mod tests {
         ));
     }
 
-    /// A degraded Turnkey must not block a removal the backup service can complete:
-    /// the authenticator teardown it feeds is best-effort, so an inconclusive lookup
-    /// skips it rather than failing the whole flow.
     #[tokio::test]
-    async fn a_degraded_authenticator_lookup_still_drops_the_factor() {
+    async fn a_degraded_authenticator_lookup_aborts_before_committing() {
         install_attestation();
         let server = MockServer::start().await;
         mount_metadata(
@@ -1846,14 +1836,17 @@ mod tests {
         )
         .await;
 
-        let outcome = run_remove(&server, "pk-1", None, false).await.unwrap();
+        let error = run_remove(&server, "pk-1", None, false).await.unwrap_err();
 
-        assert!(matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }));
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
+        ));
         let paths = called_paths(&server).await;
-        assert!(paths.contains(&DELETE_FACTOR.to_string()));
         assert!(
-            !paths.contains(&DELETE_AUTHENTICATORS.to_string()),
-            "the teardown is skipped, not retried into a failure"
+            !paths.contains(&DELETE_FACTOR.to_string()),
+            "nothing may be committed while the plan is incomplete"
         );
+        assert!(!paths.contains(&DELETE_AUTHENTICATORS.to_string()));
     }
 }

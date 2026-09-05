@@ -180,21 +180,6 @@ impl BackupMetadata {
     }
 }
 
-impl BackupFactor {
-    /// The Turnkey OAuth provider id, if this factor is an OIDC account.
-    pub(in crate::backup) fn turnkey_provider_id(&self) -> Option<&str> {
-        match &self.kind {
-            BackupFactorKind::OidcAccount {
-                turnkey_provider_id,
-                ..
-            } => Some(turnkey_provider_id),
-            BackupFactorKind::Passkey { .. } | BackupFactorKind::EcKeypair { .. } => {
-                None
-            }
-        }
-    }
-}
-
 /// The scope of the factor being deleted. OIDC factors are `Main`.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

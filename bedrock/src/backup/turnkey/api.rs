@@ -508,10 +508,10 @@ impl TurnkeyApiClient {
     /// Ensure a [`SyncFactor`] is valid in Turnkey.
     ///
     /// # Errors
-    /// [`NeedsReauthReason::SyncFactorInvalid`] when Turnkey rejects the signer. A
-    /// degraded or unreachable Turnkey is tolerated: the teardowns this gates are
-    /// best-effort, so failing here would take down a flow the backup service can
-    /// still complete.
+    /// [`NeedsReauthReason::SyncFactorInvalid`] when Turnkey rejects the signer, and
+    /// the mapped error for any other failure. Nothing is tolerated here: this runs
+    /// before anything is committed, so aborting costs only a retry, whereas
+    /// proceeding would commit on a premise that was never verified.
     pub async fn verify_sync_factor(
         &self,
         suborganization_id: &str,
@@ -525,13 +525,6 @@ impl TurnkeyApiClient {
                     reason: NeedsReauthReason::SyncFactorInvalid,
                 })
             }
-            Err(e) if e.is_retryable() => {
-                crate::warn!(
-                    "turnkey.sync_factor_preflight_inconclusive code={} (proceeding)",
-                    e.code()
-                );
-                Ok(())
-            }
             Err(e) => Err(e.into()),
         }
     }
@@ -540,8 +533,8 @@ impl TurnkeyApiClient {
     ///
     /// # Errors
     /// [`NeedsReauthReason::MainFactorInvalid`] when Turnkey rejects the signer or it
-    /// authenticates as another user. A degraded Turnkey is tolerated, as in
-    /// [`Self::verify_sync_factor`].
+    /// authenticates as another user, and the mapped error for any other failure.
+    /// Nothing is tolerated here, as in [`Self::verify_sync_factor`].
     pub async fn verify_main_factor(
         &self,
         suborganization_id: &str,
@@ -554,13 +547,6 @@ impl TurnkeyApiClient {
             Err(e) if e.indicates_invalid_signer() => {
                 crate::warn!("turnkey.main_factor_invalid (pre-flight)");
                 return Err(BackupOperationError::NeedsReauth { reason });
-            }
-            Err(e) if e.is_retryable() => {
-                crate::warn!(
-                    "turnkey.main_factor_preflight_inconclusive code={} (proceeding)",
-                    e.code()
-                );
-                return Ok(());
             }
             Err(e) => return Err(e.into()),
         };
