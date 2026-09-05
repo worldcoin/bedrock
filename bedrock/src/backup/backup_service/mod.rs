@@ -17,14 +17,14 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use wire::{
-    Authorization, ChallengeResponse, DeleteFactorRequest, FactorScope,
-    RetrieveMetadataRequest, ServiceErrorBody,
+    Authorization, ChallengeResponse, DeleteBackupRequest, DeleteFactorRequest,
+    FactorScope, RetrieveMetadataRequest, ServiceErrorBody,
 };
 
 use crate::backup::{BackupOperationError, NeedsReauthReason};
 use crate::primitives::attestation::get_attestation_gateway;
 use crate::primitives::config::BedrockEnvironment;
-use crate::primitives::retry::{retry_with_backoff, RetryPolicy};
+use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::{KeypairSignerError, P256Signer};
 use crate::HttpError;
 
@@ -33,6 +33,8 @@ const ATTESTATION_HEADER: &str = "attestation-token";
 
 const DELETE_FACTOR_CHALLENGE_PATH: &str = "/v1/delete-factor/challenge/keypair";
 const DELETE_FACTOR_PATH: &str = "/v1/delete-factor";
+const DELETE_BACKUP_CHALLENGE_PATH: &str = "/v1/delete-backup/challenge/keypair";
+const DELETE_BACKUP_PATH: &str = "/v1/delete-backup";
 const RETRIEVE_METADATA_CHALLENGE_PATH: &str =
     "/v1/retrieve-metadata/challenge/keypair";
 const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
@@ -43,10 +45,8 @@ const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
 /// feature is supported.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
 
-/// Deadline for fetching a delete-factor challenge. It is retried, so its own budget
-/// is several [`REQUEST_TIMEOUT`]s; it runs before anything is committed, so
-/// cancelling it is safe.
-const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Max timeout for fetching challenges. Fail fast!
+const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Deadline for the foreign attestation callback, which Bedrock cannot otherwise
 /// bound and which sits in the commit path.
@@ -95,15 +95,14 @@ impl BackupServiceClient {
         Ok(Self { http, base_url })
     }
 
-    /// Retrieves the current backup metadata, authenticated by the sync factor.
+    /// Retrieves the current backup metadata.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`] on signing, transport, or backup-service
-    /// failure. An `unauthorized_factor` rejection surfaces as
-    /// [`BackupOperationError::NeedsReauth`].
+    /// See [`BackupOperationError`].
     pub async fn retrieve_metadata(
         &self,
         sync_factor: &P256Signer,
+        backup_id: &str,
     ) -> Result<BackupMetadata, BackupOperationError> {
         let challenge = self
             .fetch_challenge(RETRIEVE_METADATA_CHALLENGE_PATH, &json!({}))
@@ -113,6 +112,7 @@ impl BackupServiceClient {
         let request = RetrieveMetadataRequest {
             authorization,
             challenge_token: challenge.token,
+            backup_id: backup_id.to_string(),
         };
         let body =
             serde_json::to_vec(&request).map_err(|error| serialize_error(&error))?;
@@ -135,29 +135,19 @@ impl BackupServiceClient {
     /// Turnkey encryption key from the metadata.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`] on signing, attestation, transport, or
-    /// backup-service failure.
+    /// See [`BackupOperationError`].
     pub async fn delete_factor(
         &self,
         sync_factor: &P256Signer,
         factor_id: &str,
         encryption_key: Option<BackupEncryptionKey>,
     ) -> Result<DeleteFactorResponse, BackupOperationError> {
-        let challenge = match tokio::time::timeout(
-            CHALLENGE_TIMEOUT,
-            self.fetch_challenge(
+        let challenge = self
+            .fetch_challenge(
                 DELETE_FACTOR_CHALLENGE_PATH,
                 &json!({ "factorId": factor_id }),
-            ),
-        )
-        .await
-        {
-            Ok(challenge) => challenge?,
-            Err(_elapsed) => {
-                crate::warn!("backup_service.delete_factor.challenge_timed_out");
-                return Err(BackupOperationError::Network { retryable: true });
-            }
-        };
+            )
+            .await?;
         let authorization =
             ec_keypair_authorization(sync_factor, &challenge.challenge)?;
         let request = DeleteFactorRequest {
@@ -203,7 +193,38 @@ impl BackupServiceClient {
         serde_json::from_slice(&bytes).map_err(|error| deserialize_error(&error))
     }
 
-    /// Fetches a keypair challenge from `path`. Idempotent, so retried.
+    /// Deletes the entire backup.
+    ///
+    /// # Errors
+    /// See [`BackupOperationError`].
+    pub async fn delete_backup(
+        &self,
+        sync_factor: &P256Signer,
+    ) -> Result<(), BackupOperationError> {
+        let challenge = self
+            .fetch_challenge(DELETE_BACKUP_CHALLENGE_PATH, &json!({}))
+            .await?;
+        let authorization =
+            ec_keypair_authorization(sync_factor, &challenge.challenge)?;
+        let request = DeleteBackupRequest {
+            authorization,
+            challenge_token: challenge.token,
+        };
+        let body =
+            serde_json::to_vec(&request).map_err(|error| serialize_error(&error))?;
+
+        self.post_bytes(
+            "delete_backup",
+            DELETE_BACKUP_PATH,
+            body,
+            &[],
+            false, // Single-use challenge token (no retries)
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Fetches a keypair challenge from `path`
     async fn fetch_challenge(
         &self,
         path: &str,
@@ -211,8 +232,12 @@ impl BackupServiceClient {
     ) -> Result<ChallengeResponse, BackupOperationError> {
         let bytes =
             serde_json::to_vec(body).map_err(|error| serialize_error(&error))?;
-        let raw = self.post_bytes("challenge", path, bytes, &[], true).await?;
-        serde_json::from_slice(&raw).map_err(|error| deserialize_error(&error))
+        let fetch = self.post_bytes("challenge", path, bytes, &[], false);
+        let Ok(raw) = tokio::time::timeout(CHALLENGE_TIMEOUT, fetch).await else {
+            crate::warn!(path = path, "backup_service.challenge_timed_out");
+            return Err(BackupOperationError::Network { retryable: true });
+        };
+        serde_json::from_slice(&raw?).map_err(|error| deserialize_error(&error))
     }
 
     /// POSTs raw `body` bytes, retrying transient failures when `retry` is set.
@@ -238,6 +263,10 @@ impl BackupServiceClient {
             || self.send_once(&url, &body, headers),
         )
         .await
+        .map_err(|e| match e {
+            RetryError::Timeout => BackupOperationError::Timeout,
+            RetryError::Operation(e) => e,
+        })
     }
 
     /// Sends a single POST and maps the outcome to bytes or a typed error.
@@ -487,6 +516,71 @@ mod tests {
             status_error(StatusCode::NOT_FOUND, b"not json"),
             BackupOperationError::BackupService { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn delete_backup_accepts_an_empty_204_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_CHALLENGE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "challenge": STANDARD.encode([7u8; 32]),
+                "token": "challenge-token",
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_PATH))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = BackupServiceClient::with_base_url_for_test(server.uri()).unwrap();
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+
+        client.delete_backup(&signer).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_backup_is_not_replayed() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_CHALLENGE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "challenge": STANDARD.encode([7u8; 32]),
+                "token": "challenge-token",
+            })))
+            .mount(&server)
+            .await;
+        // A status the challenge fetch *would* retry, to prove the delete does not.
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_PATH))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = BackupServiceClient::with_base_url_for_test(server.uri()).unwrap();
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let error = client.delete_backup(&signer).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
+        ));
+        let deletes = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == DELETE_BACKUP_PATH)
+            .count();
+        assert_eq!(deletes, 1, "the delete must be attempted exactly once");
     }
 
     /// The challenge token is single-use and the delete is not idempotent. Only the

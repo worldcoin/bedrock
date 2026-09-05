@@ -8,6 +8,7 @@
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -27,9 +28,9 @@ use turnkey_client::generated::services::coordinator::public::v1::{
 };
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
-use crate::backup::{MainFactor, SyncFactor};
+use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::retry::{retry_with_backoff, RetryPolicy};
+use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 
 use super::error::TurnkeyApiError;
@@ -175,7 +176,10 @@ impl TurnkeyApiClient {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            retry: RetryPolicy::default(),
+            retry: RetryPolicy {
+                total_timeout: Duration::from_secs(30), // some leeway to activity polling
+                ..RetryPolicy::default()
+            },
             users_cache: OrgCache::new("user"),
             policies_cache: OrgCache::new("policy"),
             base_url: None,
@@ -217,9 +221,14 @@ impl TurnkeyApiClient {
     ) -> Result<T, TurnkeyApiError>
     where
         Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
+        T: Send,
     {
         retry_with_backoff(&self.retry, operation, TurnkeyApiError::is_retryable, op)
             .await
+            .map_err(|e| match e {
+                RetryError::Operation(e) => e,
+                RetryError::Timeout => TurnkeyApiError::Timeout,
+            })
     }
 }
 
@@ -281,28 +290,6 @@ impl TurnkeyApiClient {
                 .map_err(TurnkeyApiError::from)
         })
         .await
-    }
-
-    /// Lists the users of a sub-organization.
-    ///
-    /// Results are cached for the lifetime of this client.
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
-    /// Re-reads the users, discarding any cached copy first.
-    ///
-    /// For callers that must act on the current state rather than a snapshot taken
-    /// earlier in the same flow.
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
-    pub async fn get_users_fresh(
-        &self,
-        suborganization_id: &str,
-        signer: SyncFactor<'_>,
-    ) -> Result<Arc<Vec<User>>, TurnkeyApiError> {
-        self.users_cache.clear();
-        self.get_users(suborganization_id, signer).await
     }
 
     pub async fn get_users(
@@ -515,6 +502,59 @@ impl TurnkeyApiClient {
 
         self.users_cache.clear();
         self.policies_cache.clear();
+        Ok(())
+    }
+
+    /// Ensure a [`SyncFactor`] is valid in Turnkey.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::SyncFactorInvalid`] when Turnkey rejects the signer, and
+    /// the mapped error for any other failure. Nothing is tolerated here: this runs
+    /// before anything is committed, so aborting costs only a retry, whereas
+    /// proceeding would commit on a premise that was never verified.
+    pub async fn verify_sync_factor(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<(), BackupOperationError> {
+        match self.get_users(suborganization_id, signer).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.indicates_invalid_signer() => {
+                crate::warn!("turnkey.sync_factor_invalid (pre-flight)");
+                Err(BackupOperationError::NeedsReauth {
+                    reason: NeedsReauthReason::SyncFactorInvalid,
+                })
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Ensure a [`MainFactor`] is valid in Turnkey for an `expected_user_id`.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::MainFactorInvalid`] when Turnkey rejects the signer or it
+    /// authenticates as another user, and the mapped error for any other failure.
+    /// Nothing is tolerated here, as in [`Self::verify_sync_factor`].
+    pub async fn verify_main_factor(
+        &self,
+        suborganization_id: &str,
+        expected_user_id: &str,
+        signer: MainFactor<'_>,
+    ) -> Result<(), BackupOperationError> {
+        let reason = NeedsReauthReason::MainFactorInvalid;
+        let user_id = match self.whoami_user_id(suborganization_id, signer).await {
+            Ok(user_id) => user_id,
+            Err(e) if e.indicates_invalid_signer() => {
+                crate::warn!("turnkey.main_factor_invalid (pre-flight)");
+                return Err(BackupOperationError::NeedsReauth { reason });
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if user_id != expected_user_id {
+            crate::warn!("turnkey.main_factor_wrong_user");
+            return Err(BackupOperationError::NeedsReauth { reason });
+        }
         Ok(())
     }
 

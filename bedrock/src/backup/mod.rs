@@ -53,8 +53,8 @@ use std::str::FromStr;
 use once_cell::sync::OnceCell;
 
 use crate::backup::backup_service::BackupServiceClient;
-use crate::backup::flows::{BackupFlow, FlowContext, RemoveFactor};
-use crate::backup::turnkey::TurnkeyApiClient;
+use crate::backup::flows::{BackupFlow, DeleteBackup, FlowContext, RemoveFactor};
+use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::primitives::config::get_config;
 use crate::primitives::{KeypairSignerError, P256Signer};
 
@@ -544,6 +544,7 @@ impl BackupManager {
         main_factor: Option<Arc<P256Signer>>,
         factor_id: String,
         user_confirmed_backup_removal: bool,
+        backup_id: String,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
         let service = self.service()?;
         let turnkey = TurnkeyApiClient::new();
@@ -552,6 +553,7 @@ impl BackupManager {
             turnkey: &turnkey,
             sync_factor,
             main_factor: main_factor.as_deref(),
+            backup_id: &backup_id,
         };
         let flow = RemoveFactor {
             factor_id,
@@ -569,13 +571,45 @@ impl BackupManager {
         let outcome = result?;
 
         if matches!(outcome, RemoveFactorOutcome::BackupDeleted) {
-            if let Err(error) = Self::post_delete_backup() {
-                crate::critical!(
-                    "remove_factor.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
-                );
-            }
+            Self::post_delete_backup("remove_factor");
         }
         Ok(outcome)
+    }
+
+    /// Deletes the user's entire backup (BF-8). Clears state with the backup-service
+    /// (authoritative), then Turnkey (best-effort) and the local Bedrock state.
+    ///
+    /// # Usage
+    /// Generally only used after full World App account deletion is requested. For
+    /// business-as-usual operations, [`Self::remove_factor`] is used.
+    ///
+    /// # Native responsibilities
+    /// 1. Delete the [`SyncFactor`] stored locally.
+    ///
+    /// # Errors
+    /// Returns [`BackupOperationError`] for processing errors. May return
+    /// [`BackupOperationError::NeedsReauth`] if the [`SyncFactor`] is no longer authorized.
+    pub async fn delete_backup(
+        &self,
+        sync_factor: &P256Signer,
+        backup_id: String,
+    ) -> Result<(), BackupOperationError> {
+        let service = self.service()?;
+        let turnkey = TurnkeyApiClient::new();
+        let ctx = FlowContext {
+            service,
+            turnkey: &turnkey,
+            sync_factor,
+            main_factor: None,
+            backup_id: &backup_id,
+        };
+
+        DeleteBackup.run(&ctx).await?;
+        // FIXME: add client side event for removal
+        crate::info!("delete_backup.succeeded");
+
+        Self::post_delete_backup("delete_backup");
+        Ok(())
     }
 
     /// Retrieves the user's current backup metadata.
@@ -589,8 +623,11 @@ impl BackupManager {
     pub async fn retrieve_metadata(
         &self,
         sync_factor: &P256Signer,
+        backup_id: String,
     ) -> Result<BackupMetadata, BackupOperationError> {
-        self.service()?.retrieve_metadata(sync_factor).await
+        self.service()?
+            .retrieve_metadata(sync_factor, &backup_id)
+            .await
     }
 }
 
@@ -617,12 +654,12 @@ pub struct ManifestDebug {
 
 /// Internal helpers (not exported)
 impl BackupManager {
-    /// Clears the local state after a backup deletion: the manifest file
-    /// and the backup base report
+    /// Clears the local state after a backup deletion: the manifest file and the
+    /// backup base report.
     ///
-    /// # Errors
-    /// - Returns an error if the post-processing fails.
-    fn post_delete_backup() -> Result<(), BackupError> {
+    /// Infallible by design. Every caller reaches here only once the backup is gone
+    /// remotely, so there is nothing left to abort.
+    fn post_delete_backup(flow: &str) {
         crate::info!("Cleaning up backup system... Deleting manifest file after backup is disabled/deleted.");
 
         let manifest = match ManifestManager::new().danger_delete_manifest() {
@@ -632,12 +669,17 @@ impl BackupManager {
         };
 
         let report = ClientEventsReporter::new().delete_base_report();
-        if let Err(error) = &report {
-            crate::warn!("[ClientEvents] failed to delete base report: {error:?}");
-        }
 
-        manifest?;
-        report.map_err(Into::into)
+        if let Err(error) = manifest {
+            crate::critical!(
+                "{flow}.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
+            );
+        }
+        if let Err(error) = report {
+            crate::critical!(
+                "{flow}.post_delete_report_cleanup_failed (backup is deleted remotely; base report is stale) err={error:?}"
+            );
+        }
     }
 
     fn service(&self) -> Result<&BackupServiceClient, BackupOperationError> {
@@ -996,9 +1038,10 @@ pub enum NeedsReauthReason {
     /// The operation needs a [`MainFactor`] that was not supplied. The user needs to
     /// authenticate.
     MainFactorRequired,
-    /// The sync factor is no longer valid: not registered in Turnkey, or no longer
-    /// authorized by the backup service. Native must re-auth a [`MainFactor`], refresh
-    /// the sync factor, and re-invoke.
+    /// Provided [`MainFactor`] is not valid (either Turnkey or backup-service). Rare.
+    MainFactorInvalid,
+    /// Provided [`SyncFactor`] is not valid (either Turnkey or backup-service). Can be
+    /// fixed with a [`MainFactor`] re-auth.
     SyncFactorInvalid,
 }
 
@@ -1007,6 +1050,9 @@ pub enum NeedsReauthReason {
 /// Most variants are opaque by design (details are logged inside Bedrock).
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum BackupOperationError {
+    /// The total operation timed out (including retries). Terminal.
+    #[error("request timed out")]
+    Timeout,
     /// The factor provided invalid or under-permissioned. Re-authenticate and retry.
     #[error("re-authentication required: {reason:?}")]
     NeedsReauth {
@@ -1052,6 +1098,12 @@ pub enum BackupOperationError {
         /// Human-readable description of what is unsupported.
         detail: String,
     },
+    /// The provided `factor_id` is invalid.
+    #[error("invalid factor id")]
+    InvalidFactorId,
+    /// There's some discrepancy or inconsistency that cannot be manually resolved. Can't continue.
+    #[error("consistency error")]
+    Consistency,
     /// An unexpected internal error. By default, no reason to log (Bedrock already handles it).
     #[error("{error_message}")]
     Generic {
@@ -1063,6 +1115,17 @@ pub enum BackupOperationError {
 impl From<KeypairSignerError> for BackupOperationError {
     fn from(inner: KeypairSignerError) -> Self {
         Self::Signer { inner }
+    }
+}
+
+impl From<TurnkeyApiError> for BackupOperationError {
+    fn from(inner: TurnkeyApiError) -> Self {
+        if inner.is_retryable() {
+            return Self::Network { retryable: true };
+        }
+        Self::Turnkey {
+            code: inner.code().to_string(),
+        }
     }
 }
 
@@ -1124,4 +1187,13 @@ pub struct BackupAccount {
     ///
     /// This public key can be used to authenticate with a specific backup.
     public_key: String,
+}
+
+/// High-level metadata to perform management operations on a Turnkey account.
+#[derive(Clone)]
+struct TurnkeyMeta {
+    /// The Turnkey ID of the account (sub-organization) of the backup.
+    id: String,
+    /// The Turnkey ID of the `auth_user_main`.
+    auth_user_main_id: String,
 }
