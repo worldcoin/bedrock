@@ -87,7 +87,9 @@ where
                     if attempt >= policy.max_attempts || !is_retryable(&error) {
                         crate::warn!(
                             operation = operation,
-                            "request.failed op={operation} attempts={attempt} err={error}"
+                            attempts = attempt,
+                            error_message = error,
+                            "request.failed"
                         );
                         return Err(RetryError::Operation(error));
                     }
@@ -95,8 +97,11 @@ where
                     let delay = policy.backoff_delay(attempt);
 
                     crate::warn!(
-                        "request.retry op={operation} attempt={attempt} delay_ms={} err={error}",
-                        delay.as_millis()
+                        operation = operation,
+                        attempt = attempt,
+                        delay_ms = delay.as_millis(),
+                        error_message = error,
+                        "request.retry"
                     );
 
                     tokio::time::sleep(delay).await;
@@ -111,7 +116,7 @@ where
         crate::warn!(
             operation = operation,
             timeout_ms = timeout_ms,
-            "request.total_timeout op={operation}",
+            "request.total_timeout"
         );
         return Err(RetryError::Timeout);
     };

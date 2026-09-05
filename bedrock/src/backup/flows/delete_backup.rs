@@ -7,6 +7,7 @@ use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::backup::{BackupEncryptionKey, BackupOperationError, SyncFactor};
 use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 /// Deletes the entire backup state from all remotes (backup-service and Turnkey)
@@ -27,7 +28,10 @@ impl BackupFlow for DeleteBackup {
             Ok(metadata) => {
                 // Backup deletion is the only flow that handles the theoretical invariant
                 // of a user having multiple Turnkey accounts
-                let mut ids: Vec<String> = metadata
+                // A set, not `dedup`: that only drops *consecutive* duplicates, so the
+                // same account listed twice non-adjacently would be torn down twice,
+                // the second time under a fresh activity timestamp.
+                metadata
                     .keys
                     .iter()
                     .filter_map(|key| {
@@ -40,9 +44,9 @@ impl BackupFlow for DeleteBackup {
                             None
                         }
                     })
-                    .collect();
-                ids.dedup();
-                ids
+                    .collect::<BTreeSet<String>>()
+                    .into_iter()
+                    .collect()
             }
             Err(e) => {
                 if let BackupOperationError::BackupService { code } = &e {
@@ -106,13 +110,17 @@ pub(in crate::backup::flows) async fn delete_turnkey_account(
         {
             if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
                 crate::warn!(
-                    "turnkey_suborg_teardown_pending suborg_id={suborg_id} err={error}"
+                    suborg_id = suborg_id,
+                    error_message = error,
+                    "turnkey_suborg_teardown_pending"
                 );
                 continue;
             }
             crate::critical!(
-                "turnkey_suborg could not be deleted code={} err={error}",
-                error.code()
+                suborg_id = suborg_id,
+                code = error.code(),
+                error_message = error,
+                "turnkey_suborg could not be deleted"
             );
         }
     }

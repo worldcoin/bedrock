@@ -232,9 +232,9 @@ impl BackupServiceClient {
     ) -> Result<ChallengeResponse, BackupOperationError> {
         let bytes =
             serde_json::to_vec(body).map_err(|error| serialize_error(&error))?;
-        let fetch = self.post_bytes("challenge", path, bytes, &[], true);
+        let fetch = self.post_bytes("challenge", path, bytes, &[], false);
         let Ok(raw) = tokio::time::timeout(CHALLENGE_TIMEOUT, fetch).await else {
-            crate::warn!("backup_service.challenge_timed_out path={path}");
+            crate::warn!(path = path, "backup_service.challenge_timed_out");
             return Err(BackupOperationError::Network { retryable: true });
         };
         serde_json::from_slice(&raw?).map_err(|error| deserialize_error(&error))

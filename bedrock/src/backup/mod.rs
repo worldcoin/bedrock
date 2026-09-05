@@ -1049,7 +1049,7 @@ pub enum NeedsReauthReason {
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum BackupOperationError {
     /// The total operation timed out (including retries). Terminal.
-    #[error("Turnkey request timed out")]
+    #[error("request timed out")]
     Timeout,
     /// The factor provided invalid or under-permissioned. Re-authenticate and retry.
     #[error("re-authentication required: {reason:?}")]
