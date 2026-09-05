@@ -605,6 +605,8 @@ impl BackupManager {
         };
 
         DeleteBackup.run(&ctx).await?;
+        // FIXME: add client side event for removal
+        crate::info!("delete_backup.succeeded");
 
         Self::post_delete_backup("delete_backup");
         Ok(())
