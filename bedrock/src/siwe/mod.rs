@@ -213,22 +213,29 @@ fn parse_datetime(s: &str, label: &str) -> Result<DateTime<Utc>, ParseError> {
         .map_err(|_| ParseError::Field(format!("invalid {label} datetime")))
 }
 
-/// Sanitizes raw input: strips `<>` brackets, trims whitespace, enforces max length.
-fn sanitize(s: &str) -> Result<String, ParseError> {
-    let cleaned = s.replace(['<', '>'], "");
-    let cleaned = cleaned.trim();
+/// Trims surrounding whitespace and enforces the maximum length.
+///
+/// Angle brackets are rejected rather than stripped: stripping them makes the message
+/// that gets signed differ from the one the user was shown, so a domain written as
+/// `example.com<@evil.com>` would be consented to as one origin and signed as another.
+fn normalize(s: &str) -> Result<&str, ParseError> {
+    let cleaned = s.trim();
     if cleaned.len() > MAX_MESSAGE_LEN {
         return Err(ParseError::Field("message too long".into()));
     }
-    Ok(cleaned.to_owned())
+    if cleaned.contains(['<', '>']) {
+        return Err(ParseError::Field(
+            "message must not contain angle brackets".into(),
+        ));
+    }
+    Ok(cleaned)
 }
 
 impl FromStr for SiweMessage {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let sanitized = sanitize(s)?;
-        let mut lines = sanitized.split('\n');
+        let mut lines = normalize(s)?.split('\n');
 
         let preamble = lines.next().ok_or(ParseError::Missing("preamble"))?;
         let domain_str = preamble
@@ -396,40 +403,47 @@ impl SiweMessage {
     ) -> Result<Self, SiweError> {
         let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
 
-        let (current_authority, _) = parse_authority(querying_url).map_err(|e| {
-            PrimitiveError::InvalidInput {
+        let current_origin =
+            parse_origin(querying_url).map_err(|e| PrimitiveError::InvalidInput {
                 attribute: "querying_url".to_string(),
                 error_message: e.to_string(),
-            }
-        })?;
+            })?;
 
-        let expected_authority: Authority =
-            {
-                let mut found = None;
-                for authorized_url in authorized_urls {
-                    let (expected_authority, _) = parse_authority(authorized_url)
-                        .map_err(|e| PrimitiveError::InvalidInput {
-                            attribute: "authorized_url".to_string(),
-                            error_message: e.to_string(),
-                        })?;
-
-                    if expected_authority == current_authority {
-                        found = Some(expected_authority);
-                        break;
+        let expected_origin = {
+            let mut found = None;
+            for authorized_url in authorized_urls {
+                let origin = parse_origin(authorized_url).map_err(|e| {
+                    PrimitiveError::InvalidInput {
+                        attribute: "authorized_url".to_string(),
+                        error_message: e.to_string(),
                     }
+                })?;
+
+                if origin == current_origin {
+                    found = Some(origin);
+                    break;
                 }
-                found.ok_or(SiweError::UnauthorizedHost)?
-            };
+            }
+            found.ok_or(SiweError::UnauthorizedHost)?
+        };
+        let Origin {
+            scheme: expected_scheme,
+            authority: expected_authority,
+        } = expected_origin;
 
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
 
-        if msg.domain != expected_authority {
+        if msg.domain != expected_authority
+            || !scheme_authorized(msg.scheme.as_ref(), expected_scheme.as_ref())
+        {
             return Err(SiweError::UnauthorizedHost);
         }
 
         let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
-        if uri_authority != &expected_authority {
+        if uri_authority != &expected_authority
+            || !scheme_authorized(msg.uri.scheme(), expected_scheme.as_ref())
+        {
             return Err(SiweError::UnauthorizedHost);
         }
 
@@ -505,10 +519,15 @@ impl SiweMessage {
             attribute: "current_url".to_string(),
             error_message: "does not have a valid host".to_string(),
         })?;
+        // the port is part of the web origin: without it a Mini App on another port of the
+        // same host would reuse an auto-login approval that was never granted to it.
+        let port = current_url
+            .port_u16()
+            .map_or_else(String::new, |port| format!(":{port}"));
 
         let address = self.address.to_checksum(None);
         let statement = self.statement.as_deref().unwrap_or("");
-        let input = format!("{scheme}://{host}{address}{statement}");
+        let input = format!("{scheme}://{host}{port}{address}{statement}");
         Ok(hex::encode(keccak256(input.as_bytes())).try_into()?)
     }
 
@@ -547,15 +566,33 @@ impl SiweMessage {
     }
 }
 
-/// Parses an authority and scheme (per [RFC-3986](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.1)) from
-/// a full URL or bare authority string.
+/// The scheme and authority (per [RFC-3986](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.1))
+/// a signing request is bound to.
 ///
 /// Per ERC-4361, the `scheme` is optional for SIWE messages.
-fn parse_authority(s: &str) -> Result<(Authority, Option<Scheme>), &str> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Origin {
+    scheme: Option<Scheme>,
+    authority: Authority,
+}
+
+/// Parses an [`Origin`] from a full URL or bare authority string.
+fn parse_origin(s: &str) -> Result<Origin, &str> {
     let uri: Uri = s.parse().map_err(|_| "invalid uri")?;
-    let scheme = uri.scheme().cloned();
     let authority = uri.authority().ok_or("invalid authority")?.clone();
-    Ok((authority, scheme))
+    Ok(Origin {
+        scheme: uri.scheme().cloned(),
+        authority,
+    })
+}
+
+/// Whether a scheme claimed by a SIWE message is covered by the authorized origin.
+///
+/// ERC-4361 makes the scheme optional, so a message that omits it claims no scheme at
+/// all; one that states a scheme must state the authorized one, otherwise a request
+/// served over `custom://` would inherit the authorization of `https://` on the same host.
+fn scheme_authorized(claimed: Option<&Scheme>, expected: Option<&Scheme>) -> bool {
+    claimed.is_none() || claimed == expected
 }
 
 #[cfg(test)]

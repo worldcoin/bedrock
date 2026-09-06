@@ -238,6 +238,27 @@ fn cache_hash_deterministic() {
     assert_eq!(h1.to_hex_string().len(), 66); // "0x" + 64 hex chars
 }
 
+/// The port is part of the web origin, so an approval for one port must not auto-login
+/// a Mini App served from another port of the same host.
+#[test]
+fn cache_hash_separates_ports_and_schemes() {
+    let msg = SiweMessage {
+        scheme: Some(Scheme::HTTPS),
+        domain: Authority::from_static("test.com"),
+        address: Address::from_str(TEST_WALLET).unwrap(),
+        statement: Some("statement".into()),
+        ..SiweMessage::default()
+    };
+    let no_port = msg.to_cache_hash("https://test.com").unwrap();
+    let port_8080 = msg.to_cache_hash("https://test.com:8080").unwrap();
+    let port_9090 = msg.to_cache_hash("https://test.com:9090").unwrap();
+    let http = msg.to_cache_hash("http://test.com").unwrap();
+
+    assert_ne!(port_8080, port_9090);
+    assert_ne!(no_port, port_8080);
+    assert_ne!(no_port, http);
+}
+
 #[test]
 fn default_produces_valid_message() {
     let msg = SiweMessage::default();
@@ -400,11 +421,13 @@ fn no_placeholder_still_parses() {
     assert_eq!(msg.address, account.wallet_address);
 }
 
+/// Angle brackets must not be stripped: the hidden `@evil.com` would be dropped from
+/// the domain that gets signed while the raw message the user saw still contains it.
 #[test]
-fn parse_strips_angle_brackets() {
+fn parse_rejects_angle_brackets() {
     let datetime = now_rfc3339();
     let raw = format!(
-        "<https://example.com>{PREAMBLE}\n\
+        "example.com<@evil.com>{PREAMBLE}\n\
          0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n\n\n\
          URI: https://example.com\n\
          Version: 1\n\
@@ -412,8 +435,11 @@ fn parse_strips_angle_brackets() {
          Nonce: 12345678\n\
          Issued At: {datetime}"
     );
-    let msg = SiweMessage::from_str(&raw).unwrap();
-    assert_eq!(msg.domain, "example.com");
+    let err = SiweMessage::from_str(&raw).unwrap_err();
+    assert!(
+        matches!(err, ParseError::Field(ref msg) if msg.contains("angle brackets")),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -790,6 +816,79 @@ fn rejects_different_port_on_same_host() {
     )
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+/// A Mini App that navigates the webview to a custom scheme on an authorized host must
+/// not inherit that host's `https` authorization.
+#[test]
+fn rejects_querying_url_with_unauthorized_scheme() {
+    let account = test_smart_account();
+    let raw_msg =
+        make_siwe_raw("app.example.com", "https://app.example.com", &now_rfc3339());
+    let err = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec!["https://app.example.com".to_string()],
+        "custom://app.example.com",
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+#[test]
+fn rejects_message_domain_with_unauthorized_scheme() {
+    let account = test_smart_account();
+    let raw_msg = make_siwe_raw(
+        "custom://app.example.com",
+        "https://app.example.com",
+        &now_rfc3339(),
+    );
+    let err = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec!["https://app.example.com".to_string()],
+        "https://app.example.com",
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+#[test]
+fn rejects_message_uri_with_unauthorized_scheme() {
+    let account = test_smart_account();
+    let raw_msg = make_siwe_raw(
+        "app.example.com",
+        "custom://app.example.com/callback",
+        &now_rfc3339(),
+    );
+    let err = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec!["https://app.example.com".to_string()],
+        "https://app.example.com",
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+/// ERC-4361 leaves the scheme optional, so a message that states the authorized one
+/// stays valid.
+#[test]
+fn accepts_message_domain_matching_authorized_scheme() {
+    let account = test_smart_account();
+    let raw_msg = make_siwe_raw(
+        "https://app.example.com",
+        "https://app.example.com/callback",
+        &now_rfc3339(),
+    );
+    let msg = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec!["https://app.example.com".to_string()],
+        "https://app.example.com",
+    )
+    .unwrap();
+    assert_eq!(msg.scheme.unwrap(), Scheme::HTTPS);
 }
 
 #[test]
