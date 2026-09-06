@@ -238,8 +238,6 @@ fn cache_hash_deterministic() {
     assert_eq!(h1.to_hex_string().len(), 66); // "0x" + 64 hex chars
 }
 
-/// The port is part of the web origin, so an approval for one port must not auto-login
-/// a Mini App served from another port of the same host.
 #[test]
 fn cache_hash_separates_ports_and_schemes() {
     let msg = SiweMessage {
@@ -857,38 +855,21 @@ fn rejects_message_domain_with_unauthorized_scheme() {
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
 }
 
-/// ERC-4361 requires the `URI` field to be a full URI, so an authority on its own must
-/// not pass the origin check the way a scheme-less domain does.
+/// ERC-4361 requires `URI` to be a full URI naming the authorized origin, so neither a
+/// bare authority nor another scheme on the same host passes as one.
 #[test]
-fn rejects_message_uri_without_scheme() {
-    let account = test_smart_account();
-    let raw_msg = make_siwe_raw("app.example.com", "app.example.com", &now_rfc3339());
-    let err = SiweMessage::from_str_with_account(
-        &raw_msg,
-        &account,
-        &vec!["https://app.example.com".to_string()],
-        "https://app.example.com",
-    )
-    .unwrap_err();
-    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
-}
-
-#[test]
-fn rejects_message_uri_with_unauthorized_scheme() {
-    let account = test_smart_account();
-    let raw_msg = make_siwe_raw(
-        "app.example.com",
-        "custom://app.example.com/callback",
-        &now_rfc3339(),
-    );
-    let err = SiweMessage::from_str_with_account(
-        &raw_msg,
-        &account,
-        &vec!["https://app.example.com".to_string()],
-        "https://app.example.com",
-    )
-    .unwrap_err();
-    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+fn rejects_message_uri_not_on_the_authorized_scheme() {
+    for uri in ["app.example.com", "custom://app.example.com/callback"] {
+        let raw_msg = make_siwe_raw("app.example.com", uri, &now_rfc3339());
+        let err = SiweMessage::from_str_with_account(
+            &raw_msg,
+            &test_smart_account(),
+            &vec!["https://app.example.com".to_string()],
+            "https://app.example.com",
+        )
+        .unwrap_err();
+        assert!(matches!(err, SiweError::UnauthorizedHost), "{uri}: {err}");
+    }
 }
 
 /// ERC-4361 assumes HTTPS when the domain states no scheme, so a bare domain must not
@@ -909,6 +890,26 @@ fn rejects_scheme_less_message_domain_on_http_origin() {
     )
     .unwrap_err();
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
+/// ERC-4361 assumes HTTPS for an absent scheme on the authorized URL as well, so a bare
+/// authority registered in the Developer Portal still matches an https Mini App.
+#[test]
+fn accepts_authorized_url_without_scheme() {
+    let account = test_smart_account();
+    let raw_msg = make_siwe_raw(
+        "app.example.com",
+        "https://app.example.com/callback",
+        &now_rfc3339(),
+    );
+    let msg = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec!["app.example.com".to_string()],
+        "https://app.example.com",
+    )
+    .unwrap();
+    assert_eq!(msg.domain, "app.example.com");
 }
 
 /// The other authorization tests omit the scheme, which ERC-4361 allows; a message that

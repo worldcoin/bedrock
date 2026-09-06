@@ -215,9 +215,8 @@ fn parse_datetime(s: &str, label: &str) -> Result<DateTime<Utc>, ParseError> {
 
 /// Trims surrounding whitespace and enforces the maximum length.
 ///
-/// Angle brackets are rejected rather than stripped: stripping them makes the message
-/// that gets signed differ from the one the user was shown, so a domain written as
-/// `example.com<@evil.com>` would be consented to as one origin and signed as another.
+/// Angle brackets are rejected rather than stripped, because stripping them makes the
+/// message that gets signed differ from the one the user was shown.
 fn normalize(s: &str) -> Result<&str, ParseError> {
     let cleaned = s.trim();
     if cleaned.len() > MAX_MESSAGE_LEN {
@@ -409,42 +408,44 @@ impl SiweMessage {
                 error_message: e.to_string(),
             })?;
 
-        let expected_origin = {
-            let mut found = None;
-            for authorized_url in authorized_urls {
-                let origin = parse_origin(authorized_url).map_err(|e| {
-                    PrimitiveError::InvalidInput {
-                        attribute: "authorized_url".to_string(),
-                        error_message: e.to_string(),
-                    }
-                })?;
-
-                if origin == current_origin {
-                    found = Some(origin);
-                    break;
+        let mut authorized = false;
+        for authorized_url in authorized_urls {
+            let origin = parse_origin(authorized_url).map_err(|e| {
+                PrimitiveError::InvalidInput {
+                    attribute: "authorized_url".to_string(),
+                    error_message: e.to_string(),
                 }
+            })?;
+
+            if origin == current_origin {
+                authorized = true;
+                break;
             }
-            found.ok_or(SiweError::UnauthorizedHost)?
-        };
+        }
+        if !authorized {
+            crate::warn!(check = "querying_url", "SIWE request is not authorized");
+            return Err(SiweError::UnauthorizedHost);
+        }
         let Origin {
             scheme: expected_scheme,
             authority: expected_authority,
-        } = expected_origin;
+        } = current_origin;
 
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
 
         let claimed_scheme = msg.scheme.clone().unwrap_or(Scheme::HTTPS);
         if msg.domain != expected_authority || claimed_scheme != expected_scheme {
+            crate::warn!(check = "message_domain", "SIWE request is not authorized");
             return Err(SiweError::UnauthorizedHost);
         }
 
-        // unlike the domain, ERC-4361 requires the `URI` field to be a full RFC-3986 URI,
-        // so an authority with no scheme of its own does not name an authorized origin.
+        // unlike the domain, ERC-4361 requires `URI` to be a full RFC-3986 URI.
         let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
         if uri_authority != &expected_authority
             || msg.uri.scheme() != Some(&expected_scheme)
         {
+            crate::warn!(check = "message_uri", "SIWE request is not authorized");
             return Err(SiweError::UnauthorizedHost);
         }
 
@@ -516,15 +517,13 @@ impl SiweMessage {
                 error_message: "does not have a valid scheme".to_string(),
             })?;
 
-        // the authority, not the bare host: the port is part of the web origin, and without
-        // it a Mini App on another port of the same host would reuse an auto-login
-        // approval that was never granted to it.
+        // the authority rather than the host: the port is part of the web origin.
         let authority =
             current_url
                 .authority()
                 .ok_or_else(|| SiweError::InvalidInput {
                     attribute: "current_url".to_string(),
-                    error_message: "does not have a valid host".to_string(),
+                    error_message: "does not have a valid authority".to_string(),
                 })?;
 
         let address = self.address.to_checksum(None);
