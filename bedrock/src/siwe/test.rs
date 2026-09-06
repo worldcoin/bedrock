@@ -891,6 +891,26 @@ fn rejects_message_uri_with_unauthorized_scheme() {
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
 }
 
+/// ERC-4361 assumes HTTPS when the domain states no scheme, so a bare domain must not
+/// pass on an origin that is not HTTPS.
+#[test]
+fn rejects_scheme_less_message_domain_on_http_origin() {
+    let account = test_smart_account();
+    let raw_msg = make_siwe_raw(
+        "app.example.com",
+        "http://app.example.com/callback",
+        &now_rfc3339(),
+    );
+    let err = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec!["http://app.example.com".to_string()],
+        "http://app.example.com",
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
 /// The other authorization tests omit the scheme, which ERC-4361 allows; a message that
 /// does state one is accepted when it names the authorized scheme.
 #[test]

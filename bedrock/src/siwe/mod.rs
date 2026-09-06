@@ -434,9 +434,8 @@ impl SiweMessage {
         let mut msg = Self::from_str(&s)?;
         msg.address = smart_account.wallet_address;
 
-        if msg.domain != expected_authority
-            || !scheme_authorized(msg.scheme.as_ref(), expected_scheme.as_ref())
-        {
+        let claimed_scheme = msg.scheme.clone().unwrap_or(Scheme::HTTPS);
+        if msg.domain != expected_authority || claimed_scheme != expected_scheme {
             return Err(SiweError::UnauthorizedHost);
         }
 
@@ -444,7 +443,7 @@ impl SiweMessage {
         // so an authority with no scheme of its own does not name an authorized origin.
         let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
         if uri_authority != &expected_authority
-            || msg.uri.scheme() != expected_scheme.as_ref()
+            || msg.uri.scheme() != Some(&expected_scheme)
         {
             return Err(SiweError::UnauthorizedHost);
         }
@@ -571,31 +570,23 @@ impl SiweMessage {
 
 /// The scheme and authority (per [RFC-3986](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.1))
 /// a signing request is bound to.
-///
-/// Per ERC-4361, the `scheme` is optional for SIWE messages.
 #[derive(Debug, PartialEq, Eq)]
 struct Origin {
-    scheme: Option<Scheme>,
+    scheme: Scheme,
     authority: Authority,
 }
 
 /// Parses an [`Origin`] from a full URL or bare authority string.
+///
+/// ERC-4361 makes the scheme optional and assumes HTTPS when it is absent, so a request
+/// served over `custom://` never inherits the authorization of `https://` on the same host.
 fn parse_origin(s: &str) -> Result<Origin, &str> {
     let uri: Uri = s.parse().map_err(|_| "invalid uri")?;
     let authority = uri.authority().ok_or("invalid authority")?.clone();
     Ok(Origin {
-        scheme: uri.scheme().cloned(),
+        scheme: uri.scheme().cloned().unwrap_or(Scheme::HTTPS),
         authority,
     })
-}
-
-/// Whether the scheme claimed by a SIWE message's domain is covered by the authorized origin.
-///
-/// ERC-4361 makes the domain's scheme optional, so a message that omits it claims no scheme
-/// at all; one that states a scheme must state the authorized one, otherwise a request
-/// served over `custom://` would inherit the authorization of `https://` on the same host.
-fn scheme_authorized(claimed: Option<&Scheme>, expected: Option<&Scheme>) -> bool {
-    claimed.is_none() || claimed == expected
 }
 
 #[cfg(test)]
