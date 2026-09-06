@@ -218,10 +218,10 @@ fn parse_datetime(s: &str, label: &str) -> Result<DateTime<Utc>, ParseError> {
 /// Angle brackets are rejected rather than stripped, because stripping them makes the
 /// message that gets signed differ from the one the user was shown.
 fn normalize(s: &str) -> Result<&str, ParseError> {
-    let cleaned = s.trim();
-    if cleaned.len() > MAX_MESSAGE_LEN {
+    if s.len() > MAX_MESSAGE_LEN {
         return Err(ParseError::Field("message too long".into()));
     }
+    let cleaned = s.trim();
     if cleaned.contains(['<', '>']) {
         return Err(ParseError::Field(
             "message must not contain angle brackets".into(),
@@ -400,7 +400,8 @@ impl SiweMessage {
         authorized_urls: &Vec<String>,
         querying_url: &str,
     ) -> Result<Self, SiweError> {
-        let s = s.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
+        let s =
+            normalize(s)?.replacen("{address}", &Address::ZERO.to_checksum(None), 1);
 
         let current_origin =
             parse_origin(querying_url).map_err(|e| PrimitiveError::InvalidInput {
