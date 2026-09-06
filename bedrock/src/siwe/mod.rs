@@ -441,8 +441,7 @@ impl SiweMessage {
         }
 
         // unlike the domain, ERC-4361 requires `URI` to be a full RFC-3986 URI.
-        let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
-        if uri_authority != &expected_authority
+        if msg.uri.authority() != Some(&expected_authority)
             || msg.uri.scheme() != Some(&expected_scheme)
         {
             crate::warn!(check = "message_uri", "SIWE request is not authorized");
