@@ -253,10 +253,14 @@ fn cache_hash_separates_ports_and_schemes() {
     let port_8080 = msg.to_cache_hash("https://test.com:8080").unwrap();
     let port_9090 = msg.to_cache_hash("https://test.com:9090").unwrap();
     let http = msg.to_cache_hash("http://test.com").unwrap();
+    // `Uri::port_u16` reports no port at all for one this large, so hashing the parsed
+    // port rather than the authority would collide with the portless origin.
+    let out_of_range_port = msg.to_cache_hash("https://test.com:65536").unwrap();
 
     assert_ne!(port_8080, port_9090);
     assert_ne!(no_port, port_8080);
     assert_ne!(no_port, http);
+    assert_ne!(no_port, out_of_range_port);
 }
 
 #[test]
@@ -853,6 +857,22 @@ fn rejects_message_domain_with_unauthorized_scheme() {
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
 }
 
+/// ERC-4361 requires the `URI` field to be a full URI, so an authority on its own must
+/// not pass the origin check the way a scheme-less domain does.
+#[test]
+fn rejects_message_uri_without_scheme() {
+    let account = test_smart_account();
+    let raw_msg = make_siwe_raw("app.example.com", "app.example.com", &now_rfc3339());
+    let err = SiweMessage::from_str_with_account(
+        &raw_msg,
+        &account,
+        &vec!["https://app.example.com".to_string()],
+        "https://app.example.com",
+    )
+    .unwrap_err();
+    assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
+}
+
 #[test]
 fn rejects_message_uri_with_unauthorized_scheme() {
     let account = test_smart_account();
@@ -871,8 +891,8 @@ fn rejects_message_uri_with_unauthorized_scheme() {
     assert!(matches!(err, SiweError::UnauthorizedHost), "got: {err}");
 }
 
-/// ERC-4361 leaves the scheme optional, so a message that states the authorized one
-/// stays valid.
+/// The other authorization tests omit the scheme, which ERC-4361 allows; a message that
+/// does state one is accepted when it names the authorized scheme.
 #[test]
 fn accepts_message_domain_matching_authorized_scheme() {
     let account = test_smart_account();

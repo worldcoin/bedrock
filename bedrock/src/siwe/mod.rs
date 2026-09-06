@@ -440,9 +440,11 @@ impl SiweMessage {
             return Err(SiweError::UnauthorizedHost);
         }
 
+        // unlike the domain, ERC-4361 requires the `URI` field to be a full RFC-3986 URI,
+        // so an authority with no scheme of its own does not name an authorized origin.
         let uri_authority = msg.uri.authority().ok_or(SiweError::UnauthorizedHost)?;
         if uri_authority != &expected_authority
-            || !scheme_authorized(msg.uri.scheme(), expected_scheme.as_ref())
+            || msg.uri.scheme() != expected_scheme.as_ref()
         {
             return Err(SiweError::UnauthorizedHost);
         }
@@ -515,19 +517,20 @@ impl SiweMessage {
                 error_message: "does not have a valid scheme".to_string(),
             })?;
 
-        let host = current_url.host().ok_or_else(|| SiweError::InvalidInput {
-            attribute: "current_url".to_string(),
-            error_message: "does not have a valid host".to_string(),
-        })?;
-        // the port is part of the web origin: without it a Mini App on another port of the
-        // same host would reuse an auto-login approval that was never granted to it.
-        let port = current_url
-            .port_u16()
-            .map_or_else(String::new, |port| format!(":{port}"));
+        // the authority, not the bare host: the port is part of the web origin, and without
+        // it a Mini App on another port of the same host would reuse an auto-login
+        // approval that was never granted to it.
+        let authority =
+            current_url
+                .authority()
+                .ok_or_else(|| SiweError::InvalidInput {
+                    attribute: "current_url".to_string(),
+                    error_message: "does not have a valid host".to_string(),
+                })?;
 
         let address = self.address.to_checksum(None);
         let statement = self.statement.as_deref().unwrap_or("");
-        let input = format!("{scheme}://{host}{port}{address}{statement}");
+        let input = format!("{scheme}://{authority}{address}{statement}");
         Ok(hex::encode(keccak256(input.as_bytes())).try_into()?)
     }
 
@@ -570,7 +573,7 @@ impl SiweMessage {
 /// a signing request is bound to.
 ///
 /// Per ERC-4361, the `scheme` is optional for SIWE messages.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct Origin {
     scheme: Option<Scheme>,
     authority: Authority,
@@ -586,10 +589,10 @@ fn parse_origin(s: &str) -> Result<Origin, &str> {
     })
 }
 
-/// Whether a scheme claimed by a SIWE message is covered by the authorized origin.
+/// Whether the scheme claimed by a SIWE message's domain is covered by the authorized origin.
 ///
-/// ERC-4361 makes the scheme optional, so a message that omits it claims no scheme at
-/// all; one that states a scheme must state the authorized one, otherwise a request
+/// ERC-4361 makes the domain's scheme optional, so a message that omits it claims no scheme
+/// at all; one that states a scheme must state the authorized one, otherwise a request
 /// served over `custom://` would inherit the authorization of `https://` on the same host.
 fn scheme_authorized(claimed: Option<&Scheme>, expected: Option<&Scheme>) -> bool {
     claimed.is_none() || claimed == expected
