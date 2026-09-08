@@ -4,12 +4,13 @@
 //!
 
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
+use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
 use crate::transactions::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
-use chrono::{Duration, Utc};
+use chrono::Duration;
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
@@ -38,7 +39,7 @@ impl SafeSmartAccount {
         let valid_after_bytes: [u8; 6] = [0u8; 6];
 
         // validUntil = now + configured duration
-        let valid_until_seconds = (Utc::now()
+        let valid_until_seconds = (now_with_ntp()
             + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
         .timestamp();
         let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
@@ -494,8 +495,14 @@ mod tests {
             Bytes::from_str("0x1234").unwrap(),
         );
 
+        let earliest_expiry = (now_with_ntp()
+            + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
+        .timestamp() as u64;
         safe.sign_user_operation(&mut user_op, Network::WorldChain)
             .unwrap();
+        let latest_expiry = (now_with_ntp()
+            + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
+        .timestamp() as u64;
 
         // Signature should be exactly 77 bytes (6 + 6 + 65)
         assert_eq!(user_op.signature.len(), 77);
@@ -510,6 +517,7 @@ mod tests {
         // The timestamps should be extractable from the signed operation
         let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
         assert_eq!(valid_after, U48::from(0u64));
-        assert!(valid_until > U48::from(0u64));
+        assert!(valid_until >= U48::from(earliest_expiry));
+        assert!(valid_until <= U48::from(latest_expiry));
     }
 }
