@@ -1,5 +1,5 @@
 use alloy::primitives::{Address, Bytes, U128, U256};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 /// JSON-RPC request ID
@@ -97,6 +97,58 @@ pub struct JsonRpcError {
     pub data: Option<Value>,
 }
 
+/// Response from requesting paymaster sponsorship for a user operation.
+#[derive(Debug)]
+pub enum PmSponsorUserOperationResponse {
+    /// Sponsorship was approved with the returned gas and paymaster fields.
+    Approved(PmSponsorshipApproval),
+    /// Sponsorship was declined with a self-sponsorship advisory.
+    Declined(PmSponsorshipDecline),
+}
+
+/// Self-sponsorship advisory returned when sponsorship is declined.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PmSponsorshipDecline {
+    /// ERC-20 token the user can use to pay the transaction fee.
+    pub token: Address,
+    /// Paymaster contract that accepts the fee token.
+    pub paymaster_address: Address,
+    /// Policy reason for declining sponsorship.
+    pub reason: PmSponsorshipDeclineReason,
+}
+
+/// Reason a `pm_sponsorUserOperation` request was declined.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PmSponsorshipDeclineReason {
+    /// The L2 base fee exceeded the sponsorship threshold.
+    L2BaseFee,
+    /// The L1 data fee exceeded the sponsorship threshold.
+    L1DataFee,
+    /// The user's transaction count exceeded the sponsorship threshold.
+    TransactionCount,
+    /// The estimated gas usage exceeded the sponsorship threshold.
+    GasUsage,
+    /// A reason introduced by a newer sponsorship service.
+    Unknown(String),
+}
+
+impl<'de> Deserialize<'de> for PmSponsorshipDeclineReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "l2_base_fee" => Self::L2BaseFee,
+            "l1_data_fee" => Self::L1DataFee,
+            "tx_count" => Self::TransactionCount,
+            "gas_usage" => Self::GasUsage,
+            _ => Self::Unknown(value),
+        })
+    }
+}
+
 /// Response from `wa_sponsorUserOperation`
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -123,7 +175,7 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
-/// Response from `pm_sponsorUserOperation` (V2)
+/// Approved sponsorship fields returned by `pm_sponsorUserOperation` (V2).
 ///
 /// Paymaster fields (`paymaster`, `paymaster_data`,
 /// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
@@ -133,7 +185,7 @@ pub struct SponsorUserOperationResponse {
 /// `Option<T>` so both shapes deserialize.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PmSponsorUserOperationResponse {
+pub struct PmSponsorshipApproval {
     /// Call gas limit
     pub call_gas_limit: U128,
     /// Verification gas limit

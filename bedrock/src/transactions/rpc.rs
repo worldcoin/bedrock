@@ -25,7 +25,8 @@ use std::sync::{Arc, OnceLock};
 mod wire;
 
 pub use wire::{
-    Id, PmSponsorUserOperationResponse, RelaySafeTransactionRequest, RpcMethod,
+    Id, PmSponsorUserOperationResponse, PmSponsorshipApproval, PmSponsorshipDecline,
+    PmSponsorshipDeclineReason, RelaySafeTransactionRequest, RpcMethod,
     RpcProviderName, SponsorUserOperationResponse, SponsorshipContext,
     WaGetUserOperationReceiptResponse,
 };
@@ -36,6 +37,31 @@ mod tests;
 
 /// Global RPC client instance for Bedrock operations
 static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
+
+const SPONSORSHIP_DECLINED_CODE: i64 = -32602;
+const SPONSORSHIP_DECLINED_MESSAGE: &str = "sponsorship declined";
+
+impl TryFrom<JsonRpcError> for PmSponsorshipDecline {
+    type Error = JsonRpcError;
+
+    fn try_from(error: JsonRpcError) -> Result<Self, Self::Error> {
+        if error.code != SPONSORSHIP_DECLINED_CODE
+            || error.message != SPONSORSHIP_DECLINED_MESSAGE
+        {
+            return Err(error);
+        }
+
+        let Some(data) = error.data.as_ref() else {
+            return Err(error);
+        };
+        let Ok(decline) = serde_json::from_value(data.clone()) else {
+            return Err(error);
+        };
+
+        Ok(decline)
+    }
+}
+
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
 
@@ -279,7 +305,7 @@ impl RpcClient {
     /// - The HTTP request fails
     /// - The request serialization fails
     /// - The response parsing fails
-    /// - The RPC returns an error response
+    /// - The RPC returns an unexpected error response
     pub async fn pm_sponsor_user_operation(
         &self,
         network: Network,
@@ -292,14 +318,26 @@ impl RpcClient {
             serde_json::Value::String(format!("{entry_point:?}")),
             context.to_json_value(),
         ];
-        self.rpc_call(
-            network,
-            RpcMethod::PmSponsorUserOperation,
-            params,
-            RpcProviderName::Any,
-        )
-        .await
-        .map_err(RpcError::from)
+        match self
+            .rpc_call(
+                network,
+                RpcMethod::PmSponsorUserOperation,
+                params,
+                RpcProviderName::Any,
+            )
+            .await
+        {
+            Ok(response) => Ok(PmSponsorUserOperationResponse::Approved(response)),
+            Err(RpcCallError::Response(error)) => {
+                match PmSponsorshipDecline::try_from(error) {
+                    Ok(decline) => {
+                        Ok(PmSponsorUserOperationResponse::Declined(decline))
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
+            Err(RpcCallError::Rpc(error)) => Err(error),
+        }
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
