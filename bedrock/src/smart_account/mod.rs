@@ -573,7 +573,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
         result.unwrap_err().to_string(),
-        format!("failed to decode hex-encoded secret into k256 signer: encoded key was not the right length (64 hex)")
+        "failed to decode hex-encoded secret into k256 signer: encoded key was not the right length (64 hex)".to_string()
     );
     }
 
@@ -589,9 +589,8 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!(
-                "failed to decode hex-encoded secret into k256 signer: signature error"
-            )
+            "failed to decode hex-encoded secret into k256 signer: signature error"
+                .to_string()
         );
     }
 
@@ -777,7 +776,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!("Primitive error: invalid input on token: odd number of digits")
+            "Primitive error: invalid input on token: odd number of digits".to_string()
         );
     }
 
@@ -809,7 +808,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().to_string(),
-            format!("the contract 0x000000000022D473030F116dDEE9F6B43aC78BA3 is restricted from TypedData signing.")
+            "the contract 0x000000000022D473030F116dDEE9F6B43aC78BA3 is restricted from TypedData signing.".to_string()
         );
     }
 

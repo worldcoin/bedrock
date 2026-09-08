@@ -87,7 +87,7 @@ impl TfhPaymasterApprovalMigration {
         // Two calls per token, in order, so the results pair up.
         let mut gap = Vec::new();
         for ((token, name, target), pair) in
-            PAYMASTER_TOKENS.iter().zip(results.chunks_exact(2))
+            PAYMASTER_TOKENS.iter().zip(results.as_chunks::<2>().0)
         {
             if pair.iter().any(|r| !r.success || r.returnData.len() < 32) {
                 return Err(MigrationError::InvalidOperation(format!(
