@@ -604,8 +604,10 @@ impl BackupManager {
             backup_id: &backup_id,
         };
 
-        DeleteBackup.run(&ctx).await?;
-        // FIXME: add client side event for removal
+        if let Err(error) = DeleteBackup.run(&ctx).await {
+            crate::warn!(error_message = error, "delete_backup.failed");
+            return Err(error);
+        }
         crate::info!("delete_backup.succeeded");
 
         Self::post_delete_backup("delete_backup");
@@ -672,12 +674,16 @@ impl BackupManager {
 
         if let Err(error) = manifest {
             crate::critical!(
-                "{flow}.post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale) err={error:?}"
+                flow = flow,
+                error_message = error,
+                "post_delete_cleanup_failed (backup is deleted remotely; local manifest is stale)"
             );
         }
         if let Err(error) = report {
-            crate::critical!(
-                "{flow}.post_delete_report_cleanup_failed (backup is deleted remotely; base report is stale) err={error:?}"
+            crate::warn!(
+                flow = flow,
+                error_message = error,
+                "post_delete_report_cleanup_failed (backup deleted remotely; base report stale)"
             );
         }
     }
@@ -1120,6 +1126,16 @@ impl From<KeypairSignerError> for BackupOperationError {
 
 impl From<TurnkeyApiError> for BackupOperationError {
     fn from(inner: TurnkeyApiError) -> Self {
+        if matches!(inner, TurnkeyApiError::Timeout) {
+            return Self::Timeout;
+        }
+        if inner.indicates_invalid_signer() {
+            // Main Factor check is done earlier
+            crate::warn!("turnkey.sync_factor_invalid");
+            return Self::NeedsReauth {
+                reason: NeedsReauthReason::SyncFactorInvalid,
+            };
+        }
         if inner.is_retryable() {
             return Self::Network { retryable: true };
         }

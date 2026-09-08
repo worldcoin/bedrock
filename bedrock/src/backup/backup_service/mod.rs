@@ -45,9 +45,6 @@ const RETRIEVE_METADATA_PATH: &str = "/v1/retrieve-metadata";
 /// feature is supported.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
 
-/// Max timeout for fetching challenges. Fail fast!
-const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Deadline for the foreign attestation callback, which Bedrock cannot otherwise
 /// bound and which sits in the commit path.
 const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -126,7 +123,17 @@ impl BackupServiceClient {
                 false, // Single-use challenge token (no retries)
             )
             .await?;
-        serde_json::from_slice(&bytes).map_err(|error| deserialize_error(&error))
+        let metadata: BackupMetadata = serde_json::from_slice(&bytes)
+            .map_err(|error| deserialize_error(&error))?;
+        if metadata.id != backup_id {
+            crate::critical!(
+                expected_backup_id = backup_id,
+                actual_backup_id = metadata.id,
+                "backup_service.metadata_id_mismatch"
+            );
+            return Err(BackupOperationError::Consistency);
+        }
+        Ok(metadata)
     }
 
     /// Deletes a factor via the attestation-gated `delete-factor` endpoint.
@@ -232,12 +239,9 @@ impl BackupServiceClient {
     ) -> Result<ChallengeResponse, BackupOperationError> {
         let bytes =
             serde_json::to_vec(body).map_err(|error| serialize_error(&error))?;
-        let fetch = self.post_bytes("challenge", path, bytes, &[], false);
-        let Ok(raw) = tokio::time::timeout(CHALLENGE_TIMEOUT, fetch).await else {
-            crate::warn!(path = path, "backup_service.challenge_timed_out");
-            return Err(BackupOperationError::Network { retryable: true });
-        };
-        serde_json::from_slice(&raw?).map_err(|error| deserialize_error(&error))
+        // Minting a challenge is safe to retry; consuming its token is not.
+        let raw = self.post_bytes("challenge", path, bytes, &[], true).await?;
+        serde_json::from_slice(&raw).map_err(|error| deserialize_error(&error))
     }
 
     /// POSTs raw `body` bytes, retrying transient failures when `retry` is set.
@@ -515,6 +519,66 @@ mod tests {
         assert!(matches!(
             status_error(StatusCode::NOT_FOUND, b"not json"),
             BackupOperationError::BackupService { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn challenge_fetch_retries_transient_failures() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        for status in [408, 429, 503] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path(DELETE_BACKUP_CHALLENGE_PATH))
+                .respond_with(ResponseTemplate::new(status))
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(DELETE_BACKUP_CHALLENGE_PATH))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "challenge": STANDARD.encode([7u8; 32]),
+                    "token": "fresh-token",
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client =
+                BackupServiceClient::with_base_url_for_test(server.uri()).unwrap();
+
+            let challenge = client
+                .fetch_challenge(DELETE_BACKUP_CHALLENGE_PATH, &json!({}))
+                .await
+                .unwrap();
+
+            assert_eq!(challenge.token, "fresh-token");
+        }
+    }
+
+    #[tokio::test]
+    async fn challenge_retries_are_bounded() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_CHALLENGE_PATH))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(u64::from(RetryPolicy::default().max_attempts))
+            .mount(&server)
+            .await;
+        let client = BackupServiceClient::with_base_url_for_test(server.uri()).unwrap();
+
+        let error = client
+            .fetch_challenge(DELETE_BACKUP_CHALLENGE_PATH, &json!({}))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackupOperationError::Network { retryable: true }
         ));
     }
 
