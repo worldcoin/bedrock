@@ -3,8 +3,10 @@
 //!
 //! Reference: <https://docs.toolsforhumanity.com/world-app/backup/flows>
 
+mod delete_backup;
 mod remove_factor;
 
+pub use delete_backup::DeleteBackup;
 pub use remove_factor::{RemoveFactor, RemoveFactorOutcome};
 
 use crate::backup::backup_service::BackupServiceClient;
@@ -25,6 +27,8 @@ pub struct FlowContext<'a> {
     pub sync_factor: &'a P256Signer,
     /// An optional main-factor signer for privileged Turnkey writes.
     pub main_factor: Option<&'a P256Signer>,
+    /// The backup account id, derived from the root key.
+    pub backup_id: &'a str,
 }
 
 /// A high-level backup operation (e.g. "Add a Main Factor", "Remove a Main Factor").
@@ -36,7 +40,7 @@ pub trait BackupFlow {
     /// Executes the flow.
     ///
     /// # Errors
-    /// Returns [`BackupOperationError`] or `NeedsReauth` if applicable.
+    /// See [`BackupOperationError`].
     async fn run(
         &self,
         ctx: &FlowContext<'_>,

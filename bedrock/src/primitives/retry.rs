@@ -14,6 +14,9 @@ pub struct RetryPolicy {
     pub base_delay: Duration,
     /// Ceiling on any single backoff delay.
     pub max_delay: Duration,
+    /// The maximum time the entire request (including retries) may take. A last
+    /// resort stop-gap to prevent hanging requests.
+    pub total_timeout: Duration,
 }
 
 impl Default for RetryPolicy {
@@ -22,6 +25,7 @@ impl Default for RetryPolicy {
             max_attempts: 3,
             base_delay: Duration::from_millis(250),
             max_delay: Duration::from_secs(2),
+            total_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -42,6 +46,15 @@ impl RetryPolicy {
     }
 }
 
+/// Why a retried operation failed.
+#[derive(Debug)]
+pub enum RetryError<E> {
+    /// Operation reported a non-retryable error.
+    Operation(E),
+    /// [`RetryPolicy::total_timeout`] elapsed before a success.
+    Timeout,
+}
+
 /// Runs `op`, retrying transient failures per `policy` until terminal state.
 ///
 /// `is_retryable` decides whether a given error warrants another attempt, so each
@@ -53,34 +66,61 @@ impl RetryPolicy {
 pub async fn retry_with_backoff<T, E, Fut>(
     policy: &RetryPolicy,
     operation: &str,
-    is_retryable: impl Fn(&E) -> bool + Send,
+    is_retryable: impl Fn(&E) -> bool + Send + Sync,
     mut op: impl FnMut() -> Fut + Send,
-) -> Result<T, E>
+) -> Result<T, RetryError<E>>
 where
     Fut: Future<Output = Result<T, E>> + Send,
-    E: std::fmt::Display,
+    E: std::fmt::Display + Send,
+    T: Send,
 {
-    let mut attempt: u32 = 0;
-    loop {
-        match op().await {
-            Ok(value) => return Ok(value),
-            Err(error) => {
-                attempt += 1;
-                if attempt >= policy.max_attempts || !is_retryable(&error) {
+    let result = tokio::time::timeout(policy.total_timeout, async {
+        let mut attempt: u32 = 0;
+
+        loop {
+            match op().await {
+                Ok(value) => return Ok(value),
+
+                Err(error) => {
+                    attempt += 1;
+
+                    if attempt >= policy.max_attempts || !is_retryable(&error) {
+                        crate::warn!(
+                            operation = operation,
+                            attempts = attempt,
+                            error_message = error,
+                            "request.failed"
+                        );
+                        return Err(RetryError::Operation(error));
+                    }
+
+                    let delay = policy.backoff_delay(attempt);
+
                     crate::warn!(
-                        "request.failed op={operation} attempts={attempt} err={error}"
+                        operation = operation,
+                        attempt = attempt,
+                        delay_ms = delay.as_millis(),
+                        error_message = error,
+                        "request.retry"
                     );
-                    return Err(error);
+
+                    tokio::time::sleep(delay).await;
                 }
-                let delay = policy.backoff_delay(attempt);
-                crate::warn!(
-                    "request.retry op={operation} attempt={attempt} delay_ms={} err={error}",
-                    delay.as_millis()
-                );
-                tokio::time::sleep(delay).await;
             }
         }
-    }
+    })
+    .await;
+
+    let Ok(result) = result else {
+        let timeout_ms = policy.total_timeout.as_millis();
+        crate::warn!(
+            operation = operation,
+            timeout_ms = timeout_ms,
+            "request.total_timeout"
+        );
+        return Err(RetryError::Timeout);
+    };
+    result
 }
 
 #[cfg(test)]
@@ -100,7 +140,7 @@ mod tests {
     async fn recovers_after_transient_failures() {
         let policy = RetryPolicy::default();
         let calls = AtomicU32::new(0);
-        let result: Result<u32, &str> = retry_with_backoff(
+        let result: Result<u32, RetryError<&str>> = retry_with_backoff(
             &policy,
             "op",
             |_| true,
@@ -125,7 +165,7 @@ mod tests {
     async fn gives_up_after_max_attempts() {
         let policy = RetryPolicy::default();
         let calls = AtomicU32::new(0);
-        let result: Result<(), &str> = retry_with_backoff(
+        let result: Result<(), RetryError<&str>> = retry_with_backoff(
             &policy,
             "op",
             |_| true,
@@ -136,7 +176,7 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(RetryError::Operation("always"))));
         assert_eq!(calls.load(Ordering::SeqCst), policy.max_attempts);
     }
 
@@ -144,7 +184,7 @@ mod tests {
     async fn does_not_retry_non_retryable() {
         let policy = RetryPolicy::default();
         let calls = AtomicU32::new(0);
-        let result: Result<(), &str> = retry_with_backoff(
+        let result: Result<(), RetryError<&str>> = retry_with_backoff(
             &policy,
             "op",
             |_| false,
@@ -155,7 +195,36 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(RetryError::Operation("permanent"))));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn total_timeout_exceeded_raises_timeout_error() {
+        let policy = RetryPolicy {
+            total_timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
+        let calls = AtomicU32::new(0);
+        let result: Result<(), RetryError<&str>> = retry_with_backoff(
+            &policy,
+            "op",
+            |_| true,
+            || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Err("never settles")
+                }
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(RetryError::Timeout)));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the first attempt never settled, so no retry was ever reached"
+        );
     }
 }

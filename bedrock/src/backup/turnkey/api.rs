@@ -2,12 +2,11 @@
 //!
 //! The SDK retries only the polling of `PENDING` activities to completion; it does not retry
 //! transport failures, so we wrap each call in our own bounded exponential-backoff-with-jitter policy
-//! covering 429/5xx/timeouts/connectivity. Query results are cached
-//! in-memory for the lifetime of a single client so that multiple migrations
-//! reading the same data do not issue duplicate calls.
+//! covering 429/5xx/timeouts/connectivity. Policy reads are cached for the lifetime of a client.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -27,9 +26,9 @@ use turnkey_client::generated::services::coordinator::public::v1::{
 };
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
-use crate::backup::{MainFactor, SyncFactor};
+use crate::backup::{BackupOperationError, MainFactor, NeedsReauthReason, SyncFactor};
 use crate::primitives::ntp::now_with_ntp;
-use crate::primitives::retry::{retry_with_backoff, RetryPolicy};
+use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 
 use super::error::TurnkeyApiError;
@@ -157,13 +156,9 @@ impl<T> OrgCache<T> {
     }
 }
 
-/// Turnkey API client using the Turnkey SDK plus Bedrock's retry and caching.
-///
-/// Unless otherwise noted, all read operations are cached in-memory for the
-/// lifetime of this client.
+/// Turnkey API client with bounded retries and cached policy reads.
 pub struct TurnkeyApiClient {
     retry: RetryPolicy,
-    users_cache: OrgCache<Vec<User>>,
     policies_cache: OrgCache<Vec<Policy>>,
     /// Overrides the SDK's default Turnkey base URL. `None` in production; set
     /// only in tests to point the real client at a mock HTTP server.
@@ -175,8 +170,10 @@ impl TurnkeyApiClient {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            retry: RetryPolicy::default(),
-            users_cache: OrgCache::new("user"),
+            retry: RetryPolicy {
+                total_timeout: Duration::from_secs(30), // some leeway to activity polling
+                ..RetryPolicy::default()
+            },
             policies_cache: OrgCache::new("policy"),
             base_url: None,
         }
@@ -217,9 +214,14 @@ impl TurnkeyApiClient {
     ) -> Result<T, TurnkeyApiError>
     where
         Fut: Future<Output = Result<T, TurnkeyApiError>> + Send,
+        T: Send,
     {
         retry_with_backoff(&self.retry, operation, TurnkeyApiError::is_retryable, op)
             .await
+            .map_err(|e| match e {
+                RetryError::Operation(e) => e,
+                RetryError::Timeout => TurnkeyApiError::Timeout,
+            })
     }
 }
 
@@ -283,52 +285,28 @@ impl TurnkeyApiClient {
         .await
     }
 
-    /// Lists the users of a sub-organization.
-    ///
-    /// Results are cached for the lifetime of this client.
+    /// Lists users from Turnkey.
     ///
     /// # Errors
     /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
-    /// Re-reads the users, discarding any cached copy first.
-    ///
-    /// For callers that must act on the current state rather than a snapshot taken
-    /// earlier in the same flow.
-    ///
-    /// # Errors
-    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
-    pub async fn get_users_fresh(
-        &self,
-        suborganization_id: &str,
-        signer: SyncFactor<'_>,
-    ) -> Result<Arc<Vec<User>>, TurnkeyApiError> {
-        self.users_cache.clear();
-        self.get_users(suborganization_id, signer).await
-    }
-
     pub async fn get_users(
         &self,
         suborganization_id: &str,
         signer: SyncFactor<'_>,
-    ) -> Result<Arc<Vec<User>>, TurnkeyApiError> {
-        if let Some(cached) = self.users_cache.get(suborganization_id)? {
-            return Ok(cached);
-        }
+    ) -> Result<Vec<User>, TurnkeyApiError> {
         let client = self.sdk_client(signer.0)?;
         let request = GetUsersRequest {
             organization_id: suborganization_id.to_string(),
         };
 
-        let users = self
-            .with_retry("get_users", || async {
-                client
-                    .get_users(request.clone())
-                    .await
-                    .map(|response| response.users)
-                    .map_err(TurnkeyApiError::from)
-            })
-            .await?;
-
-        Ok(self.users_cache.store(suborganization_id, users))
+        self.with_retry("get_users", || async {
+            client
+                .get_users(request.clone())
+                .await
+                .map(|response| response.users)
+                .map_err(TurnkeyApiError::from)
+        })
+        .await
     }
 
     /// Creates OAuth providers on a user (needs a [`MainFactor`] signer).
@@ -381,8 +359,6 @@ impl TurnkeyApiClient {
             );
         }
 
-        // User has changed, remove the cache
-        self.users_cache.clear();
         Ok(())
     }
 
@@ -432,8 +408,6 @@ impl TurnkeyApiClient {
             );
         }
 
-        // User has changed, remove the cache.
-        self.users_cache.clear();
         Ok(())
     }
 
@@ -479,8 +453,6 @@ impl TurnkeyApiClient {
             );
         }
 
-        // User has changed, remove the cache.
-        self.users_cache.clear();
         Ok(())
     }
 
@@ -513,8 +485,52 @@ impl TurnkeyApiClient {
         })
         .await?;
 
-        self.users_cache.clear();
         self.policies_cache.clear();
+        Ok(())
+    }
+
+    /// Ensure a [`SyncFactor`] is valid in Turnkey.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::SyncFactorInvalid`] when Turnkey rejects the signer, and
+    /// the mapped error for any other failure. Nothing is tolerated here: this runs
+    /// before anything is committed, so aborting costs only a retry, whereas
+    /// proceeding would commit on a premise that was never verified.
+    pub async fn verify_sync_factor(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<(), BackupOperationError> {
+        self.get_users(suborganization_id, signer).await?;
+        Ok(())
+    }
+
+    /// Ensure a [`MainFactor`] is valid in Turnkey for an `expected_user_id`.
+    ///
+    /// # Errors
+    /// [`NeedsReauthReason::MainFactorInvalid`] when Turnkey rejects the signer or it
+    /// authenticates as another user, and the mapped error for any other failure.
+    /// Nothing is tolerated here, as in [`Self::verify_sync_factor`].
+    pub async fn verify_main_factor(
+        &self,
+        suborganization_id: &str,
+        expected_user_id: &str,
+        signer: MainFactor<'_>,
+    ) -> Result<(), BackupOperationError> {
+        let reason = NeedsReauthReason::MainFactorInvalid;
+        let user_id = match self.whoami_user_id(suborganization_id, signer).await {
+            Ok(user_id) => user_id,
+            Err(e) if e.indicates_invalid_signer() => {
+                crate::warn!("turnkey.main_factor_invalid (pre-flight)");
+                return Err(BackupOperationError::NeedsReauth { reason });
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if user_id != expected_user_id {
+            crate::warn!("turnkey.main_factor_wrong_user");
+            return Err(BackupOperationError::NeedsReauth { reason });
+        }
         Ok(())
     }
 
@@ -674,6 +690,8 @@ mod tests {
     use crate::backup::turnkey::test::TestSigner;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn stamp_verifies_against_body() {
@@ -704,7 +722,7 @@ mod tests {
     #[test]
     fn retryable_classes_only() {
         let body = || String::new();
-        assert!(TurnkeyApiError::Timeout.is_retryable());
+        assert!(!TurnkeyApiError::Timeout.is_retryable());
         assert!(TurnkeyApiError::RateLimited { body: body() }.is_retryable());
         assert!(TurnkeyApiError::ServerError {
             status: 503,
@@ -818,7 +836,9 @@ mod tests {
                 let attempt = calls.fetch_add(1, Ordering::SeqCst);
                 async move {
                     if attempt < 2 {
-                        Err(TurnkeyApiError::Timeout)
+                        Err(TurnkeyApiError::Transport {
+                            error_message: "request timed out".to_string(),
+                        })
                     } else {
                         Ok(42)
                     }
@@ -866,5 +886,102 @@ mod tests {
 
         assert!(matches!(result, Err(TurnkeyApiError::MainUserNotFound)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn total_deadline_is_terminal_for_backup_operations() {
+        let client = TurnkeyApiClient::new();
+        let error = client
+            .with_retry(
+                "stalled",
+                std::future::pending::<Result<(), TurnkeyApiError>>,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, TurnkeyApiError::Timeout));
+        assert!(!error.is_retryable());
+        assert!(matches!(
+            error.to_migration_error(),
+            crate::backup::turnkey::TurnkeyMigrationError::Retryable
+        ));
+        assert!(matches!(
+            BackupOperationError::from(error),
+            BackupOperationError::Timeout
+        ));
+    }
+
+    #[tokio::test]
+    async fn sdk_request_timeout_remains_retryable() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/query/list_users"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .mount(&server)
+            .await;
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let client = TurnkeyClient::builder()
+            .api_key(KeypairSignerStamper::new(&signer))
+            .base_url(server.uri())
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let error = client
+            .get_users(GetUsersRequest {
+                organization_id: "suborg-1".to_string(),
+            })
+            .await
+            .unwrap_err();
+        let turnkey_client::TurnkeyClientError::Http(source) = &error else {
+            panic!("expected HTTP timeout, got {error:?}");
+        };
+        assert!(source.is_timeout());
+        let error = TurnkeyApiError::from(error);
+        assert!(error.is_retryable());
+        assert!(!error.to_string().contains(&server.uri()));
+        assert!(matches!(
+            BackupOperationError::from(error),
+            BackupOperationError::Network { retryable: true }
+        ));
+    }
+
+    #[tokio::test]
+    async fn sync_factor_verification_rechecks_a_previously_valid_signer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/query/list_users"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "users": [] })),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/query/list_users"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(
+                serde_json::json!({ "message": "PUBLIC_KEY_NOT_FOUND" }),
+            ))
+            .expect(1)
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        let client = TurnkeyApiClient::with_base_url(server.uri());
+        client
+            .get_users("suborg-1", SyncFactor(&signer))
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            client
+                .verify_sync_factor("suborg-1", SyncFactor(&signer))
+                .await,
+            Err(BackupOperationError::NeedsReauth {
+                reason: NeedsReauthReason::SyncFactorInvalid,
+            })
+        ));
     }
 }
