@@ -19,7 +19,7 @@ use turnkey_client::generated::external::data::v1::{Policy, User};
 use turnkey_client::generated::immutable::activity::v1::{
     CreateOauthProvidersIntentV2, CreatePolicyIntentV3, DeleteAuthenticatorsIntent,
     DeleteOauthProvidersIntent, DeletePolicyIntent, DeleteSubOrganizationIntent,
-    OauthProviderParamsV2, UpdatePolicyIntentV2,
+    DeleteUsersIntent, OauthProviderParamsV2, UpdatePolicyIntentV2,
 };
 use turnkey_client::generated::services::coordinator::public::v1::{
     GetPoliciesRequest, GetUsersRequest, GetWhoamiRequest,
@@ -32,6 +32,7 @@ use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 
 use super::error::TurnkeyApiError;
+use super::policies::UserRole;
 
 /// Adapts a [`P256Signer`] into the Turnkey SDK's [`Stamp`] trait, so the SDK
 /// client can stamp requests with a key held in native secure storage.
@@ -661,6 +662,81 @@ impl TurnkeyApiClient {
         self.policies_cache.clear();
         Ok(())
     }
+
+    /// Reconciles deletion of a legacy sync-factor user from a Turnkey sub-organization.
+    ///
+    /// The request is stamped by the replacement sync factor. This makes the
+    /// operation convergent: if a previous delete was accepted but its response
+    /// was lost, a later invocation observes that the legacy user is absent and
+    /// completes successfully without needing the legacy credential to sign.
+    ///
+    /// The replacement signer's private key remains in native secure storage and
+    /// is never passed into Bedrock as bytes.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on input validation, transport, stamping,
+    /// activity, or response-consistency failures.
+    pub async fn reconcile_legacy_sync_factor_user(
+        &self,
+        suborganization_id: &str,
+        legacy_user_id: &str,
+        replacement_sync_factor: SyncFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        if uuid::Uuid::try_parse(legacy_user_id).is_err() {
+            return Err(TurnkeyApiError::Client(
+                "legacy sync-factor user id is not a UUID".to_string(),
+            ));
+        }
+
+        let users = self
+            .get_users(suborganization_id, replacement_sync_factor)
+            .await?;
+        let Some(legacy_user) = users
+            .iter()
+            .find(|user| user.user_id == legacy_user_id)
+        else {
+            // A previous attempt may have deleted the user after the caller
+            // lost the activity response. Absence is the desired terminal state.
+            return Ok(());
+        };
+
+        if UserRole::classify(&legacy_user.user_name) != UserRole::SyncFactor {
+            crate::critical!(
+                "turnkey.reconcile_legacy_sync_factor_user.target_is_not_sync_factor"
+            );
+            return Err(TurnkeyApiError::Consistency);
+        }
+
+        let client = self.sdk_client(replacement_sync_factor.0)?;
+        let intent = DeleteUsersIntent {
+            user_ids: vec![legacy_user_id.to_string()],
+        };
+        // Compute this once outside retries to keep the submitted activity
+        // idempotent if the first response is lost.
+        let timestamp_ms = ntp_timestamp_ms()?;
+        let deleted_user_ids = self
+            .with_retry("reconcile_legacy_sync_factor_user", || async {
+                client
+                    .delete_users(
+                        suborganization_id.to_string(),
+                        timestamp_ms,
+                        intent.clone(),
+                    )
+                    .await
+                    .map(|activity| activity.result.user_ids)
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        if !deleted_user_ids.iter().any(|id| id == legacy_user_id) {
+            crate::critical!(
+                "turnkey.reconcile_legacy_sync_factor_user.response_missing_requested_user"
+            );
+            return Err(TurnkeyApiError::Consistency);
+        }
+
+        Ok(())
+    }
 }
 
 /// Current NTP time in milliseconds, for Turnkey activity timestamps.
@@ -983,5 +1059,160 @@ mod tests {
                 reason: NeedsReauthReason::SyncFactorInvalid,
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn reconcile_legacy_sync_factor_user_deletes_a_verified_sync_factor() {
+        const SUBORGANIZATION_ID: &str = "suborg-1";
+        const USER_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/query/list_users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "users": [{
+                    "userId": USER_ID,
+                    "userName": "sync_factor_user_legacy"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/submit/delete_users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "activity": {
+                    "id": "activity-1",
+                    "organizationId": SUBORGANIZATION_ID,
+                    "status": "ACTIVITY_STATUS_COMPLETED",
+                    "type": "ACTIVITY_TYPE_DELETE_USERS",
+                    "fingerprint": "fingerprint-1",
+                    "result": {
+                        "deleteUsersResult": { "userIds": [USER_ID] }
+                    }
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+        TurnkeyApiClient::with_base_url(server.uri())
+            .reconcile_legacy_sync_factor_user(SUBORGANIZATION_ID, USER_ID, SyncFactor(&signer))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_legacy_sync_factor_user_retries_a_transient_delete_failure() {
+        const SUBORGANIZATION_ID: &str = "suborg-1";
+        const USER_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/query/list_users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "users": [{
+                    "userId": USER_ID,
+                    "userName": "sync_factor_user_legacy"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/submit/delete_users"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/submit/delete_users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "activity": {
+                    "id": "activity-1",
+                    "organizationId": SUBORGANIZATION_ID,
+                    "status": "ACTIVITY_STATUS_COMPLETED",
+                    "type": "ACTIVITY_TYPE_DELETE_USERS",
+                    "fingerprint": "fingerprint-1",
+                    "result": {
+                        "deleteUsersResult": { "userIds": [USER_ID] }
+                    }
+                }
+            })))
+            .expect(1)
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+
+        TurnkeyApiClient::with_base_url(server.uri())
+            .reconcile_legacy_sync_factor_user(SUBORGANIZATION_ID, USER_ID, SyncFactor(&signer))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_legacy_sync_factor_user_completes_when_already_absent() {
+        const USER_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/query/list_users"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "users": [] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+
+        TurnkeyApiClient::with_base_url(server.uri())
+            .reconcile_legacy_sync_factor_user("suborg-1", USER_ID, SyncFactor(&signer))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_legacy_sync_factor_user_rejects_a_non_sync_factor_target() {
+        const USER_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/public/v1/query/list_users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "users": [{
+                    "userId": USER_ID,
+                    "userName": "auth_user_main"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+
+        let error = TurnkeyApiClient::with_base_url(server.uri())
+            .reconcile_legacy_sync_factor_user("suborg-1", USER_ID, SyncFactor(&signer))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, TurnkeyApiError::Consistency));
+    }
+
+    #[tokio::test]
+    async fn reconcile_legacy_sync_factor_user_rejects_an_invalid_user_id_without_a_request() {
+        let server = MockServer::start().await;
+        let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
+
+        let error = TurnkeyApiClient::with_base_url(server.uri())
+            .reconcile_legacy_sync_factor_user("suborg-1", "not-a-uuid", SyncFactor(&signer))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, TurnkeyApiError::Client(_)));
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 }
