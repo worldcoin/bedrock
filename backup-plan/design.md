@@ -27,58 +27,65 @@ struct BackupManager {
 
 impl BackupManager {
     fn new(main_factor_ceremony: MainFactorCeremony) -> Self;
-    // Derive the account ID, consume the root, and retain only the ID.
+    // Derive the account ID, consume the root, and retain only the ID. Separate from `new` because
+    // you can also init the `BackupManager` for login, before there's a root secret.
     fn bind(root: SiegelSession);
     // Adopt native backup state only after its account, encryption key, and head match.
     async fn adopt_existing_backup(sync: P256Signer, encryption_public_key: String,
                                     turnkey_sync_user_id: Option<String>);
 
-    // Report remote existence, not sync health; network failures remain errors.
     async fn has_backup() -> bool;
+    // Retrieves the backup metadata, does not enforce the RemoteStaleAhead gate.
     async fn metadata(sync: P256Signer) -> BackupMetadata;
-    // Check remote divergence and compatibility blocks without restoring files.
+    // Separate from metadata() because metadata is needed to render the factor list
     async fn check_for_remote_updates(sync: P256Signer);
-    async fn backed_up_files(sync: P256Signer, designator: BackupFileDesignator) -> Vec<String>;
+    async fn list_files_in_backup(sync: P256Signer, designator: BackupFileDesignator)
+        -> Vec<String>;
     async fn sync(root: SiegelSession, sync: P256Signer, changes: Vec<BackupFileChange>);
 
-    async fn create(factor: NewFactor, root: SiegelSession,
+    async fn create(factor: FactorRegistration, root: SiegelSession,
                      sync: P256Signer, files: Vec<BackupFileChange>);
     // Stage validated files; only Login returns the root, and registration waits for completion.
-    async fn recover(login: BackupLogin, mode: RecoveryMode,
+    async fn recover(login: FactorAuthentication, mode: RecoveryMode,
                       expected_backup_id: Option<String>) -> RecoveredBackup;
     // Acknowledge required native restore work, then enroll the signer and publish staged state.
     async fn complete_recovery(recovery_id: String, sync: P256Signer,
-                                reauth: Option<BackupLogin>, replace_device: Option<String>)
+                                reauth: Option<FactorAuthentication>,
+                                replace_device: Option<String>)
         -> TurnkeyStatus;
     // Cancel before registration; native blocks cancellation once ReplaceLocal import starts.
     fn cancel_recovery(recovery_id: String);
     // Authorize device access without importing files or returning a root.
-    async fn reauthorize(login: BackupLogin, sync: P256Signer,
+    async fn reauthorize(login: FactorAuthentication, sync: P256Signer,
                           replace_device: Option<String>) -> TurnkeyStatus;
 
-    async fn add_factor(factor: NewFactor, existing: BackupLogin,
+    async fn add_factor(factor: FactorRegistration, existing: FactorAuthentication,
                          sync: P256Signer) -> BackupMetadata;
     async fn remove_factor(id: String, sync: P256Signer,
-                            reauth: Option<BackupLogin>, confirm_backup_deletion: bool)
+                            reauth: Option<FactorAuthentication>, confirm_backup_deletion: bool)
         -> RemoveFactorOutcome;
     // Revoke this device in both stores while preserving the backup and its main factors.
     async fn unregister_device(sync: P256Signer) -> TurnkeyStatus;
     async fn delete_backup(sync: P256Signer) -> TurnkeyStatus;
-    // Delete through root authority; Turnkey cleanup may remain incomplete.
+    // Performs the backup full `/reset`
     async fn reset(root: SiegelSession) -> TurnkeyStatus;
-    async fn run_migrations(sync: P256Signer, reauth: Option<BackupLogin>) ->
-        TurnkeyMigrationOutcome;
+    async fn run_migrations(sync: P256Signer, reauth: Option<FactorAuthentication>)
+        -> TurnkeyMigrationOutcome;
     // Read cached public metadata for offline cross-app handoff.
     fn cross_app_metadata() -> CrossAppBackupMetadata;
     // Clear Bedrock state and binding, preserving wallet files, native keys, and remote data.
     fn clear_local_state();
 }
 
-enum NewFactor {
+enum FactorRegistration {
     Passkey { name: String, display_name: String },
     Oidc { provider: OidcProvider },
 }
-enum BackupLogin { Passkey, Oidc { provider: OidcProvider }, IcloudKeychain { key_id: String } }
+enum FactorAuthentication {
+    Passkey,
+    Oidc { provider: OidcProvider },
+    IcloudKeychain { key_id: String },
+}
 enum RecoveryMode { Login, ReplaceLocal, ResumeSync }
 enum TurnkeyStatus { Complete, Incomplete }
 
@@ -96,28 +103,29 @@ struct CrossAppBackupMetadata {
 }
 ```
 
-`NewFactor` selects what `create` and `add_factor` enroll; `BackupLogin` selects an existing factor
-for authentication. Neither holds credentials or an authenticated session. New factor types extend
-`NewFactor` and private dispatch behind the same public methods. `MainFactorCeremony` keeps ceremony
-ordering inside Bedrock; native presents the requested UI and returns its result. `NewFactor`
-excludes iCloud Keychain. An existing iCloud factor may authorize adding a passkey/OIDC factor when
-no Turnkey account exists. With an existing Turnkey account, additions need a working passkey/OIDC
-main factor; iCloud recovery remains available. At most one passkey per backup, matching the
-existing single PRF encryption-key invariant. Multiple OIDC factors share the existing Turnkey
-encryption key; do not create one key per Apple audience.
+`FactorRegistration` selects what `create` and `add_factor` enroll; `FactorAuthentication`
+selects an existing factor for authentication. Neither holds credentials or an authenticated
+session. New factor types extend `FactorRegistration` and private dispatch behind the same
+public methods. `MainFactorCeremony` keeps ceremony ordering inside Bedrock; native presents the
+requested UI and returns its result. `FactorRegistration` excludes iCloud Keychain. An existing
+iCloud factor may authorize adding a passkey/OIDC factor when no Turnkey account exists. With an
+existing Turnkey account, additions need a working passkey/OIDC main factor; iCloud recovery
+remains available. At most one passkey per backup, matching the existing single PRF
+encryption-key invariant. Multiple OIDC factors share the existing Turnkey encryption key; do
+not create one key per Apple audience.
 
 Reuse service types at the wire boundary and expose the shared `OidcProvider` through UniFFI.
-`NewFactor` and `BackupLogin` are ceremony inputs; wire `Authorization` contains completed proofs,
-and registered-factor metadata requires fields unavailable before authentication. Keep those roles
-distinct; [shared type wiring](execution.md#shared-type-wiring) defines reuse and compilation
-checks.
+`FactorRegistration` and `FactorAuthentication` are ceremony inputs; wire `Authorization` contains
+completed proofs, and registered-factor metadata requires fields unavailable before authentication.
+Keep those roles distinct; [shared type wiring](execution.md#shared-type-wiring) defines reuse and
+compilation checks.
 
 File changes are `Put { designator, path }`, `Remove { path }`, and `ReplaceFiles { designator,
 paths }`. `ReplaceFiles` replaces that designator's inventory, not unrelated files.
-`backed_up_files` is used by the Oxide bridge and returns only installed, accepted paths after the
-same remote-head check as sync. Remove/ReplaceFiles change inventory, not wallet files; removing an
-absent path is a no-op. Put/ReplaceFiles validate the same file policy before filesystem access or
-packing.
+`list_files_in_backup` is used by the Oxide bridge and returns only installed, accepted paths
+after the same remote-head check as sync. Remove/ReplaceFiles change inventory, not wallet
+files; removing an absent path is a no-op. Put/ReplaceFiles validate the same file policy before
+filesystem access or packing.
 
 `RemoveFactorOutcome` keeps its two existing meanings; attach `TurnkeyStatus` to each so a committed
 removal with failed Turnkey cleanup cannot appear fully cleaned up. Preserve the existing
@@ -150,6 +158,7 @@ archive import. Never infer it from an old native key just because manifest hash
 ## Native callbacks and secrets
 
 ```rust
+/// Enables Bedrock to trigger passkey or OIDC authentication or set up, i.e. a factor ceremony.
 trait MainFactorCeremony {
     async fn register_passkey(options_json: String) -> PasskeyResponse;
     async fn authenticate_passkey(options_json: String) -> PasskeyResponse;
