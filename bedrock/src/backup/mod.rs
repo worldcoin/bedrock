@@ -443,10 +443,12 @@ impl BackupManager {
     ) -> Result<(), BackupError> {
         if kind == BackupReportEventKind::Sync
             || kind == BackupReportEventKind::RemoveMainFactor
+            || kind == BackupReportEventKind::Delete
         {
             return Err(BackupError::Generic {
-                error_message: "Sync event is automatically sent from Bedrock"
-                    .to_string(),
+                error_message: format!(
+                    "{kind} events are automatically sent by Bedrock"
+                ),
             });
         }
 
@@ -566,7 +568,10 @@ impl BackupManager {
             client_events::sync_report_with_metadata(metadata);
         }
 
-        client_events::send_remove_factor_event(&result);
+        client_events::send_operation_event(
+            BackupReportEventKind::RemoveMainFactor,
+            &result,
+        );
 
         let outcome = result?;
 
@@ -604,11 +609,9 @@ impl BackupManager {
             backup_id: &backup_id,
         };
 
-        if let Err(error) = DeleteBackup.run(&ctx).await {
-            crate::warn!(error_message = error, "delete_backup.failed");
-            return Err(error);
-        }
-        crate::info!("delete_backup.succeeded");
+        let result = DeleteBackup.run(&ctx).await;
+        client_events::send_operation_event(BackupReportEventKind::Delete, &result);
+        result?;
 
         Self::post_delete_backup("delete_backup");
         Ok(())

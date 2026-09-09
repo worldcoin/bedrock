@@ -45,7 +45,7 @@ pub enum TurnkeyApiError {
         /// The upstream response body, for diagnostics.
         body: String,
     },
-    /// A transport-level failure (connectivity, DNS, TLS). Never contains a URL.
+    /// A transport-level failure (request timeout, connectivity, DNS, TLS). Never contains a URL.
     #[error("Turnkey transport error: {error_message}")]
     Transport {
         /// Description of the transport failure.
@@ -86,6 +86,11 @@ impl TurnkeyApiError {
     /// the caller must re-authenticate to re-register it.
     pub fn is_public_key_not_found(&self) -> bool {
         self.body_contains("PUBLIC_KEY_NOT_FOUND")
+    }
+
+    /// Whether provider deletion failed because one of the requested IDs is gone.
+    pub fn is_no_matching_provider(&self) -> bool {
+        self.body_contains("No matching providers found")
     }
 
     /// Whether the error indicates the stamping key is not a valid signer for the
@@ -143,11 +148,11 @@ impl TurnkeyApiError {
     /// is already submitted. If execution fails at the TEE, the next migration will pick it up.
     pub const fn is_retryable(&self) -> bool {
         match self {
-            Self::Timeout
-            | Self::RateLimited { .. }
+            Self::RateLimited { .. }
             | Self::ServerError { .. }
             | Self::Transport { .. } => true,
-            Self::Unauthorized { .. }
+            Self::Timeout
+            | Self::Unauthorized { .. }
             | Self::NotFound { .. }
             | Self::ClientError { .. }
             | Self::Activity { .. }
@@ -162,7 +167,7 @@ impl TurnkeyApiError {
     /// Collapses this rich internal error into the opaque client-facing
     /// [`TurnkeyMigrationError`], preserving only the coarse retry classification.
     pub(super) const fn to_migration_error(&self) -> TurnkeyMigrationError {
-        if self.is_retryable() {
+        if self.is_retryable() || matches!(self, Self::Timeout) {
             TurnkeyMigrationError::Retryable
         } else {
             TurnkeyMigrationError::Failed
@@ -197,16 +202,8 @@ fn truncate_body(body: String) -> String {
 impl From<TurnkeyClientError> for TurnkeyApiError {
     fn from(error: TurnkeyClientError) -> Self {
         match error {
-            TurnkeyClientError::Http(source) => {
-                if source.is_timeout() {
-                    Self::Timeout
-                } else {
-                    Self::Transport {
-                        error_message: source.without_url().to_string(),
-                    }
-                }
-            }
-            TurnkeyClientError::ReqwestBuilder(source) => Self::Transport {
+            TurnkeyClientError::Http(source)
+            | TurnkeyClientError::ReqwestBuilder(source) => Self::Transport {
                 error_message: source.without_url().to_string(),
             },
             TurnkeyClientError::UnexpectedHttpStatus(code, body) => {
@@ -284,5 +281,53 @@ mod tests {
         };
         assert!(!denied.is_public_key_not_found());
         assert!(denied.indicates_invalid_signer());
+    }
+
+    #[test]
+    fn recognizes_the_upstream_strings_it_depends_on() {
+        let stale = TurnkeyApiError::ClientError {
+            status: 400,
+            body: "PUBLIC_KEY_NOT_FOUND: unknown key".to_string(),
+        };
+        assert!(stale.is_public_key_not_found());
+        assert!(stale.indicates_invalid_signer());
+        assert!(matches!(
+            crate::backup::BackupOperationError::from(stale),
+            crate::backup::BackupOperationError::NeedsReauth {
+                reason: crate::backup::NeedsReauthReason::SyncFactorInvalid,
+            }
+        ));
+
+        let absent = TurnkeyApiError::Activity {
+            error_message: "No matching providers found for the given ids".to_string(),
+        };
+        assert!(absent.is_no_matching_provider());
+        assert!(!absent.indicates_invalid_signer());
+    }
+
+    #[test]
+    fn unrelated_failures_do_not_request_reauthentication() {
+        for error in [
+            TurnkeyApiError::Timeout,
+            TurnkeyApiError::ServerError {
+                status: 503,
+                body: "upstream unavailable".to_string(),
+            },
+            TurnkeyApiError::Activity {
+                error_message: "activity rejected by policy".to_string(),
+            },
+            TurnkeyApiError::ActivityPollingExceeded {
+                error_message: "still pending".to_string(),
+            },
+            TurnkeyApiError::MainUserNotFound,
+            TurnkeyApiError::Consistency,
+        ] {
+            assert!(!error.indicates_invalid_signer(), "{error}");
+            assert!(!error.is_no_matching_provider(), "{error}");
+            assert!(!matches!(
+                crate::backup::BackupOperationError::from(error),
+                crate::backup::BackupOperationError::NeedsReauth { .. }
+            ));
+        }
     }
 }
