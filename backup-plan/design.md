@@ -1,5 +1,7 @@
 # Backup migration: design
 
+This is the overall design to migrate all logic related to the new login (prev. backup & restore) logic to Bedrock. This document outlines the whole plan. **Breaking changes** are introduced by design. This plan is designed so that all functionality can be incorporated into Bedrock in one pass (multiple PRs, single release), including removing all the legacy functionality where Bedrock exposed low-level utility functions.
+
 ## Ownership
 
 ```text
@@ -21,58 +23,55 @@ pub use backup_service_types::OidcProvider;
 
 struct BackupManager {
     account_id: Option<String>,
+    sync_signer: Option<P256Signer>,
     main_factor_ceremony: MainFactorCeremony,
     // Private clients, one operation mutex, and an optional pending recovery; never a root key.
 }
 
 impl BackupManager {
     fn new(main_factor_ceremony: MainFactorCeremony) -> Self;
-    // Initializes the BackupManager for a specific backup. Derives the account ID and stores it.
-    // Separate from `new` because login can initialize the manager before there's a root secret.
-    fn bind(root: SiegelSession);
-    // Adopt native backup state only after its account, encryption key, and head match.
-    async fn adopt_existing_backup(sync: P256Signer, encryption_public_key: String,
-                                    turnkey_sync_user_id: Option<String>);
+    // Retain the device signer; derive the account ID when a root is available.
+    fn bind(root: Option<SiegelSession>, sync: P256Signer);
 
     async fn has_backup() -> bool;
     // Retrieves the backup metadata, does not enforce the RemoteAhead gate.
-    async fn metadata(sync: P256Signer) -> BackupMetadata;
+    async fn metadata() -> BackupMetadata;
     // Separate from metadata() because metadata is needed to render the factor list
-    async fn check_for_remote_updates(sync: P256Signer);
-    async fn list_files_in_backup(sync: P256Signer, designator: BackupFileDesignator)
+    async fn check_for_remote_updates();
+    async fn list_files_in_backup(designator: BackupFileDesignator)
         -> Vec<String>;
-    async fn sync(root: SiegelSession, sync: P256Signer, changes: Vec<BackupFileChange>);
+    async fn sync(root: SiegelSession, encryption_public_key: String,
+                  changes: Vec<BackupFileChange>);
 
+    // Return the backup encryption public key for native to persist and supply on sync.
     async fn create(factor: FactorRegistration, root: SiegelSession,
-                     sync: P256Signer, files: Vec<BackupFileChange>);
+                     files: Vec<BackupFileChange>) -> String;
     // Stage validated files; only Login returns the root, and registration waits for completion.
     async fn recover(login: FactorAuthentication, mode: RecoveryMode,
                       expected_backup_id: Option<String>) -> RecoveredBackup;
     // Acknowledge required native restore work, then enroll the signer and publish staged state.
-    async fn complete_recovery(recovery_id: String, sync: P256Signer,
+    async fn complete_recovery(recovery_id: String,
                                 reauth: Option<FactorAuthentication>,
                                 replace_device: Option<String>)
         -> TurnkeyStatus;
     // Cancel before registration; native blocks cancellation once ReplaceLocal import starts.
     fn cancel_recovery(recovery_id: String);
     // Authorize device access without importing files or returning a root.
-    async fn reauthorize(login: FactorAuthentication, sync: P256Signer,
+    async fn reauthorize(login: FactorAuthentication,
                           replace_device: Option<String>) -> TurnkeyStatus;
 
-    async fn add_factor(factor: FactorRegistration, existing: FactorAuthentication,
-                         sync: P256Signer) -> BackupMetadata;
-    async fn remove_factor(id: String, sync: P256Signer,
-                            reauth: Option<FactorAuthentication>, confirm_backup_deletion: bool)
+    async fn add_factor(factor: FactorRegistration, existing: FactorAuthentication)
+        -> BackupMetadata;
+    async fn remove_factor(id: String, reauth: Option<FactorAuthentication>,
+                           confirm_backup_deletion: bool)
         -> RemoveFactorOutcome;
-    // Revoke a supplied Sync Factor, then clear local backup state; None clears local state only.
-    async fn logout(sync: Option<P256Signer>);
-    async fn delete_backup(sync: P256Signer) -> TurnkeyStatus;
+    // Clear local backup state, optionally revoking the bound device key first.
+    async fn logout(revoke_device: bool);
+    async fn delete_backup() -> TurnkeyStatus;
     // Performs the backup full `/reset`
     async fn reset(root: SiegelSession) -> TurnkeyStatus;
-    async fn run_migrations(sync: P256Signer, reauth: Option<FactorAuthentication>)
+    async fn run_migrations(reauth: Option<FactorAuthentication>)
         -> TurnkeyMigrationOutcome;
-    // Read cached public metadata for offline cross-app handoff.
-    fn cross_app_metadata() -> CrossAppBackupMetadata;
 }
 
 /// Configuration for enrolling a Main Factor
@@ -93,27 +92,21 @@ enum TurnkeyStatus { Complete, Incomplete }
 struct RecoveredBackup {
     recovery_id: String,
     root: Option<SiegelSession>,
+    backup_keypair_public_key: String,
     files: Vec<RecoveredFile>,
     metadata: BackupMetadata,
     requires_app_update: bool,
 }
 struct RecoveredFile { designator: BackupFileDesignator, path: String, staged_path: String }
-struct CrossAppBackupMetadata {
-    backup_keypair_public_key: String,
-    turnkey_sync_user_id: Option<String>,
-}
 ```
 
-Reuse service types at the wire boundary and expose the shared `OidcProvider` through UniFFI.
-`FactorRegistration` and `FactorAuthentication` are ceremony inputs; wire `Authorization` contains
-completed proofs, and registered-factor metadata requires fields unavailable before authentication.
-Keep those roles distinct; [shared type wiring](execution.md#shared-type-wiring) defines reuse and
-compilation checks.
+Primarily reusing service types from the `backup-service` crate and expose the shared `OidcProvider` through UniFFI so
+native can do relevant high-level calls. The internal `backup_service_types::Authorization` contains
+completed proofs.
 
-File changes are `Put { designator, path }`, `Remove { path }`, and `ReplaceFiles { designator,
-paths }`. `ReplaceFiles` replaces that designator's inventory, not unrelated files.
-`list_files_in_backup` is used by the Oxide bridge and returns only installed, accepted paths
-after the same remote-head check as sync. Remove/ReplaceFiles change inventory, not wallet
+File changes in the bcakup are declared as `Put { designator, path }`, `Remove { path }`, and `ReplaceFiles { designator,
+paths }`. `list_files_in_backup` is used by the Oxide bridge and returns files in the backup,
+after checking the remote state is in sync. Remove/ReplaceFiles changes the backup inventory, it does not change the actual
 files; removing an absent path is a no-op. Put/ReplaceFiles validate the same file policy before
 filesystem access or packing.
 
@@ -124,7 +117,7 @@ failures remain Result errors. Extend `BackupOperationError` with `UpdateRequire
 `CommitUncertain`, `Busy`, `RecoveryPending { recovery_id: String, mode: RecoveryMode }`, `Capacity
 { factors: Vec<BackupFactor> }`, and `Cancelled`. Keep existing reauth/confirmation failures:
 rejected/missing sync keys map to `NeedsReauth(SyncFactorInvalid)`, never a network retry. Use
-`NeedsReauth(BackupKeyUnverified)` when adopting metadata whose encryption key is not yet verified.
+`NeedsReauth(BackupKeyUnverified)` when existing metadata has no verified encryption public key.
 Invalid local state or malformed archives use one contextual local-data error; do not export
 internal transport/codec error enums. `has_backup` requires binding and calls public
 `/v1/backup/status` with the cached account ID; it reports remote existence, not sync health.
@@ -132,7 +125,7 @@ Network failure is an error, never `false`. Add optional `last_used_at` to the e
 BackupFactor, from service metadata. Capacity UI shows creation/last-active dates and the
 current-device marker.
 
-Native calls `check_for_remote_updates` once after startup binding/adoption. Bedrock compares
+Native calls `check_for_remote_updates` once after startup binding. Bedrock compares
 authenticated metadata with its acknowledged head and returns `RemoteAhead` or `UpdateRequired` when
 recovery is needed. Network/authentication failure preserves local state. Reuse this head check in
 sync and file queries; `metadata` remains available for factor management while sync is blocked.
@@ -181,20 +174,38 @@ hashed 32-byte digest; DER ECDSA output, normalized in Bedrock. Never ask for it
 existing key-storage compatibility until the separate hardware rollout. Verify a replacement key is
 usable before removing the old value.
 
-`bind` consumes the root once, derives the backup id. A second bind may only confirm the same ID;
-account switching destroys the manager. Create/recover/reset can establish the binding themselves.
-Other account operations require it; an unbound call returns the contextual local-state error.
-Local-only `logout(None)` needs no binding. Recovery derives/binds the ID internally before the
-one-use Login root handoff; native does not call bind again with that consumed handle.
-Root arguments to sync/reset/create must match an existing binding before any mutation. The public
-key for break-glass registration is already encoded in that ID.
+`bind(Some(root), sync)` consumes the root, derives the account ID, and retains the signer
+capability. Signed-out creation/login first calls `bind(None, sync)` with a persisted candidate;
+create/recover derive the ID from their supplied/recovered root. `None` never clears an existing ID.
+All signer-using flows use this stored capability; binding does not register or authorize a key.
+Reset derives/checks the account ID from its root and needs neither prior binding nor a signer.
+Local-only `logout(false)` also needs neither signer nor account. Create/recover require a signer
+before starting, but may establish the ID themselves. Other account operations require an ID;
+signer-using operations also require a bound signer. Missing state is a contextual local-state
+error. Root arguments must match an existing ID before any mutation. The break-glass public key is
+already encoded in that ID.
+
+A signer instance always identifies one fixed key; native must not implement it as a mutable
+"current key" lookup. Same-account rebinding may replace the signer while idle. Preserve an
+unresolved sync manifest so the new signer can reconcile its outcome after authorization. Binding
+cannot switch accounts, change a key during a mutation, or replace the key of an unresolved
+creation/authorization/recovery. After restart native binds the same persisted pending key; Bedrock
+checks it against the public key in pending recovery/creation state before resuming. Account
+switching destroys the manager. Recovery establishes the ID before the one-use Login root handoff;
+no second root transfer to bind is needed. Logout and successful backup deletion/reset release the
+signer together with the account binding. Native owns key storage and erasure; retaining the
+callback does not export the private key.
 
 Root, OIDC tokens, PRF, unwrapped backup keys, and ephemeral Turnkey session keys are zeroized when
 no longer needed. Pending recovery may hold its five-minute main session and one-use sync token in
 memory until completion/cancellation/expiry; a deadline wipes them even if native never finishes
 recovery. Neither is persisted. The root is never retained by the manager. Root is supplied
-explicitly for sync and reset; there is no root-provider callback. The local backup encryption
-**public** key is persisted by Bedrock with the manifest, not in a second native account record.
+explicitly for sync and reset; there is no root-provider callback. Native keeps the backup
+encryption **public** key in its existing store and passes it to every `sync`. Creation returns
+that key; recovery returns it with the staged result, and native promotes it after completion.
+Bedrock records the verified key with its acknowledged manifest for consistency checks. Before
+sealing a sync, the supplied key must match that record and authenticated remote metadata; a
+mismatch fails without uploading. Supplying a key cannot initialize a missing verified remote key.
 
 During Login, Bedrock decrypts the existing root secret from the backup and returns it to native for
 wallet restoration and secure storage. That needs a one-use Rust → native transfer through Siegel;
@@ -205,42 +216,41 @@ and ResumeSync keep the recovered root inside Bedrock.
 
 Persist under `backup_manager/<account_id>/`: acknowledged manifest/public key/compatibility, a
 pending manifest for an upload whose outcome is unresolved, and any staged recovery.
-`adopt_existing_backup` is the one-time upgrade/import flow: after bind, native passes its existing
-encryption public key and signer. Check authenticated metadata ID against the binding, the public
-key against the verified remote key, and the old global manifest hash against the remote head;
-atomically adopt the inventory/public key, then remove the old manifest. The legacy manifest has no
-account field: do not pretend otherwise. If the old manifest is absent, initialize only when the
-remote inventory is canonically empty. Otherwise preserve all old state, return `RemoteAhead`, and
-disable writes until explicit recovery; never auto-overwrite or guess a candidate from files alone.
+Bedrock already owns the global manifest. Migrate it internally on the first authenticated state
+load: check the remote account ID against the binding and the old manifest hash against the remote
+head, then record the verified remote encryption public key with the inventory before removing the
+old manifest. Missing verified remote keys require reauthorization as above. The old manifest has no
+account field. If it is absent, initialize only when the remote inventory is canonically empty.
+Otherwise preserve existing state, return `RemoteAhead`, and block writes until explicit recovery.
+Native keeps its existing encryption public key and supplies it to sync; no public adoption call.
 
-Android cross-app transport retains its existing `BackupSyncData` format and imported-from-peer
-marker; changing that contract belongs to the separate handoff rollout. `CrossAppBackupMetadata` is
-only the two public fields needed to populate that existing wire format, not another account object;
-`cross_app_metadata` reads local state only, preserving offline handoff. Cache the optional
-current-key Turnkey user ID after registration/reconciliation and seed it from native metadata
-during adoption. It is not authority for remote operations. None means no known mapping; only the
-legacy wire adapter handles its existing null/empty representation. The receiver uses
-`adopt_existing_backup` with the imported signer/public key. Today's handoff has no manifest: a
-fresh receiver of a nonempty backup must complete a main-factor `ReplaceLocal` recovery before
+Android cross-app transport reads the device key and backup encryption public key from native
+storage and retains the imported-from-peer marker. Remove the cached Turnkey sync-user ID from
+`BackupSyncData` and its native consumers; Bedrock resolves the user from the authenticated signer
+when needed. Handoff needs no BackupManager getter or separate metadata object. The receiver binds
+normally, retains the imported public key for sync, and uses the startup head check. Today's handoff
+has no manifest: a fresh receiver of a nonempty backup must complete a main-factor `ReplaceLocal`
+recovery before
 syncing, with confirmation because transferred local data may differ. Retain its imported data and
 key while blocked; do not treat deprecated Drive upload callbacks as inventory. Remove duplicate
-native runtime account state, but do not remove this wire DTO or its decoder until the separate
-cross-app/hardware rollout supplies a replacement.
+native runtime account state; retain the key transport DTO and decoder. Replacing shared keys with
+separate hardware-backed keys remains a separate rollout.
 
 One manager per active account. A concurrent mutation returns `Busy`; no unbounded queue or
 background debounce. The native file adapter batches one logical change and may retry Busy once
 after the active call finishes, using fresh exports; otherwise return a visible unsynced result. An
-on-disk recovery returns RecoveryPending, not Busy. Startup with a persisted root binds but returns
-that error with ID/mode; native surfaces resume/cancel before enabling backup mutations. Before
-Login has transferred/persisted a root, restart resumes through recover, without calling bind. Only
+on-disk recovery returns RecoveryPending, not Busy. Startup restores the same signer through bind,
+using Some(root) if already persisted and None otherwise. Binding installs the matching capability
+but reports RecoveryPending with ID/mode; native surfaces resume/cancel before enabling mutations.
+Before Login has persisted a root, restart resumes through recover after that signer binding. Only
 completion/cancel/resume may mutate pending recovery. Do not time-expire staged data that may
 already have been imported into the vault; explicit cancellation follows the flow contract. Reads do
 not observe half-published state. This does not replace backup-service's remote conditional writes;
 another device is a real concurrent writer.
 
-`logout(Some(sync))` revokes this device and clears Bedrock's manifest/staging state and binding.
-`logout(None)` clears only that local state; Android uses its existing imported-key marker to select
-this path, and native local-reset callers use it too. Wallet files and native keys remain
+`logout(true)` revokes this device and clears Bedrock's manifest/staging state, signer, and account
+binding. `logout(false)` clears only that local state; Android uses its existing imported-key marker
+to select this path, and native local-reset callers use it too. Wallet files and native keys remain
 native-owned. Share the private local-clear helper with delete/reset. The [logout
 contract](flows.md#delete-reset-logout) defines ordering and errors.
 

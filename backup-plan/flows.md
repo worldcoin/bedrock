@@ -67,13 +67,16 @@ can display/remove one but offers no iCloud login ceremony.
 | `create(FactorRegistration::Passkey)` | Check no backup; obtain registration + PRF; build the complete initial archive from supplied files; prove root ownership and sync-key possession; `/create`; publish local manifest/public key only after commit. No Turnkey account. |
 | `create(FactorRegistration::Oidc)` | Bind nonce/token; create suborg through app backend; establish main user, sole-root quorum, sync user/policy, break-glass user/policy; remove bootstrap authority; import factor secret; seal complete initial archive; `/create`; publish local state. |
 | `recover` | Authenticate and retrieve; check selected/bound account; unwrap key; validate archive; stage files according to mode; return descriptors and (Login only) root via Siegel. No sync-factor registration or manifest publication yet. |
-| `complete_recovery` | After required native import/login work, register the pending signer, publish files and acknowledged inventory/public key/compatibility; remove retired files and temporary vault data. Returns TurnkeyStatus for secondary registration. |
-| `reauthorize` | Authenticate against the bound ID; verify encryption-key identity; repair/register the supplied sync key in both applicable systems; return TurnkeyStatus. Callers needing metadata use metadata(sync). Never unpack files, return a root, or import a vault. Extend `/verify-factor` to return metadata and a one-use sync-registration token internally. |
-| `sync` | Validate root/account; check compatibility; compare remote head to acknowledged inventory; apply the batch to a candidate; read/checksum accepted files; seal; conditional `/sync`; atomically publish candidate manifest after confirmed remote commit. |
+| `complete_recovery` | After required native import/login work, register the bound pending signer, publish files and acknowledged inventory/public key/compatibility; remove retired files and temporary vault data. Returns TurnkeyStatus for secondary registration. |
+| `reauthorize` | Authenticate against the bound ID; verify encryption-key identity; repair/register the bound sync key in both applicable systems; return TurnkeyStatus. Callers needing metadata use metadata(). Never unpack files, return a root, or import a vault. Extend `/verify-factor` to return metadata and a one-use sync-registration token internally. |
+| `sync` | Validate root/account and the supplied encryption public key against the acknowledged and verified remote key; check compatibility; compare remote head to acknowledged inventory; apply the batch to a candidate; read/checksum accepted files; seal with the supplied key; conditional `/sync`; atomically publish candidate manifest after confirmed remote commit. |
 
-For each new authorization attempt, native creates and persists a fresh pending sync key before
-remote registration; mark it active only after backup-service registration is confirmed. Retain that
-key for the same unresolved attempt's retries. Never re-enroll a previously active, revoked key or
+Before create or a new device-authorization attempt, native creates and persists a fresh pending
+sync key and passes it to bind. Existing authorized devices bind their stored key at startup.
+Create, complete_recovery, and reauthorize enroll the bound key; mark it active only after
+backup-service registration is confirmed. Retain that key for the same unresolved attempt's retries,
+including after restart; never replace it to escape an ambiguous result.
+Never re-enroll a previously active, revoked key or
 reattach its old Turnkey user. A still-enrolled key may repair its Turnkey half through migrations,
 but that path cannot recreate missing service membership: return `NeedsReauth(SyncFactorInvalid)`
 and require fresh authorization if membership disappears. Register Turnkey user/policy first, then
@@ -121,7 +124,8 @@ remote entry. An empty or unchanged batch sends no upload. Retirement changes ma
 real sync.
 
 Before `/create` or `/sync`, atomically write the candidate to `manifest.pending`, including its
-encryption public key; no root or file contents. Creation has no old head: a matching candidate hash
+encryption public key; creation also records the pending sync public key. No private key or file
+contents. Creation has no old head: a matching candidate hash
 and encryption key authenticated by the pending sync key promotes local state; absence after an
 ambiguous request remains `CommitUncertain`. Anything else is conflict. On timeout leave the
 acknowledged manifest unchanged. Resolve pending state before processing another batch: remote
@@ -178,8 +182,8 @@ cancellation. Restart resumes the idempotent import and completion; only a defin
 import can reopen cancellation. This is replacement, not merging, and preserves the old vault on any
 import failure.
 
-Keep one disk-backed pending recovery with account ID, mode, manifest hash, and publication
-progress, not a second public session object. Generate a fresh opaque ID per attempt and retain it
+Keep one disk-backed pending recovery with account ID, mode, manifest hash, sync public key, and
+publication progress. Generate a fresh opaque ID per attempt and retain it
 on resume; a later deliberate restore of the same hash is a new attempt. This ID keys the receipt;
 native root/onboarding persistence stores the same ID. No secret goes on disk in this record.
 `recover` may reauthenticate and resume that attempt after restart (including before root transfer).
@@ -203,7 +207,7 @@ restored wallet or permitting logout.
 
 ## Adding and removing main factors
 
-`add_factor(factor, existing, sync)` dispatches by `FactorRegistration`; all enrollment paths share
+`add_factor(factor, existing)` dispatches by `FactorRegistration`; all enrollment paths share
 the authorization and commit rules below.
 
 Additions require proof of an existing main factor plus the new factor; a sync key alone cannot add
@@ -274,7 +278,7 @@ Proxy `POST /v1/account`, `{filterType:"PUBLIC_KEY", filterValue:<derived public
 break-glass authority to delete that exact suborg. Discovery still works after backup-service
 metadata is gone. Older accounts without break-glass can remain undeletable: reset succeeds with
 `TurnkeyStatus::Incomplete`; do not require another factor or invent an app-backend recovery bypass.
-The existing canonical sync policy permits organization deletion, so `delete_backup(sync)` needs no
+The existing canonical sync policy permits organization deletion, so `delete_backup()` needs no
 root on a healthy account. Authenticated/appropriately scoped NotFound is idempotent deletion
 success; auth failure or an unavailable existence check is not proof of absence.
 
@@ -290,24 +294,25 @@ Before `logout`, native stops file producers and awaits the active operation. Re
 recovery using its existing completion/cancellation rules; Busy or RecoveryPending refuses logout
 before any teardown, so native must retain its keys and finish that work first.
 
-`logout(Some(sync))` captures the public key and remote IDs, then attempts to remove the matching
+`logout(true)` uses the bound signer to attempt removal of the matching
 Turnkey user and backup-service sync factor, with a bounded attempt for each store. Attempt service
 revocation even if Turnkey cleanup fails. Preserve the backup and every other factor. The sync
 policy cannot delete policies; its orphan policy is pruned by the next main-authorized migration.
 
 After the remote attempt, remove the fixed `backup_manager/` directory and release temporary
-authority and the binding, even if revocation failed. This clears the old global manifest and all
-account subdirectories without an account ID. Keep the public cleanup-target journal outside this
+authority, the stored signer, and the account binding, even if revocation failed. This clears the
+old global manifest and all account subdirectories without an account ID. Keep the public cleanup-target journal outside this
 directory. Return the existing contextual operation error after clearing; success
 means all applicable remote revocations and local clearing completed. A local filesystem failure
 remains an error, takes precedence over a remote error, and does not retain the in-memory binding.
 Bedrock logs each failure. No new logout outcome type or background cleanup is needed.
 
-`logout(None)` requests local-only clearing: use it for Android's cross-app-imported key and native
+`logout(false)` requests local-only clearing: use it for Android's cross-app-imported key and native
 local reset, preserving the peer's remote credentials. It also retries failed local deletion without
 a binding or signer; it cannot turn failed revocation into success.
-If native cannot load a required signer, log and report incomplete revocation before local-only
-teardown; never silently convert that error into None.
+A missing/unusable bound signer during logout(true) is a revocation error; still run local teardown
+and report incomplete cleanup. If native cannot load the signer at startup, it reports that failure
+and may use logout(false) for local teardown, never as evidence of successful revocation.
 Once teardown has run, native clears its own keys and wallet data even if remote revocation failed;
 any error means cleanup is incomplete, not that either remote store confirmed revocation. Retry
 failed local deletion. No remote work is launched after native erases its signer. Already-cleared
