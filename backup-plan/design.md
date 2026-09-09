@@ -22,13 +22,13 @@ pub use backup_service_types::OidcProvider;
 struct BackupManager {
     account_id: Option<String>,
     main_factor_ceremony: MainFactorCeremony,
-    // Private clients, one operation mutex, and an optional pending recovery; never a root.
+    // Private clients, one operation mutex, and an optional pending recovery; never a root key.
 }
 
 impl BackupManager {
     fn new(main_factor_ceremony: MainFactorCeremony) -> Self;
-    // Derive the account ID, consume the root, and retain only the ID. Separate from `new` because
-    // you can also init the `BackupManager` for login, before there's a root secret.
+    // Initializes the BackupManager for a specific backup. Derives the account ID and stores it.
+    // Separate from `new` because login can initialize the manager before there's a root secret.
     fn bind(root: SiegelSession);
     // Adopt native backup state only after its account, encryption key, and head match.
     async fn adopt_existing_backup(sync: P256Signer, encryption_public_key: String,
@@ -64,8 +64,8 @@ impl BackupManager {
     async fn remove_factor(id: String, sync: P256Signer,
                             reauth: Option<FactorAuthentication>, confirm_backup_deletion: bool)
         -> RemoveFactorOutcome;
-    // Revoke this device in both stores while preserving the backup and its main factors.
-    async fn unregister_device(sync: P256Signer) -> TurnkeyStatus;
+    // Processes app logout: clears local backup state and unregisters the supplied Sync Factor.
+    async fn logout(sync: Option<P256Signer>);
     async fn delete_backup(sync: P256Signer) -> TurnkeyStatus;
     // Performs the backup full `/reset`
     async fn reset(root: SiegelSession) -> TurnkeyStatus;
@@ -73,14 +73,15 @@ impl BackupManager {
         -> TurnkeyMigrationOutcome;
     // Read cached public metadata for offline cross-app handoff.
     fn cross_app_metadata() -> CrossAppBackupMetadata;
-    // Clear Bedrock state and binding, preserving wallet files, native keys, and remote data.
-    fn clear_local_state();
 }
 
+/// Configuration for enrolling a Main Factor
 enum FactorRegistration {
     Passkey { name: String, display_name: String },
     Oidc { provider: OidcProvider },
 }
+
+/// Initialize a login with a specific type of Main Factor
 enum FactorAuthentication {
     Passkey,
     Oidc { provider: OidcProvider },
@@ -102,17 +103,6 @@ struct CrossAppBackupMetadata {
     turnkey_sync_user_id: Option<String>,
 }
 ```
-
-`FactorRegistration` selects what `create` and `add_factor` enroll; `FactorAuthentication`
-selects an existing factor for authentication. Neither holds credentials or an authenticated
-session. New factor types extend `FactorRegistration` and private dispatch behind the same
-public methods. `MainFactorCeremony` keeps ceremony ordering inside Bedrock; native presents the
-requested UI and returns its result. `FactorRegistration` excludes iCloud Keychain. An existing
-iCloud factor may authorize adding a passkey/OIDC factor when no Turnkey account exists. With an
-existing Turnkey account, additions need a working passkey/OIDC main factor; iCloud recovery
-remains available. At most one passkey per backup, matching the existing single PRF
-encryption-key invariant. Multiple OIDC factors share the existing Turnkey encryption key; do
-not create one key per Apple audience.
 
 Reuse service types at the wire boundary and expose the shared `OidcProvider` through UniFFI.
 `FactorRegistration` and `FactorAuthentication` are ceremony inputs; wire `Authorization` contains
@@ -248,10 +238,11 @@ already have been imported into the vault; explicit cancellation follows the flo
 not observe half-published state. This does not replace backup-service's remote conditional writes;
 another device is a real concurrent writer.
 
-`clear_local_state` removes Bedrock's manifest/staging state and releases the binding. It does not
-delete wallet files, native keys, or anything remote. Logout/account switching first finishes or
-cancels an in-flight operation; native then deletes its own keys/data. No remote cleanup is launched
-after native has already erased the signer or account IDs.
+`logout(Some(sync))` revokes this device and clears Bedrock's manifest/staging state and binding.
+`logout(None)` clears only that local state; Android uses its existing imported-key marker to select
+this path, and native local-reset callers use it too. Wallet files and native keys remain
+native-owned. Share the private local-clear helper with delete/reset. The [logout
+contract](flows.md#delete-reset-logout) defines ordering and errors.
 
 ## Restore file contract
 

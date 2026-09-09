@@ -195,7 +195,7 @@ Cancellation before finalization removes staging; no new remote key exists. Nati
 ReplaceLocal import guard above before calling `cancel_recovery`. After registration starts,
 cancellation is refused: Busy while the call runs, RecoveryPending after restart/failure. Native
 retains the signer and resumes complete_recovery to resolve registration and publication; it must
-not drop a running mutation future. After completion it can explicitly unregister/logout. This keeps
+not drop a running mutation future. After completion it can explicitly log out. This keeps
 cancel local and synchronous; no second remote rollback flow. After an allowed cancel, abandoning
 Login clears only that onboarding wallet/vault through the native reset; canceling ReplaceLocal does
 not clear a pre-existing wallet. After vault replacement, finish publication before exposing the
@@ -286,12 +286,27 @@ service delete does not authorize Turnkey deletion or local backup-state clearin
 break-glass authority as terminal until credentials/policy change; do not retry it or emit the same
 alert on every create. Retry only transient failures within existing bounds.
 
-`unregister_device` captures its public key and remote IDs before deleting anything; remove its
-Turnkey user before revoking the backup-service sync factor, so the latter remains usable for retry.
-The canonical sync policy cannot delete policies; its now-orphan policy is pruned by the next
-main-authorized migration. `Complete` here means device credentials revoked in both stores. Logout
-awaits a bounded attempt, reports failure, then native may clear its key. Android cross-app-imported
-keys keep their current local-only logout behavior; do not revoke a peer's key.
+Before `logout`, native stops file producers and awaits the active operation. Resolve pending
+recovery using its existing completion/cancellation rules; Busy or RecoveryPending refuses logout
+before any teardown, so native must retain its keys and finish that work first.
+
+`logout(Some(sync))` captures the public key and remote IDs, then attempts to remove the matching
+Turnkey user and backup-service sync factor within one bounded deadline. Attempt service revocation
+even if Turnkey cleanup fails. Preserve the backup and every other factor. The sync policy cannot
+delete policies; its orphan policy is pruned by the next main-authorized migration.
+
+After the remote attempt, clear local manifest/staging state, temporary authority, and the binding,
+even if revocation failed. Return the existing contextual operation error after clearing; success
+means both requested remote revocations and local clearing completed. A local filesystem failure
+remains an error, takes precedence over a remote error, and does not retain the in-memory binding.
+Bedrock logs each failure. No new logout outcome type or background cleanup is needed.
+
+`logout(None)` requests local-only clearing: use it for Android's cross-app-imported key and native
+local reset, preserving the peer's remote credentials. It also retries failed local deletion without
+a binding or signer; it cannot turn failed revocation into success.
+Once teardown has run, native clears its own keys and wallet data even if remote revocation failed;
+report incomplete revocation or local clearing and retry failed local deletion. No remote work is
+launched after native erases its signer. Already-cleared local state is a no-op.
 
 ## Repairs and migrations
 
