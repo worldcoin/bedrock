@@ -35,7 +35,7 @@ impl BackupManager {
                                     turnkey_sync_user_id: Option<String>);
 
     async fn has_backup() -> bool;
-    // Retrieves the backup metadata, does not enforce the RemoteStaleAhead gate.
+    // Retrieves the backup metadata, does not enforce the RemoteAhead gate.
     async fn metadata(sync: P256Signer) -> BackupMetadata;
     // Separate from metadata() because metadata is needed to render the factor list
     async fn check_for_remote_updates(sync: P256Signer);
