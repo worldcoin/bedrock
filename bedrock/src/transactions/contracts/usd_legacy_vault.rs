@@ -48,7 +48,7 @@ pub struct Permit2Data {
 
 sol! {
     /// The USD Vault contract interface.
-    /// Reference: <https://worldchain-mainnet.explorer.alchemy.com/address/0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB?tab=contract>
+    /// Reference: <https://explorer.worldchain.worldcoin.org/address/0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB?tab=contract>
     #[derive(serde::Serialize)]
     interface USDVault {
         function USDC() public view returns (address);
