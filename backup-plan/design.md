@@ -30,8 +30,8 @@ struct BackupManager {
 
 impl BackupManager {
     fn new(main_factor_ceremony: MainFactorCeremony) -> Self;
-    // Retain the device signer; derive the account ID when a root is available.
-    fn bind(root: Option<SiegelSession>, sync: P256Signer);
+    // Derive the account ID, release the root, and retain the device signer.
+    fn bind(root: SiegelSession, sync: P256Signer);
 
     async fn has_backup() -> bool;
     // Retrieves the backup metadata, does not enforce the RemoteAhead gate.
@@ -46,19 +46,18 @@ impl BackupManager {
     // Return the backup encryption public key for native to persist and supply on sync.
     async fn create(factor: FactorRegistration, root: SiegelSession,
                      files: Vec<BackupFileChange>) -> String;
-    // Stage validated files; only Login returns the root, and registration waits for completion.
-    async fn recover(login: FactorAuthentication, mode: RecoveryMode,
+    // Stage validated files; only Login mode returns the root.
+    async fn login(authentication: FactorAuthentication, sync_factor: P256Signer, mode: RecoveryMode,
                       expected_backup_id: Option<String>) -> RecoveredBackup;
-    // Acknowledge required native restore work, then enroll the signer and publish staged state.
-    async fn complete_recovery(recovery_id: String,
+    // Enroll the signer, install staged files, and commit the restored manifest.
+    async fn finalize_login(recovery_id: String,
                                 reauth: Option<FactorAuthentication>,
-                                replace_device: Option<String>)
-        -> TurnkeyStatus;
+                                replace_device: Option<String>);
     // Cancel before registration; native blocks cancellation once ReplaceLocal import starts.
     fn cancel_recovery(recovery_id: String);
     // Authorize device access without importing files or returning a root.
     async fn reauthorize(login: FactorAuthentication,
-                          replace_device: Option<String>) -> TurnkeyStatus;
+                          replace_device: Option<String>);
 
     async fn add_factor(factor: FactorRegistration, existing: FactorAuthentication)
         -> BackupMetadata;
@@ -67,9 +66,9 @@ impl BackupManager {
         -> RemoveFactorOutcome;
     // Clear local backup state, optionally revoking the bound device key first.
     async fn logout(revoke_device: bool);
-    async fn delete_backup() -> TurnkeyStatus;
+    async fn delete_backup();
     // Performs the backup full `/reset`
-    async fn reset(root: SiegelSession) -> TurnkeyStatus;
+    async fn reset(root: SiegelSession);
     async fn run_migrations(reauth: Option<FactorAuthentication>)
         -> TurnkeyMigrationOutcome;
 }
@@ -87,7 +86,6 @@ enum FactorAuthentication {
     IcloudKeychain { key_id: String },
 }
 enum RecoveryMode { Login, ReplaceLocal, ResumeSync }
-enum TurnkeyStatus { Complete, Incomplete }
 
 struct RecoveredBackup {
     recovery_id: String,
@@ -110,8 +108,9 @@ after checking the remote state is in sync. Remove/ReplaceFiles changes the back
 files; removing an absent path is a no-op. Put/ReplaceFiles validate the same file policy before
 filesystem access or packing.
 
-`RemoveFactorOutcome` keeps its two existing meanings; attach `TurnkeyStatus` to each so a committed
-removal with failed Turnkey cleanup cannot appear fully cleaned up. Preserve the existing
+`RemoveFactorOutcome` keeps its two existing meanings. Bedrock logs secondary registration and
+remote cleanup failures internally; they do not change a committed operation's native result.
+Primary operation failures and actionable local-state errors still propagate. Preserve the existing
 `TurnkeyMigrationOutcome`: Completed or MainFactorRequired with description-valued pending entries;
 failures remain Result errors. Extend `BackupOperationError` with `UpdateRequired`, `RemoteAhead`,
 `CommitUncertain`, `Busy`, `RecoveryPending { recovery_id: String, mode: RecoveryMode }`, `Capacity
@@ -174,13 +173,14 @@ hashed 32-byte digest; DER ECDSA output, normalized in Bedrock. Never ask for it
 existing key-storage compatibility until the separate hardware rollout. Verify a replacement key is
 usable before removing the old value.
 
-`bind(Some(root), sync)` consumes the root, derives the account ID, and retains the signer
-capability. Signed-out creation/login first calls `bind(None, sync)` with a persisted candidate;
-create/recover derive the ID from their supplied/recovered root. `None` never clears an existing ID.
-All signer-using flows use this stored capability; binding does not register or authorize a key.
+`bind(root, sync)` consumes the root, derives the account ID, and retains the signer capability.
+Normal startup and creation bind with the available root. Login takes the persisted pending signer
+directly, derives the account ID from the validated recovered root, and retains the signer for
+finalization; no preliminary bind is needed. Subsequent flows use the stored signer. Neither bind
+nor login registers a key; login registration waits for finalization.
 Reset derives/checks the account ID from its root and needs neither prior binding nor a signer.
-Local-only `logout(false)` also needs neither signer nor account. Create/recover require a signer
-before starting, but may establish the ID themselves. Other account operations require an ID;
+Local-only `logout(false)` also needs neither signer nor account. Create requires prior binding;
+Login mode can establish the account itself. Other account operations require an ID;
 signer-using operations also require a bound signer. Missing state is a contextual local-state
 error. Root arguments must match an existing ID before any mutation. The break-glass public key is
 already encoded in that ID.
@@ -189,8 +189,10 @@ A signer instance always identifies one fixed key; native must not implement it 
 "current key" lookup. Same-account rebinding may replace the signer while idle. Preserve an
 unresolved sync manifest so the new signer can reconcile its outcome after authorization. Binding
 cannot switch accounts, change a key during a mutation, or replace the key of an unresolved
-creation/authorization/recovery. After restart native binds the same persisted pending key; Bedrock
-checks it against the public key in pending recovery/creation state before resuming. Account
+creation/authorization/recovery. Login enforces the same account/key replacement restrictions as
+bind. After restart native passes the same persisted pending key to login for recovery, or to bind
+with the root for creation/reauthorization. Bedrock checks it against the pending operation's key
+before resuming. Account
 switching destroys the manager. Recovery establishes the ID before the one-use Login root handoff;
 no second root transfer to bind is needed. Logout and successful backup deletion/reset release the
 signer together with the account binding. Native owns key storage and erasure; retaining the
@@ -239,10 +241,10 @@ separate hardware-backed keys remains a separate rollout.
 One manager per active account. A concurrent mutation returns `Busy`; no unbounded queue or
 background debounce. The native file adapter batches one logical change and may retry Busy once
 after the active call finishes, using fresh exports; otherwise return a visible unsynced result. An
-on-disk recovery returns RecoveryPending, not Busy. Startup restores the same signer through bind,
-using Some(root) if already persisted and None otherwise. Binding installs the matching capability
-but reports RecoveryPending with ID/mode; native surfaces resume/cancel before enabling mutations.
-Before Login has persisted a root, restart resumes through recover after that signer binding. Only
+on-disk recovery returns RecoveryPending, not Busy. Startup with a persisted root restores the same
+signer through bind. Binding installs the matching capability but reports RecoveryPending with
+ID/mode; native surfaces resume/cancel before enabling mutations. Before Login has persisted a root,
+restart resumes through login with the same persisted pending signer, without calling bind. Only
 completion/cancel/resume may mutate pending recovery. Do not time-expire staged data that may
 already have been imported into the vault; explicit cancellation follows the flow contract. Reads do
 not observe half-published state. This does not replace backup-service's remote conditional writes;

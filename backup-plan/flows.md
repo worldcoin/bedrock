@@ -7,10 +7,11 @@ budget. Network responses, tokens, PRF outputs, root keys, and unmasked identiti
 in logs. Bedrock owns one existing ClientEventsReporter event per flow attempt: Sync, LogIn,
 MethodVerification, AddMainFactor, or RemoveMainFactor. Remove only duplicate native
 ClientEventsReporter emissions; keep native screen/funnel analytics and their consent behavior. Use
-canonical failure codes for RemoteAhead, UpdateRequired, RecoveryPending, CommitUncertain, and
-TurnkeyIncomplete; other flows use structured operation/outcome logs. Report state transitions, not
-the same paused state on every read. Native surfaces these states and their retry/resume action;
-telemetry failure never changes the committed operation result.
+canonical failure codes for RemoteAhead, UpdateRequired, RecoveryPending, and CommitUncertain.
+Native surfaces these actionable states and their retry/resume action. Bedrock logs secondary
+registration and remote cleanup failures with structured operation/failure fields; no native status
+or duplicate native logging. Report transitions, not the same paused state on every read. Telemetry
+failure never changes the committed operation result.
 
 ## Authentication shared by all flows
 
@@ -60,20 +61,22 @@ Turnkey main authority: defer Turnkey repair until a passkey/OIDC factor is avai
 create/add another iCloud factor; existing ones can authorize an upgrade to passkey/OIDC. Android
 can display/remove one but offers no iCloud login ceremony.
 
-## Create, recover, authorize, sync
+## Create, login, authorize, sync
 
 | Operation | Ordered work and completion boundary |
 | --- | --- |
 | `create(FactorRegistration::Passkey)` | Check no backup; obtain registration + PRF; build the complete initial archive from supplied files; prove root ownership and sync-key possession; `/create`; publish local manifest/public key only after commit. No Turnkey account. |
 | `create(FactorRegistration::Oidc)` | Bind nonce/token; create suborg through app backend; establish main user, sole-root quorum, sync user/policy, break-glass user/policy; remove bootstrap authority; import factor secret; seal complete initial archive; `/create`; publish local state. |
-| `recover` | Authenticate and retrieve; check selected/bound account; unwrap key; validate archive; stage files according to mode; return descriptors and (Login only) root via Siegel. No sync-factor registration or manifest publication yet. |
-| `complete_recovery` | After required native import/login work, register the bound pending signer, publish files and acknowledged inventory/public key/compatibility; remove retired files and temporary vault data. Returns TurnkeyStatus for secondary registration. |
-| `reauthorize` | Authenticate against the bound ID; verify encryption-key identity; repair/register the bound sync key in both applicable systems; return TurnkeyStatus. Callers needing metadata use metadata(). Never unpack files, return a root, or import a vault. Extend `/verify-factor` to return metadata and a one-use sync-registration token internally. |
+| `login` | Accept the persisted pending signer directly; authenticate and retrieve; check selected/bound account and pending-operation key; unwrap key; validate archive; establish the account ID and retain the signer; stage files according to mode; return descriptors and (Login only) root via Siegel. No preliminary bind, sync-factor registration, or manifest publication. |
+| `finalize_login` | After required native wallet/vault restoration, register the bound signer; install staged files at their accepted paths; remove retired files and temporary vault data; save the restored manifest, verified encryption public key, and compatibility state. Log secondary registration failures internally. |
+| `reauthorize` | Authenticate against the bound ID; verify encryption-key identity; repair/register the bound sync key in both applicable systems; log secondary registration failures internally. Callers needing metadata use metadata(). Never unpack files, return a root, or import a vault. Extend `/verify-factor` to return metadata and a one-use sync-registration token internally. |
 | `sync` | Validate root/account and the supplied encryption public key against the acknowledged and verified remote key; check compatibility; compare remote head to acknowledged inventory; apply the batch to a candidate; read/checksum accepted files; seal with the supplied key; conditional `/sync`; atomically publish candidate manifest after confirmed remote commit. |
 
 Before create or a new device-authorization attempt, native creates and persists a fresh pending
-sync key and passes it to bind. Existing authorized devices bind their stored key at startup.
-Create, complete_recovery, and reauthorize enroll the bound key; mark it active only after
+sync key. Creation and reauthorization pass it with the existing root to bind; Login passes it
+directly to login. Existing authorized devices bind their root and stored key at startup;
+ReplaceLocal/ResumeSync pass that same signer to login.
+Create, finalize_login, and reauthorize enroll the bound key; mark it active only after
 backup-service registration is confirmed. Retain that key for the same unresolved attempt's retries,
 including after restart; never replace it to escape an ambiguous result.
 Never re-enroll a previously active, revoked key or
@@ -94,11 +97,11 @@ commit. On definite failure remove the new lookup and restore the registration t
 retain both lookups and resolve membership from authenticated metadata. Never evict the
 new/authenticating key. Delete the displaced Turnkey user only after commit. No distributed
 transaction framework. Passkey/OIDC login on a healthy Turnkey-backed backup finishes with the key
-present in both stores. Both complete_recovery and reauthorize use this registration/replacement
+present in both stores. Both finalize_login and reauthorize use this registration/replacement
 contract.
 
 If Turnkey is down, **passkey/iCloud** login may still recover and register with backup-service;
-completion returns `TurnkeyStatus::Incomplete` rather than disabling wallet recovery. OIDC needs
+completion succeeds and Bedrock logs the secondary registration failure. OIDC needs
 Turnkey to export its factor secret and therefore cannot recover while that dependency is down.
 Privileged Turnkey-dependent management remains unavailable until repaired. This same degraded
 outcome applies to existing iCloud login and missing passkey authenticators, on both platforms.
@@ -113,7 +116,7 @@ rollback for adding one factor. Persist creation's UUID before calling the backe
 provisional org ID in the pending-deletion file before further setup. Repeating that UUID must
 resolve the same creation attempt, never create another org; unit E verifies/adds this backend
 contract. An ambiguous response does not authorize a new UUID or speculative rollback. Lost
-bootstrap authority is reported as incomplete cleanup, never hidden by a successful retry.
+bootstrap authority is logged by Bedrock even when a later retry succeeds.
 
 Creation includes current vault/PCP/referral files in its single `/create` upload. Native keeps
 exported files alive for the whole awaited create/sync and deletes temporary exports afterward.
@@ -164,13 +167,21 @@ retrieval, before decrypt/stage/bind. ReplaceLocal/ResumeSync always check the e
 Only Login returns the root and persists it through the native secure adapter; ReplaceLocal and
 ResumeSync validate then discard it inside Bedrock. Native imports required staged data and (Login
 only) performs app-backend restore while keeping onboarding pending. It then calls
-`complete_recovery` with the returned recovery ID; this call acknowledges all required native
+`finalize_login` with the returned recovery ID; this call acknowledges all required native
 imports/login. Only finalization enrolls the signer, publishes the manifest, and allows it to become
 active. After publication reload PCP/invalidate referral caches before exposing completed recovery
 to UI. Import failure blocks finalization and preserves staging. Reload failure blocks UI
 completion; retry reload from the durably published files without enrolling another key or
 reimporting the vault. Keep the native recovery ID until reload/invalidation succeed. After restart,
-repeat idempotent complete_recovery with that ID, reload, then clear native pending state.
+repeat idempotent finalize_login with that ID, reload, then clear native pending state.
+
+Installing staged files means moving the validated temporary files into their final app-private
+paths according to the selected mode, with atomic replacement of each file. Save the restored
+manifest, verified encryption public key, and compatibility state only after those file operations
+and retired-file cleanup succeed. This makes the restored inventory the local baseline for future
+syncs; it does not upload another backup. Readers stay blocked until the final manifest save succeeds.
+The files and manifest are not one filesystem transaction: persisted progress lets finalize_login
+resume after interruption, as described below.
 
 Add one WalletKit prerequisite: transactional `import_backup_once(bytes, recovery_id, replace)`.
 Validate the source first; within one destination transaction enforce empty-only or replace known
@@ -186,7 +197,7 @@ Keep one disk-backed pending recovery with account ID, mode, manifest hash, sync
 publication progress. Generate a fresh opaque ID per attempt and retain it
 on resume; a later deliberate restore of the same hash is a new attempt. This ID keys the receipt;
 native root/onboarding persistence stores the same ID. No secret goes on disk in this record.
-`recover` may reauthenticate and resume that attempt after restart (including before root transfer).
+`login` may reauthenticate and resume that attempt after restart (including before root transfer).
 If the remote hash changed, stop with conflict; do not reuse an old import receipt for new contents.
 Completion checks the ID/hash, reacquires expired authority through optional `reauth`, and is
 idempotent after success. Keep staging until per-file atomic replacement, retired-file cleanup, and
@@ -198,7 +209,7 @@ data protection. Readers remain gated until publication.
 Cancellation before finalization removes staging; no new remote key exists. Native must enforce the
 ReplaceLocal import guard above before calling `cancel_recovery`. After registration starts,
 cancellation is refused: Busy while the call runs, RecoveryPending after restart/failure. Native
-retains the signer and resumes complete_recovery to resolve registration and publication; it must
+retains the signer and resumes finalize_login to resolve registration and publication; it must
 not drop a running mutation future. After completion it can explicitly log out. This keeps
 cancel local and synchronous; no second remote rollback flow. After an allowed cancel, abandoning
 Login clears only that onboarding wallet/vault through the native reset; canceling ReplaceLocal does
@@ -267,17 +278,17 @@ Use one private cleanup file for provisional creation and deletion targets. Reco
 phase: unresolved creation is ineligible for cleanup; creation abandoned before dispatch, a
 definitive precommit rejection, or confirmed service deletion makes it eligible. Before service
 deletion, persist its exact Turnkey organization IDs there. Delete backup-service first, then
-Turnkey, then clear local backup state. Return `Complete` only when both applicable remote deletions
-are confirmed; service success plus Turnkey failure returns `TurnkeyStatus::Incomplete`. Bedrock
-logs the underlying failure class and owns retry decisions; native reports incomplete cleanup
-without inferring a retry policy from that binary status. Apply this to explicit deletion,
+Turnkey, then clear local backup state. Once service deletion and local clearing succeed, return
+success even if Turnkey cleanup failed. Bedrock logs the failure and owns cleanup/retry decisions;
+no cleanup status or error is returned to native. Primary deletion and local clearing failures
+still propagate. Apply this to explicit deletion,
 last-factor deletion, reset, and app-account deletion. Local wallet deletion is not a remote reset.
 
 `reset(root)` signs `/v1/reset` with the root-derived secp256k1 key. Discover Turnkey through Auth
 Proxy `POST /v1/account`, `{filterType:"PUBLIC_KEY", filterValue:<derived public key>}`; use
 break-glass authority to delete that exact suborg. Discovery still works after backup-service
-metadata is gone. Older accounts without break-glass can remain undeletable: reset succeeds with
-`TurnkeyStatus::Incomplete`; do not require another factor or invent an app-backend recovery bypass.
+metadata is gone. Older accounts without break-glass can remain undeletable: reset succeeds and
+Bedrock logs the missing cleanup authority; no extra factor or app-backend recovery bypass.
 The existing canonical sync policy permits organization deletion, so `delete_backup()` needs no
 root on a healthy account. Authenticated/appropriately scoped NotFound is idempotent deletion
 success; auth failure or an unavailable existence check is not proof of absence.
@@ -302,20 +313,18 @@ policy cannot delete policies; its orphan policy is pruned by the next main-auth
 After the remote attempt, remove the fixed `backup_manager/` directory and release temporary
 authority, the stored signer, and the account binding, even if revocation failed. This clears the
 old global manifest and all account subdirectories without an account ID. Keep the public cleanup-target journal outside this
-directory. Return the existing contextual operation error after clearing; success
-means all applicable remote revocations and local clearing completed. A local filesystem failure
-remains an error, takes precedence over a remote error, and does not retain the in-memory binding.
-Bedrock logs each failure. No new logout outcome type or background cleanup is needed.
+directory. Bedrock logs remote revocation failures and returns success after local clearing. A local
+filesystem failure remains an error so native can retry clearing; the in-memory binding is still
+released. Success confirms local logout, not remote revocation. No new logout outcome type or
+background cleanup is needed.
 
 `logout(false)` requests local-only clearing: use it for Android's cross-app-imported key and native
 local reset, preserving the peer's remote credentials. It also retries failed local deletion without
 a binding or signer; it cannot turn failed revocation into success.
-A missing/unusable bound signer during logout(true) is a revocation error; still run local teardown
-and report incomplete cleanup. If native cannot load the signer at startup, it reports that failure
-and may use logout(false) for local teardown, never as evidence of successful revocation.
-Once teardown has run, native clears its own keys and wallet data even if remote revocation failed;
-any error means cleanup is incomplete, not that either remote store confirmed revocation. Retry
-failed local deletion. No remote work is launched after native erases its signer. Already-cleared
+A missing/unusable bound signer during logout(true) is logged by Bedrock; still run local teardown.
+If native cannot load the signer at startup, it logs that local failure and may use logout(false).
+Once teardown has run, native clears its own keys and wallet data even if remote revocation failed.
+Retry failed local deletion. No remote work is launched after native erases its signer. Already-cleared
 local state is a no-op.
 
 ## Repairs and migrations
