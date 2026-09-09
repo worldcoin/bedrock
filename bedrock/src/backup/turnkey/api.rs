@@ -682,11 +682,11 @@ impl TurnkeyApiClient {
         legacy_user_id: &str,
         replacement_sync_factor: SyncFactor<'_>,
     ) -> Result<(), TurnkeyApiError> {
-        if uuid::Uuid::try_parse(legacy_user_id).is_err() {
-            return Err(TurnkeyApiError::Client(
-                "legacy sync-factor user id is not a UUID".to_string(),
-            ));
-        }
+        let legacy_user_id = uuid::Uuid::try_parse(legacy_user_id)
+            .map_err(|_| {
+                TurnkeyApiError::Client("legacy sync-factor user id is not a UUID".to_string())
+            })?
+            .to_string();
 
         let users = self
             .get_users(suborganization_id, replacement_sync_factor)
@@ -709,7 +709,7 @@ impl TurnkeyApiClient {
 
         let client = self.sdk_client(replacement_sync_factor.0)?;
         let intent = DeleteUsersIntent {
-            user_ids: vec![legacy_user_id.to_string()],
+            user_ids: vec![legacy_user_id.clone()],
         };
         // Compute this once outside retries to keep the submitted activity
         // idempotent if the first response is lost.
@@ -728,7 +728,7 @@ impl TurnkeyApiClient {
             })
             .await?;
 
-        if !deleted_user_ids.iter().any(|id| id == legacy_user_id) {
+        if !deleted_user_ids.iter().any(|id| id == &legacy_user_id) {
             crate::critical!(
                 "turnkey.reconcile_legacy_sync_factor_user.response_missing_requested_user"
             );
@@ -1065,6 +1065,8 @@ mod tests {
     async fn reconcile_legacy_sync_factor_user_deletes_a_verified_sync_factor() {
         const SUBORGANIZATION_ID: &str = "suborg-1";
         const USER_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        // `UUID.uuidString` on iOS uses uppercase hexadecimal characters.
+        const IOS_USER_ID: &str = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1098,9 +1100,20 @@ mod tests {
 
         let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
         TurnkeyApiClient::with_base_url(server.uri())
-            .reconcile_legacy_sync_factor_user(SUBORGANIZATION_ID, USER_ID, SyncFactor(&signer))
+            .reconcile_legacy_sync_factor_user(
+                SUBORGANIZATION_ID,
+                IOS_USER_ID,
+                SyncFactor(&signer),
+            )
             .await
             .unwrap();
+
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|request| request.url.path() == "/public/v1/submit/delete_users"));
     }
 
     #[tokio::test]
