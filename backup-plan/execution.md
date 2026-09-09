@@ -4,11 +4,17 @@ The contracts in [design.md](design.md) and [flows.md](flows.md) are shared. Imp
 introduce alternative public account/auth/session structures. A needed change to those contracts
 comes back to the integration owner before parallel implementation proceeds.
 
+Native still supplies/consumes data owned by WalletKit and Oxide: vault export/import, PCP reload,
+referral-store access, and root-key persistence. Those are storage boundaries, not a reason to
+retain native backup networking, challenge handling, or Turnkey DTOs. App-backend wallet
+login/account deletion remain native account-lifecycle operations.
+
 ## Execution conventions
 
 Start from [PR #440](https://github.com/worldcoin/bedrock/pull/440). The stubs omit receivers, Arc,
-FFI attributes, and Result; add them where implementation requires them. Export a method only when
-its flow works. Reuse the existing clients, signer, factor types, and migration outcomes.
+FFI attributes, and Result; add them where implementation requires them. Export a method and each
+`NewFactor` variant only when their flows work. Reuse the existing clients, signer, factor types,
+and migration outcomes.
 
 Legacy iCloud-file/Google Drive migration, hardware-key rollout, and cross-app handoff redesign
 remain separate. Existing iCloud Keychain factors support recovery, removal, and authorization of
@@ -28,10 +34,10 @@ adoption PR. This is release sequencing, not permanent compatibility shims.
 | B | One-use handoff of the recovered Login root to native: Siegel Rust → native transfer and Swift/JNI buffer adapters. | None | One consumption; invalid handle/length including >1MiB; second read rejected; native buffer wiped; no JSON root field in the new recovery binding. |
 | C | Bedrock `backup/mod.rs`, `manifest.rs`, `backup_service/{mod,wire}.rs`, new `flows/sync.rs`: bound account ID, startup head check, old-state adoption, pending-manifest resolution, direct batched sync. | #440, Q | Old global manifest adopted only after ID/hash check; mismatch preserves files; one upload per batch; empty/unchanged no upload; root mismatch; Busy; startup divergence; same-inventory recreation with a different encryption key; timed-out commit recognized after vault re-export; temp-file lifetime. |
 | D | Bedrock `backup_format/v0.rs`, `manifest.rs`, file-policy helper and atomic filesystem publication: bounded one-entry-at-a-time parse, allowlist, raw designators, retirement, staging/publication. | C | Malicious archive publishes nothing; all observed paths accepted; mixed referrals preserved; unsupported entries block rewrites; app update + ResumeSync clears the block; full original inventory retained; interrupted per-file publication resumes. |
-| E | Bedrock `turnkey/api.rs`, policies and `flows/create.rs`; both native creation callsites. | C, D | Platform-correct passkey options and native labels; complete initial backup; required break-glass/quorum; root ownership; no backup-enabled result after a failed initial upload; uncertain create retains authority; late commit recognized from pending manifest; initial OIDC provider included in main-user creation. |
+| E | Bedrock `turnkey/api.rs`, policies and `flows/create.rs`; unified `create(NewFactor, ...)` and both native creation callsites. | C, D | Platform-correct passkey options and native labels; complete initial backup; required break-glass/quorum; root ownership; no backup-enabled result after a failed initial upload; uncertain create retains authority; late commit recognized from pending manifest; initial OIDC provider included in main-user creation. |
 | F | Bedrock private authentication helpers and `flows/recover.rs`; iOS/Android login, cloud-list, authorize-device adapters. | A, B, D, P, O | Selected-account validation; healthy login registers both stores only at completion; iCloud login retained; degraded Turnkey result; all three restore modes; persisted UpdateRequired visible with unchanged head; restart before root transfer/after vault import/during publication/after return before reload; pending recovery surfaced; pre-registration cancel, completion-only after vault replacement, and post-registration resume; reauth never imports files. |
 | G | backup-service enrollment: new passkey, existing OIDC/iCloud, same-identity retries; authenticated OIDC subject; narrow repair-factor challenge/route. | A | Proof of both factors, bound new identity, shared WebAuthn verifier/activity replay rejection, single PRF key, wrong-account denial, duplicate retry; main authority repairs only an existing factor reference without the broken factor's login. |
-| H | Bedrock `flows/add_factor.rs`; both factor settings adapters. | E, F, G | Passkey to OIDC and OIDC to passkey; additional OIDC; all Apple audiences; existing Turnkey blocks iCloud-only addition before ceremony; OIDC/iCloud validation before new-passkey registration; iCloud cannot be created; missing Turnkey provisioned once; concurrent retries never remove shared credentials. |
+| H | Bedrock `flows/add_factor.rs`; unified `add_factor(NewFactor, ...)` and both factor settings adapters. | E, F, G | Passkey to OIDC and OIDC to passkey; additional OIDC; all Apple audiences; existing Turnkey blocks iCloud-only addition before ceremony; OIDC/iCloud validation before new-passkey registration; iCloud cannot be created; missing Turnkey provisioned once; concurrent retries never remove shared credentials. |
 | I | backup-service `delete_factor`, storage conditional mutation and endpoint types: atomic last-factor confirmation. | None | Two concurrent removals cannot delete the backup without confirmation; MAIN/SYNC target/context checks; old missing flag defaults false. |
 | J | Bedrock `flows/{remove_factor,delete_backup,reset,unregister_device}.rs`; native reset/logout/account-delete callsites. | C, E, F, I | Reset deletes Turnkey through break-glass; missing break-glass returns incomplete cleanup; retry never deletes a live/new suborg; capture signer before logout; imported Android key preserved remotely. |
 | K | Bedrock migration files: root quorum, break-glass, main-factor consistency; extend existing Apple/policy repairs. | E, F, G | Already-correct state emits no writes; main required/deferred; missing provider anchor repaired; all Apple audiences; unknown audience/user preserved; no last working authority removed. |
@@ -137,11 +143,12 @@ evidence they were fixed.
 
 Use fixture-driven Rust flow tests at HTTP/filesystem/authentication boundaries. Include real V0
 archives from both platforms with secrets replaced, both PRF salt variants, and both referral
-formats. One shared suite owns flow decisions; Swift/Kotlin tests check FFI shapes, async callback
-cancellation, signer encodings, secret transfer, temporary-file lifetime, and caller sequencing. Do
-not duplicate the entire state-machine suite in each native language. On each platform, verify a
-supported PRF provider, actionable missing-PRF failure, and cross-device recovery that preserves the
-existing backup. Check native analytics consent and single operational-event emission.
+formats. One shared suite owns flow decisions; Swift/Kotlin tests check `NewFactor` variants, FFI
+shapes, async callback cancellation, signer encodings, secret transfer, temporary-file lifetime, and
+caller sequencing. Do not duplicate the entire state-machine suite in each native language. On each
+platform, verify a supported PRF provider, actionable missing-PRF failure, and cross-device recovery
+that preserves the existing backup. Check native analytics consent and single operational-event
+emission.
 
 For implementation PRs, follow repository CI: `cargo build`, targeted backup tests with `--features
 test_utils`, `cargo fmt -- --check`, workspace/all-target/all-feature Clippy, `taplo fmt --check`,

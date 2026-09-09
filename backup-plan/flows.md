@@ -64,8 +64,8 @@ can display/remove one but offers no iCloud login ceremony.
 
 | Operation | Ordered work and completion boundary |
 | --- | --- |
-| `create_passkey` | Check no backup; obtain registration + PRF; build the complete initial archive from supplied files; prove root ownership and sync-key possession; `/create`; publish local manifest/public key only after commit. No Turnkey account. |
-| `create_oidc` | Bind nonce/token; create suborg through app backend; establish main user, sole-root quorum, sync user/policy, break-glass user/policy; remove bootstrap authority; import factor secret; seal complete initial archive; `/create`; publish local state. |
+| `create(NewFactor::Passkey)` | Check no backup; obtain registration + PRF; build the complete initial archive from supplied files; prove root ownership and sync-key possession; `/create`; publish local manifest/public key only after commit. No Turnkey account. |
+| `create(NewFactor::Oidc)` | Bind nonce/token; create suborg through app backend; establish main user, sole-root quorum, sync user/policy, break-glass user/policy; remove bootstrap authority; import factor secret; seal complete initial archive; `/create`; publish local state. |
 | `recover` | Authenticate and retrieve; check selected/bound account; unwrap key; validate archive; stage files according to mode; return descriptors and (Login only) root via Siegel. No sync-factor registration or manifest publication yet. |
 | `complete_recovery` | After required native import/login work, register the pending signer, publish files and acknowledged inventory/public key/compatibility; remove retired files and temporary vault data. Returns TurnkeyStatus for secondary registration. |
 | `reauthorize` | Authenticate against the bound ID; verify encryption-key identity; repair/register the supplied sync key in both applicable systems; return TurnkeyStatus. Callers needing metadata use metadata(sync). Never unpack files, return a root, or import a vault. Extend `/verify-factor` to return metadata and a one-use sync-registration token internally. |
@@ -202,6 +202,9 @@ not clear a pre-existing wallet. After vault replacement, finish publication bef
 restored wallet or permitting logout.
 
 ## Adding and removing main factors
+
+`add_factor(factor, existing, sync)` dispatches by `NewFactor`; all enrollment paths share the
+authorization and commit rules below.
 
 Additions require proof of an existing main factor plus the new factor; a sync key alone cannot add
 a recovery method. Extend backup-service's existing `/add-factor/challenge` and `/add-factor` for

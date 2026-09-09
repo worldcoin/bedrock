@@ -14,11 +14,6 @@ Native implements: BackupPlatform ceremonies + existing P256Signer
 Existing shared bridges: authenticated app-backend HTTP, attestation, filesystem
 ```
 
-Native still supplies/consumes data owned by WalletKit and Oxide: vault export/import, PCP reload,
-referral-store access, and root-key persistence. Those are storage boundaries, not a reason to
-retain native backup networking, challenge handling, or Turnkey DTOs. App-backend wallet
-login/account deletion remain native account-lifecycle operations.
-
 ## Public surface
 
 ```rust
@@ -30,45 +25,57 @@ struct BackupManager {
 
 impl BackupManager {
     fn new(platform: BackupPlatform) -> Self;
+    // Derive the account ID, consume the root, and retain only the ID.
     fn bind(root: SiegelSession);
+    // Adopt native backup state only after its account, encryption key, and head match.
     async fn adopt_existing_backup(sync: P256Signer, encryption_public_key: String,
                                     turnkey_sync_user_id: Option<String>);
 
+    // Report remote existence, not sync health; network failures remain errors.
     async fn has_backup() -> bool;
     async fn metadata(sync: P256Signer) -> BackupMetadata;
+    // Check remote divergence and compatibility blocks without restoring files.
     async fn check_for_remote_updates(sync: P256Signer);
     async fn backed_up_files(sync: P256Signer, designator: BackupFileDesignator) -> Vec<String>;
     async fn sync(root: SiegelSession, sync: P256Signer, changes: Vec<BackupFileChange>);
 
-    async fn create_passkey(root: SiegelSession, sync: P256Signer, files: Vec<BackupFileChange>,
-                            name: String, display_name: String);
-    async fn create_oidc(root: SiegelSession, provider: OidcProvider,
-                         sync: P256Signer, files: Vec<BackupFileChange>);
+    async fn create(factor: NewFactor, root: SiegelSession,
+                     sync: P256Signer, files: Vec<BackupFileChange>);
+    // Stage validated files; only Login returns the root, and registration waits for completion.
     async fn recover(login: BackupLogin, mode: RecoveryMode,
                       expected_backup_id: Option<String>) -> RecoveredBackup;
+    // Acknowledge required native restore work, then enroll the signer and publish staged state.
     async fn complete_recovery(recovery_id: String, sync: P256Signer,
                                 reauth: Option<BackupLogin>, replace_device: Option<String>)
         -> TurnkeyStatus;
+    // Cancel only before registration and before a committed ReplaceLocal import.
     fn cancel_recovery(recovery_id: String);
+    // Authorize device access without importing files or returning a root.
     async fn reauthorize(login: BackupLogin, sync: P256Signer,
                           replace_device: Option<String>) -> TurnkeyStatus;
 
-    async fn add_passkey(existing: BackupLogin, sync: P256Signer,
-                         name: String, display_name: String) -> BackupMetadata;
-    async fn add_oidc(provider: OidcProvider, existing: BackupLogin,
-                      sync: P256Signer) -> BackupMetadata;
+    async fn add_factor(factor: NewFactor, existing: BackupLogin,
+                         sync: P256Signer) -> BackupMetadata;
     async fn remove_factor(id: String, sync: P256Signer,
                             reauth: Option<BackupLogin>, confirm_backup_deletion: bool)
         -> RemoveFactorOutcome;
+    // Revoke this device in both stores while preserving the backup and its main factors.
     async fn unregister_device(sync: P256Signer) -> TurnkeyStatus;
     async fn delete_backup(sync: P256Signer) -> TurnkeyStatus;
+    // Delete through root authority; Turnkey cleanup may remain incomplete.
     async fn reset(root: SiegelSession) -> TurnkeyStatus;
     async fn run_migrations(sync: P256Signer, reauth: Option<BackupLogin>) ->
         TurnkeyMigrationOutcome;
+    // Read cached public metadata for offline cross-app handoff.
     fn cross_app_metadata() -> CrossAppBackupMetadata;
+    // Clear Bedrock state and binding, preserving wallet files, native keys, and remote data.
     fn clear_local_state();
 }
 
+enum NewFactor {
+    Passkey { name: String, display_name: String },
+    Oidc { provider: OidcProvider },
+}
 enum OidcProvider { Google, Apple }
 enum BackupLogin { Passkey, Oidc { provider: OidcProvider }, IcloudKeychain { key_id: String } }
 enum RecoveryMode { Login, ReplaceLocal, ResumeSync }
@@ -88,12 +95,15 @@ struct CrossAppBackupMetadata {
 }
 ```
 
-`BackupLogin` selects a ceremony, not credentials or an account. Creation and addition have explicit
-passkey/OIDC methods so iCloud Keychain cannot be a new factor. An existing iCloud factor may
-authorize adding a passkey/OIDC factor when no Turnkey account exists. With an existing Turnkey
-account, additions need a working passkey/OIDC main factor; iCloud recovery remains available. At
-most one passkey per backup, matching the existing single PRF encryption-key invariant. Multiple
-OIDC factors share the existing Turnkey encryption key; do not create one key per Apple audience.
+`NewFactor` selects what `create` and `add_factor` enroll; `BackupLogin` selects an existing factor
+for authentication. Neither holds credentials or an authenticated session. New factor types extend
+`NewFactor` and private dispatch behind the same public methods. `BackupPlatform` keeps ceremony
+ordering inside Bedrock; native presents the requested UI and returns its result. `NewFactor`
+excludes iCloud Keychain. An existing iCloud factor may authorize adding a passkey/OIDC factor when
+no Turnkey account exists. With an existing Turnkey account, additions need a working passkey/OIDC
+main factor; iCloud recovery remains available. At most one passkey per backup, matching the
+existing single PRF encryption-key invariant. Multiple OIDC factors share the existing Turnkey
+encryption key; do not create one key per Apple audience.
 
 File changes are `Put { designator, path }`, `Remove { path }`, and `ReplaceFiles { designator,
 paths }`. `ReplaceFiles` replaces that designator's inventory, not unrelated files.
