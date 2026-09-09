@@ -64,7 +64,7 @@ impl BackupManager {
     async fn remove_factor(id: String, sync: P256Signer,
                             reauth: Option<FactorAuthentication>, confirm_backup_deletion: bool)
         -> RemoveFactorOutcome;
-    // Processes app logout: unregisters the supplied Sync Factor, then clears local backup state.
+    // Revoke a supplied Sync Factor, then clear local backup state; None clears local state only.
     async fn logout(sync: Option<P256Signer>);
     async fn delete_backup(sync: P256Signer) -> TurnkeyStatus;
     // Performs the backup full `/reset`
