@@ -10,7 +10,7 @@ Native UI / account lifecycle
        ├─ manifest + backup_format private file inventory, packing, validation
        └─ migrations               existing plan/apply functions
 
-Native implements: BackupPlatform ceremonies + existing P256Signer
+Native implements: MainFactorCeremony + existing P256Signer
 Existing shared bridges: authenticated app-backend HTTP, attestation, filesystem
 ```
 
@@ -19,12 +19,12 @@ Existing shared bridges: authenticated app-backend HTTP, attestation, filesystem
 ```rust
 struct BackupManager {
     account_id: Option<String>,
-    platform: BackupPlatform,
+    main_factor_ceremony: MainFactorCeremony,
     // Private clients, one operation mutex, and an optional pending recovery; never a root.
 }
 
 impl BackupManager {
-    fn new(platform: BackupPlatform) -> Self;
+    fn new(main_factor_ceremony: MainFactorCeremony) -> Self;
     // Derive the account ID, consume the root, and retain only the ID.
     fn bind(root: SiegelSession);
     // Adopt native backup state only after its account, encryption key, and head match.
@@ -97,7 +97,7 @@ struct CrossAppBackupMetadata {
 
 `NewFactor` selects what `create` and `add_factor` enroll; `BackupLogin` selects an existing factor
 for authentication. Neither holds credentials or an authenticated session. New factor types extend
-`NewFactor` and private dispatch behind the same public methods. `BackupPlatform` keeps ceremony
+`NewFactor` and private dispatch behind the same public methods. `MainFactorCeremony` keeps ceremony
 ordering inside Bedrock; native presents the requested UI and returns its result. `NewFactor`
 excludes iCloud Keychain. An existing iCloud factor may authorize adding a passkey/OIDC factor when
 no Turnkey account exists. With an existing Turnkey account, additions need a working passkey/OIDC
@@ -143,7 +143,7 @@ archive import. Never infer it from an old native key just because manifest hash
 ## Native callbacks and secrets
 
 ```rust
-trait BackupPlatform {
+trait MainFactorCeremony {
     async fn register_passkey(options_json: String) -> PasskeyResponse;
     async fn authenticate_passkey(options_json: String) -> PasskeyResponse;
     async fn oidc_token(provider: OidcProvider, nonce: String) -> SiegelSession;

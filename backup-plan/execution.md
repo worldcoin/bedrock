@@ -81,7 +81,7 @@ adoption diff must delete replaced behavior, not wrap it in another service.
 | iOS entry point | Replacement |
 | --- | --- |
 | `AccountRecovery/Core/AccountManagementService.swift` create/login/authorize/sync/reset | Call corresponding BackupManager methods; remove challenges, key wrapping, Turnkey import/export, Auth Proxy/backend recovery calls, and network retry decisions. |
-| `FactorEnrollmentService.swift`, `TurnkeyService.swift` and its operation extensions | Ceremony implementations move to `BackupPlatform`; delete Turnkey DTO/operation orchestration after callers migrate. |
+| `FactorEnrollmentService.swift`, `TurnkeyService.swift` and its operation extensions | Ceremony implementations move to `MainFactorCeremony`; delete Turnkey DTO/operation orchestration after callers migrate. |
 | `BedrockBackupManager.swift`, `BedrockBackupServiceApi.swift`, `WLDBedrock/BedrockWrapper.swift` | One manager instance, startup head check, and callback registration; remove the native backup-service callback once C/F cover its callers. |
 | `RestoreWalletLogInReducer`, `RestoreWalletCloudListReducer` | Validate selected account, consume Login root securely, import with WalletKit receipt, perform native login, complete recovery/register signer, reload PCP, then expose completion. |
 | `AuthorizeDeviceReducer` | Persist signer and call reauthorize; handle TurnkeyStatus. No root transfer, files, vault import, or wallet login. |
@@ -96,7 +96,7 @@ adoption diff must delete replaced behavior, not wrap it in another service.
 | `AddPasskeyBackedOIDCFactor`, `DeleteBackup`, `DeleteSyncFactor` | Shared add/remove/delete/unregister flows; add missing passkey enrollment UI; provider choice no longer hardcoded to Google in shared DTOs. |
 | `BackupAccessService`, `ExternalAccountService`, `P256KeypairSigner` | Implement native ceremonies and existing signer only. Preserve the old Android PRF second result; no challenge token retained in UI state. |
 | `BackupServiceImpl`, `TurnkeyServiceImpl`, networking `BackupServiceApi`, Turnkey DTOs | Remove migrated current-system network methods/DTOs; retain app-backend wallet/account operations and legacy Drive services. |
-| `BedrockSdk`, `BedrockBackupServiceApi`, `OxideBedrockBridgeImpl` | Register one manager/platform adapter; check the head at startup; batch file mutations; remove the native sync/metadata callback and old manifest methods. |
+| `BedrockSdk`, `BedrockBackupServiceApi`, `OxideBedrockBridgeImpl` | Register one manager and `MainFactorCeremony` adapter; check the head at startup; batch file mutations; remove the native sync/metadata callback and old manifest methods. |
 | `LocalSyncFactorStoreImpl`, `BackupSyncData`, `CleanupStaleTurnkeyUsers` | Keep storage compatibility for existing keys; remove duplicated runtime metadata, but retain cross-app wire fields/imported marker via `cross_app_metadata` and adoption; delete native stale-user algorithm/worker. |
 | `ResetLocalAccountData`, `DeleteAccount`, `DeleteAllBackups`, cross-app import | Local reset stays local; current-system remote deletion reports outcomes; legacy Drive deletion stays outside Bedrock; preserve shared-key logout behavior until the hardware rollout. |
 
