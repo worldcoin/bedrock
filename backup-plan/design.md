@@ -48,7 +48,7 @@ impl BackupManager {
     async fn complete_recovery(recovery_id: String, sync: P256Signer,
                                 reauth: Option<BackupLogin>, replace_device: Option<String>)
         -> TurnkeyStatus;
-    // Cancel only before registration and before a committed ReplaceLocal import.
+    // Cancel before registration; native blocks cancellation once ReplaceLocal import starts.
     fn cancel_recovery(recovery_id: String);
     // Authorize device access without importing files or returning a root.
     async fn reauthorize(login: BackupLogin, sync: P256Signer,
