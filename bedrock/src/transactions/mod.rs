@@ -64,7 +64,7 @@ pub struct PreparedTransaction {
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
-    /// Prepares an ERC-20 transfer on World Chain without signing it.
+    /// Prepares an unsigned ERC-20 transfer on World Chain.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
@@ -112,6 +112,7 @@ impl SafeSmartAccount {
             })?;
 
         let PmSponsorUserOperationResponse::Approved(approval) = sponsorship else {
+            // TODO: Handle the self-sponsored UserOperation flow.
             return Err(TransactionError::Generic {
                 error_message: "Sponsorship declined".to_string(),
             });
