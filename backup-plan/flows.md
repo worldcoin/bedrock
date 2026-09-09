@@ -291,22 +291,25 @@ recovery using its existing completion/cancellation rules; Busy or RecoveryPendi
 before any teardown, so native must retain its keys and finish that work first.
 
 `logout(Some(sync))` captures the public key and remote IDs, then attempts to remove the matching
-Turnkey user and backup-service sync factor within one bounded deadline. Attempt service revocation
-even if Turnkey cleanup fails. Preserve the backup and every other factor. The sync policy cannot
-delete policies; its orphan policy is pruned by the next main-authorized migration.
+Turnkey user and backup-service sync factor, with a bounded attempt for each store. Attempt service
+revocation even if Turnkey cleanup fails. Preserve the backup and every other factor. The sync
+policy cannot delete policies; its orphan policy is pruned by the next main-authorized migration.
 
 After the remote attempt, clear local manifest/staging state, temporary authority, and the binding,
 even if revocation failed. Return the existing contextual operation error after clearing; success
-means both requested remote revocations and local clearing completed. A local filesystem failure
+means all applicable remote revocations and local clearing completed. A local filesystem failure
 remains an error, takes precedence over a remote error, and does not retain the in-memory binding.
 Bedrock logs each failure. No new logout outcome type or background cleanup is needed.
 
 `logout(None)` requests local-only clearing: use it for Android's cross-app-imported key and native
 local reset, preserving the peer's remote credentials. It also retries failed local deletion without
 a binding or signer; it cannot turn failed revocation into success.
+If native cannot load a required signer, report incomplete revocation before local-only teardown;
+never silently convert that error into None.
 Once teardown has run, native clears its own keys and wallet data even if remote revocation failed;
-report incomplete revocation or local clearing and retry failed local deletion. No remote work is
-launched after native erases its signer. Already-cleared local state is a no-op.
+any error means cleanup is incomplete, not that either remote store confirmed revocation. Retry
+failed local deletion. No remote work is launched after native erases its signer. Already-cleared
+local state is a no-op.
 
 ## Repairs and migrations
 

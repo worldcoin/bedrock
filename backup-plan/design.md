@@ -64,7 +64,7 @@ impl BackupManager {
     async fn remove_factor(id: String, sync: P256Signer,
                             reauth: Option<FactorAuthentication>, confirm_backup_deletion: bool)
         -> RemoveFactorOutcome;
-    // Processes app logout: clears local backup state and unregisters the supplied Sync Factor.
+    // Processes app logout: unregisters the supplied Sync Factor, then clears local backup state.
     async fn logout(sync: Option<P256Signer>);
     async fn delete_backup(sync: P256Signer) -> TurnkeyStatus;
     // Performs the backup full `/reset`
@@ -181,13 +181,13 @@ hashed 32-byte digest; DER ECDSA output, normalized in Bedrock. Never ask for it
 existing key-storage compatibility until the separate hardware rollout. Verify a replacement key is
 usable before removing the old value.
 
-`bind` consumes the root once, derives `backup_account_<compressed secp256k1 public key>`, and drops
-it. A second bind may only confirm the same ID; account switching destroys the manager.
-Create/recover/reset can establish the binding themselves. Other account operations require it; an
-unbound call returns the contextual local-state error. Recovery derives/binds the ID internally
-before the one-use Login root handoff; native does not call bind again with that consumed handle.
+`bind` consumes the root once, derives the backup id. A second bind may only confirm the same ID;
+account switching destroys the manager. Create/recover/reset can establish the binding themselves.
+Other account operations require it; an unbound call returns the contextual local-state error.
+Local-only `logout(None)` needs no binding. Recovery derives/binds the ID internally before the
+one-use Login root handoff; native does not call bind again with that consumed handle.
 Root arguments to sync/reset/create must match an existing binding before any mutation. The public
-key for break-glass registration is already encoded in that ID; migration needs no root.
+key for break-glass registration is already encoded in that ID.
 
 Root, OIDC tokens, PRF, unwrapped backup keys, and ephemeral Turnkey session keys are zeroized when
 no longer needed. Pending recovery may hold its five-minute main session and one-use sync token in
