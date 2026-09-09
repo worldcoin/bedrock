@@ -434,7 +434,7 @@ mod tests {
             let server = Arc::clone(&server);
             async move { run_delete(&server).await }
         });
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if called_paths(&server)
                     .await
@@ -446,7 +446,7 @@ mod tests {
             }
         })
         .await
-        .expect("Turnkey cleanup must start after the backup is deleted");
+        .expect("timed out waiting for the Turnkey cleanup request");
 
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(31)).await;

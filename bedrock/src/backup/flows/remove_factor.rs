@@ -46,10 +46,22 @@ impl BackupFlow for RemoveFactor {
         &self,
         ctx: &FlowContext<'_>,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        let metadata = ctx
+        let metadata = match ctx
             .service
             .retrieve_metadata(ctx.sync_factor, ctx.backup_id)
-            .await?;
+            .await
+        {
+            Ok(metadata) => metadata,
+            Err(BackupOperationError::BackupService { code })
+                if code == "backup_does_not_exist" =>
+            {
+                crate::warn!(
+                    "remove_factor.backup_already_deleted (invalid call from native)"
+                );
+                return Ok(RemoveFactorOutcome::BackupDeleted);
+            }
+            Err(error) => return Err(error),
+        };
         let factor = metadata
             .factor(&self.factor_id)
             .ok_or(BackupOperationError::InvalidFactorId)?;
@@ -69,7 +81,7 @@ impl BackupFlow for RemoveFactor {
         }
 
         let plan = self.plan(ctx, &metadata, &factor.kind).await?;
-        self.commit(ctx, plan).await
+        self.commit(ctx, &metadata, plan).await
     }
 }
 
@@ -80,8 +92,8 @@ enum Plan {
         turnkey_account: TurnkeyMeta,
         /// The encrypted backup key to remove.
         backup_encryption_key: BackupEncryptionKey,
-        /// OIDC Provider IDs that must be removed (Turnkey IDs).
-        provider_ids: Vec<String>,
+        /// Identity used to find current providers after the service commits.
+        identity: Option<OidcIdentity>,
         /// When removing the last OIDC factor, the Turnkey account is deleted (as it's no longer used).
         is_last_oidc_factor: bool,
     },
@@ -91,6 +103,11 @@ enum Plan {
         /// All metadata to remove the passkey from Turnkey. `None` if the user has no Turnkey account.
         turnkey: Option<TurnkeyPasskeyMeta>,
     },
+}
+
+struct OidcIdentity {
+    issuer: String,
+    subject: String,
 }
 
 /// The metadata required to delete the passkey (i.e. authenticator) from Turnkey.
@@ -164,11 +181,11 @@ impl RemoveFactor {
 
         let is_last_oidc_factor = metadata.oidc_factor_count() == 1;
 
-        let provider_ids = if is_last_oidc_factor {
+        let identity = if is_last_oidc_factor {
             ctx.turnkey
                 .verify_sync_factor(&turnkey_account.id, SyncFactor(ctx.sync_factor))
                 .await?;
-            Vec::new()
+            None
         } else if let Some(main_factor) = ctx.main_factor {
             ctx.turnkey
                 .verify_main_factor(
@@ -177,8 +194,7 @@ impl RemoveFactor {
                     MainFactor(main_factor),
                 )
                 .await?;
-            resolve_all_turnkey_provider_ids(ctx, &turnkey_account, turnkey_provider_id)
-                .await?
+            resolve_oidc_identity(ctx, &turnkey_account, turnkey_provider_id).await?
         } else {
             // Deleting an OAuth provider from Turnkey requires a [`MainFactor`]
             crate::debug!("remove_factor.needs_main_factor");
@@ -190,7 +206,7 @@ impl RemoveFactor {
         Ok(Plan::Oidc {
             turnkey_account,
             backup_encryption_key: backup_encryption_key.clone(),
-            provider_ids,
+            identity,
             is_last_oidc_factor,
         })
     }
@@ -259,26 +275,19 @@ impl RemoveFactor {
     async fn commit(
         &self,
         ctx: &FlowContext<'_>,
+        metadata: &BackupMetadata,
         plan: Plan,
     ) -> Result<RemoveFactorOutcome, BackupOperationError> {
-        let (backup_encryption_key, turnkey_account) = match &plan {
+        let backup_encryption_key = match &plan {
             Plan::Oidc {
                 backup_encryption_key,
-                turnkey_account,
                 is_last_oidc_factor,
                 ..
-            } => (
-                is_last_oidc_factor.then(|| backup_encryption_key.clone()),
-                Some(turnkey_account.clone()),
-            ),
+            } => is_last_oidc_factor.then(|| backup_encryption_key.clone()),
             Plan::Passkey {
                 backup_encryption_key,
-                turnkey,
                 ..
-            } => (
-                Some(backup_encryption_key.clone()),
-                turnkey.as_ref().map(|v| v.turnkey_account.clone()),
-            ),
+            } => Some(backup_encryption_key.clone()),
         };
 
         // Step 1: Commit backup-service (authoritative)
@@ -291,7 +300,7 @@ impl RemoveFactor {
 
         //  Step 2A: Delete the whole Turnkey account if the backup was deleted (remote race condition)
         if response.backup_deleted {
-            if let Some(turnkey_account) = turnkey_account {
+            if let Some((turnkey_account, _)) = metadata.turnkey_account() {
                 delete_backup::delete_turnkey_account(
                     ctx.turnkey,
                     vec![turnkey_account.id],
@@ -330,7 +339,7 @@ async fn turnkey_commit(ctx: &FlowContext<'_>, plan: Plan) {
     match plan {
         Plan::Oidc {
             turnkey_account,
-            provider_ids,
+            identity,
             is_last_oidc_factor,
             ..
         } => {
@@ -342,19 +351,16 @@ async fn turnkey_commit(ctx: &FlowContext<'_>, plan: Plan) {
                     ctx.sync_factor,
                 )
                 .await;
-            } else if let Some(main_factor) = ctx.main_factor {
+            } else if let (Some(main_factor), Some(identity)) =
+                (ctx.main_factor, identity)
+            {
                 delete_oauth_providers_from_turnkey(
                     ctx,
                     &turnkey_account,
-                    provider_ids,
+                    identity,
                     main_factor,
                 )
                 .await;
-            } else {
-                crate::critical!(
-                    suborg_id = turnkey_account.id,
-                    "remove_factor.missing_main_factor_for_provider_cleanup"
-                );
             }
         }
         Plan::Passkey {
@@ -379,6 +385,14 @@ async fn turnkey_commit(ctx: &FlowContext<'_>, plan: Plan) {
                 )
                 .await
             {
+                if let TurnkeyApiError::ActivityPollingExceeded { .. } = &error {
+                    crate::warn!(
+                        suborg_id = turnkey.turnkey_account.id,
+                        error_message = error,
+                        "remove_factor.authenticator_teardown_pending"
+                    );
+                    return;
+                }
                 crate::critical!(
                     suborg_id = turnkey.turnkey_account.id,
                     code = error.code(),
@@ -391,14 +405,50 @@ async fn turnkey_commit(ctx: &FlowContext<'_>, plan: Plan) {
     }
 }
 
-/// Deletes the identity's providers, refreshing stale IDs after a concurrent removal.
+/// Deletes the identity's current providers, retrying if an audience disappears.
 async fn delete_oauth_providers_from_turnkey(
     ctx: &FlowContext<'_>,
     turnkey_account: &TurnkeyMeta,
-    mut provider_ids: Vec<String>,
+    identity: OidcIdentity,
     main_factor: &P256Signer,
 ) {
     for attempt in 0..3 {
+        let users = match ctx
+            .turnkey
+            .get_users(&turnkey_account.id, SyncFactor(ctx.sync_factor))
+            .await
+        {
+            Ok(users) => users,
+            Err(error) => {
+                crate::critical!(
+                    suborg_id = turnkey_account.id,
+                    code = error.code(),
+                    error_message = error,
+                    "remove_factor.turnkey_provider_refresh_failed"
+                );
+                return;
+            }
+        };
+        let Some(user) = users
+            .iter()
+            .find(|user| user.user_id == turnkey_account.auth_user_main_id)
+        else {
+            crate::critical!(
+                suborg_id = turnkey_account.id,
+                user_id = turnkey_account.auth_user_main_id,
+                "remove_factor.turnkey_user_missing_during_provider_refresh"
+            );
+            return;
+        };
+        let provider_ids: Vec<String> = user
+            .oauth_providers
+            .iter()
+            .filter(|provider| {
+                provider.issuer == identity.issuer
+                    && provider.subject == identity.subject
+            })
+            .map(|provider| provider.provider_id.clone())
+            .collect();
         if provider_ids.is_empty() {
             crate::debug!("remove_factor.turnkey_providers_already_absent");
             return;
@@ -409,41 +459,13 @@ async fn delete_oauth_providers_from_turnkey(
             .delete_oauth_providers(
                 &turnkey_account.id,
                 &turnkey_account.auth_user_main_id,
-                provider_ids.clone(),
+                provider_ids,
                 MainFactor(main_factor),
             )
             .await
         {
             Ok(()) => return,
-            Err(error) if error.is_no_matching_provider() && attempt < 2 => {
-                let users = match ctx
-                    .turnkey
-                    .get_users(&turnkey_account.id, SyncFactor(ctx.sync_factor))
-                    .await
-                {
-                    Ok(users) => users,
-                    Err(error) => {
-                        crate::critical!(
-                            suborg_id = turnkey_account.id,
-                            code = error.code(),
-                            error_message = error,
-                            "remove_factor.turnkey_provider_refresh_failed"
-                        );
-                        return;
-                    }
-                };
-                let Some(user) = users
-                    .iter()
-                    .find(|user| user.user_id == turnkey_account.auth_user_main_id)
-                else {
-                    return;
-                };
-                provider_ids.retain(|id| {
-                    user.oauth_providers
-                        .iter()
-                        .any(|provider| &provider.provider_id == id)
-                });
-            }
+            Err(error) if error.is_no_matching_provider() && attempt < 2 => {}
             Err(error @ TurnkeyApiError::ActivityPollingExceeded { .. }) => {
                 crate::warn!(
                     suborg_id = turnkey_account.id,
@@ -491,13 +513,12 @@ fn unsupported_reason(
     }
 }
 
-/// Obtains the list of all `provider_id`s to remove from Turnkey based on the factor being
-/// removed. Explicitly for Apple, multiple providers are used to support all clients.
-async fn resolve_all_turnkey_provider_ids(
+/// Captures the identity so cleanup can find its audiences after the service commits.
+async fn resolve_oidc_identity(
     ctx: &FlowContext<'_>,
     turnkey_meta: &TurnkeyMeta,
     turnkey_provider_id: &str,
-) -> Result<Vec<String>, BackupOperationError> {
+) -> Result<Option<OidcIdentity>, BackupOperationError> {
     let users = ctx
         .turnkey
         .get_users(&turnkey_meta.id, SyncFactor(ctx.sync_factor))
@@ -525,17 +546,13 @@ async fn resolve_all_turnkey_provider_ids(
             provider_id = turnkey_provider_id,
             "remove_factor.turnkey_provider_already_absent_siblings_unknown"
         );
-        return Ok(Vec::new());
+        return Ok(None);
     };
 
-    Ok(user
-        .oauth_providers
-        .iter()
-        .filter(|provider| {
-            provider.issuer == target.issuer && provider.subject == target.subject
-        })
-        .map(|provider| provider.provider_id.clone())
-        .collect())
+    Ok(Some(OidcIdentity {
+        issuer: target.issuer.clone(),
+        subject: target.subject.clone(),
+    }))
 }
 
 #[cfg(test)]
@@ -1235,30 +1252,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_cascade_deletes_the_suborg_instead_of_individual_providers() {
+    async fn removal_retry_only_treats_a_missing_backup_as_deleted() {
+        for code in ["backup_does_not_exist", "unauthorized_factor"] {
+            let server = MockServer::start().await;
+            mount(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
+            Mock::given(method("POST"))
+                .and(path(RETRIEVE_META))
+                .respond_with(
+                    ResponseTemplate::new(400)
+                        .set_body_json(json!({ "error": { "code": code } })),
+                )
+                .mount(&server)
+                .await;
+
+            let result = run_remove(&server, "f-1", None, true).await;
+
+            if code == "backup_does_not_exist" {
+                assert!(matches!(result, Ok(RemoveFactorOutcome::BackupDeleted)));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(BackupOperationError::NeedsReauth {
+                        reason: NeedsReauthReason::SyncFactorInvalid,
+                    })
+                ));
+            }
+            assert_eq!(
+                called_paths(&server).await,
+                [RETRIEVE_META_CHALLENGE, RETRIEVE_META]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn service_cascade_deletes_the_suborg_for_oidc_and_passkey_removal() {
         install_attestation();
-        let server = MockServer::start().await;
-        mount_metadata(
-            &server,
-            metadata(vec![oidc_factor("f-1", "p-1"), oidc_factor("f-2", "p-2")]),
-        )
-        .await;
-        mount_users(&server, vec![oauth_provider("p-1", "iss", "sub")]).await;
-        mount_whoami(&server, "user-1").await;
-        mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
-        mount_delete_sub_org(&server).await;
-        let main = signer();
+        for (factor_id, meta) in [
+            (
+                "f-1",
+                metadata(vec![oidc_factor("f-1", "p-1"), oidc_factor("f-2", "p-2")]),
+            ),
+            (
+                "pk-1",
+                metadata_keyed(
+                    vec![turnkey_key(), prf_key("prf")],
+                    vec![passkey_factor("pk-1"), oidc_factor("f-1", "p-1")],
+                ),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            mount_metadata(&server, meta).await;
+            mount_users(&server, vec![oauth_provider("p-1", "iss", "sub")]).await;
+            mount_whoami(&server, "user-1").await;
+            mount_delete_factor(&server, json!({ "backupDeleted": true })).await;
+            mount_delete_sub_org(&server).await;
+            let main = signer();
 
-        let outcome = run_remove(&server, "f-1", Some(&main), false)
-            .await
-            .unwrap();
+            let outcome = run_remove(&server, factor_id, Some(&main), false)
+                .await
+                .unwrap();
 
-        assert!(matches!(outcome, RemoveFactorOutcome::BackupDeleted));
-        let paths = called_paths(&server).await;
-        assert!(paths.contains(&DELETE_FACTOR.to_string()));
-        assert!(paths.contains(&DELETE_SUB_ORG.to_string()));
-        assert!(!paths.contains(&DELETE_OAUTH.to_string()));
-        assert!(!paths.contains(&DELETE_BACKUP.to_string()));
+            assert!(matches!(outcome, RemoveFactorOutcome::BackupDeleted));
+            let paths = called_paths(&server).await;
+            assert!(paths.contains(&DELETE_FACTOR.to_string()));
+            assert!(paths.contains(&DELETE_SUB_ORG.to_string()));
+            assert!(!paths.contains(&DELETE_OAUTH.to_string()));
+            assert!(!paths.contains(&DELETE_AUTHENTICATORS.to_string()));
+            assert!(!paths.contains(&DELETE_BACKUP.to_string()));
+        }
     }
 
     /// Identity lookup must succeed so every sibling audience can be removed.
@@ -1713,6 +1774,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_cleanup_includes_audiences_added_after_preflight() {
+        install_attestation();
+        let server = MockServer::start().await;
+        let apple = "https://appleid.apple.com";
+        mount_metadata(
+            &server,
+            metadata(vec![
+                oidc_factor("f-1", "p-ios"),
+                oidc_factor("f-2", "p-google"),
+            ]),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(LIST_USERS))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "users": [main_user(vec![oauth_provider("p-ios", apple, "sub-apple")])]
+            })))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        mount_users(
+            &server,
+            vec![
+                oauth_provider("p-ios", apple, "sub-apple"),
+                oauth_provider("p-android", apple, "sub-apple"),
+                oauth_provider("p-google", "google", "sub-google"),
+            ],
+        )
+        .await;
+        mount_whoami(&server, "user-1").await;
+        mount_delete_factor(
+            &server,
+            json!({
+                "backupDeleted": false,
+                "backupMetadata": metadata(vec![oidc_factor("f-2", "p-google")]),
+            }),
+        )
+        .await;
+        mount_delete_oauth(&server).await;
+        let main = signer();
+
+        let outcome = run_remove(&server, "f-1", Some(&main), false)
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RemoveFactorOutcome::FactorRemoved { .. }));
+        assert_eq!(deleted_provider_ids(&server).await, ["p-ios", "p-android"]);
+        let paths = called_paths(&server).await;
+        let commit = paths.iter().position(|path| path == DELETE_FACTOR).unwrap();
+        assert_eq!(paths[commit + 1..], [LIST_USERS, DELETE_OAUTH]);
+    }
+
+    #[tokio::test]
     async fn provider_cleanup_refreshes_ids_when_an_audience_disappears() {
         install_attestation();
         let server = MockServer::start().await;
@@ -1734,7 +1849,7 @@ mod tests {
                 ])]
             })))
             .with_priority(1)
-            .up_to_n_times(1)
+            .up_to_n_times(2)
             .mount(&server)
             .await;
         mount_users(
@@ -1782,7 +1897,7 @@ mod tests {
                 .iter()
                 .filter(|path| *path == LIST_USERS)
                 .count(),
-            2,
+            3,
         );
     }
 

@@ -167,6 +167,7 @@ impl TurnkeyApiError {
     /// Collapses this rich internal error into the opaque client-facing
     /// [`TurnkeyMigrationError`], preserving only the coarse retry classification.
     pub(super) const fn to_migration_error(&self) -> TurnkeyMigrationError {
+        // A Bedrock timeout can be retried
         if self.is_retryable() || matches!(self, Self::Timeout) {
             TurnkeyMigrationError::Retryable
         } else {
