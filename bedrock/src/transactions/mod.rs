@@ -148,7 +148,7 @@ impl SafeSmartAccount {
             })?;
 
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to submit transaction: {e}"),
+            error_message: format!("Failed to get RPC client: {e}"),
         })?;
         let user_op_hash = rpc_client
             .send_user_operation_v2(
