@@ -684,16 +684,17 @@ impl TurnkeyApiClient {
     ) -> Result<(), TurnkeyApiError> {
         let legacy_user_id = uuid::Uuid::try_parse(legacy_user_id)
             .map_err(|_| {
-                TurnkeyApiError::Client("legacy sync-factor user id is not a UUID".to_string())
+                TurnkeyApiError::Client(
+                    "legacy sync-factor user id is not a UUID".to_string(),
+                )
             })?
             .to_string();
 
         let users = self
             .get_users(suborganization_id, replacement_sync_factor)
             .await?;
-        let Some(legacy_user) = users
-            .iter()
-            .find(|user| user.user_id == legacy_user_id)
+        let Some(legacy_user) =
+            users.iter().find(|user| user.user_id == legacy_user_id)
         else {
             // A previous attempt may have deleted the user after the caller
             // lost the activity response. Absence is the desired terminal state.
@@ -1162,7 +1163,11 @@ mod tests {
         let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
 
         TurnkeyApiClient::with_base_url(server.uri())
-            .reconcile_legacy_sync_factor_user(SUBORGANIZATION_ID, USER_ID, SyncFactor(&signer))
+            .reconcile_legacy_sync_factor_user(
+                SUBORGANIZATION_ID,
+                USER_ID,
+                SyncFactor(&signer),
+            )
             .await
             .unwrap();
     }
@@ -1216,12 +1221,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_legacy_sync_factor_user_rejects_an_invalid_user_id_without_a_request() {
+    async fn reconcile_legacy_sync_factor_user_rejects_an_invalid_user_id_without_a_request(
+    ) {
         let server = MockServer::start().await;
         let signer = P256Signer::verify(Arc::new(TestSigner::new())).unwrap();
 
         let error = TurnkeyApiClient::with_base_url(server.uri())
-            .reconcile_legacy_sync_factor_user("suborg-1", "not-a-uuid", SyncFactor(&signer))
+            .reconcile_legacy_sync_factor_user(
+                "suborg-1",
+                "not-a-uuid",
+                SyncFactor(&signer),
+            )
             .await
             .unwrap_err();
 
