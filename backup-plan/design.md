@@ -17,6 +17,8 @@ Existing shared bridges: authenticated app-backend HTTP, attestation, filesystem
 ## Public surface
 
 ```rust
+pub use backup_service_types::OidcProvider;
+
 struct BackupManager {
     account_id: Option<String>,
     main_factor_ceremony: MainFactorCeremony,
@@ -76,7 +78,6 @@ enum NewFactor {
     Passkey { name: String, display_name: String },
     Oidc { provider: OidcProvider },
 }
-enum OidcProvider { Google, Apple }
 enum BackupLogin { Passkey, Oidc { provider: OidcProvider }, IcloudKeychain { key_id: String } }
 enum RecoveryMode { Login, ReplaceLocal, ResumeSync }
 enum TurnkeyStatus { Complete, Incomplete }
@@ -104,6 +105,12 @@ no Turnkey account exists. With an existing Turnkey account, additions need a wo
 main factor; iCloud recovery remains available. At most one passkey per backup, matching the
 existing single PRF encryption-key invariant. Multiple OIDC factors share the existing Turnkey
 encryption key; do not create one key per Apple audience.
+
+Reuse service types at the wire boundary and expose the shared `OidcProvider` through UniFFI.
+`NewFactor` and `BackupLogin` are ceremony inputs; wire `Authorization` contains completed proofs,
+and registered-factor metadata requires fields unavailable before authentication. Keep those roles
+distinct; [shared type wiring](execution.md#shared-type-wiring) defines reuse and compilation
+checks.
 
 File changes are `Put { designator, path }`, `Remove { path }`, and `ReplaceFiles { designator,
 paths }`. `ReplaceFiles` replaces that designator's inventory, not unrelated files.

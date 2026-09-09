@@ -20,6 +20,48 @@ Legacy iCloud-file/Google Drive migration, hardware-key rollout, and cross-app h
 remain separate. Existing iCloud Keychain factors support recovery, removal, and authorization of
 passkey/OIDC upgrades; no new iCloud factors.
 
+## Shared type wiring
+
+Depend on the existing
+[backup-service-types](https://github.com/worldcoin/backup-service/tree/main/types) crate with a
+pinned public Git revision and `default-features = false`, following Bedrock's existing Git
+dependency convention. Commit the lockfile update. Keep shared HTTP types independent of UniFFI;
+Bedrock owns their native bindings. Every service API change updates
+`types/src/{lib,endpoints,error}.rs` as applicable; update Bedrock's pin and adapters before native
+adoption of that change.
+
+| Boundary | Decision |
+| --- | --- |
+| Service HTTP | Use shared request/response types, `Authorization`, `OidcToken`, `FactorScope`, `Platform`, and `ErrorBody`. Reuse `Endpoint` paths, methods, body kind, response type, attestation requirement, and multipart/header constants through the existing client. Delete replaced private wire DTOs; no new transport framework. |
+| Identical FFI types | Reuse shared `OidcProvider` and `BackupEncryptionKey` with `uniffi::remote(Enum)`. The declaration describes the existing Rust type; it does not create a second enum. |
+| Metadata exposed to native | Keep existing `BackupMetadata`, `BackupFactor`, `BackupFactorKind`, and `BackupOidcAccount` only as the needed FFI views. Convert from typed service metadata once; keep passkey registration and OIDC subject in the private source data for Turnkey flows. Do not parse HTTP directly into a view that drops those fields. |
+| Ceremony inputs | `NewFactor` and `BackupLogin` remain operation inputs. Neither service `Authorization` nor registered-factor metadata fits this role. Existing Bedrock `FactorType` describes encryption, not authentication; remove it with its replaced low-level callers. |
+| Native adapters | Use generated Bedrock enums at the ceremony boundary. Preserve an existing UI enum only where its module boundary requires it; map once in that module's live adapter. Reuse configured Bedrock `Os` and map to service `Platform`; no new public platform enum. |
+
+For example, the provider binding uses [UniFFI remote
+enums](https://mozilla.github.io/uniffi-rs/0.32/types/remote_ext_types.html):
+
+```rust
+pub use backup_service_types::OidcProvider;
+
+#[uniffi::remote(Enum)]
+enum OidcProvider { Google, Apple }
+```
+
+The generated exhaustive match and constructors make missing/extra variants or changed payloads a
+compile error. Keep the same mechanism for identical closed enums; no variant-count assertions or
+new mapping macro. When a separate enum is required, use exhaustive conversions in both directions
+for equal variant sets, without wildcard/default arms. For deliberately narrower views, exhaustively
+match the source variants and destructure every source field without `..`; explicitly omit fields
+excluded from FFI and retain the original typed response wherever private data is needed. Do not
+fabricate reverse conversions for information-losing views.
+
+These checks apply when the pinned dependency or generated bindings change, not automatically when
+remote main changes. Service `ErrorCode` is intentionally non-exhaustive with `Unknown`: reuse it
+and keep the generic error fallback. Unknown metadata/UI values are unsupported authentication
+choices. Serialization fixtures still cover tags, field names, optional fields, and Apple token
+audiences; exhaustive matches alone do not verify the wire format.
+
 ## Work split
 
 Each row is an independently reviewable unit of value, usually one Bedrock/service PR plus small
@@ -32,7 +74,7 @@ adoption PR. This is release sequencing, not permanent compatibility shims.
 | --- | --- | --- | --- |
 | A | backup-service `turnkey_activity.rs`, passkey retrieve/verify/add-factor routes, challenge manager and endpoint types: STAMP_LOGIN challenge binding, full WebAuthn verification, fingerprint replay protection; verify returns metadata + sync token. | None | Same real staging assertion accepted by both systems; cold parent-org discovery, wrong origin/RP/UV, altered activity, future timestamp, replay with a fresh token; PRF results rejected. |
 | B | One-use handoff of the recovered Login root to native: Siegel Rust → native transfer and Swift/JNI buffer adapters. | None | One consumption; invalid handle/length including >1MiB; second read rejected; native buffer wiped; no JSON root field in the new recovery binding. |
-| C | Bedrock `backup/mod.rs`, `manifest.rs`, `backup_service/{mod,wire}.rs`, new `flows/sync.rs`: bound account ID, startup head check, old-state adoption, pending-manifest resolution, direct batched sync. | #440, Q | Old global manifest adopted only after ID/hash check; mismatch preserves files; one upload per batch; empty/unchanged no upload; root mismatch; Busy; startup divergence; same-inventory recreation with a different encryption key; timed-out commit recognized after vault re-export; temp-file lifetime. |
+| C | Bedrock `backup/mod.rs`, `manifest.rs`, `backup_service/{mod,wire}.rs`, new `flows/sync.rs`: bound account ID, startup head check, old-state adoption, pending-manifest resolution, direct batched sync. | #440, Q, R | Old global manifest adopted only after ID/hash check; mismatch preserves files; one upload per batch; empty/unchanged no upload; root mismatch; Busy; startup divergence; same-inventory recreation with a different encryption key; timed-out commit recognized after vault re-export; temp-file lifetime. |
 | D | Bedrock `backup_format/v0.rs`, `manifest.rs`, file-policy helper and atomic filesystem publication: bounded one-entry-at-a-time parse, allowlist, raw designators, retirement, staging/publication. | C | Malicious archive publishes nothing; all observed paths accepted; mixed referrals preserved; unsupported entries block rewrites; app update + ResumeSync clears the block; full original inventory retained; interrupted per-file publication resumes. |
 | E | Bedrock `turnkey/api.rs`, policies and `flows/create.rs`; unified `create(NewFactor, ...)` and both native creation callsites. | C, D | Platform-correct passkey options and native labels; complete initial backup; required break-glass/quorum; root ownership; no backup-enabled result after a failed initial upload; uncertain create retains authority; late commit recognized from pending manifest; initial OIDC provider included in main-user creation. |
 | F | Bedrock private authentication helpers and `flows/recover.rs`; iOS/Android login, cloud-list, authorize-device adapters. | A, B, D, P, O | Selected-account validation; healthy login registers both stores only at completion; iCloud login retained; degraded Turnkey result; all three restore modes; persisted UpdateRequired visible with unchanged head; restart before root transfer/after vault import/during publication/after return before reload; pending recovery surfaced; pre-registration cancel, completion-only after vault replacement, and post-registration resume; reauth never imports files. |
@@ -43,10 +85,11 @@ adoption PR. This is release sequencing, not permanent compatibility shims.
 | K | Bedrock migration files: root quorum, break-glass, main-factor consistency; extend existing Apple/policy repairs. | E, F, G | Already-correct state emits no writes; main required/deferred; missing provider anchor repaired; all Apple audiences; unknown audience/user preserved; no last working authority removed. |
 | L | backup-service auth/metadata: daily last-used timestamp and membership share one conditional write; onlyIfStale deletion predicate. | None | Activity updated at most daily; no client timestamps; missing history remains unknown; touch failure fails auth; a touch during expired-lock eviction forces reread; archive reference preserved. |
 | M | Bedrock migration files: public-key sync reconciliation and 25/365 paired cleanup; delete native stale-user workers. | F, K, L | Old service-only passkey device preserved/repaired; active sync-only device retained; stale and excess pairs removed from both stores; revoked keys never resurrected; incomplete listings and unpaired users preserved. |
-| N | Both native projects + Bedrock export cleanup. | A–M, O, P, Q | No native backup-service/Turnkey network orchestration; one BackupManager; old codec/signing/manifest/Turnkey exports and duplicate DTOs removed; binding tests and platform flow smoke tests pass. |
+| N | Both native projects + Bedrock export cleanup. | A–M, O, P, Q, R | No native backup-service/Turnkey network orchestration; one BackupManager; old codec/signing/manifest/Turnkey exports and duplicate DTOs removed; binding tests and platform flow smoke tests pass. |
 | O | backup-service add-sync conditional replacement; reuse current challenge and registration-token authorization. | L | Failed/conflicting add preserves old membership; one selected replacement with new-key possession; known stale vs unknown history; concurrent activity/enrollment; no repeated eviction on retries. |
 | P | WalletKit transactional, idempotent `import_backup_once`; native Swift/Kotlin adapters. | None | Empty-only import; confirmed replacement; invalid source and mid-copy error preserve old vault; crash after commit resumes via receipt; same content in a new attempt still imports; receipt not exported. |
 | Q | backup-service archive storage and metadata: conditional immutable-archive publication and encryption-public-key binding; main-authorized initialization for existing backups. | None | Failed publication leaves the old archive readable; concurrent sync/factor updates keep archive and hash consistent; existing backups remain readable; missing-key upgrade requires verified unwrap; changed/missing expected key rejects sync; cleanup preserves selected objects and in-flight readers. |
+| R | Bedrock dependency/lockfile and `backup_service/{mod,wire}.rs`: shared contract types, UniFFI declarations, and existing metadata/removal clients. | None | Current metadata/removal behavior preserved; shared endpoint routing/serialization; raw registration retained; changed shared variants/fields fail compilation; generated Swift/Kotlin bindings and live adapters compile. |
 
 E is two PRs (passkey creation, then OIDC creation). F is three (OIDC recovery + shared completion,
 passkey recovery, iCloud recovery); J is reset, removal extension, then device logout. K and M ship
@@ -56,14 +99,14 @@ fields needed for rollout. Existing creation/reauthorization callers supply the 
 until their Bedrock replacements land. These subdivisions preserve the contracts; they are not
 permission to bundle a whole row's flows.
 
-Suggested parallel start: A, B, I, L, P, Q; C follows Q. After shared interfaces land, D and native
-callback adapters can proceed independently; E starts after D, and authentication F unlocks
-remaining flows. One integration owner edits shared `backup/mod.rs`, service endpoint
-types/mutations, exports, and dependency versions. Flow agents own distinct files; they submit
-changes to shared types through that owner. Writers use separate worktrees. During C, old native
-create/restore callers bind and adopt their existing state before invoking new sync methods. Keep
-the old network callback only while a remaining old flow consumes it; delete each replaced caller at
-adoption.
+Suggested parallel start: A, B, I, L, P, Q, R; C follows Q and R. After shared interfaces land, D
+and native callback adapters can proceed independently; E starts after D, and authentication F
+unlocks remaining flows. One integration owner coordinates shared `backup/mod.rs`, service
+`types/src` contracts, endpoint mutations, exports, and dependency pins. Flow agents own distinct
+files; they submit changes to shared types through that owner. Writers use separate worktrees.
+During C, old native create/restore callers bind and adopt their existing state before invoking new
+sync methods. Keep the old network callback only while a remaining old flow consumes it; delete each
+replaced caller at adoption.
 
 Unit B extends Siegel's existing session: fill from Rust, copy once through checked C/JNI into a
 native-owned buffer, then consume/wipe. Preserve its existing length bounds; native stores then
@@ -104,6 +147,14 @@ Both adapters pass actual capability failures to UI. Android does not yet implem
 the shared API supports Apple without forcing a new native OAuth UI into this migration. iOS uses
 its existing passkey OS guards (PRF requires iOS 18); OS rename/orphan notifications remain native.
 Do not promise OS credential deletion/rename success when the OS supplies no confirmation.
+
+Native wire enums disappear with their network callers: iOS `BackupMetadataAccountKind` and
+`OIDCTokenKind`; Android networking `OidcAccountKind`. Update their analytics/last-login mappings.
+Keep iOS `WLDAccount.BackupOAuthProvider` if its module boundary requires it, with exhaustive
+conversions in `WLDAccountLive/BackupFactorsClient+Live.swift`. Android `OidcFactorKind.Unknown`
+remains a metadata/UI state and is explicitly rejected for authentication. Use exhaustive Swift
+`switch` and Kotlin `when` expressions in live adapters, with no default hiding new known providers;
+Android's Apple branch returns the existing unsupported-capability error until its ceremony ships.
 
 ## Documentation updates
 
@@ -149,6 +200,12 @@ caller sequencing. Do not duplicate the entire state-machine suite in each nativ
 platform, verify a supported PRF provider, actionable missing-PRF failure, and cross-device recovery
 that preserves the existing backup. Check native analytics consent and single operational-event
 emission.
+
+For R, compile the actual shared dependency and generated Swift/Kotlin adapters. During
+verification, add a temporary source enum variant/field and confirm the remote declaration or
+projection no longer compiles; then restore it. For equal-set native mirrors, verify additions on
+either side break their exhaustive mappings. Use fixture checks for deliberately unsupported values
+and wire serialization.
 
 For implementation PRs, follow repository CI: `cargo build`, targeted backup tests with `--features
 test_utils`, `cargo fmt -- --check`, workspace/all-target/all-feature Clippy, `taplo fmt --check`,
