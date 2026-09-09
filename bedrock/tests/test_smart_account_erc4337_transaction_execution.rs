@@ -1,8 +1,8 @@
 use alloy::{
-    primitives::{Bytes, U256},
+    primitives::{Bytes, Log, U256},
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
-    sol_types::SolCall,
+    sol_types::{SolCall, SolEvent},
 };
 use bedrock::test_utils::PackedUserOperation;
 use bedrock::{
@@ -71,7 +71,7 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         sender: safe_address.to_string(),
         nonce: "0x0".to_string(),
         call_data: format!("0x{}", hex::encode(&call_data)),
-        call_gas_limit: "0x20000".to_string(),
+        call_gas_limit: "0x200000".to_string(),
         verification_gas_limit: "0x20000".to_string(),
         pre_verification_gas: "0x20000".to_string(),
         max_fee_per_gas: "0x3b9aca00".to_string(), // 1 gwei
@@ -120,7 +120,22 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
         .from(owner)
         .send()
         .await?;
-    pending_tx.get_receipt().await?;
+    let receipt = pending_tx.get_receipt().await?;
+    let user_op_executed = receipt.inner.logs().iter().any(|log| {
+        if log.address() != *ENTRYPOINT_4337 {
+            return false;
+        }
+        let raw_log = Log {
+            address: log.address(),
+            data: log.data().clone(),
+        };
+        IEntryPoint::UserOperationEvent::decode_log(&raw_log)
+            .is_ok_and(|event| event.sender == safe_address && event.success)
+    });
+    assert!(
+        user_op_executed,
+        "UserOperation did not execute successfully"
+    );
 
     // Assert the transfer has succeeded
     let after_balance = provider.get_balance(safe_address2).await?;
