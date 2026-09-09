@@ -2,9 +2,11 @@
 
 use async_trait::async_trait;
 
-use super::{BackupFlow, FlowContext};
+use crate::backup::flows::{BackupFlow, FlowContext};
 use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
-use crate::backup::{BackupEncryptionKey, BackupOperationError, SyncFactor};
+use crate::backup::{
+    BackupEncryptionKey, BackupMetadata, BackupOperationError, SyncFactor,
+};
 use crate::primitives::retry::{retry_with_backoff, RetryError, RetryPolicy};
 use crate::primitives::P256Signer;
 use std::collections::BTreeSet;
@@ -20,34 +22,12 @@ impl BackupFlow for DeleteBackup {
 
     /// Reads the metadata, deletes the backup, then deletes the Turnkey account
     async fn run(&self, ctx: &FlowContext<'_>) -> Result<(), BackupOperationError> {
-        let suborg_ids = match ctx
+        let metadata = match ctx
             .service
             .retrieve_metadata(ctx.sync_factor, ctx.backup_id)
             .await
         {
-            Ok(metadata) => {
-                // Backup deletion is the only flow that handles the theoretical invariant
-                // of a user having multiple Turnkey accounts
-                // A set, not `dedup`: that only drops *consecutive* duplicates, so the
-                // same account listed twice non-adjacently would be torn down twice,
-                // the second time under a fresh activity timestamp.
-                metadata
-                    .keys
-                    .iter()
-                    .filter_map(|key| {
-                        if let BackupEncryptionKey::Turnkey {
-                            turnkey_account_id, ..
-                        } = key
-                        {
-                            Some(turnkey_account_id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<BTreeSet<String>>()
-                    .into_iter()
-                    .collect()
-            }
+            Ok(metadata) => metadata,
             Err(e) => {
                 if let BackupOperationError::BackupService { code } = &e {
                     if code == "backup_does_not_exist" {
@@ -61,24 +41,37 @@ impl BackupFlow for DeleteBackup {
             }
         };
 
-        commit(ctx, suborg_ids).await
+        delete_from_metadata(ctx, metadata).await
     }
 }
 
-/// Executes the complete backup deletion, from the backup-service first (authorative),
-/// and best-effort Turnkey account.
-async fn commit(
+/// Deletes the backup using metadata already read during preflight.
+pub(super) async fn delete_from_metadata(
     ctx: &FlowContext<'_>,
-    suborg_ids: Vec<String>,
+    metadata: BackupMetadata,
 ) -> Result<(), BackupOperationError> {
+    let suborg_ids = metadata
+        .keys
+        .into_iter()
+        .filter_map(|key| {
+            if let BackupEncryptionKey::Turnkey {
+                turnkey_account_id, ..
+            } = key
+            {
+                Some(turnkey_account_id)
+            } else {
+                None
+            }
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let policy = RetryPolicy {
         total_timeout: Duration::from_secs(45),
         ..Default::default()
     };
 
-    // Step 1: Delete on backup-service (source of truth)
-    // Race condition possibility on the backup-service is negligible and low impact (calling again will return `Ok`).
-    retry_with_backoff(
+    let result = retry_with_backoff(
         &policy,
         "delete_backup",
         |error| matches!(error, BackupOperationError::Network { retryable: true }),
@@ -88,16 +81,21 @@ async fn commit(
     .map_err(|e| match e {
         RetryError::Timeout => BackupOperationError::Timeout,
         RetryError::Operation(e) => e,
-    })?;
+    });
+    if let Err(error) = result {
+        // A previous attempt may have committed before its response was lost.
+        match error {
+            BackupOperationError::BackupService { code }
+                if code == "backup_does_not_exist" => {}
+            error => return Err(error),
+        }
+    }
 
-    // Step 2: Delete on Turnkey (best-effort)
     delete_turnkey_account(ctx.turnkey, suborg_ids, ctx.sync_factor).await;
     Ok(())
 }
 
-/// Tears down the Turnkey sub-organization (best-effort).
-///
-/// While not possible to have multiple Turnkey accounts, handle possibility.
+/// Tears down each distinct Turnkey sub-organization (best-effort).
 pub(in crate::backup::flows) async fn delete_turnkey_account(
     turnkey: &TurnkeyApiClient,
     suborg_ids: Vec<String>,
@@ -307,6 +305,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mismatched_metadata_aborts_before_any_deletion() {
+        let server = MockServer::start().await;
+        mount_json(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
+        let mut response = metadata(vec![turnkey_key()]);
+        response["id"] = json!("another-backup");
+        mount_json(&server, RETRIEVE_META, response).await;
+
+        let error = run_delete(&server).await.unwrap_err();
+
+        assert!(matches!(error, BackupOperationError::Consistency));
+        assert_eq!(
+            called_paths(&server).await,
+            [RETRIEVE_META_CHALLENGE, RETRIEVE_META]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_already_gone_backup_during_commit_still_tears_down_turnkey() {
+        for endpoint in [DELETE_BACKUP_CHALLENGE, DELETE_BACKUP] {
+            let server = MockServer::start().await;
+            mount_metadata(&server, vec![turnkey_key()]).await;
+            mount_rejection(&server, endpoint, "backup_does_not_exist").await;
+            mount_delete_backup(&server).await;
+            mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+            run_delete(&server).await.unwrap();
+
+            assert!(called_paths(&server)
+                .await
+                .contains(&DELETE_SUB_ORG.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lost_delete_response_then_missing_backup_is_success() {
+        let server = MockServer::start().await;
+        mount_metadata(&server, vec![turnkey_key()]).await;
+        Mock::given(method("POST"))
+            .and(path(DELETE_BACKUP_CHALLENGE))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(challenge_response()),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        mount_rejection(&server, DELETE_BACKUP_CHALLENGE, "backup_does_not_exist")
+            .await;
+        // A gateway can fail the response after the service commits the delete.
+        mount(&server, DELETE_BACKUP, ResponseTemplate::new(502)).await;
+        mount_delete_sub_org(&server, completed_sub_org_teardown()).await;
+
+        run_delete(&server).await.unwrap();
+
+        let paths = called_paths(&server).await;
+        assert_eq!(paths.iter().filter(|p| *p == DELETE_BACKUP).count(), 1);
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|p| *p == DELETE_BACKUP_CHALLENGE)
+                .count(),
+            2
+        );
+        assert_eq!(paths.iter().filter(|p| *p == DELETE_SUB_ORG).count(), 1);
+    }
+
+    #[tokio::test]
     async fn a_failed_metadata_read_aborts_before_the_delete() {
         let server = MockServer::start().await;
         mount_json(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
@@ -354,6 +418,43 @@ mod tests {
         assert!(called_paths(&server)
             .await
             .contains(&DELETE_SUB_ORG.to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_turnkey_deadline_preserves_the_committed_deletion() {
+        let server = Arc::new(MockServer::start().await);
+        mount_metadata(&server, vec![turnkey_key()]).await;
+        mount_delete_backup(&server).await;
+        mount_delete_sub_org(
+            &server,
+            completed_sub_org_teardown().set_delay(Duration::from_secs(60)),
+        )
+        .await;
+        let deletion = tokio::spawn({
+            let server = Arc::clone(&server);
+            async move { run_delete(&server).await }
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if called_paths(&server)
+                    .await
+                    .contains(&DELETE_SUB_ORG.to_string())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Turnkey cleanup must start after the backup is deleted");
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        deletion
+            .await
+            .unwrap()
+            .expect("the backup is already deleted");
+        tokio::time::resume();
     }
 
     #[tokio::test]
@@ -432,7 +533,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_correct_error_returned_if_device_is_unaauthorized() {
+    async fn an_untraceable_backup_aborts_before_the_delete() {
         let server = MockServer::start().await;
         mount_json(&server, RETRIEVE_META_CHALLENGE, challenge_response()).await;
         mount_rejection(&server, RETRIEVE_META, "backup_untraceable").await;
