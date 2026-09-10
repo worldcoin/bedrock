@@ -53,11 +53,11 @@ pub struct WorldGiftManagerResult {
     pub gift_id: Arc<HexEncodedData>,
 }
 
-/// An unsigned `UserOperation` prepared for review before signing.
+/// An unsigned World Chain `UserOperation` prepared for review before signing.
 #[derive(Debug, uniffi::Object)]
 pub struct PreparedTransaction {
     user_operation: UserOperation,
-    network: Network,
+    // TODO: Add sponsorship details like sponsorship decline reason, self-sponsorship fee details for user confirmation, etc.
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -168,7 +168,6 @@ impl SafeSmartAccount {
         };
         let prepared_transaction = PreparedTransaction {
             user_operation: user_operation.with_pm_sponsorship_approval(&approval),
-            network: Network::WorldChain,
         };
 
         crate::debug!(
@@ -182,7 +181,7 @@ impl SafeSmartAccount {
         Ok(prepared_transaction)
     }
 
-    /// Signs and submits a previously prepared transaction.
+    /// Signs and submits a previously prepared transaction on World Chain.
     ///
     /// # Errors
     /// - Will throw an error if the transaction was prepared for another account.
@@ -196,7 +195,7 @@ impl SafeSmartAccount {
             crate::error!(
                 sender = prepared_transaction.user_operation.sender,
                 wallet_address = self.wallet_address,
-                network = prepared_transaction.network.network_name(),
+                network = Network::WorldChain.network_name(),
                 outcome = "error",
                 stage = stage,
                 error_message = error,
@@ -206,7 +205,7 @@ impl SafeSmartAccount {
 
         crate::info!(
             sender = prepared_transaction.user_operation.sender,
-            network = prepared_transaction.network.network_name(),
+            network = Network::WorldChain.network_name(),
             "Submitting prepared transaction"
         );
         if prepared_transaction.user_operation.sender != self.wallet_address {
@@ -221,7 +220,7 @@ impl SafeSmartAccount {
         }
 
         let mut user_operation = prepared_transaction.user_operation.clone();
-        self.sign_user_operation(&mut user_operation, prepared_transaction.network)
+        self.sign_user_operation(&mut user_operation, Network::WorldChain)
             .map_err(|e| {
                 log_failure("sign", &e);
                 TransactionError::Generic {
@@ -239,7 +238,7 @@ impl SafeSmartAccount {
         })?;
         let user_op_hash = rpc_client
             .send_user_operation_v2(
-                prepared_transaction.network,
+                Network::WorldChain,
                 &user_operation,
                 *ENTRYPOINT_4337,
             )
@@ -248,7 +247,7 @@ impl SafeSmartAccount {
                 crate::error!(
                     user_operation = format!("{user_operation:?}"),
                     sender = user_operation.sender,
-                    network = prepared_transaction.network.network_name(),
+                    network = Network::WorldChain.network_name(),
                     outcome = "error",
                     error_message = e,
                     "Failed to submit prepared transaction"
@@ -261,7 +260,7 @@ impl SafeSmartAccount {
         crate::info!(
             user_op_hash = user_op_hash,
             sender = user_operation.sender,
-            network = prepared_transaction.network.network_name(),
+            network = Network::WorldChain.network_name(),
             "Submitted prepared transaction"
         );
 
