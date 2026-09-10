@@ -26,7 +26,7 @@ pub static WLD_ADDRESS: Address =
 
 /// The Tools for Humanity multi-token ERC-20 paymaster (WLD and USDC).
 ///
-/// **Staging deployment.** Sponsors user operations and takes payment in
-/// tokens, so it needs an ERC-20 allowance from the Safe.
+/// Shared by staging and production. Sponsors user operations and takes
+/// payment in tokens, so it needs an ERC-20 allowance from the Safe.
 pub static TFH_PAYMASTER_ADDRESS: Address =
-    address!("0xBF09Bc530dc29623c3cE171A4D9bf03edafE763c");
+    address!("0x48BB71Ac56CAd233012a8Afb35Ab6684e9233756");
