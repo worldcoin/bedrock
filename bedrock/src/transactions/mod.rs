@@ -96,7 +96,9 @@ impl SafeSmartAccount {
         let user_operation = transaction
             .build_preflight_user_operation(self.wallet_address, Some(metadata))?;
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to prepare transaction: {e}"),
+            error_message: format!(
+                "Failed to get RPC client for ERC-20 transfer preparation: {e}"
+            ),
         })?;
         let sponsorship = rpc_client
             .pm_sponsor_user_operation(
@@ -106,20 +108,50 @@ impl SafeSmartAccount {
                 &SponsorshipContext::Protocol,
             )
             .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to prepare transaction: {e}"),
+            .map_err(|e| {
+                crate::error!(
+                    transaction_type = "erc20_transfer",
+                    network = Network::WorldChain.network_name(),
+                    sender = self.wallet_address,
+                    outcome = "error",
+                    user_operation = format!("{user_operation:?}"),
+                    error_message = e,
+                    "Failed to request sponsorship for ERC-20 transfer"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to request sponsorship: {e}"),
+                }
             })?;
 
-        let PmSponsorUserOperationResponse::Approved(approval) = sponsorship else {
-            // TODO: Handle the self-sponsored UserOperation flow.
-            return Err(TransactionError::Generic {
-                error_message: "Sponsorship declined".to_string(),
-            });
+        let approval = match sponsorship {
+            PmSponsorUserOperationResponse::Approved(approval) => approval,
+            PmSponsorUserOperationResponse::Declined(decline) => {
+                crate::info!(
+                    transaction_type = "erc20_transfer",
+                    network = Network::WorldChain.network_name(),
+                    sender = self.wallet_address,
+                    outcome = "sponsorship_declined",
+                    decline_reason = decline.reason,
+                    "Sponsorship declined for ERC-20 transfer"
+                );
+                // TODO: Handle the self-sponsored UserOperation flow.
+                return Err(TransactionError::Generic {
+                    error_message: "Sponsorship declined".to_string(),
+                });
+            }
         };
         let prepared_transaction = PreparedTransaction {
             user_operation: user_operation.with_pm_sponsorship_approval(&approval),
             network: Network::WorldChain,
         };
+
+        crate::debug!(
+            transaction_type = "erc20_transfer",
+            network = Network::WorldChain.network_name(),
+            sender = self.wallet_address,
+            outcome = "prepared",
+            "Prepared ERC-20 transfer"
+        );
 
         Ok(prepared_transaction)
     }
@@ -134,6 +166,11 @@ impl SafeSmartAccount {
         &self,
         prepared_transaction: &PreparedTransaction,
     ) -> Result<HexEncodedData, TransactionError> {
+        crate::info!(
+            sender = prepared_transaction.user_operation.sender,
+            network = prepared_transaction.network.network_name(),
+            "Submitting prepared transaction"
+        );
         if prepared_transaction.user_operation.sender != self.wallet_address {
             return Err(TransactionError::Generic {
                 error_message: "Prepared transaction belongs to another account"
@@ -148,7 +185,9 @@ impl SafeSmartAccount {
             })?;
 
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
+            error_message: format!(
+                "Failed to get RPC client for transaction submission: {e}"
+            ),
         })?;
         let user_op_hash = rpc_client
             .send_user_operation_v2(
@@ -157,9 +196,24 @@ impl SafeSmartAccount {
                 *ENTRYPOINT_4337,
             )
             .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to submit transaction: {e}"),
+            .map_err(|e| {
+                crate::error!(
+                    user_operation = format!("{user_operation:?}"),
+                    network = prepared_transaction.network.network_name(),
+                    error_message = e,
+                    "Failed to submit prepared transaction"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to submit transaction: {e}"),
+                }
             })?;
+
+        crate::info!(
+            user_op_hash = user_op_hash,
+            sender = user_operation.sender,
+            network = prepared_transaction.network.network_name(),
+            "Submitted prepared transaction"
+        );
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }

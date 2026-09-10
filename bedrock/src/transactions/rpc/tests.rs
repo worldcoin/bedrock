@@ -1,6 +1,19 @@
 use super::*;
 use alloy::primitives::{address, bytes, U128, U256};
 use serde_json::json;
+use strum::IntoEnumIterator;
+
+#[test]
+fn test_sponsorship_decline_reason_display_round_trip() {
+    for reason in PmSponsorshipDeclineReason::iter().chain(std::iter::once(
+        PmSponsorshipDeclineReason::Unknown("future_policy".to_string()),
+    )) {
+        let value = serde_json::Value::String(reason.to_string());
+        let decoded: PmSponsorshipDeclineReason =
+            serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, reason);
+    }
+}
 
 struct StaticHttpClient {
     response: Vec<u8>,
