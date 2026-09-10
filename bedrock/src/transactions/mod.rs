@@ -83,9 +83,29 @@ impl SafeSmartAccount {
         amount: &str,
         transfer_association: Option<TransferAssociation>,
     ) -> Result<PreparedTransaction, TransactionError> {
-        let token_address = Address::parse_from_ffi(token_address, "token_address")?;
-        let to_address = Address::parse_from_ffi(to_address, "address")?;
-        let amount = U256::parse_from_ffi(amount, "amount")?;
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                transaction_type = "erc20_transfer",
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to prepare ERC-20 transfer"
+            );
+        };
+
+        let token_address = Address::parse_from_ffi(token_address, "token_address")
+            .inspect_err(|e| {
+                log_failure("parse_token_address", e);
+            })?;
+        let to_address =
+            Address::parse_from_ffi(to_address, "address").inspect_err(|e| {
+                log_failure("parse_to_address", e);
+            })?;
+        let amount = U256::parse_from_ffi(amount, "amount").inspect_err(|e| {
+            log_failure("parse_amount", e);
+        })?;
 
         let transaction = Erc20::new(token_address, to_address, amount);
 
@@ -94,11 +114,17 @@ impl SafeSmartAccount {
         };
 
         let user_operation = transaction
-            .build_preflight_user_operation(self.wallet_address, Some(metadata))?;
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!(
-                "Failed to get RPC client for ERC-20 transfer preparation: {e}"
-            ),
+            .build_preflight_user_operation(self.wallet_address, Some(metadata))
+            .inspect_err(|e| {
+                log_failure("build_user_operation", e);
+            })?;
+        let rpc_client = get_rpc_client().map_err(|e| {
+            log_failure("get_rpc_client", &e);
+            TransactionError::Generic {
+                error_message: format!(
+                    "Failed to get RPC client for ERC-20 transfer preparation: {e}"
+                ),
+            }
         })?;
         let sponsorship = rpc_client
             .pm_sponsor_user_operation(
@@ -166,12 +192,28 @@ impl SafeSmartAccount {
         &self,
         prepared_transaction: &PreparedTransaction,
     ) -> Result<HexEncodedData, TransactionError> {
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                sender = prepared_transaction.user_operation.sender,
+                wallet_address = self.wallet_address,
+                network = prepared_transaction.network.network_name(),
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to submit prepared transaction"
+            );
+        };
+
         crate::info!(
             sender = prepared_transaction.user_operation.sender,
             network = prepared_transaction.network.network_name(),
             "Submitting prepared transaction"
         );
         if prepared_transaction.user_operation.sender != self.wallet_address {
+            log_failure(
+                "validate_account",
+                &"Prepared transaction belongs to another account",
+            );
             return Err(TransactionError::Generic {
                 error_message: "Prepared transaction belongs to another account"
                     .to_string(),
@@ -180,14 +222,20 @@ impl SafeSmartAccount {
 
         let mut user_operation = prepared_transaction.user_operation.clone();
         self.sign_user_operation(&mut user_operation, prepared_transaction.network)
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to sign transaction: {e}"),
+            .map_err(|e| {
+                log_failure("sign", &e);
+                TransactionError::Generic {
+                    error_message: format!("Failed to sign transaction: {e}"),
+                }
             })?;
 
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!(
-                "Failed to get RPC client for transaction submission: {e}"
-            ),
+        let rpc_client = get_rpc_client().map_err(|e| {
+            log_failure("get_rpc_client", &e);
+            TransactionError::Generic {
+                error_message: format!(
+                    "Failed to get RPC client for transaction submission: {e}"
+                ),
+            }
         })?;
         let user_op_hash = rpc_client
             .send_user_operation_v2(
@@ -199,7 +247,9 @@ impl SafeSmartAccount {
             .map_err(|e| {
                 crate::error!(
                     user_operation = format!("{user_operation:?}"),
+                    sender = user_operation.sender,
                     network = prepared_transaction.network.network_name(),
+                    outcome = "error",
                     error_message = e,
                     "Failed to submit prepared transaction"
                 );
