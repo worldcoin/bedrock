@@ -67,16 +67,17 @@ can display/remove one but offers no iCloud login ceremony.
 | --- | --- |
 | `create(FactorRegistration::Passkey)` | Check no backup; obtain registration + PRF; build the complete initial archive from supplied files; prove root ownership and sync-key possession; `/create`; publish local manifest/public key only after commit. No Turnkey account. |
 | `create(FactorRegistration::Oidc)` | Bind nonce/token; create suborg through app backend; establish main user, sole-root quorum, sync user/policy, break-glass user/policy; remove bootstrap authority; import factor secret; seal complete initial archive; `/create`; publish local state. |
-| `login` | Accept the persisted pending signer directly; authenticate and retrieve; check selected/bound account and pending-operation key; unwrap key; validate archive; establish the account ID and retain the signer; stage files according to mode; return descriptors and (Login only) root via Siegel. No preliminary bind, sync-factor registration, or manifest publication. |
+| `login` | Accept the persisted pending signer directly; authenticate and retrieve; check selected/bound account and pending-operation key; unwrap key; validate archive; establish the account ID and retain the signer; stage files according to purpose; return descriptors and the root via Siegel. No preliminary init, sync-factor registration, or manifest publication. |
 | `finalize_login` | After required native wallet/vault restoration, register the bound signer; install staged files at their accepted paths; remove retired files and temporary vault data; save the restored manifest, verified encryption public key, and compatibility state. Log secondary registration failures internally. |
-| `reauthorize` | Authenticate against the bound ID; verify encryption-key identity; repair/register the bound sync key in both applicable systems; log secondary registration failures internally. Callers needing metadata use metadata(). Never unpack files, return a root, or import a vault. Extend `/verify-factor` to return metadata and a one-use sync-registration token internally. |
+| `reauthorize` | Accept the persisted pending signer directly; authenticate against the initialized account ID; verify encryption-key identity; register the supplied key in both applicable systems; install it after confirmed service registration; log secondary registration failures internally. Callers needing metadata use metadata(). Never unpack files, return a root, or import a vault. Extend `/verify-factor` to return metadata and a one-use sync-registration token internally. |
 | `sync` | Validate root/account and the supplied encryption public key against the acknowledged and verified remote key; check compatibility; compare remote head to acknowledged inventory; apply the batch to a candidate; read/checksum accepted files; seal with the supplied key; conditional `/sync`; atomically publish candidate manifest after confirmed remote commit. |
 
 Before create or a new device-authorization attempt, native creates and persists a fresh pending
-sync key. Creation and reauthorization pass it with the existing root to bind; Login passes it
-directly to login. Existing authorized devices bind their root and stored key at startup;
-ReplaceLocal/ResumeSync pass that same signer to login.
-Create, finalize_login, and reauthorize enroll the bound key; mark it active only after
+sync key. Creation passes it with the root to init. Login and reauthorization pass it directly to
+login and reauthorize respectively. Existing authorized devices initialize with their root and
+stored key at startup; DownloadUpdates pass that same signer to login.
+Create and finalize_login enroll the stored key; reauthorize enrolls its supplied pending key.
+Mark the pending key active only after
 backup-service registration is confirmed. Retain that key for the same unresolved attempt's retries,
 including after restart; never replace it to escape an ambiguous result.
 Never re-enroll a previously active, revoked key or
@@ -152,23 +153,27 @@ object references private to the service.
 
 ## Recovery consumers and interrupted work
 
-| Mode | Preconditions | Restore behavior |
+| Purpose | Preconditions | Restore behavior |
 | --- | --- | --- |
 | `Login` | Signed-out onboarding; empty vault. | Return the root to native; import the vault and publish accepted files. |
-| `ReplaceLocal` | Bound, matching account; explicit confirmation to replace unsynced data. | Replace the vault and accepted files; retain the existing native root. |
-| `ResumeSync` | App updated; remote head still matches the acknowledged head. | Restore only previously unsupported entries now recognized; preserve accepted local data. No root persistence or existing-vault import. |
+| `DownloadUpdates` | Initialized, matching account; explicit confirmation to replace unsynced data. | Restore the full remote backup into the vault and accepted files; keep the native root and discard the returned root handle. |
 
-In ResumeSync, an existing destination with different bytes is a conflict, not permission to
-overwrite it. Completion clears UpdateRequired only if the full archive is now accepted/retired. A
-changed remote head returns RemoteAhead.
+`DownloadUpdates` is a full restore, not a merge or a download of only changed files. Use it when
+remote changes require refreshing local data, or after an app update makes a previously unsupported
+backup readable. Login and DownloadUpdates share retrieval, validation, staging, and finalization;
+the purpose selects empty-vault import versus confirmed replacement of existing data. Persist that
+purpose with the attempt so a restart cannot turn one into the other. Completion clears
+UpdateRequired only if the full archive is now accepted/retired.
 
 For a selected login row, pass `expected_backup_id`; check it immediately after authenticated
-retrieval, before decrypt/stage/bind. ReplaceLocal/ResumeSync always check the existing binding.
-Only Login returns the root and persists it through the native secure adapter; ReplaceLocal and
-ResumeSync validate then discard it inside Bedrock. Native imports required staged data and (Login
-only) performs app-backend restore while keeping onboarding pending. It then calls
-`finalize_login` with the returned recovery ID; this call acknowledges all required native
-imports/login. Only finalization enrolls the signer, publishes the manifest, and allows it to become
+retrieval, before decryption, staging, or establishing the account. DownloadUpdates always
+checks the existing account.
+Both purposes return the root after Bedrock validates its account ID. Native persists it through
+the secure adapter for Login and disposes of the returned handle for DownloadUpdates. Native imports
+required staged data and, for Login only, performs app-backend restore while keeping onboarding
+pending. It then calls `finalize_login` with the returned recovery ID to acknowledge all required
+native imports/login. Only finalization enrolls the signer, publishes the manifest, and allows it to
+become
 active. After publication reload PCP/invalidate referral caches before exposing completed recovery
 to UI. Import failure blocks finalization and preserves staging. Reload failure blocks UI
 completion; retry reload from the durably published files without enrolling another key or
@@ -176,7 +181,7 @@ reimporting the vault. Keep the native recovery ID until reload/invalidation suc
 repeat idempotent finalize_login with that ID, reload, then clear native pending state.
 
 Installing staged files means moving the validated temporary files into their final app-private
-paths according to the selected mode, with atomic replacement of each file. Save the restored
+paths according to the selected purpose, with atomic replacement of each file. Save the restored
 manifest, verified encryption public key, and compatibility state only after those file operations
 and retired-file cleanup succeed. This makes the restored inventory the local baseline for future
 syncs; it does not upload another backup. Readers stay blocked until the final manifest save succeeds.
@@ -188,12 +193,13 @@ Validate the source first; within one destination transaction enforce empty-only
 vault tables, import, and record a completion receipt. The receipt is local-only, excluded from
 exports and source imports, and cleared with its vault. Same recovery ID is an idempotent success;
 failure rolls back both rows and receipt. `replace=true` is reachable only through confirmed
-ReplaceLocal. Before import, native marks that pending ReplaceLocal as completion-only and disables
-cancellation. Restart resumes the idempotent import and completion; only a definitely rolled-back
+DownloadUpdates. Before import, native marks that pending DownloadUpdates as completion-only
+and disables cancellation. Restart resumes the idempotent import and completion; only a definitely
+rolled-back
 import can reopen cancellation. This is replacement, not merging, and preserves the old vault on any
 import failure.
 
-Keep one disk-backed pending recovery with account ID, mode, manifest hash, sync public key, and
+Keep one disk-backed pending recovery with account ID, purpose, manifest hash, sync public key, and
 publication progress. Generate a fresh opaque ID per attempt and retain it
 on resume; a later deliberate restore of the same hash is a new attempt. This ID keys the receipt;
 native root/onboarding persistence stores the same ID. No secret goes on disk in this record.
@@ -207,13 +213,14 @@ then release its buffers. Staging uses app-private storage excluded from OS back
 data protection. Readers remain gated until publication.
 
 Cancellation before finalization removes staging; no new remote key exists. Native must enforce the
-ReplaceLocal import guard above before calling `cancel_recovery`. After registration starts,
+DownloadUpdates import guard above before calling `cancel_recovery`. After registration starts,
 cancellation is refused: Busy while the call runs, RecoveryPending after restart/failure. Native
 retains the signer and resumes finalize_login to resolve registration and publication; it must
 not drop a running mutation future. After completion it can explicitly log out. This keeps
 cancel local and synchronous; no second remote rollback flow. After an allowed cancel, abandoning
-Login clears only that onboarding wallet/vault through the native reset; canceling ReplaceLocal does
-not clear a pre-existing wallet. After vault replacement, finish publication before exposing the
+Login clears only that onboarding wallet/vault through the native reset; canceling DownloadUpdates
+does not clear a pre-existing wallet. After vault replacement, finish publication before exposing
+the
 restored wallet or permitting logout.
 
 ## Adding and removing main factors
