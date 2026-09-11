@@ -1,8 +1,6 @@
 //! Tops up the Safe's ERC-20 allowance to the TFH multi-token paymaster.
 //!
-//! **Staging and sandbox only.** `WalletMigrationController` is the only thing
-//! that registers it, and does not on production, so there it never runs and
-//! never gets a record.
+//! Registered in every environment by `WalletMigrationController`.
 
 use std::sync::Arc;
 
@@ -36,7 +34,7 @@ const PAYMASTER_TOKENS: [(Address, &str, U256); 2] = [
 ///
 /// A token is topped up when the Safe holds some of it *and* its allowance has
 /// fallen below half the target — the paymaster spends the allowance down, so
-/// this runs again as it drains. Registered on staging and sandbox only.
+/// this runs again as it drains. Registered in every environment.
 pub struct TfhPaymasterApprovalMigration {
     safe_account: Arc<SafeSmartAccount>,
 }

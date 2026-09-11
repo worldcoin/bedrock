@@ -7,7 +7,6 @@ use crate::migration::error::MigrationError;
 use crate::migration::record_store::{
     MigrationRecord, MigrationRecordEntry, MigrationStatus, RecordStore, Submission,
 };
-use crate::primitives::config::{current_environment_or_default, BedrockEnvironment};
 use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
 use chrono::{Duration, Utc};
@@ -53,20 +52,10 @@ impl WalletMigrationController {
             return Self::with_migrations(kv_store, vec![]);
         };
 
-        let mut migrations: Vec<Arc<dyn WalletMigration>> =
-            vec![Arc::new(Permit2ApprovalMigration::new(account.clone()))];
-
-        // Staging and sandbox only, so production never runs the paymaster
-        // approval and never writes a record for it. An uninitialized config
-        // reads as production, so an unknown environment is excluded too.
-        if matches!(
-            current_environment_or_default(),
-            BedrockEnvironment::Staging | BedrockEnvironment::Sandbox
-        ) {
-            migrations.push(Arc::new(TfhPaymasterApprovalMigration::new(
-                account.clone(),
-            )));
-        }
+        let migrations: Vec<Arc<dyn WalletMigration>> = vec![
+            Arc::new(Permit2ApprovalMigration::new(account.clone())),
+            Arc::new(TfhPaymasterApprovalMigration::new(account.clone())),
+        ];
 
         Self {
             records: RecordStore::new(kv_store, WALLET_KEY_PREFIX),
@@ -536,10 +525,10 @@ mod tests {
         )
     }
 
-    /// Marks the child run of [`test_production_omits_the_paymaster_approval`].
+    /// Marks the child run of [`test_production_registers_the_paymaster_approval`].
     const PRODUCTION_CHILD_ENV: &str = "BEDROCK_WALLET_PROD_CHILD";
     const PRODUCTION_TEST_NAME: &str =
-        "migration::wallet_controller::tests::test_production_omits_the_paymaster_approval";
+        "migration::wallet_controller::tests::test_production_registers_the_paymaster_approval";
 
     /// The default set for a Safe-backed controller.
     fn default_set() -> WalletMigrationController {
@@ -567,15 +556,15 @@ mod tests {
             .any(|m| m.migration_id() == "wallet.tfh_paymaster.approval.v1"));
     }
 
-    /// Production registers everything *but* the paymaster approval, so no
-    /// record for it is ever written there.
+    /// Production registers the paymaster approval too — the environment gate
+    /// is gone, so every environment gets the same set.
     ///
     /// Runs in a fresh process: the config is a process-wide `OnceLock`, so the
     /// staging value the other tests rely on cannot be replaced in place. The
     /// uninitialized case is covered first, since it defaults to production.
     #[test]
-    fn test_production_omits_the_paymaster_approval() {
-        use crate::primitives::config::{set_config, Os};
+    fn test_production_registers_the_paymaster_approval() {
+        use crate::primitives::config::{set_config, BedrockEnvironment, Os};
 
         if std::env::var_os(PRODUCTION_CHILD_ENV).is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -596,17 +585,17 @@ mod tests {
             return;
         }
 
-        let assert_omitted = |c: WalletMigrationController| {
-            assert_eq!(c.len(), 2, "the paymaster approval must not be registered");
+        let assert_registered = |c: WalletMigrationController| {
+            assert_eq!(c.len(), 3, "the paymaster approval must be registered");
             assert!(
-                !c.all()
+                c.all()
                     .any(|m| m.migration_id() == "wallet.tfh_paymaster.approval.v1"),
-                "the paymaster approval must not be registered"
+                "the paymaster approval must be registered"
             );
         };
 
         // Uninitialized reads as production.
-        assert_omitted(default_set());
+        assert_registered(default_set());
 
         let root = std::env::temp_dir()
             .join(format!("bedrock-wallet-prod-{}", std::process::id()));
@@ -617,7 +606,7 @@ mod tests {
         )
         .expect("configure a production test environment");
 
-        assert_omitted(default_set());
+        assert_registered(default_set());
         drop(std::fs::remove_dir_all(&root));
     }
 

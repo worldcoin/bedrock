@@ -111,9 +111,9 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
     // 3) Launch 1: the repair is relayed, and everything else is held back.
     //    A userOp could not validate yet, so submitting one would be waste.
     let summary = controller.run().await;
-    assert_eq!(summary.total, 2);
+    assert_eq!(summary.total, 3);
     assert_eq!(summary.pending, 1, "the repair was submitted");
-    assert_eq!(summary.skipped, 1, "the dependent was held back");
+    assert_eq!(summary.skipped, 2, "the dependents were held back");
 
     let records = controller.list_records()?;
     assert!(
@@ -170,7 +170,11 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
     //    submitted, and the repair reports skipped rather than a fresh success.
     let summary = controller.run().await;
     assert_eq!(summary.succeeded, 1, "the approvals are proven landed");
-    assert_eq!(summary.skipped, 1, "the repair was already done");
+    assert_eq!(
+        summary.skipped, 2,
+        "the repair was already done, and the paymaster approval is not needed \
+         on a Safe holding neither fee token"
+    );
     assert_eq!(summary.pending, 0);
 
     let records = controller.list_records()?;
