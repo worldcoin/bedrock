@@ -36,6 +36,14 @@ sol! {
     }
 }
 
+/// 100% in WAD scaling (`1e18`), matching Morpho SDK slippage units.
+const WAD: U256 = U256::from_limbs([1_000_000_000_000_000_000, 0, 0, 0]);
+
+/// Default migrate deposit haircut: 0.03% in WAD (`3e14`), matching Morpho SDK
+/// `DEFAULT_SLIPPAGE_TOLERANCE`.
+const MIGRATE_DEPOSIT_SLIPPAGE_TOLERANCE_WAD: U256 =
+    U256::from_limbs([300_000_000_000_000, 0, 0, 0]);
+
 // =============================================================================
 // Generic ERC-4626 Transaction Types
 // =============================================================================
@@ -385,8 +393,10 @@ impl Erc4626Vault {
 
     /// Creates a migration operation (redeem from one ERC-4626 vault + approve + deposit into another).
     ///
-    /// The deposited amount is based on a `previewRedeem` snapshot at build time. If more assets are
-    /// redeemed at execution time due to accrual, the remainder stays as dust in the user's account.
+    /// The deposited amount is based on a `previewRedeem` snapshot at build time, with a 0.03%
+    /// haircut (Morpho SDK default slippage) so a small source-vault decline between build and
+    /// execution is less likely to make `deposit` consume pre-existing Safe balances. Any excess
+    /// redeemed assets remain as dust in the user's account.
     ///
     /// # Errors
     /// Returns an error if:
@@ -394,6 +404,7 @@ impl Erc4626Vault {
     /// - The two vaults use different underlying assets
     /// - The user has no shares in the source vault
     /// - `previewRedeem` returns zero assets
+    /// - The post-slippage deposit amount is zero
     /// - Any RPC call fails during transaction building
     pub async fn migrate(
         rpc_client: &RpcClient,
@@ -484,16 +495,41 @@ impl Erc4626Vault {
             });
         }
 
-        // 6–7. Encode redeem + approve + deposit and build the MultiSend bundle
+        // 6. Apply 0.03% haircut to the deposited amount (Morpho default slippage)
+        let deposit_assets = Self::deposit_assets_after_slippage(preview_assets)?;
+
+        // 7. Encode redeem + approve + deposit and build the MultiSend bundle
         Ok(Self::build_migrate_transaction(
             from_vault_address,
             to_vault_address,
             from_asset_address,
             user_address,
             actual_share_amount,
-            preview_assets,
+            deposit_assets,
             metadata,
         ))
+    }
+
+    /// Applies the migrate deposit haircut: `preview * (1e18 - 3e14) / 1e18`.
+    fn deposit_assets_after_slippage(preview_assets: U256) -> Result<U256, RpcError> {
+        let factor = WAD - MIGRATE_DEPOSIT_SLIPPAGE_TOLERANCE_WAD;
+        let deposit_assets = preview_assets
+            .checked_mul(factor)
+            .and_then(|value| value.checked_div(WAD))
+            .ok_or_else(|| RpcError::InvalidResponse {
+                error_message: "Failed to apply migrate deposit slippage haircut"
+                    .to_string(),
+            })?;
+
+        if deposit_assets.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message:
+                    "Cannot migrate zero amount - deposit amount is zero after slippage haircut"
+                        .to_string(),
+            });
+        }
+
+        Ok(deposit_assets)
     }
 
     /// Builds the `MultiSend` (`redeem` → `approve` → `deposit`) migrate transaction.
@@ -503,7 +539,7 @@ impl Erc4626Vault {
         from_asset_address: Address,
         user_address: Address,
         actual_share_amount: U256,
-        preview_assets: U256,
+        deposit_assets: U256,
         metadata: [u8; 10],
     ) -> Self {
         let redeem_data = IERC4626::redeemCall {
@@ -513,10 +549,10 @@ impl Erc4626Vault {
         }
         .abi_encode();
 
-        let approve_data = Erc20::encode_approve(to_vault_address, preview_assets);
+        let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
 
         let deposit_data = IERC4626::depositCall {
-            assets: preview_assets,
+            assets: deposit_assets,
             receiver: user_address,
         }
         .abi_encode();
@@ -974,6 +1010,8 @@ mod tests {
         let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let share_amount = U256::from(10u128.pow(18));
         let preview_assets = U256::from(1_200_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
 
         let test_rpc_client = setup_migrate_rpc_client(
             from_vault_address,
@@ -1002,7 +1040,7 @@ mod tests {
             asset_address,
             user_address,
             share_amount,
-            preview_assets,
+            deposit_assets,
             metadata,
         );
 
@@ -1010,6 +1048,22 @@ mod tests {
         assert_eq!(vault.to, expected.to);
         assert_eq!(vault.action, expected.action);
         assert_eq!(vault.call_data, expected.call_data);
+        assert!(deposit_assets < preview_assets);
+    }
+
+    #[test]
+    fn test_migrate_deposit_slippage_haircut() {
+        let preview_assets = U256::from(1_000_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+        // 1e18 * (1e18 - 3e14) / 1e18 = 1e18 - 3e14
+        assert_eq!(
+            deposit_assets,
+            preview_assets - U256::from(300_000_000_000_000u64)
+        );
+
+        let err = Erc4626Vault::deposit_assets_after_slippage(U256::ZERO).unwrap_err();
+        assert!(err.to_string().contains("zero after slippage haircut"));
     }
 
     fn setup_migrate_rpc_client(

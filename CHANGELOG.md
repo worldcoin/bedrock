@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate`) with `previewRedeem` asset snapshot
+- ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate`) with `previewRedeem` snapshot and 0.03% deposit haircut
 
 ## [0.7.0](https://github.com/worldcoin/bedrock/compare/0.6.2...0.7.0) - 2026-09-09
 

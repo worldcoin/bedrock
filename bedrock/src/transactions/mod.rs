@@ -419,7 +419,8 @@ impl SafeSmartAccount {
     /// 2. `approve(assets)` on the underlying token for the destination vault
     /// 3. `deposit(assets)` into the destination vault
     ///
-    /// The `assets` amount is snapshotted with `previewRedeem` when building the transaction.
+    /// The `assets` amount is snapshotted with `previewRedeem` when building the transaction,
+    /// then reduced by a 0.03% haircut (Morpho SDK default slippage) for approve + deposit.
     /// If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
     ///
     /// # Arguments
