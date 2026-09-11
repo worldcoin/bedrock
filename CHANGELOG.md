@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/worldcoin/bedrock/compare/0.7.0...0.7.1) - 2026-09-11
+
+### Added
+
+- *(transactions)* prepare ERC-20 transfers before signing ([#439](https://github.com/worldcoin/bedrock/pull/439))
+
+### Other
+
+- *(contracts)* point TFH paymaster at the new proxy ([#448](https://github.com/worldcoin/bedrock/pull/448))
+
 ## [0.7.0](https://github.com/worldcoin/bedrock/compare/0.6.2...0.7.0) - 2026-09-09
 
 ### Added
