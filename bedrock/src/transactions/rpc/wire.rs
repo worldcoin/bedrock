@@ -119,7 +119,7 @@ pub struct PmSponsorshipDecline {
 }
 
 /// Reason a `pm_sponsorUserOperation` request was declined.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, strum::EnumIter)]
 pub enum PmSponsorshipDeclineReason {
     /// The L2 base fee exceeded the sponsorship threshold.
     L2BaseFee,
@@ -131,6 +131,18 @@ pub enum PmSponsorshipDeclineReason {
     GasUsage,
     /// A reason introduced by a newer sponsorship service.
     Unknown(String),
+}
+
+impl std::fmt::Display for PmSponsorshipDeclineReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::L2BaseFee => "l2_base_fee",
+            Self::L1DataFee => "l1_data_fee",
+            Self::TransactionCount => "tx_count",
+            Self::GasUsage => "gas_usage",
+            Self::Unknown(value) => value,
+        })
+    }
 }
 
 impl<'de> Deserialize<'de> for PmSponsorshipDeclineReason {

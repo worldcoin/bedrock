@@ -9,7 +9,7 @@ use crate::{
     primitives::{ntp::now_with_ntp, HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{
         Is4337Encodable, Permit2Approve, SafeSmartAccount, UnparsedPermitTransferFrom,
-        UnparsedTokenPermissions,
+        UnparsedTokenPermissions, UserOperation, ENTRYPOINT_4337,
     },
     transactions::{
         contracts::{
@@ -17,7 +17,10 @@ use crate::{
             usd_legacy_vault::Permit2Data,
             world_gift_manager::WorldGiftManager,
         },
-        rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
+        rpc::{
+            get_rpc_client, PmSponsorUserOperationResponse, SponsorshipContext,
+            WaGetUserOperationReceiptResponse,
+        },
     },
 };
 
@@ -50,10 +53,17 @@ pub struct WorldGiftManagerResult {
     pub gift_id: Arc<HexEncodedData>,
 }
 
+/// An unsigned World Chain `UserOperation` prepared for review before signing.
+#[derive(Debug, uniffi::Object)]
+pub struct PreparedTransaction {
+    user_operation: UserOperation,
+    // TODO: Add sponsorship details like sponsorship decline reason, self-sponsorship fee details for user confirmation, etc.
+}
+
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
-    /// Allows executing an ERC-20 token transfer **on World Chain**.
+    /// Prepares an unsigned ERC-20 transfer on World Chain.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
@@ -61,47 +71,41 @@ impl SafeSmartAccount {
     /// - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
     /// - `transfer_association`: Metadata value. The association of the transfer.
     ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::sync::Arc;
-    /// use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
-    /// use bedrock::transactions::TransactionError;
-    /// use bedrock::primitives::Network;
-    ///
-    /// # async fn example(
-    /// #     key_manager: Arc<dyn SmartAccountKeyManager>,
-    /// # ) -> Result<(), TransactionError> {
-    /// // Assume we have a configured SafeSmartAccount
-    /// # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
-    ///
-    /// // Transfer USDC on World Chain
-    /// let tx_hash = safe_account.transaction_transfer(
-    ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
-    ///     "0x1234567890123456789012345678901234567890",
-    ///     "1000000", // 1 USDC (6 decimals)
-    ///     None,
-    /// ).await?;
-    ///
-    /// println!("Transaction hash: {}", tx_hash.to_hex_string());
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    /// - Will throw an RPC error if the transaction submission fails.
+    /// - Will throw an RPC error if sponsorship preparation fails.
+    /// - Will throw an error if sponsorship is declined.
     /// - Will throw an error if the global HTTP client has not been initialized.
-    pub async fn transaction_transfer(
+    pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,
         to_address: &str,
         amount: &str,
         transfer_association: Option<TransferAssociation>,
-    ) -> Result<HexEncodedData, TransactionError> {
-        let token_address = Address::parse_from_ffi(token_address, "token_address")?;
-        let to_address = Address::parse_from_ffi(to_address, "address")?;
-        let amount = U256::parse_from_ffi(amount, "amount")?;
+    ) -> Result<PreparedTransaction, TransactionError> {
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                transaction_type = "erc20_transfer",
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to prepare ERC-20 transfer"
+            );
+        };
+
+        let token_address = Address::parse_from_ffi(token_address, "token_address")
+            .inspect_err(|e| {
+                log_failure("parse_token_address", e);
+            })?;
+        let to_address =
+            Address::parse_from_ffi(to_address, "address").inspect_err(|e| {
+                log_failure("parse_to_address", e);
+            })?;
+        let amount = U256::parse_from_ffi(amount, "amount").inspect_err(|e| {
+            log_failure("parse_amount", e);
+        })?;
 
         let transaction = Erc20::new(token_address, to_address, amount);
 
@@ -109,14 +113,156 @@ impl SafeSmartAccount {
             association: transfer_association,
         };
 
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, Some(metadata), provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute transaction: {e}"),
+        let user_operation = transaction
+            .build_preflight_user_operation(self.wallet_address, Some(metadata))
+            .inspect_err(|e| {
+                log_failure("build_user_operation", e);
             })?;
+        let rpc_client = get_rpc_client().map_err(|e| {
+            log_failure("get_rpc_client", &e);
+            TransactionError::Generic {
+                error_message: format!(
+                    "Failed to get RPC client for ERC-20 transfer preparation: {e}"
+                ),
+            }
+        })?;
+        let sponsorship = rpc_client
+            .pm_sponsor_user_operation(
+                Network::WorldChain,
+                &user_operation,
+                *ENTRYPOINT_4337,
+                &SponsorshipContext::Protocol,
+            )
+            .await
+            .map_err(|e| {
+                crate::error!(
+                    transaction_type = "erc20_transfer",
+                    network = Network::WorldChain.network_name(),
+                    sender = self.wallet_address,
+                    outcome = "error",
+                    user_operation = format!("{user_operation:?}"),
+                    error_message = e,
+                    "Failed to request sponsorship for ERC-20 transfer"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to request sponsorship: {e}"),
+                }
+            })?;
+
+        let approval = match sponsorship {
+            PmSponsorUserOperationResponse::Approved(approval) => approval,
+            PmSponsorUserOperationResponse::Declined(decline) => {
+                crate::info!(
+                    transaction_type = "erc20_transfer",
+                    network = Network::WorldChain.network_name(),
+                    sender = self.wallet_address,
+                    outcome = "sponsorship_declined",
+                    decline_reason = decline.reason,
+                    "Sponsorship declined for ERC-20 transfer"
+                );
+                // TODO: Handle the self-sponsored UserOperation flow.
+                return Err(TransactionError::Generic {
+                    error_message: "Sponsorship declined".to_string(),
+                });
+            }
+        };
+        let prepared_transaction = PreparedTransaction {
+            user_operation: user_operation.with_pm_sponsorship_approval(&approval),
+        };
+
+        crate::debug!(
+            transaction_type = "erc20_transfer",
+            network = Network::WorldChain.network_name(),
+            sender = self.wallet_address,
+            outcome = "prepared",
+            "Prepared ERC-20 transfer"
+        );
+
+        Ok(prepared_transaction)
+    }
+
+    /// Signs and submits a previously prepared transaction on World Chain.
+    ///
+    /// # Errors
+    /// - Will throw an error if the transaction was prepared for another account.
+    /// - Will throw an RPC error if signing or submission fails.
+    /// - Will throw an error if the global HTTP client has not been initialized.
+    pub async fn submit_prepared_transaction(
+        &self,
+        prepared_transaction: &PreparedTransaction,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                sender = prepared_transaction.user_operation.sender,
+                wallet_address = self.wallet_address,
+                network = Network::WorldChain.network_name(),
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to submit prepared transaction"
+            );
+        };
+
+        crate::info!(
+            sender = prepared_transaction.user_operation.sender,
+            network = Network::WorldChain.network_name(),
+            "Submitting prepared transaction"
+        );
+        if prepared_transaction.user_operation.sender != self.wallet_address {
+            log_failure(
+                "validate_account",
+                &"Prepared transaction belongs to another account",
+            );
+            return Err(TransactionError::Generic {
+                error_message: "Prepared transaction belongs to another account"
+                    .to_string(),
+            });
+        }
+
+        let mut user_operation = prepared_transaction.user_operation.clone();
+        self.sign_user_operation(&mut user_operation, Network::WorldChain)
+            .map_err(|e| {
+                log_failure("sign", &e);
+                TransactionError::Generic {
+                    error_message: format!("Failed to sign transaction: {e}"),
+                }
+            })?;
+
+        let rpc_client = get_rpc_client().map_err(|e| {
+            log_failure("get_rpc_client", &e);
+            TransactionError::Generic {
+                error_message: format!(
+                    "Failed to get RPC client for transaction submission: {e}"
+                ),
+            }
+        })?;
+        let user_op_hash = rpc_client
+            .send_user_operation_v2(
+                Network::WorldChain,
+                &user_operation,
+                *ENTRYPOINT_4337,
+            )
+            .await
+            .map_err(|e| {
+                crate::error!(
+                    user_operation = format!("{user_operation:?}"),
+                    sender = user_operation.sender,
+                    network = Network::WorldChain.network_name(),
+                    outcome = "error",
+                    error_message = e,
+                    "Failed to submit prepared transaction"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to submit transaction: {e}"),
+                }
+            })?;
+
+        crate::info!(
+            user_op_hash = user_op_hash,
+            sender = user_operation.sender,
+            network = Network::WorldChain.network_name(),
+            "Submitted prepared transaction"
+        );
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
