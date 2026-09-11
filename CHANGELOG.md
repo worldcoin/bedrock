@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate`) with `previewRedeem` asset snapshot
 
+## [0.7.0](https://github.com/worldcoin/bedrock/compare/0.6.2...0.7.0) - 2026-09-09
+
+### Added
+
+- [**breaking**] delete backup method & simplify factor removal logic ([#422](https://github.com/worldcoin/bedrock/pull/422))
+- *(migration)* top up the TFH paymaster's ERC-20 allowance (staging only) ([#433](https://github.com/worldcoin/bedrock/pull/433))
+- *(migration)* track fire-and-forget userOp hashes and harden the retry loop ([#408](https://github.com/worldcoin/bedrock/pull/408))
+
+### Fixed
+
+- *(transactions)* use NTP time for on-chain signature deadlines ([#444](https://github.com/worldcoin/bedrock/pull/444))
+- erc4337 tx exec flaky test ([#445](https://github.com/worldcoin/bedrock/pull/445))
+
+### Other
+
+- *(rpc)* parse sponsorship decline responses ([#435](https://github.com/worldcoin/bedrock/pull/435))
+- update Worldchain URLs. ([#442](https://github.com/worldcoin/bedrock/pull/442))
+- *(rpc)* preserve structured error responses ([#434](https://github.com/worldcoin/bedrock/pull/434))
+- *(deps)* bump base64 from 0.22.1 to 0.23.1 ([#430](https://github.com/worldcoin/bedrock/pull/430))
+
 ## [0.6.2](https://github.com/worldcoin/bedrock/compare/0.6.1...0.6.2) - 2026-09-01
 
 ### Fixed

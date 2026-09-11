@@ -1,13 +1,12 @@
 use alloy::primitives::{Address, U256};
 use bedrock_macros::bedrock_export;
-use chrono::Utc;
 use rand::{Rng, RngCore};
 use std::sync::Arc;
 
 use alloy::primitives::aliases::{U160, U48};
 
 use crate::{
-    primitives::{HexEncodedData, Network, ParseFromForeignBinding},
+    primitives::{ntp::now_with_ntp, HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{
         Is4337Encodable, Permit2Approve, SafeSmartAccount, UnparsedPermitTransferFrom,
         UnparsedTokenPermissions,
@@ -596,7 +595,7 @@ impl SafeSmartAccount {
             U256::from_be_bytes(rng.gen::<[u8; 32]>())
         };
 
-        let deadline = Utc::now().timestamp() + 180; // 3 minutes from now
+        let deadline = now_with_ntp().timestamp() + 180; // 3 minutes from now
 
         let transfer = UnparsedPermitTransferFrom {
             permitted,

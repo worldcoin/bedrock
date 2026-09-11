@@ -32,7 +32,7 @@ use crate::{
 
 sol! {
     /// The WLD Vault contract interface.
-    /// Reference: <https://worldchain-mainnet.explorer.alchemy.com/address/0x14a028cC500108307947dca4a1Aa35029FB66CE0?tab=contract>
+    /// Reference: <https://explorer.worldchain.worldcoin.org/address/0x14a028cC500108307947dca4a1Aa35029FB66CE0?tab=contract>
     #[derive(serde::Serialize)]
     interface WLDVault {
         function token() public view returns (address);

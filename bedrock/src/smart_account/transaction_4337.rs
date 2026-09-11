@@ -4,12 +4,13 @@
 //!
 
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
+use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
 use crate::transactions::rpc::{RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
-use chrono::{Duration, Utc};
+use chrono::Duration;
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
@@ -38,7 +39,7 @@ impl SafeSmartAccount {
         let valid_after_bytes: [u8; 6] = [0u8; 6];
 
         // validUntil = now + configured duration
-        let valid_until_seconds = (Utc::now()
+        let valid_until_seconds = (now_with_ntp()
             + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
         .timestamp();
         let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
