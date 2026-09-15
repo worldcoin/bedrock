@@ -48,6 +48,127 @@ fn ensure_fs_initialized() {
 // ManifestManager tests
 // =========================
 
+#[tokio::test]
+#[serial]
+async fn test_batch_conditional_removal_preserves_other_identity_and_retries() {
+    let api = init_test_globals();
+    api.reset();
+    let prefix = "backup_test_face_migration";
+    let legacy = "conditional_face/legacy.bin";
+    let scoped = "conditional_face/alice.bin";
+    let other = "conditional_face/bob.bin";
+    let checksum = hex::encode(blake3::hash(b"ALICE").as_bytes());
+    write_global_file(scoped, b"ALICE");
+    write_global_file(other, b"BOB");
+    // The legacy file has already been renamed: only the manifest still refers to it.
+    let initial = BackupManifest::V0(V0BackupManifest {
+        files: vec![
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::FacePkg,
+                file_path: legacy.into(),
+                checksum_hex: checksum.clone(),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::FacePkg,
+                file_path: other.into(),
+                checksum_hex: hex::encode(blake3::hash(b"BOB").as_bytes()),
+            },
+        ],
+    });
+    write_manifest_with_prefix(&initial, prefix);
+    api.set_remote_hash(compute_manifest_hash(&initial));
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    let root = RootKey::new_random().danger_to_json().unwrap();
+    let manager = ManifestManager::new_with_prefix(prefix);
+    for _ in 0..2 {
+        let changes = vec![
+            BackupFileChange::Put {
+                designator: BackupFileDesignator::FacePkg,
+                path: scoped.into(),
+            },
+            BackupFileChange::RemoveIfChecksumMatches {
+                designator: BackupFileDesignator::FacePkg,
+                path: format!("./{legacy}"),
+                checksum_hex: checksum.to_uppercase(),
+            },
+        ];
+        manager
+            .sync_changes(&root, hex::encode(key.public_key().as_bytes()), changes)
+            .await
+            .unwrap();
+    }
+    let BackupManifest::V0(committed) = get_manifest_from_disk(prefix);
+    assert_eq!(committed.files.len(), 2);
+    assert!(committed
+        .files
+        .iter()
+        .any(|entry| entry.file_path == scoped));
+    let BackupManifest::V0(original) = initial;
+    assert_eq!(
+        committed
+            .files
+            .iter()
+            .find(|entry| entry.file_path == other),
+        Some(&original.files[1]),
+    );
+    assert_eq!(api.state.lock().unwrap().sync_count, 1);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_batch_conditional_removal_rejects_changed_owner_without_committing() {
+    let api = init_test_globals();
+    let prefix = "backup_test_face_changed_owner";
+    for wrong_designator in [false, true] {
+        api.reset();
+        let initial = BackupManifest::V0(V0BackupManifest {
+            files: vec![V0BackupManifestEntry {
+                designator: BackupFileDesignator::FacePkg,
+                file_path: "conditional_changed/legacy.bin".into(),
+                checksum_hex: hex::encode(blake3::hash(b"BOB").as_bytes()),
+            }],
+        });
+        write_manifest_with_prefix(&initial, prefix);
+        api.set_remote_hash(compute_manifest_hash(&initial));
+        write_global_file("conditional_changed/new.bin", b"NEW");
+        let key = SecretKey::generate(&mut rand::thread_rng());
+        let result = ManifestManager::new_with_prefix(prefix)
+            .sync_changes(
+                &RootKey::new_random().danger_to_json().unwrap(),
+                hex::encode(key.public_key().as_bytes()),
+                vec![
+                    BackupFileChange::Put {
+                        designator: BackupFileDesignator::FacePkg,
+                        path: "conditional_changed/new.bin".into(),
+                    },
+                    BackupFileChange::RemoveIfChecksumMatches {
+                        designator: if wrong_designator {
+                            BackupFileDesignator::OrbPkg
+                        } else {
+                            BackupFileDesignator::FacePkg
+                        },
+                        path: "conditional_changed/legacy.bin".into(),
+                        checksum_hex: hex::encode(
+                            blake3::hash(if wrong_designator {
+                                b"BOB"
+                            } else {
+                                b"ALICE"
+                            })
+                            .as_bytes(),
+                        ),
+                    },
+                ],
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::backup::BackupError::InvalidFileForBackup(_)),
+        ));
+        assert_eq!(get_manifest_from_disk(prefix), initial);
+        assert_eq!(api.state.lock().unwrap().sync_count, 0);
+    }
+}
+
 #[derive(Default, Clone, Debug)]
 struct NextSyncErrorConfig {
     code: u64,
