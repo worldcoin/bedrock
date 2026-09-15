@@ -241,12 +241,11 @@ impl ManifestManager {
         .await
     }
 
-    /// Removes a file from the manifest and syncs the backup if it changes.
-    /// Removing a path that is already absent leaves the manifest unchanged.
+    /// Removes a file from the manifest and syncs the backup.
     ///
     /// # Errors
-    /// Returns an error if the remote backup is ahead or the remaining files
-    /// cannot be backed up.
+    /// Returns an error if the file is not registered, the remote backup is ahead,
+    /// or the remaining files cannot be backed up.
     pub async fn remove_file(
         &self,
         file_path: String,
@@ -545,7 +544,14 @@ impl ManifestManager {
                 }
                 BackupFileChange::Remove { path } => {
                     let path = Self::normalize_input_path(&path);
+                    let before = manifest.files.len();
                     manifest.files.retain(|entry| entry.file_path != path);
+                    if manifest.files.len() == before {
+                        return Err(BackupError::InvalidFileForBackup(format!(
+                            "File not found in manifest: {}",
+                            path.get(..14).unwrap_or(path)
+                        )));
+                    }
                 }
                 BackupFileChange::ReplaceFiles { designator, paths } => {
                     manifest

@@ -364,9 +364,6 @@ async fn test_batch_refreshes_document_with_vault_and_referrals_preserving_sibli
                     designator: BackupFileDesignator::AnonymizedThirdPartyAnalytics,
                     path: "batch_refresh/referrals.json".into(),
                 },
-                BackupFileChange::Remove {
-                    path: "batch_refresh/already_removed.bin".into(),
-                },
             ],
         )
         .await
@@ -1189,7 +1186,7 @@ async fn test_replace_all_files_for_designator_happy_path() {
 
 #[tokio::test]
 #[serial]
-async fn test_remove_file_is_idempotent() {
+async fn test_remove_file_happy_and_not_found() {
     let api = init_test_globals();
     api.reset();
 
@@ -1239,13 +1236,12 @@ async fn test_remove_file_is_idempotent() {
     assert_eq!(files[0]["designator"], "document_pkg");
     assert_eq!(files[0]["file_path"], "docs/keep.bin");
 
-    // Repeating the removal leaves the manifest unchanged and does not upload.
-    let before_retry = read_manifest_bytes("backup_test_remove_1");
-    mgr.remove_file("pcp/target.bin".to_string(), &root_json, backup_pk_hex)
+    // Second removal of the same file should error and not sync again
+    let err = mgr
+        .remove_file("pcp/target.bin".to_string(), &root_json, backup_pk_hex)
         .await
-        .unwrap();
-    assert_eq!(api.state.lock().unwrap().sync_count, 1);
-    assert_eq!(read_manifest_bytes("backup_test_remove_1"), before_retry);
+        .expect_err("expected file-not-found error");
+    assert!(err.to_string().contains("File not found in manifest"));
 }
 
 #[tokio::test]
@@ -1338,6 +1334,9 @@ async fn test_sync_changes_failure_preserves_manifest() {
     let cases = [
         BackupFileChange::Put {
             designator: BackupFileDesignator::OrbPkg,
+            path: "batch/missing.bin".into(),
+        },
+        BackupFileChange::Remove {
             path: "batch/missing.bin".into(),
         },
         BackupFileChange::ReplaceFiles {
