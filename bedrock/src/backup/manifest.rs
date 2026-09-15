@@ -197,20 +197,17 @@ impl ManifestManager {
         Ok(files)
     }
 
-    /// Applies file changes in order and uploads the resulting backup once.
+    /// Applies file changes in order and syncs the backup if needed.
     ///
-    /// Include every file you changed, including any recreated vault export.
-    /// Files not included in `changes` must still match their saved checksums.
-    /// Keep source files available and unchanged until this call returns, and
-    /// serialize this call with other backup writes.
+    /// Include all changed files, including recreated exports. Other files must
+    /// still match their saved checksums. Keep files unchanged until this returns
+    /// and serialize calls with other backup writes.
     ///
-    /// An empty batch does nothing. If the local and remote manifests already
-    /// match the result, no upload is needed. The local manifest is saved only
-    /// after a successful upload.
+    /// The local manifest is saved after upload. A lost response or failed local
+    /// save can leave the server ahead; resolve that state before retrying.
     ///
     /// # Errors
-    /// Returns an error if a change is invalid, a file cannot be backed up,
-    /// the remote backup is ahead, or the upload or local save fails.
+    /// See [`BackupError`].
     pub async fn sync_changes(
         &self,
         root_secret: &str,
@@ -631,19 +628,19 @@ impl Default for ManifestManager {
     }
 }
 
-/// A file change to include in a backup sync.
+/// A change applied by [`ManifestManager::sync_changes`].
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum BackupFileChange {
-    /// Adds a file or updates its saved checksum from the current contents.
+    /// Adds or refreshes a file from its current contents.
     Put {
-        /// The kind of data stored in this file.
+        /// File category.
         designator: BackupFileDesignator,
-        /// Source path relative to the app filesystem.
+        /// Path relative to the app filesystem.
         path: String,
     },
-    /// Removes a registered file. Fails if the path is not registered.
+    /// Removes a file. Fails if it is not registered.
     Remove {
-        /// The path recorded in the manifest.
+        /// Registered path.
         path: String,
     },
     /// Removes only the entry with the expected designator and recorded BLAKE3 checksum.
@@ -657,11 +654,11 @@ pub enum BackupFileChange {
         /// Expected BLAKE3 checksum recorded in the manifest.
         checksum_hex: String,
     },
-    /// Replaces all files for this designator with the supplied paths.
+    /// Replaces all files for a designator.
     ReplaceFiles {
-        /// The kind of data whose file list will be replaced.
+        /// File category to replace.
         designator: BackupFileDesignator,
-        /// Source paths to keep. An empty list removes all files for the designator.
+        /// Paths relative to the app filesystem. Empty removes all files for the designator.
         paths: Vec<String>,
     },
 }
