@@ -16,7 +16,7 @@ use alloy::{
 };
 
 mod common;
-use common::{deploy_safe, setup_anvil, IERC20};
+use common::{deploy_safe, setup_anvil_at_block, IERC20};
 
 use bedrock::{
     primitives::http_client::set_http_client,
@@ -49,6 +49,8 @@ const WARS_FUNDER_CANDIDATES: &[&str] = &[
     // V2 vault idle assets
     "0x4047dB25Fd6EcD07d72CA44adf3a2A44dE6DE084",
 ];
+/// Pinned World Chain block so funding holders stay reproducible in CI.
+const WORLDCHAIN_FORK_BLOCK: u64 = 35_061_453;
 
 #[tokio::test]
 async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
@@ -61,7 +63,7 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
     let owner_key_hex = hex::encode(owner_signer.to_bytes());
     let owner = owner_signer.address();
 
-    let anvil = setup_anvil();
+    let anvil = setup_anvil_at_block(WORLDCHAIN_FORK_BLOCK);
     let provider = ProviderBuilder::new()
         .wallet(owner_signer.clone())
         .connect_http(anvil.endpoint_url());

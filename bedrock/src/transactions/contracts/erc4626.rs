@@ -498,16 +498,27 @@ impl Erc4626Vault {
         // 6. Apply 0.03% haircut to the deposited amount (Morpho default slippage)
         let deposit_assets = Self::deposit_assets_after_slippage(preview_assets)?;
 
-        // 7. Encode redeem + approve + deposit and build the MultiSend bundle
-        Ok(Self::build_migrate_transaction(
+        // 7. Read current allowance so we can reset USDT-style tokens before approve
+        let existing_allowance = Erc20::fetch_allowance(
+            rpc_client,
+            network,
+            from_asset_address,
+            user_address,
+            to_vault_address,
+        )
+        .await?;
+
+        // 8. Encode redeem + approve(+ optional reset) + deposit and build MultiSend
+        Ok(Self::build_migrate_transaction(MigrateBundleParams {
             from_vault_address,
             to_vault_address,
             from_asset_address,
             user_address,
             actual_share_amount,
             deposit_assets,
+            existing_allowance,
             metadata,
-        ))
+        }))
     }
 
     /// Applies the migrate deposit haircut: `preview * (1e18 - 3e14) / 1e18`.
@@ -532,16 +543,23 @@ impl Erc4626Vault {
         Ok(deposit_assets)
     }
 
-    /// Builds the `MultiSend` (`redeem` → `approve` → `deposit`) migrate transaction.
-    fn build_migrate_transaction(
-        from_vault_address: Address,
-        to_vault_address: Address,
-        from_asset_address: Address,
-        user_address: Address,
-        actual_share_amount: U256,
-        deposit_assets: U256,
-        metadata: [u8; 10],
-    ) -> Self {
+    /// Builds the `MultiSend` migrate transaction.
+    ///
+    /// When `existing_allowance` is nonzero and differs from `deposit_assets`, inserts
+    /// `approve(0)` before `approve(deposit_assets)` for tokens that require a zero-first reset.
+    /// If allowance already equals `deposit_assets`, the approve step is skipped.
+    fn build_migrate_transaction(params: MigrateBundleParams) -> Self {
+        let MigrateBundleParams {
+            from_vault_address,
+            to_vault_address,
+            from_asset_address,
+            user_address,
+            actual_share_amount,
+            deposit_assets,
+            existing_allowance,
+            metadata,
+        } = params;
+
         let redeem_data = IERC4626::redeemCall {
             shares: actual_share_amount,
             receiver: user_address,
@@ -549,37 +567,50 @@ impl Erc4626Vault {
         }
         .abi_encode();
 
-        let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
-
         let deposit_data = IERC4626::depositCall {
             assets: deposit_assets,
             receiver: user_address,
         }
         .abi_encode();
 
-        let entries = vec![
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: from_vault_address,
-                value: U256::ZERO,
-                data_length: U256::from(redeem_data.len()),
-                data: redeem_data.into(),
-            },
-            MultiSendTx {
+        let mut entries = vec![MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: from_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(redeem_data.len()),
+            data: redeem_data.into(),
+        }];
+
+        if existing_allowance != deposit_assets {
+            if !existing_allowance.is_zero() {
+                let reset_approve_data =
+                    Erc20::encode_approve(to_vault_address, U256::ZERO);
+                entries.push(MultiSendTx {
+                    operation: SafeOperation::Call as u8,
+                    to: from_asset_address,
+                    value: U256::ZERO,
+                    data_length: U256::from(reset_approve_data.len()),
+                    data: reset_approve_data.into(),
+                });
+            }
+
+            let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
+            entries.push(MultiSendTx {
                 operation: SafeOperation::Call as u8,
                 to: from_asset_address,
                 value: U256::ZERO,
                 data_length: U256::from(approve_data.len()),
                 data: approve_data.into(),
-            },
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: to_vault_address,
-                value: U256::ZERO,
-                data_length: U256::from(deposit_data.len()),
-                data: deposit_data.into(),
-            },
-        ];
+            });
+        }
+
+        entries.push(MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: to_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(deposit_data.len()),
+            data: deposit_data.into(),
+        });
 
         let bundle = MultiSend::build_bundle(&entries);
 
@@ -591,6 +622,19 @@ impl Erc4626Vault {
             metadata,
         }
     }
+}
+
+/// Inputs for [`Erc4626Vault::build_migrate_transaction`].
+#[derive(Clone, Copy)]
+struct MigrateBundleParams {
+    from_vault_address: Address,
+    to_vault_address: Address,
+    from_asset_address: Address,
+    user_address: Address,
+    actual_share_amount: U256,
+    deposit_assets: U256,
+    existing_allowance: U256,
+    metadata: [u8; 10],
 }
 
 impl Is4337Encodable for Erc4626Vault {
@@ -1020,6 +1064,7 @@ mod tests {
             user_address,
             share_amount,
             preview_assets,
+            U256::ZERO,
         );
 
         let vault = Erc4626Vault::migrate(
@@ -1050,6 +1095,60 @@ mod tests {
                 user_address,
                 share_amount,
                 deposit_assets,
+                U256::ZERO,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_resets_nonzero_allowance() {
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let share_amount = U256::from(10u128.pow(18));
+        let preview_assets = U256::from(1_200_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+        let existing_allowance = U256::from(42u64);
+
+        let test_rpc_client = setup_migrate_rpc_client(
+            from_vault_address,
+            to_vault_address,
+            asset_address,
+            user_address,
+            share_amount,
+            preview_assets,
+            existing_allowance,
+        );
+
+        let vault = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            share_amount,
+            user_address,
+            metadata,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            vault.call_data.to_vec(),
+            expected_migrate_multisend_data(
+                from_vault_address,
+                to_vault_address,
+                asset_address,
+                user_address,
+                share_amount,
+                deposit_assets,
+                existing_allowance,
             )
         );
     }
@@ -1061,6 +1160,7 @@ mod tests {
         user_address: Address,
         share_amount: U256,
         deposit_assets: U256,
+        existing_allowance: U256,
     ) -> Vec<u8> {
         let redeem_data = IERC4626::redeemCall {
             shares: share_amount,
@@ -1068,35 +1168,46 @@ mod tests {
             owner: user_address,
         }
         .abi_encode();
-        let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
         let deposit_data = IERC4626::depositCall {
             assets: deposit_assets,
             receiver: user_address,
         }
         .abi_encode();
-        let entries = vec![
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: from_vault_address,
-                value: U256::ZERO,
-                data_length: U256::from(redeem_data.len()),
-                data: redeem_data.into(),
-            },
-            MultiSendTx {
+        let mut entries = vec![MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: from_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(redeem_data.len()),
+            data: redeem_data.into(),
+        }];
+        if existing_allowance != deposit_assets {
+            if !existing_allowance.is_zero() {
+                let reset_approve_data =
+                    Erc20::encode_approve(to_vault_address, U256::ZERO);
+                entries.push(MultiSendTx {
+                    operation: SafeOperation::Call as u8,
+                    to: asset_address,
+                    value: U256::ZERO,
+                    data_length: U256::from(reset_approve_data.len()),
+                    data: reset_approve_data.into(),
+                });
+            }
+            let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
+            entries.push(MultiSendTx {
                 operation: SafeOperation::Call as u8,
                 to: asset_address,
                 value: U256::ZERO,
                 data_length: U256::from(approve_data.len()),
                 data: approve_data.into(),
-            },
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: to_vault_address,
-                value: U256::ZERO,
-                data_length: U256::from(deposit_data.len()),
-                data: deposit_data.into(),
-            },
-        ];
+            });
+        }
+        entries.push(MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: to_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(deposit_data.len()),
+            data: deposit_data.into(),
+        });
         MultiSend::build_bundle(&entries).data
     }
 
@@ -1122,6 +1233,7 @@ mod tests {
         user_address: Address,
         share_amount: U256,
         preview_assets: U256,
+        existing_allowance: U256,
     ) -> RpcClient {
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
@@ -1164,6 +1276,19 @@ mod tests {
             from_vault_address,
             format!("0x{}", hex::encode(preview_redeem_call_data)),
             format!("0x{}", hex::encode(padded_assets)),
+        );
+
+        let allowance_call_data = IErc20::allowanceCall {
+            owner: user_address,
+            spender: to_vault_address,
+        }
+        .abi_encode();
+        let mut padded_allowance = [0u8; 32];
+        padded_allowance[..32].copy_from_slice(&existing_allowance.to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            asset_address,
+            format!("0x{}", hex::encode(allowance_call_data)),
+            format!("0x{}", hex::encode(padded_allowance)),
         );
 
         RpcClient::new(Arc::new(http_client))
