@@ -230,7 +230,7 @@ struct ReaperPlan {
 }
 
 impl ReaperPlan {
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.policy_ids.is_empty() && self.user_ids.is_empty()
     }
 }
@@ -250,10 +250,10 @@ fn plan(
             let last_activity = last_activity_by_user_id
                 .get(&user.user_id)
                 .copied()
-                .map(Ok)
-                .unwrap_or_else(|| {
-                    parse_timestamp(user.created_at.as_ref(), "sync factor user")
-                });
+                .map_or_else(
+                    || parse_timestamp(user.created_at.as_ref(), "sync factor user"),
+                    Ok,
+                );
             last_activity.map(|last_activity| (user, last_activity))
         })
         .collect::<Result<_, _>>()?;
