@@ -62,7 +62,8 @@ pub enum RetryError<E> {
 ///
 /// # Errors
 /// Returns the last error from `op` once retries are exhausted or `is_retryable`
-/// returns `false`.
+/// returns `false`. Returns [`RetryError::Timeout`] when the total deadline expires,
+/// dropping any in-flight operation; a submitted mutation may still commit remotely.
 pub async fn retry_with_backoff<T, E, Fut>(
     policy: &RetryPolicy,
     operation: &str,
