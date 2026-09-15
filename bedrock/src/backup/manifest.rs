@@ -241,11 +241,12 @@ impl ManifestManager {
         .await
     }
 
-    /// Removes a file from the manifest and syncs the backup.
+    /// Removes a file from the manifest and syncs the backup if it changes.
+    /// Removing a path that is already absent leaves the manifest unchanged.
     ///
     /// # Errors
-    /// Returns an error if the file is not registered, the remote backup is ahead,
-    /// or the remaining files cannot be backed up.
+    /// Returns an error if the remote backup is ahead or the remaining files
+    /// cannot be backed up.
     pub async fn remove_file(
         &self,
         file_path: String,
@@ -460,6 +461,16 @@ impl ManifestManager {
             })
     }
 
+    /// Applies the changes in order and uploads the resulting backup once.
+    ///
+    /// Include every file intentionally changed since the last backup. If the
+    /// vault export was recreated, include it too. Files outside the batch must
+    /// still match their recorded checksums.
+    ///
+    /// The caller must keep source files unchanged while this method reads them.
+    /// It does not lock files or make copies. The local manifest is saved after
+    /// the upload succeeds. A lost response or failed local save can still leave
+    /// the server ahead; resolve that state before retrying.
     pub(super) async fn sync_changes(
         &self,
         root_secret: &str,
@@ -533,15 +544,10 @@ impl ManifestManager {
                     Self::put_file(manifest, designator, &path)?;
                 }
                 BackupFileChange::Remove { path } => {
-                    let path = Self::normalize_input_path(&path);
-                    let before = manifest.files.len();
-                    manifest.files.retain(|entry| entry.file_path != path);
-                    if manifest.files.len() == before {
-                        return Err(BackupError::InvalidFileForBackup(format!(
-                            "File not found in manifest: {}",
-                            path.get(..14).unwrap_or(path)
-                        )));
-                    }
+                    let path_lower = Self::normalize_input_path(&path).to_lowercase();
+                    manifest
+                        .files
+                        .retain(|entry| entry.file_path.to_lowercase() != path_lower);
                 }
                 BackupFileChange::ReplaceFiles { designator, paths } => {
                     manifest
@@ -563,7 +569,10 @@ impl ManifestManager {
     ) -> Result<(), BackupError> {
         let path = Self::normalize_input_path(path);
         let (checksum_hex, _) = Self::checksum_and_size_for_file(path)?;
-        manifest.files.retain(|entry| entry.file_path != path);
+        let path_lower = path.to_lowercase();
+        manifest
+            .files
+            .retain(|entry| entry.file_path.to_lowercase() != path_lower);
         manifest.files.push(V0BackupManifestEntry {
             designator,
             file_path: path.to_string(),
