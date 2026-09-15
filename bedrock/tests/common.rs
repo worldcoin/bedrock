@@ -112,9 +112,8 @@ pub fn setup_anvil() -> AnvilInstance {
 /// Like [`setup_anvil`], but pins the fork to a specific block for reproducible e2e.
 pub fn setup_anvil_at_block(block_number: u64) -> AnvilInstance {
     dotenvy::dotenv().ok();
-    let rpc_url = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
-        "https://rpc.worldchain.worldcoin.org".to_string()
-    });
+    let rpc_url = std::env::var("WORLDCHAIN_RPC_URL")
+        .unwrap_or_else(|_| "https://rpc.worldchain.worldcoin.org".to_string());
 
     alloy::node_bindings::Anvil::new()
         .fork(rpc_url)
