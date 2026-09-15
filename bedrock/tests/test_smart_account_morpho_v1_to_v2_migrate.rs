@@ -38,17 +38,23 @@ sol! {
 const WARS_TOKEN: &str = "0x0DC4F92879B7670e5f4e4e6e3c801D229129D90D";
 const WARS_V1_VAULT: &str = "0x1C94c7A2c71ECF13104c31F49d5138EDb099D25D";
 const WARS_V2_VAULT: &str = "0x4047dB25Fd6EcD07d72CA44adf3a2A44dE6DE084";
-/// Known wARS holder used to fund the Safe via impersonated transfer.
-const WARS_FUNDER: &str = "0x0D0c99daF35DaF2CFC50cF6a437E1c49fDf4F167";
 /// Morpho WLD vault — different underlying asset, for mismatch check.
 const WLD_MORPHO_VAULT: &str = "0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f";
+/// Candidate wARS holders for impersonated funding (first with enough balance wins).
+const WARS_FUNDER_CANDIDATES: &[&str] = &[
+    // Morpho / Re7-related holder that historically funded this canary
+    "0x0D0c99daF35DaF2CFC50cF6a437E1c49fDf4F167",
+    // V1 vault itself (sometimes holds idle underlying)
+    "0x1C94c7A2c71ECF13104c31F49d5138EDb099D25D",
+    // V2 vault idle assets
+    "0x4047dB25Fd6EcD07d72CA44adf3a2A44dE6DE084",
+];
 
 #[tokio::test]
 async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
     let wars_token = Address::from_str(WARS_TOKEN)?;
     let wars_v1 = Address::from_str(WARS_V1_VAULT)?;
     let wars_v2 = Address::from_str(WARS_V2_VAULT)?;
-    let wars_funder = Address::from_str(WARS_FUNDER)?;
     let bad_dest_vault = Address::from_str(WLD_MORPHO_VAULT)?;
 
     let owner_signer = PrivateKeySigner::random();
@@ -108,15 +114,30 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
     println!("✓ Migrate correctly failed with zero shares");
 
     // Fund Safe with wARS via impersonated transfer (storage layout is non-standard).
-    let mut deposit_amount: U256 = parse_units("10", 18)?.into();
-    let funder_balance = wars.balanceOf(wars_funder).call().await?;
-    assert!(
-        !funder_balance.is_zero(),
-        "Expected wARS funder {wars_funder} to hold tokens on the fork"
-    );
-    if funder_balance < deposit_amount {
-        deposit_amount = funder_balance / U256::from(2);
+    let requested_amount: U256 = parse_units("10", 18)?.into();
+    let min_funder_balance: U256 = parse_units("1", 18)?.into();
+    let mut wars_funder = None;
+    let mut funder_balance = U256::ZERO;
+    for candidate in WARS_FUNDER_CANDIDATES {
+        let address = Address::from_str(candidate)?;
+        let balance = wars.balanceOf(address).call().await?;
+        if balance >= min_funder_balance {
+            wars_funder = Some(address);
+            funder_balance = balance;
+            break;
+        }
     }
+    let wars_funder = wars_funder.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No wARS funder candidate held >= {min_funder_balance} on the fork tip"
+        )
+    })?;
+    let deposit_amount = requested_amount.min(funder_balance / U256::from(2));
+    assert!(
+        !deposit_amount.is_zero(),
+        "Resolved funder {wars_funder} balance too small to migrate"
+    );
+    println!("✓ Using wARS funder {wars_funder} (balance={funder_balance})");
 
     provider
         .anvil_set_balance(wars_funder, parse_ether("1")?)

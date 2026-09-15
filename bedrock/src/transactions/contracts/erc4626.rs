@@ -1034,21 +1034,70 @@ mod tests {
         .await
         .unwrap();
 
-        let expected = Erc4626Vault::build_migrate_transaction(
-            from_vault_address,
-            to_vault_address,
-            asset_address,
-            user_address,
-            share_amount,
-            deposit_assets,
-            metadata,
+        assert_eq!(vault.operation as u8, SafeOperation::DelegateCall as u8);
+        assert_eq!(
+            vault.to,
+            crate::transactions::contracts::multisend::MULTISEND_ADDRESS
         );
-
-        assert_eq!(vault.operation as u8, expected.operation as u8);
-        assert_eq!(vault.to, expected.to);
-        assert_eq!(vault.action, expected.action);
-        assert_eq!(vault.call_data, expected.call_data);
+        assert_eq!(vault.action, TransactionTypeId::ERC4626Migrate);
         assert!(deposit_assets < preview_assets);
+        assert_eq!(
+            vault.call_data.to_vec(),
+            expected_migrate_multisend_data(
+                from_vault_address,
+                to_vault_address,
+                asset_address,
+                user_address,
+                share_amount,
+                deposit_assets,
+            )
+        );
+    }
+
+    fn expected_migrate_multisend_data(
+        from_vault_address: Address,
+        to_vault_address: Address,
+        asset_address: Address,
+        user_address: Address,
+        share_amount: U256,
+        deposit_assets: U256,
+    ) -> Vec<u8> {
+        let redeem_data = IERC4626::redeemCall {
+            shares: share_amount,
+            receiver: user_address,
+            owner: user_address,
+        }
+        .abi_encode();
+        let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
+        let deposit_data = IERC4626::depositCall {
+            assets: deposit_assets,
+            receiver: user_address,
+        }
+        .abi_encode();
+        let entries = vec![
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: from_vault_address,
+                value: U256::ZERO,
+                data_length: U256::from(redeem_data.len()),
+                data: redeem_data.into(),
+            },
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: asset_address,
+                value: U256::ZERO,
+                data_length: U256::from(approve_data.len()),
+                data: approve_data.into(),
+            },
+            MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: to_vault_address,
+                value: U256::ZERO,
+                data_length: U256::from(deposit_data.len()),
+                data: deposit_data.into(),
+            },
+        ];
+        MultiSend::build_bundle(&entries).data
     }
 
     #[test]
