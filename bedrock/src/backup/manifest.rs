@@ -544,10 +544,8 @@ impl ManifestManager {
                     Self::put_file(manifest, designator, &path)?;
                 }
                 BackupFileChange::Remove { path } => {
-                    let path_lower = Self::normalize_input_path(&path).to_lowercase();
-                    manifest
-                        .files
-                        .retain(|entry| entry.file_path.to_lowercase() != path_lower);
+                    let path = Self::normalize_input_path(&path);
+                    manifest.files.retain(|entry| entry.file_path != path);
                 }
                 BackupFileChange::ReplaceFiles { designator, paths } => {
                     manifest
@@ -569,10 +567,7 @@ impl ManifestManager {
     ) -> Result<(), BackupError> {
         let path = Self::normalize_input_path(path);
         let (checksum_hex, _) = Self::checksum_and_size_for_file(path)?;
-        let path_lower = path.to_lowercase();
-        manifest
-            .files
-            .retain(|entry| entry.file_path.to_lowercase() != path_lower);
+        manifest.files.retain(|entry| entry.file_path != path);
         manifest.files.push(V0BackupManifestEntry {
             designator,
             file_path: path.to_string(),
