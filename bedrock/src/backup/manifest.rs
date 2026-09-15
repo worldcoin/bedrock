@@ -197,6 +197,36 @@ impl ManifestManager {
         Ok(files)
     }
 
+    /// Applies file changes in order and uploads the resulting backup once.
+    ///
+    /// Include every file you changed, including any recreated vault export.
+    /// Files not included in `changes` must still match their saved checksums.
+    /// Keep source files available and unchanged until this call returns, and
+    /// serialize this call with other backup writes.
+    ///
+    /// An empty batch does nothing. If the local and remote manifests already
+    /// match the result, no upload is needed. The local manifest is saved only
+    /// after a successful upload.
+    ///
+    /// # Errors
+    /// Returns an error if a change is invalid, a file cannot be backed up,
+    /// the remote backup is ahead, or the upload or local save fails.
+    pub async fn sync_changes(
+        &self,
+        root_secret: &str,
+        backup_keypair_public_key: String,
+        changes: Vec<BackupFileChange>,
+    ) -> Result<(), BackupError> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let result = self
+            .mutate_manifest_and_sync(root_secret, backup_keypair_public_key, changes)
+            .await;
+        Self::send_sync_event(&result).await;
+        result
+    }
+
     /// Adds or refreshes a file and syncs the backup when its manifest entry changes.
     ///
     /// # Errors
@@ -460,32 +490,6 @@ impl ManifestManager {
             })
     }
 
-    /// Applies the changes in order and uploads the resulting backup once.
-    ///
-    /// Include every file intentionally changed since the last backup. If the
-    /// vault export was recreated, include it too. Files outside the batch must
-    /// still match their recorded checksums.
-    ///
-    /// The caller must keep source files unchanged while this method reads them.
-    /// It does not lock files or make copies. The local manifest is saved after
-    /// the upload succeeds. A lost response or failed local save can still leave
-    /// the server ahead; resolve that state before retrying.
-    pub(super) async fn sync_changes(
-        &self,
-        root_secret: &str,
-        backup_keypair_public_key: String,
-        changes: Vec<BackupFileChange>,
-    ) -> Result<(), BackupError> {
-        if changes.is_empty() {
-            return Ok(());
-        }
-        let result = self
-            .mutate_manifest_and_sync(root_secret, backup_keypair_public_key, changes)
-            .await;
-        Self::send_sync_event(&result).await;
-        result
-    }
-
     async fn mutate_manifest_and_sync(
         &self,
         root_secret: &str,
@@ -627,28 +631,37 @@ impl Default for ManifestManager {
     }
 }
 
-pub(super) enum BackupFileChange {
+/// A file change to include in a backup sync.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum BackupFileChange {
+    /// Adds a file or updates its saved checksum from the current contents.
     Put {
+        /// The kind of data stored in this file.
         designator: BackupFileDesignator,
+        /// Source path relative to the app filesystem.
         path: String,
     },
+    /// Removes a registered file. Fails if the path is not registered.
     Remove {
+        /// The path recorded in the manifest.
         path: String,
     },
     /// Removes only the entry with the expected designator and recorded BLAKE3 checksum.
     /// Missing entries are a retry-safe no-op; a mismatch rejects the whole batch.
     /// The local file need not exist. Path normalization and matching follow `Remove`.
-    #[allow(
-        dead_code,
-        reason = "Public sync caller adoption follows separately; covered by batch tests"
-    )]
     RemoveIfChecksumMatches {
+        /// Expected file category.
         designator: BackupFileDesignator,
+        /// Registered path.
         path: String,
+        /// Expected BLAKE3 checksum recorded in the manifest.
         checksum_hex: String,
     },
+    /// Replaces all files for this designator with the supplied paths.
     ReplaceFiles {
+        /// The kind of data whose file list will be replaced.
         designator: BackupFileDesignator,
+        /// Source paths to keep. An empty list removes all files for the designator.
         paths: Vec<String>,
     },
 }

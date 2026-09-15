@@ -30,7 +30,7 @@ pub use client_events::{
     BaseReport, ClientEventsError, ClientEventsReporter,
 };
 use k256::ecdsa::{signature::Signer, Signature, SigningKey};
-pub use manifest::ManifestManager;
+pub use manifest::{BackupFileChange, ManifestManager};
 use siegel_uniffi::SiegelSession;
 use std::sync::Arc;
 
