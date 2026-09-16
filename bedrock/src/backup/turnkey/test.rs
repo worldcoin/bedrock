@@ -135,11 +135,14 @@ mod functional_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const LIST_USERS_PATH: &str = "/public/v1/query/list_users";
+    const LIST_ACTIVITIES_PATH: &str = "/public/v1/query/list_activities";
+    const WHOAMI_PATH: &str = "/public/v1/query/whoami";
     const CREATE_OAUTH_PATH: &str = "/public/v1/submit/create_oauth_providers";
     const LIST_POLICIES_PATH: &str = "/public/v1/query/list_policies";
     const CREATE_POLICY_PATH: &str = "/public/v1/submit/create_policy";
     const UPDATE_POLICY_PATH: &str = "/public/v1/submit/update_policy";
     const DELETE_POLICY_PATH: &str = "/public/v1/submit/delete_policy";
+    const DELETE_POLICIES_PATH: &str = "/public/v1/submit/delete_policies";
 
     /// A sync factor user id (UUID) used across the policy tests.
     const SYNC_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -169,9 +172,8 @@ mod functional_tests {
         })
     }
 
-    /// Mounts both read endpoints the migration list depends on: `list_users` and
-    /// `list_policies`. Every functional test needs both, since the run executes the
-    /// full [`MIGRATIONS`] list.
+    /// Mounts the read endpoints the migration list depends on. Every functional
+    /// test needs these because the run executes the full [`MIGRATIONS`] list.
     async fn mount_reads(
         server: &MockServer,
         users: Vec<serde_json::Value>,
@@ -182,6 +184,23 @@ mod functional_tests {
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(json!({ "users": users })),
             )
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(LIST_ACTIVITIES_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "activities": [] })),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(WHOAMI_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "organizationId": "suborg-1",
+                "organizationName": "test suborg",
+                "userId": SYNC_ID,
+                "username": format!("{SYNC_FACTOR_USERNAME_PREFIX}{SYNC_ID}"),
+            })))
             .mount(server)
             .await;
         Mock::given(method("POST"))
@@ -225,6 +244,7 @@ mod functional_tests {
         json!({
             "userId": user_id,
             "userName": format!("{SYNC_FACTOR_USERNAME_PREFIX}{user_id}"),
+            "createdAt": { "seconds": "2000000000", "nanos": "0" },
         })
     }
 
@@ -284,6 +304,20 @@ mod functional_tests {
                 "type": "ACTIVITY_TYPE_DELETE_POLICY",
                 "fingerprint": "fp-delete-policy",
                 "result": { "deletePolicyResult": { "policyId": policy_id } }
+            }
+        })
+    }
+
+    /// A COMPLETED `DeletePolicies` activity response returning `policy_ids`.
+    fn completed_delete_policies(policy_ids: &[&str]) -> serde_json::Value {
+        json!({
+            "activity": {
+                "id": "act-delete-policies",
+                "organizationId": "suborg-1",
+                "status": "ACTIVITY_STATUS_COMPLETED",
+                "type": "ACTIVITY_TYPE_DELETE_POLICIES",
+                "fingerprint": "fp-delete-policies",
+                "result": { "deletePoliciesResult": { "policyIds": policy_ids } }
             }
         })
     }
@@ -702,6 +736,15 @@ mod functional_tests {
                 ],
             )
             .await;
+            Mock::given(method("POST"))
+                .and(path(DELETE_POLICIES_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(completed_delete_policies(&["policy-stale"])),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
             Mock::given(method("POST"))
                 .and(path(DELETE_POLICY_PATH))
                 .respond_with(

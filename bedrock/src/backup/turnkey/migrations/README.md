@@ -112,3 +112,13 @@ Notes:
 - Pruning deliberately targets **all** orphaned policies, not just sync factor ones. An orphaned policy has no use.
 - The policy name is ignored when deciding whether a policy is up to date; it is only a label.
 - `user_id` is validated as a UUID before being interpolated into a consensus expression. A quote in an id could otherwise break out of the string literal.
+
+### `sync_factor_reaper`
+
+Legacy logout bugs left some accounts with stale Sync Factor users and their policies. This migration retains the current device's Sync Factor, then removes other Sync Factors that have either been inactive for one year or fall outside the 25 most recently active factors. Recent activity is the user's latest activity vote; users without a vote fall back to their creation time.
+
+It also repairs interrupted older cleanups: policies bound to absent users are removed, and non-current Sync Factors with no matching policy are removed. Policies are deleted before users, so a failed user deletion is recoverable on the next run.
+
+Activity scanning uses 100-item pages and stops after reaching activity older than the one-year cutoff. It is hard-capped at 50 pages; if that cap is reached, the migration still enforces the count cap but skips age-based deletion to avoid treating an incomplete activity history as inactivity.
+
+All reads are stamped by the Sync Factor. Any cleanup action requires a Main Factor; otherwise the migration reports `MainFactorRequired` without modifying the account.
