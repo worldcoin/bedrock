@@ -299,6 +299,305 @@ fn test_backup_manifest_default_hash() {
 
 #[tokio::test]
 #[serial]
+async fn test_batch_refreshes_vault_with_document_changes_in_one_sync() {
+    let api = init_test_globals();
+    let prefix = "backup_test_batch_vault";
+    for operation in ["store", "replace", "remove"] {
+        api.reset();
+        let initial = BackupManifest::V0(V0BackupManifest {
+            files: vec![
+                V0BackupManifestEntry {
+                    designator: BackupFileDesignator::CredentialVault,
+                    file_path: "batch/vault.bin".into(),
+                    checksum_hex: hex::encode(blake3::hash(b"OLD VAULT").as_bytes()),
+                },
+                V0BackupManifestEntry {
+                    designator: BackupFileDesignator::DocumentPkg,
+                    file_path: "batch/document.bin".into(),
+                    checksum_hex: hex::encode(blake3::hash(b"OLD DOCUMENT").as_bytes()),
+                },
+            ],
+        });
+        write_manifest_with_prefix(&initial, prefix);
+        api.set_remote_hash(compute_manifest_hash(&initial));
+        write_global_file("batch/vault.bin", b"FRESH VAULT EXPORT");
+        write_global_file("batch/new.bin", b"NEW DOCUMENT");
+        // A replace must update BOTH checksums before validation. A separate vault
+        // upload would fail here on the old document checksum.
+        write_global_file(
+            "batch/document.bin",
+            if operation == "replace" {
+                b"CHANGED"
+            } else {
+                b"OLD DOCUMENT"
+            },
+        );
+        let mutation = match operation {
+            "store" => BackupFileChange::Put {
+                designator: BackupFileDesignator::DocumentPkg,
+                path: "./batch/new.bin".into(),
+            },
+            "replace" => BackupFileChange::ReplaceFiles {
+                designator: BackupFileDesignator::DocumentPkg,
+                paths: vec!["batch/document.bin".into()],
+            },
+            _ => BackupFileChange::Remove {
+                path: "batch/document.bin".into(),
+            },
+        };
+        let key = SecretKey::generate(&mut rand::thread_rng());
+        let manager = ManifestManager::new_with_prefix(prefix);
+        if operation == "store" {
+            // Reproduce the production path: recreating the vault and then only
+            // storing the document rejects the previous vault checksum.
+            let error = manager
+                .store_file(
+                    BackupFileDesignator::DocumentPkg,
+                    "batch/new.bin".into(),
+                    &RootKey::new_random().danger_to_json().unwrap(),
+                    hex::encode(key.public_key().as_bytes()),
+                )
+                .await
+                .expect_err("fresh export cannot match the previous vault checksum");
+            assert!(
+                matches!(error, crate::backup::BackupError::InvalidChecksumError { designator } if designator == "credential_vault")
+            );
+            assert_eq!(api.state.lock().unwrap().sync_count, 0);
+        }
+        manager
+            .sync_changes(
+                &RootKey::new_random().danger_to_json().unwrap(),
+                hex::encode(key.public_key().as_bytes()),
+                vec![
+                    BackupFileChange::ReplaceFiles {
+                        designator: BackupFileDesignator::CredentialVault,
+                        paths: vec!["batch/vault.bin".into()],
+                    },
+                    mutation,
+                ],
+            )
+            .await
+            .unwrap();
+        let committed = get_manifest_from_disk(prefix);
+        let state = api.state.lock().unwrap();
+        assert_eq!(state.sync_count, 1);
+        let upload = state.last_sync.clone().unwrap();
+        drop(state);
+        assert_eq!(
+            upload.current_manifest_hash,
+            compute_manifest_hash(&initial)
+        );
+        assert_eq!(upload.new_manifest_hash, compute_manifest_hash(&committed));
+        let BackupManifest::V0(manifest) = committed;
+        let files = manager
+            .build_unsealed_backup_files_from_manifest(&manifest)
+            .unwrap();
+        let vault = files
+            .iter()
+            .find(|file| file.designator == BackupFileDesignator::CredentialVault)
+            .unwrap();
+        assert_eq!(vault.data, b"FRESH VAULT EXPORT");
+        let BackupFormat::V0(uploaded) =
+            BackupFormat::from_bytes(&key.unseal(&upload.sealed_backup).unwrap())
+                .unwrap();
+        assert_eq!(uploaded.files, files);
+        assert_eq!(
+            files.len(),
+            match operation {
+                "store" => 3,
+                "replace" => 2,
+                _ => 1,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_batch_refreshes_document_with_vault_and_referrals_preserving_siblings() {
+    let api = init_test_globals();
+    api.reset();
+    let prefix = "backup_test_batch_refresh";
+    let sources = [
+        (
+            BackupFileDesignator::CredentialVault,
+            "batch_refresh/vault.bin",
+            "old vault",
+            "new vault",
+        ),
+        (
+            BackupFileDesignator::DocumentPkg,
+            "batch_refresh/document.bin",
+            "old document",
+            "new document",
+        ),
+        (
+            BackupFileDesignator::DocumentPkg,
+            "batch_refresh/sibling.bin",
+            "sibling",
+            "sibling",
+        ),
+        (
+            BackupFileDesignator::AnonymizedThirdPartyAnalytics,
+            "batch_refresh/referrals.json",
+            "old referrals",
+            "new referrals",
+        ),
+        (
+            BackupFileDesignator::AnonymizedThirdPartyAnalytics,
+            "batch_refresh/other_platform_referrals.json",
+            "other platform referrals",
+            "other platform referrals",
+        ),
+    ];
+    let initial = BackupManifest::V0(V0BackupManifest {
+        files: sources
+            .iter()
+            .map(|(designator, path, previous, current)| {
+                write_global_file(path, current.as_bytes());
+                V0BackupManifestEntry {
+                    designator: designator.clone(),
+                    file_path: (*path).into(),
+                    checksum_hex: hex::encode(
+                        blake3::hash(previous.as_bytes()).as_bytes(),
+                    ),
+                }
+            })
+            .collect(),
+    });
+    write_manifest_with_prefix(&initial, prefix);
+    api.set_remote_hash(compute_manifest_hash(&initial));
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    ManifestManager::new_with_prefix(prefix)
+        .sync_changes(
+            &RootKey::new_random().danger_to_json().unwrap(),
+            hex::encode(key.public_key().as_bytes()),
+            vec![
+                BackupFileChange::ReplaceFiles {
+                    designator: BackupFileDesignator::CredentialVault,
+                    paths: vec!["batch_refresh/vault.bin".into()],
+                },
+                BackupFileChange::Put {
+                    designator: BackupFileDesignator::DocumentPkg,
+                    path: "batch_refresh/document.bin".into(),
+                },
+                BackupFileChange::Put {
+                    designator: BackupFileDesignator::AnonymizedThirdPartyAnalytics,
+                    path: "batch_refresh/referrals.json".into(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let state = api.state.lock().unwrap();
+    assert_eq!(
+        state.sync_count, 1,
+        "refresh must not upload an intermediate removal"
+    );
+    let upload = state.last_sync.clone().unwrap();
+    drop(state);
+    let committed = get_manifest_from_disk(prefix);
+    assert_eq!(
+        upload.current_manifest_hash,
+        compute_manifest_hash(&initial)
+    );
+    assert_eq!(upload.new_manifest_hash, compute_manifest_hash(&committed));
+    let BackupFormat::V0(uploaded) =
+        BackupFormat::from_bytes(&key.unseal(&upload.sealed_backup).unwrap()).unwrap();
+    let BackupManifest::V0(manifest) = committed;
+    assert_eq!(uploaded.files.len(), sources.len());
+    assert_eq!(manifest.files.len(), sources.len());
+    for (designator, path, _, current) in sources {
+        let entry = manifest
+            .files
+            .iter()
+            .find(|entry| entry.file_path == path)
+            .unwrap();
+        assert_eq!(entry.designator, designator);
+        assert_eq!(
+            entry.checksum_hex,
+            hex::encode(blake3::hash(current.as_bytes()).as_bytes())
+        );
+        assert!(
+            uploaded.files.iter().any(|file| {
+                file.designator == designator && file.data == current.as_bytes()
+            }),
+            "uploaded backup must include {path}"
+        );
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_batch_preserves_manifest_on_corruption_stale_remote_or_upload_failure() {
+    let api = init_test_globals();
+    let prefix = "backup_test_batch_failure";
+    for failure in ["corruption", "stale", "upload", "missing_source"] {
+        api.reset();
+        let initial = BackupManifest::V0(V0BackupManifest {
+            files: vec![V0BackupManifestEntry {
+                designator: BackupFileDesignator::OrbPkg,
+                file_path: "batch/unchanged.bin".into(),
+                checksum_hex: hex::encode(blake3::hash(b"ORIGINAL").as_bytes()),
+            }],
+        });
+        write_manifest_with_prefix(&initial, prefix);
+        let initial_bytes = read_manifest_bytes(prefix);
+        api.set_remote_hash(if failure == "stale" {
+            hex::encode([42; 32])
+        } else {
+            compute_manifest_hash(&initial)
+        });
+        write_global_file(
+            "batch/unchanged.bin",
+            if failure == "corruption" {
+                b"CORRUPTED"
+            } else {
+                b"ORIGINAL"
+            },
+        );
+        write_global_file("batch/vault.bin", b"FRESH VAULT");
+        if failure == "upload" {
+            api.set_sync_error_bad_status(500, b"server error".to_vec());
+        }
+        let mut mutations = vec![BackupFileChange::ReplaceFiles {
+            designator: BackupFileDesignator::CredentialVault,
+            paths: vec!["batch/vault.bin".into()],
+        }];
+        if failure == "missing_source" {
+            mutations.push(BackupFileChange::Put {
+                designator: BackupFileDesignator::DocumentPkg,
+                path: "batch/missing_source.bin".into(),
+            });
+        }
+        let key = SecretKey::generate(&mut rand::thread_rng());
+        let error = ManifestManager::new_with_prefix(prefix)
+            .sync_changes(
+                &RootKey::new_random().danger_to_json().unwrap(),
+                hex::encode(key.public_key().as_bytes()),
+                mutations,
+            )
+            .await
+            .expect_err("batch must fail");
+        if failure == "corruption" {
+            assert!(matches!(
+                error,
+                crate::backup::BackupError::InvalidChecksumError { .. }
+            ));
+        }
+        if failure == "stale" {
+            assert!(matches!(
+                error,
+                crate::backup::BackupError::RemoteAheadStaleError
+            ));
+        }
+        assert_eq!(read_manifest_bytes(prefix), initial_bytes);
+        assert_eq!(api.state.lock().unwrap().sync_count, 0);
+    }
+}
+
+#[tokio::test]
+#[serial]
 async fn test_list_files_happy_path() {
     let api = init_test_globals();
     api.reset();

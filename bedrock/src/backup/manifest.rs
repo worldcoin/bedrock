@@ -460,6 +460,16 @@ impl ManifestManager {
             })
     }
 
+    /// Applies the changes in order and uploads the resulting backup once.
+    ///
+    /// Include every file intentionally changed since the last backup. If the
+    /// vault export was recreated, include it too. Files outside the batch must
+    /// still match their recorded checksums.
+    ///
+    /// The caller must keep source files unchanged while this method reads them.
+    /// It does not lock files or make copies. The local manifest is saved after
+    /// the upload succeeds. A lost response or failed local save can still leave
+    /// the server ahead; resolve that state before retrying.
     pub(super) async fn sync_changes(
         &self,
         root_secret: &str,
