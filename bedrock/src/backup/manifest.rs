@@ -543,6 +543,29 @@ impl ManifestManager {
                         )));
                     }
                 }
+                BackupFileChange::RemoveIfChecksumMatches {
+                    designator,
+                    path,
+                    checksum_hex,
+                } => {
+                    let path = Self::normalize_input_path(&path);
+                    if let Some(index) = manifest
+                        .files
+                        .iter()
+                        .position(|entry| entry.file_path == path)
+                    {
+                        let entry = &manifest.files[index];
+                        if entry.designator != designator
+                            || !entry.checksum_hex.eq_ignore_ascii_case(&checksum_hex)
+                        {
+                            return Err(BackupError::InvalidFileForBackup(
+                                "Backup entry changed before conditional removal"
+                                    .to_string(),
+                            ));
+                        }
+                        manifest.files.remove(index);
+                    }
+                }
                 BackupFileChange::ReplaceFiles { designator, paths } => {
                     manifest
                         .files
@@ -601,6 +624,18 @@ pub(super) enum BackupFileChange {
     },
     Remove {
         path: String,
+    },
+    /// Removes only the entry with the expected designator and recorded BLAKE3 checksum.
+    /// Missing entries are a retry-safe no-op; a mismatch rejects the whole batch.
+    /// The local file need not exist. Path normalization and matching follow `Remove`.
+    #[allow(
+        dead_code,
+        reason = "Public sync caller adoption follows separately; covered by batch tests"
+    )]
+    RemoveIfChecksumMatches {
+        designator: BackupFileDesignator,
+        path: String,
+        checksum_hex: String,
     },
     ReplaceFiles {
         designator: BackupFileDesignator,
