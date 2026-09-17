@@ -1112,15 +1112,16 @@ mod tests {
         let deposit_assets =
             Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
 
-        let test_rpc_client = setup_migrate_rpc_client(
+        let test_rpc_client = setup_migrate_rpc_client(MigrateRpcMockParams {
             from_vault_address,
             to_vault_address,
             asset_address,
             user_address,
-            share_amount,
+            share_balance: share_amount,
+            max_redeem: share_amount,
             preview_assets,
-            U256::ZERO,
-        );
+            existing_allowance: U256::ZERO,
+        });
 
         let vault = Erc4626Vault::migrate(
             &test_rpc_client,
@@ -1171,15 +1172,16 @@ mod tests {
             Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
         let existing_allowance = U256::from(42u64);
 
-        let test_rpc_client = setup_migrate_rpc_client(
+        let test_rpc_client = setup_migrate_rpc_client(MigrateRpcMockParams {
             from_vault_address,
             to_vault_address,
             asset_address,
             user_address,
-            share_amount,
+            share_balance: share_amount,
+            max_redeem: share_amount,
             preview_assets,
             existing_allowance,
-        );
+        });
 
         let vault = Erc4626Vault::migrate(
             &test_rpc_client,
@@ -1221,59 +1223,23 @@ mod tests {
         let deposit_assets =
             Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
 
+        // Start from the shared migrate mock, then force previewDeposit → 0.
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
         let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
-
-        let asset_call_data = IERC4626::assetCall {}.abi_encode();
-        let mut padded_asset = [0u8; 32];
-        padded_asset[12..32].copy_from_slice(asset_address.as_slice());
-        let asset_response = format!("0x{}", hex::encode(padded_asset));
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(asset_call_data.clone())),
-            asset_response.clone(),
+        configure_migrate_rpc_mocks(
+            &mut http_client,
+            MigrateRpcMockParams {
+                from_vault_address,
+                to_vault_address,
+                asset_address,
+                user_address,
+                share_balance: share_amount,
+                max_redeem: share_amount,
+                preview_assets,
+                existing_allowance: U256::ZERO,
+            },
         );
-        http_client.set_response_for_address_and_data(
-            to_vault_address,
-            format!("0x{}", hex::encode(asset_call_data)),
-            asset_response,
-        );
-
-        let share_balance_call_data = IErc20::balanceOfCall {
-            account: user_address,
-        }
-        .abi_encode();
-        let mut padded_shares = [0u8; 32];
-        padded_shares[..32].copy_from_slice(&share_amount.to_be_bytes::<32>());
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(share_balance_call_data)),
-            format!("0x{}", hex::encode(padded_shares)),
-        );
-
-        let max_redeem_call_data = IERC4626::maxRedeemCall {
-            owner: user_address,
-        }
-        .abi_encode();
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(max_redeem_call_data)),
-            format!("0x{}", hex::encode(padded_shares)),
-        );
-
-        let preview_redeem_call_data = IERC4626::previewRedeemCall {
-            shares: share_amount,
-        }
-        .abi_encode();
-        let mut padded_assets = [0u8; 32];
-        padded_assets[..32].copy_from_slice(&preview_assets.to_be_bytes::<32>());
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(preview_redeem_call_data)),
-            format!("0x{}", hex::encode(padded_assets)),
-        );
-
         let preview_deposit_call_data = IERC4626::previewDepositCall {
             assets: deposit_assets,
         }
@@ -1284,9 +1250,8 @@ mod tests {
             format!("0x{}", hex::encode([0u8; 32])),
         );
 
-        let test_rpc_client = RpcClient::new(Arc::new(http_client));
         let result = Erc4626Vault::migrate(
-            &test_rpc_client,
+            &RpcClient::new(Arc::new(http_client)),
             Network::WorldChain,
             from_vault_address,
             to_vault_address,
@@ -1296,8 +1261,8 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(error
+        assert!(result
+            .unwrap_err()
             .to_string()
             .contains("destination previewDeposit returned zero shares"));
     }
@@ -1318,84 +1283,17 @@ mod tests {
         let deposit_assets =
             Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
 
-        let anvil = Anvil::new().spawn();
-        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
-        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
-
-        let asset_call_data = IERC4626::assetCall {}.abi_encode();
-        let mut padded_asset = [0u8; 32];
-        padded_asset[12..32].copy_from_slice(asset_address.as_slice());
-        let asset_response = format!("0x{}", hex::encode(padded_asset));
-        http_client.set_response_for_address_and_data(
+        let test_rpc_client = setup_migrate_rpc_client(MigrateRpcMockParams {
             from_vault_address,
-            format!("0x{}", hex::encode(asset_call_data.clone())),
-            asset_response.clone(),
-        );
-        http_client.set_response_for_address_and_data(
             to_vault_address,
-            format!("0x{}", hex::encode(asset_call_data)),
-            asset_response,
-        );
-
-        let share_balance_call_data = IErc20::balanceOfCall {
-            account: user_address,
-        }
-        .abi_encode();
-        let mut padded_balance = [0u8; 32];
-        padded_balance[..32].copy_from_slice(&balance.to_be_bytes::<32>());
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(share_balance_call_data)),
-            format!("0x{}", hex::encode(padded_balance)),
-        );
-
-        let max_redeem_call_data = IERC4626::maxRedeemCall {
-            owner: user_address,
-        }
-        .abi_encode();
-        let mut padded_max_redeem = [0u8; 32];
-        padded_max_redeem[..32].copy_from_slice(&max_redeem.to_be_bytes::<32>());
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(max_redeem_call_data)),
-            format!("0x{}", hex::encode(padded_max_redeem)),
-        );
-
-        let preview_redeem_call_data =
-            IERC4626::previewRedeemCall { shares: max_redeem }.abi_encode();
-        let mut padded_assets = [0u8; 32];
-        padded_assets[..32].copy_from_slice(&preview_assets.to_be_bytes::<32>());
-        http_client.set_response_for_address_and_data(
-            from_vault_address,
-            format!("0x{}", hex::encode(preview_redeem_call_data)),
-            format!("0x{}", hex::encode(padded_assets)),
-        );
-
-        let preview_deposit_call_data = IERC4626::previewDepositCall {
-            assets: deposit_assets,
-        }
-        .abi_encode();
-        let mut padded_preview_shares = [0u8; 32];
-        padded_preview_shares[..32]
-            .copy_from_slice(&U256::from(1u64).to_be_bytes::<32>());
-        http_client.set_response_for_address_and_data(
-            to_vault_address,
-            format!("0x{}", hex::encode(preview_deposit_call_data)),
-            format!("0x{}", hex::encode(padded_preview_shares)),
-        );
-
-        let allowance_call_data = IErc20::allowanceCall {
-            owner: user_address,
-            spender: to_vault_address,
-        }
-        .abi_encode();
-        http_client.set_response_for_address_and_data(
             asset_address,
-            format!("0x{}", hex::encode(allowance_call_data)),
-            format!("0x{}", hex::encode([0u8; 32])),
-        );
+            user_address,
+            share_balance: balance,
+            max_redeem,
+            preview_assets,
+            existing_allowance: U256::ZERO,
+        });
 
-        let test_rpc_client = RpcClient::new(Arc::new(http_client));
         let vault = Erc4626Vault::migrate(
             &test_rpc_client,
             Network::WorldChain,
@@ -1494,18 +1392,42 @@ mod tests {
         assert!(err.to_string().contains("zero after slippage haircut"));
     }
 
-    fn setup_migrate_rpc_client(
+    #[derive(Clone, Copy)]
+    struct MigrateRpcMockParams {
         from_vault_address: Address,
         to_vault_address: Address,
         asset_address: Address,
         user_address: Address,
-        share_amount: U256,
+        share_balance: U256,
+        max_redeem: U256,
         preview_assets: U256,
         existing_allowance: U256,
-    ) -> RpcClient {
+    }
+
+    fn setup_migrate_rpc_client(params: MigrateRpcMockParams) -> RpcClient {
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
         let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        configure_migrate_rpc_mocks(&mut http_client, params);
+        RpcClient::new(Arc::new(http_client))
+    }
+
+    fn configure_migrate_rpc_mocks(
+        http_client: &mut crate::test_utils::AnvilBackedHttpClient<
+            impl alloy::providers::Provider + Clone + 'static,
+        >,
+        params: MigrateRpcMockParams,
+    ) {
+        let MigrateRpcMockParams {
+            from_vault_address,
+            to_vault_address,
+            asset_address,
+            user_address,
+            share_balance,
+            max_redeem,
+            preview_assets,
+            existing_allowance,
+        } = params;
 
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
         let mut padded_asset = [0u8; 32];
@@ -1527,17 +1449,16 @@ mod tests {
         }
         .abi_encode();
         let mut padded_shares = [0u8; 32];
-        padded_shares[..32].copy_from_slice(&share_amount.to_be_bytes::<32>());
+        padded_shares[..32].copy_from_slice(&share_balance.to_be_bytes::<32>());
         http_client.set_response_for_address_and_data(
             from_vault_address,
             format!("0x{}", hex::encode(share_balance_call_data)),
             format!("0x{}", hex::encode(padded_shares)),
         );
 
-        let preview_redeem_call_data = IERC4626::previewRedeemCall {
-            shares: share_amount,
-        }
-        .abi_encode();
+        let redeemable = share_balance.min(max_redeem);
+        let preview_redeem_call_data =
+            IERC4626::previewRedeemCall { shares: redeemable }.abi_encode();
         let mut padded_assets = [0u8; 32];
         padded_assets[..32].copy_from_slice(&preview_assets.to_be_bytes::<32>());
         http_client.set_response_for_address_and_data(
@@ -1550,10 +1471,12 @@ mod tests {
             owner: user_address,
         }
         .abi_encode();
+        let mut padded_max_redeem = [0u8; 32];
+        padded_max_redeem[..32].copy_from_slice(&max_redeem.to_be_bytes::<32>());
         http_client.set_response_for_address_and_data(
             from_vault_address,
             format!("0x{}", hex::encode(max_redeem_call_data)),
-            format!("0x{}", hex::encode(padded_shares)),
+            format!("0x{}", hex::encode(padded_max_redeem)),
         );
 
         let deposit_assets =
@@ -1562,7 +1485,6 @@ mod tests {
             assets: deposit_assets,
         }
         .abi_encode();
-        // Non-zero destination shares so migrate does not fail the previewDeposit guard
         let mut padded_preview_shares = [0u8; 32];
         padded_preview_shares[..32]
             .copy_from_slice(&U256::from(1u64).to_be_bytes::<32>());
@@ -1584,8 +1506,6 @@ mod tests {
             format!("0x{}", hex::encode(allowance_call_data)),
             format!("0x{}", hex::encode(padded_allowance)),
         );
-
-        RpcClient::new(Arc::new(http_client))
     }
 
     #[tokio::test]
