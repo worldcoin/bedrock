@@ -209,8 +209,19 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
     );
     println!("✓ Migrate correctly failed on asset mismatch");
 
-    // Expected post-migrate balances from the same build-time formulas as `migrate`.
-    let preview_assets = v1_vault.previewRedeem(v1_shares_before).call().await?;
+    // Expected post-migrate balances from the same build-time formulas as `migrate`
+    // (`shares = min(balanceOf, maxRedeem)`). Morpho V1 may report maxRedeem < balance.
+    let max_redeem = v1_vault.maxRedeem(safe_address).call().await?;
+    let redeemable_shares = v1_shares_before.min(max_redeem);
+    assert!(
+        !redeemable_shares.is_zero(),
+        "expected non-zero redeemable V1 shares (balance={v1_shares_before}, maxRedeem={max_redeem})"
+    );
+    println!(
+        "✓ Redeemable V1 shares={redeemable_shares} (balance={v1_shares_before}, maxRedeem={max_redeem})"
+    );
+
+    let preview_assets = v1_vault.previewRedeem(redeemable_shares).call().await?;
     let haircut_factor =
         U256::from(1_000_000_000_000_000_000u64) - U256::from(300_000_000_000_000u64);
     let deposit_assets = preview_assets
@@ -219,18 +230,14 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
         .expect("deposit haircut overflow");
     let expected_v2_shares = v2_vault.previewDeposit(deposit_assets).call().await?;
     let expected_wars_dust = preview_assets.saturating_sub(deposit_assets);
+    let expected_v1_remaining = v1_shares_before.saturating_sub(redeemable_shares);
     let wars_before_migrate = wars.balanceOf(safe_address).call().await?;
     assert!(
         !expected_v2_shares.is_zero(),
         "destination previewDeposit should be non-zero before migrate"
     );
-    let max_redeem = v1_vault.maxRedeem(safe_address).call().await?;
-    assert!(
-        max_redeem >= v1_shares_before,
-        "source maxRedeem should allow redeeming the Safe's V1 balance"
-    );
 
-    // Happy path: migrate all V1 shares into V2.
+    // Happy path: migrate redeemable V1 shares into V2.
     safe_account
         .transaction_erc4626_migrate(&wars_v1.to_string(), &wars_v2.to_string())
         .await
@@ -242,16 +249,15 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
     let wars_after_migrate = wars.balanceOf(safe_address).call().await?;
     let v2_shares_received = v2_shares_after.saturating_sub(v2_shares_before);
     let wars_dust_received = wars_after_migrate.saturating_sub(wars_before_migrate);
-    println!("V1 shares after: {v1_shares_after}");
+    println!("V1 shares after: {v1_shares_after} (expected remaining={expected_v1_remaining})");
     println!("V2 shares after: {v2_shares_after} (received={v2_shares_received})");
     println!(
         "Safe wARS after: {wars_after_migrate} (dust received={wars_dust_received}, expected≈{expected_wars_dust})"
     );
 
     assert_eq!(
-        v1_shares_after,
-        U256::ZERO,
-        "V1 shares should be zero after full migrate"
+        v1_shares_after, expected_v1_remaining,
+        "V1 remaining shares should be balance - min(balance, maxRedeem)"
     );
     assert_eq!(
         v2_shares_received, expected_v2_shares,
