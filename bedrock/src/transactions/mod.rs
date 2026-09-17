@@ -569,6 +569,10 @@ impl SafeSmartAccount {
     /// then reduced by a 0.03% haircut (Morpho SDK default slippage) for approve + deposit.
     /// If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
     ///
+    /// Partial migration is supported via `share_amount` (capped by source `balanceOf` and
+    /// `maxRedeem`). Pass the full share balance to migrate the entire position.
+    /// Destination `previewDeposit` must return a non-zero share amount or building fails.
+    ///
     /// # Arguments
     /// - `from_vault_address`: The source ERC4626 vault address.
     /// - `to_vault_address`: The destination ERC4626 vault address.

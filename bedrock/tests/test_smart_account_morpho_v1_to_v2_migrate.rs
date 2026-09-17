@@ -31,6 +31,9 @@ sol! {
         function asset() external view returns (address);
         function deposit(uint256 assets, address receiver) external returns (uint256 shares);
         function approve(address spender, uint256 amount) external returns (bool);
+        function previewRedeem(uint256 shares) external view returns (uint256 assets);
+        function previewDeposit(uint256 assets) external view returns (uint256 shares);
+        function maxRedeem(address owner) external view returns (uint256 maxShares);
     }
 }
 
@@ -214,6 +217,27 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
     );
     println!("✓ Migrate correctly failed on asset mismatch");
 
+    // Expected post-migrate balances from the same build-time formulas as `migrate`.
+    let preview_assets = v1_vault.previewRedeem(v1_shares_before).call().await?;
+    let haircut_factor =
+        U256::from(1_000_000_000_000_000_000u64) - U256::from(300_000_000_000_000u64);
+    let deposit_assets = preview_assets
+        .checked_mul(haircut_factor)
+        .and_then(|v| v.checked_div(U256::from(1_000_000_000_000_000_000u64)))
+        .expect("deposit haircut overflow");
+    let expected_v2_shares = v2_vault.previewDeposit(deposit_assets).call().await?;
+    let expected_wars_dust = preview_assets.saturating_sub(deposit_assets);
+    let wars_before_migrate = wars.balanceOf(safe_address).call().await?;
+    assert!(
+        !expected_v2_shares.is_zero(),
+        "destination previewDeposit should be non-zero before migrate"
+    );
+    let max_redeem = v1_vault.maxRedeem(safe_address).call().await?;
+    assert!(
+        max_redeem >= v1_shares_before,
+        "source maxRedeem should allow redeeming the Safe's V1 balance"
+    );
+
     // Happy path: migrate all V1 shares into V2.
     safe_account
         .transaction_erc4626_migrate(
@@ -227,17 +251,28 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
 
     let v1_shares_after = v1_vault.balanceOf(safe_address).call().await?;
     let v2_shares_after = v2_vault.balanceOf(safe_address).call().await?;
+    let wars_after_migrate = wars.balanceOf(safe_address).call().await?;
+    let v2_shares_received = v2_shares_after.saturating_sub(v2_shares_before);
+    let wars_dust_received = wars_after_migrate.saturating_sub(wars_before_migrate);
     println!("V1 shares after: {v1_shares_after}");
-    println!("V2 shares after: {v2_shares_after}");
+    println!("V2 shares after: {v2_shares_after} (received={v2_shares_received})");
+    println!(
+        "Safe wARS after: {wars_after_migrate} (dust received={wars_dust_received}, expected≈{expected_wars_dust})"
+    );
 
     assert_eq!(
         v1_shares_after,
         U256::ZERO,
         "V1 shares should be zero after full migrate"
     );
-    assert!(
-        v2_shares_after > v2_shares_before,
-        "V2 shares should increase after migrate"
+    assert_eq!(
+        v2_shares_received, expected_v2_shares,
+        "V2 shares received should match destination previewDeposit(deposit_assets)"
+    );
+    // Haircut leaves non-deposited redeem proceeds in the Safe (exact on a quiet fork).
+    assert_eq!(
+        wars_dust_received, expected_wars_dust,
+        "redeemed wARS not deposited should remain in the Safe"
     );
 
     Ok(())
