@@ -26,7 +26,7 @@ mod policies;
 pub(in crate::backup) mod test;
 
 pub use api::TurnkeyApiClient;
-pub use error::{TurnkeyApiError, TurnkeyMigrationError};
+pub use error::{TurnkeyApiError, TurnkeyCleanupError, TurnkeyMigrationError};
 use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::get_config;
@@ -162,6 +162,41 @@ impl TurnkeyManager {
             }
         }
         Ok(outcome)
+    }
+
+    /// Reconciles deletion of one legacy sync-factor user after its Secure
+    /// Enclave-backed replacement has been accepted by the backup service.
+    ///
+    /// This is deliberately an operation-level API. The replacement signer can
+    /// observe whether the legacy user is already absent, so retries are safe
+    /// after a timeout or a pending Turnkey activity. Native clients must retain
+    /// the legacy credential until this succeeds, but never construct Turnkey
+    /// stamps or receive private key material.
+    pub async fn reconcile_legacy_sync_factor_user(
+        &self,
+        suborganization_id: String,
+        legacy_user_id: String,
+        replacement_sync_factor: &P256Signer,
+    ) -> Result<(), TurnkeyCleanupError> {
+        let api = TurnkeyApiClient::new();
+        match api
+            .reconcile_legacy_sync_factor_user(
+                &suborganization_id,
+                &legacy_user_id,
+                SyncFactor(replacement_sync_factor),
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                crate::warn!(
+                    operation = "reconcile_legacy_sync_factor_user",
+                    error_class = error.code(),
+                    "turnkey.legacy_sync_factor_cleanup_failed"
+                );
+                Err(error.to_cleanup_error())
+            }
+        }
     }
 }
 

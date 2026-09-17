@@ -174,6 +174,17 @@ impl TurnkeyApiError {
             TurnkeyMigrationError::Failed
         }
     }
+
+    /// Collapses internal Turnkey diagnostics to the stable cleanup API error.
+    pub(super) const fn to_cleanup_error(&self) -> TurnkeyCleanupError {
+        if self.is_retryable() || matches!(self, Self::Timeout) {
+            TurnkeyCleanupError::Retryable
+        } else if matches!(self, Self::ActivityPollingExceeded { .. }) {
+            TurnkeyCleanupError::Pending
+        } else {
+            TurnkeyCleanupError::Failed
+        }
+    }
 }
 
 /// Maps a signer failure to [`TurnkeyApiError::Signer`], preserving its message.
@@ -270,6 +281,24 @@ pub enum TurnkeyMigrationError {
     AlreadyInProgress,
 }
 
+/// Opaque error returned to clients when a signer-backed Turnkey cleanup fails.
+///
+/// Diagnostic detail is logged inside Bedrock. Native clients must retain the
+/// legacy credential on `Retryable` or `Pending`, then reconcile later using
+/// the replacement sync factor.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum TurnkeyCleanupError {
+    /// The cleanup failed permanently; retrying unchanged input will not help.
+    #[error("turnkey cleanup failed")]
+    Failed,
+    /// The cleanup did not complete because of a transient dependency failure.
+    #[error("turnkey cleanup failed transiently; retry later")]
+    Retryable,
+    /// Turnkey accepted the activity but it was still pending when polling ended.
+    #[error("turnkey cleanup activity is still pending")]
+    Pending,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,5 +359,30 @@ mod tests {
                 crate::backup::BackupOperationError::NeedsReauth { .. }
             ));
         }
+    }
+
+    #[test]
+    fn cleanup_error_preserves_retry_and_pending_semantics() {
+        assert!(matches!(
+            TurnkeyApiError::Transport {
+                error_message: "connection reset".to_string()
+            }
+            .to_cleanup_error(),
+            TurnkeyCleanupError::Retryable
+        ));
+        assert!(matches!(
+            TurnkeyApiError::ActivityPollingExceeded {
+                error_message: "still pending".to_string()
+            }
+            .to_cleanup_error(),
+            TurnkeyCleanupError::Pending
+        ));
+        assert!(matches!(
+            TurnkeyApiError::Unauthorized {
+                body: "denied".to_string()
+            }
+            .to_cleanup_error(),
+            TurnkeyCleanupError::Failed
+        ));
     }
 }
