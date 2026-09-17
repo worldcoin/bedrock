@@ -395,12 +395,17 @@ impl Erc4626Vault {
 
     /// Creates a migration operation (redeem from one ERC-4626 vault + approve + deposit into another).
     ///
-    /// Always migrates the full redeemable position: `min(balanceOf, maxRedeem)`.
+    /// Migrates the full **redeemable** position: `min(balanceOf, maxRedeem)`. If `maxRedeem` is
+    /// below `balanceOf` (liquidity / pause), leftover source shares remain and can be migrated
+    /// again later.
     ///
     /// The deposited amount is based on a `previewRedeem` snapshot at build time, with a 0.03%
     /// haircut (Morpho SDK default slippage) so a small source-vault decline between build and
     /// execution is less likely to make `deposit` consume pre-existing Safe balances. Any excess
     /// redeemed assets remain as dust in the user's account.
+    ///
+    /// Do **not** gate Morpho V2 destinations on `maxDeposit` / `maxRedeem` (they often return 0
+    /// by design). Source-side `maxRedeem` is still applied.
     ///
     /// # Errors
     /// Returns an error if:

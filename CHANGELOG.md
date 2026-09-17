@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate(from, to)`) always migrates full redeemable shares (`min(balanceOf, maxRedeem)`), with `previewRedeem` snapshot, 0.03% deposit haircut, destination `previewDeposit > 0` guard, and zero-first approve when needed
+- ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate(from, to)`) migrates full redeemable shares (`min(balanceOf, maxRedeem)`); leftover source shares possible if `maxRedeem` binds; `previewRedeem` snapshot + 0.03% deposit haircut (dust stays on Safe); destination `previewDeposit > 0`; zero-first approve when needed
 - *(test)* Morpho Re7 WARS V1→V2 migrate fork e2e (pinned fork block)
 
 ## [0.7.2](https://github.com/worldcoin/bedrock/compare/0.7.1...0.7.2) - 2026-09-17

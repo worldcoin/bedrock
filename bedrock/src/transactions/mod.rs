@@ -570,6 +570,10 @@ impl SafeSmartAccount {
     /// If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
     /// Destination `previewDeposit` must return a non-zero share amount or building fails.
     ///
+    /// If source `maxRedeem < balanceOf`, only the redeemable portion moves; remaining source
+    /// shares can be migrated in a later call. Do not gate Morpho V2 destinations on
+    /// `maxDeposit` / `maxRedeem` (often 0 by design).
+    ///
     /// # Arguments
     /// - `from_vault_address`: The source ERC4626 vault address.
     /// - `to_vault_address`: The destination ERC4626 vault address.
