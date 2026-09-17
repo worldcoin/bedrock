@@ -395,6 +395,8 @@ impl Erc4626Vault {
 
     /// Creates a migration operation (redeem from one ERC-4626 vault + approve + deposit into another).
     ///
+    /// Always migrates the full redeemable position: `min(balanceOf, maxRedeem)`.
+    ///
     /// The deposited amount is based on a `previewRedeem` snapshot at build time, with a 0.03%
     /// haircut (Morpho SDK default slippage) so a small source-vault decline between build and
     /// execution is less likely to make `deposit` consume pre-existing Safe balances. Any excess
@@ -409,15 +411,11 @@ impl Erc4626Vault {
     /// - The post-slippage deposit amount is zero
     /// - Destination `previewDeposit` returns zero shares
     /// - Any RPC call fails during transaction building
-    ///
-    /// Partial migration is supported: callers pass the share amount to move. Full
-    /// migration is `share_amount = balanceOf(user)`.
     pub async fn migrate(
         rpc_client: &RpcClient,
         network: Network,
         from_vault_address: Address,
         to_vault_address: Address,
-        share_amount: U256,
         user_address: Address,
         metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
@@ -456,13 +454,12 @@ impl Erc4626Vault {
             });
         }
 
-        // 3. Cap shares by balanceOf and source maxRedeem (liquidity / pause gates)
+        // 3. Full position: min(balanceOf, maxRedeem)
         let actual_share_amount = Self::resolve_migrate_share_amount(
             rpc_client,
             network,
             from_vault_address,
             user_address,
-            share_amount,
         )
         .await?;
 
@@ -535,13 +532,12 @@ impl Erc4626Vault {
         }))
     }
 
-    /// Caps `share_amount` by source `balanceOf` and `maxRedeem`.
+    /// Resolves the full redeemable share amount: `min(balanceOf, maxRedeem)`.
     async fn resolve_migrate_share_amount(
         rpc_client: &RpcClient,
         network: Network,
         from_vault_address: Address,
         user_address: Address,
-        share_amount: U256,
     ) -> Result<U256, RpcError> {
         let share_balance_call_data = IErc20::balanceOfCall {
             account: user_address,
@@ -569,7 +565,7 @@ impl Erc4626Vault {
         )
         .await?;
 
-        let actual_share_amount = share_amount.min(share_balance).min(max_redeem);
+        let actual_share_amount = share_balance.min(max_redeem);
         if actual_share_amount.is_zero() {
             return Err(RpcError::InvalidResponse {
                 error_message: "Cannot migrate zero amount - user has no vault shares"
@@ -1131,7 +1127,6 @@ mod tests {
             Network::WorldChain,
             from_vault_address,
             to_vault_address,
-            share_amount,
             user_address,
             metadata,
         )
@@ -1191,7 +1186,6 @@ mod tests {
             Network::WorldChain,
             from_vault_address,
             to_vault_address,
-            share_amount,
             user_address,
             metadata,
         )
@@ -1296,7 +1290,6 @@ mod tests {
             Network::WorldChain,
             from_vault_address,
             to_vault_address,
-            share_amount,
             user_address,
             [0u8; 10],
         )
@@ -1408,7 +1401,6 @@ mod tests {
             Network::WorldChain,
             from_vault_address,
             to_vault_address,
-            balance,
             user_address,
             [0u8; 10],
         )
@@ -1614,7 +1606,6 @@ mod tests {
             Network::WorldChain,
             vault_address,
             vault_address,
-            U256::from(10u128.pow(18)),
             user_address,
             metadata,
         )
@@ -1672,7 +1663,6 @@ mod tests {
             Network::WorldChain,
             from_vault_address,
             to_vault_address,
-            U256::from(10u128.pow(18)),
             user_address,
             metadata,
         )
@@ -1746,7 +1736,6 @@ mod tests {
             Network::WorldChain,
             from_vault_address,
             to_vault_address,
-            U256::from(10u128.pow(18)),
             user_address,
             metadata,
         )

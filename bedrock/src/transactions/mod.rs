@@ -558,25 +558,21 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Migrates shares from one ERC4626 vault to another on World Chain.
+    /// Migrates the full redeemable share balance from one ERC4626 vault to another on World Chain.
     ///
     /// This builds one atomic bundle with:
-    /// 1. `redeem(shares)` on the source vault
+    /// 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
     /// 2. `approve(assets)` on the underlying token for the destination vault
     /// 3. `deposit(assets)` into the destination vault
     ///
     /// The `assets` amount is snapshotted with `previewRedeem` when building the transaction,
     /// then reduced by a 0.03% haircut (Morpho SDK default slippage) for approve + deposit.
     /// If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
-    ///
-    /// Partial migration is supported via `share_amount` (capped by source `balanceOf` and
-    /// `maxRedeem`). Pass the full share balance to migrate the entire position.
     /// Destination `previewDeposit` must return a non-zero share amount or building fails.
     ///
     /// # Arguments
     /// - `from_vault_address`: The source ERC4626 vault address.
     /// - `to_vault_address`: The destination ERC4626 vault address.
-    /// - `share_amount`: The amount of shares to migrate as a stringified integer.
     ///
     /// # Errors
     /// - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
@@ -585,13 +581,11 @@ impl SafeSmartAccount {
         &self,
         from_vault_address: &str,
         to_vault_address: &str,
-        share_amount: &str,
     ) -> Result<HexEncodedData, TransactionError> {
         let from_vault_address =
             Address::parse_from_ffi(from_vault_address, "from_vault_address")?;
         let to_vault_address =
             Address::parse_from_ffi(to_vault_address, "to_vault_address")?;
-        let share_amount = U256::parse_from_ffi(share_amount, "share_amount")?;
         let receiver = self.wallet_address;
 
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
@@ -603,7 +597,6 @@ impl SafeSmartAccount {
                 Network::WorldChain,
                 from_vault_address,
                 to_vault_address,
-                share_amount,
                 receiver,
                 [0u8; 10], // metadata
             )
