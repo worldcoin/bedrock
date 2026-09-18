@@ -1670,8 +1670,8 @@ mod tests {
 
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Cannot migrate - no source vault shares are currently redeemable"));
+        assert!(error.to_string().contains(
+            "Cannot migrate - no source vault shares are currently redeemable"
+        ));
     }
 }

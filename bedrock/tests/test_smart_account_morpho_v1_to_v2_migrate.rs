@@ -109,7 +109,9 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
     );
     let zero_err = zero_result.unwrap_err().to_string();
     assert!(
-        zero_err.contains("Cannot migrate - no source vault shares are currently redeemable"),
+        zero_err.contains(
+            "Cannot migrate - no source vault shares are currently redeemable"
+        ),
         "Unexpected zero-share error: {zero_err}"
     );
     println!("✓ Migrate correctly failed with zero shares");
