@@ -34,7 +34,7 @@ The Native App implements the following:
 ## Public surface
 
 ```rust
-pub use backup_service_types::OidcProvider; // Remote UniFFI binding defined in execution.md.
+pub use backup_service_types::{BackupStatusResponse, OidcProvider}; // Remote UniFFI bindings.
 
 #[derive(uniffi::Object)]
 pub struct BackupManager {
@@ -51,8 +51,8 @@ impl BackupManager {
     /// Initializes once a backup is available. Derives the account ID, and retains the device signer.
     pub fn init(root: SiegelSession, sync: P256Signer);
 
-    /// Reports only whether the backup exists, not if this device is authorized or in sync.
-    pub async fn has_backup() -> bool;
+    /// Returns available factor kinds without device authorization; None means no backup exists.
+    pub async fn status() -> Option<BackupStatusResponse>;
     // Retrieves the backup metadata, does not enforce the RemoteStaleAhead gate.
     pub async fn metadata() -> BackupMetadata;
     // Separate from metadata() because metadata is needed to render the factor list
@@ -127,8 +127,8 @@ pub struct RetrievedFile {
 
 1. Primarily reusing service types from the `backup-service` crate (e.g. `OidcProvider`).
 2. File changes in the backup are declared atomically through the `BackupFileChange` enum (i.e. multiple changes can be carried out in a single `sync` call).
-3. `has_backup` requires an initialized account and calls public `/v1/backup/status` with the cached account ID; it reports only remote existence, not sync health.
-4. All network failures are explicitly handled, either retried if appropriate or an error propagates. A network error never translates into a defined result (e.g. in `has_backup` a network error is an error, not an `Ok(false)`).
+3. `status` requires an initialized account and calls public `/v1/backup/status` with the cached account ID. Reuse the service response and its nested `ExportedFactorSlim` through remote UniFFI bindings so native can distinguish supported login factors from unsupported-only backups. Only backup-not-found maps to `None`; this does not report device authorization or sync health.
+4. All network failures are explicitly handled, either retried if appropriate or an error propagates. A network error never translates into a defined result (e.g. in `status` a network error is an error, not an `Ok(None)`).
 5. Whenever performing backup `sync`s (or device authorization), Bedrock compares the local manifest hash and verified encryption public key with their corresponding remote values. If either differs, sync is blocked and native must prompt the user to download and restore the remote backup.
 
 ## Native callbacks and secrets
@@ -176,7 +176,8 @@ pub struct PasskeyResponse {
   → BackupManager.sync(..., changes) -> Bedrock will read the bytes from the filesystem from the `path` of each `V0BackupFile`
   → native deletes temporary exports (e.g. WalletKit vault)
   ```
-  - On every sync, Bedrock verifies that each `designator` is valid and drops any unsupported `designator` entry from the backup, logging an error.
+  - If an unsupported `designator` is found in a remote backup, it is skipped and an `UpdateRequired` error is surfaced. This usually signals that a new type of file has been added to the backup that this client does not recognize.
+  - If the specific designator has been marked for retirement, then the file is actually removed.
 2. **Major Change**. Before this update, the `path` in `V0BackupFile` determined both the **source** of the file that was added to the backup **and the destination** where it would be unpacked. With this update now, the `path` will no longer determine where the file gets unpacked to. This is for both security and increased resilience. Instead, unpacking the backup will work as follows:
   ```
   Native calls BackupManager.login(...)
