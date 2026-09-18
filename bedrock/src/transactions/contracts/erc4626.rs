@@ -1672,6 +1672,6 @@ mod tests {
         let error = result.unwrap_err();
         assert!(error
             .to_string()
-            .contains("Cannot migrate zero amount - user has no vault shares"));
+            .contains("Cannot migrate - no source vault shares are currently redeemable"));
     }
 }
