@@ -516,7 +516,7 @@ native after success:
     erase this client's signer and wallet state
 ```
 
-Preserve the backup and every other client's factors. Already-cleared state is a no-op. Native retains its key on Busy, RecoveryPending, or local clearing failure. Do not introduce `logout(false)` or reuse another client's key. Orphan Turnkey policies remain for a main-authorized migration because the sync policy cannot delete policies.
+Preserve the backup and every other client's factors. Already-cleared state is a no-op. Native retains its key on Busy, RecoveryPending, or local clearing failure.
 
 
 ## Device registration
@@ -599,6 +599,8 @@ Resolve retries of consumed enrollment tokens to the recorded result after check
 
 These rules are shared by login, reauthorization, addition, and privileged management.
 
+**Factor activity:** update `last_used_date` on successful main/sync authentication, at most once per day using service time. Activity and membership share the conditional metadata write, preserving the archive reference. A required activity-write failure fails authentication; missing history remains unknown.
+
 **OIDC:** create a temporary P-256 key; request the native token with nonce `SHA256_HEX(UTF8(HEX(compressed_public_key)))`. Use Turnkey Auth Proxy `/v1/oauth_login` with the configured `X-Auth-Proxy-Config-Id`, requesting a five-minute session without invalidating others. Verify the session's organization/main user against authenticated service metadata with a signed Turnkey query. The app backend is used only to create the Turnkey account. Sign service challenges with that ephemeral key; verify issuer, audience, expiry, nonce, signature, and operation binding. Consume both the OIDC nonce and service challenge once. A consumed token needs a fresh ceremony.
 
 **Passkey:** one discoverable assertion authorizes both systems. Extend service retrieve/verify challenges to accept the exact Turnkey `ACTIVITY_TYPE_STAMP_LOGIN` activity, targeting the configured parent organization with a five-minute expiry and `invalidateExisting = false`. The WebAuthn challenge is `UTF8(lowercase_hex(SHA256(exact_activity_bytes)))`; submit the byte-identical stamped activity to Turnkey when the backup has an organization. A passkey-only backup needs no organization.
@@ -630,7 +632,7 @@ Update the existing docs alongside adoption: `world-app/backup/{index,components
 ## Verification across the boundaries
 
 - Use sanitized V0 fixtures from both apps, including both referral formats and PRF salt variants. Rust tests own shared flow behavior; native tests cover bindings, ceremony cancellation, secret transfer, and temporary-file lifetime.
-- Cover concurrent archive/factor writes, lost-response enrollment retries, simultaneous last-factor removals, and invalid/oversized/reused Siegel handles. These must preserve committed data, factor membership, and secret boundaries.
+- Cover concurrent archive/factor writes, lost-response enrollment retries, simultaneous last-factor removals, and invalid/oversized/reused Siegel handles. These must preserve committed data, factor membership, and secret boundaries. Verify that a required activity-write failure fails authentication.
 - Compile the pinned service types and Swift/Kotlin bindings. Temporarily add source variants/fields, and native variants for equal-set mirrors, to prove the declarations/mappings fail compilation. Serialization fixtures check wire tags and fields separately.
 - Verify real provider ceremonies with working and missing PRF support, one prompt for login/reauthorization, existing-before-new prompts for addition, and recovery in both platform directions. iOS device/macOS checks remain required even when development happens on Linux.
 

@@ -177,6 +177,21 @@ pub struct PasskeyResponse {
 4. Bedrock configures the passkey RP (`keys.world.app`) and the PRF salt (`world-app-backup`). Bedrock will handle Android's legacy second-salt derivation when the primary cannot unwrap the backup key. This will also log a `critical!` error to track for migration.
 5. No changes to `P256Signer` (native signs arbitrary digest outputs).
 
+## Adding a main factor
+
+This changes the current behavior of the `backup-service` so instead of challenging both the new and existing factor directly at the same time, `add_factor` will authenticate the existing factor only before creating the new one:
+
+```text
+Request an add-factor challenge bound to the account, existing factor, new factor kind, and temporary public key
+→ existing factor authenticates, authorizing that key for this addition
+→ Bedrock unwraps the backup key and obtains the required Turnkey access
+→ perform the new factor ceremony
+→ temporary key signs the exact new factor, wrapped backup key, Turnkey references, and challenge token
+→ service verifies both factor proofs and the signature, then commits
+```
+
+With the ephemeral keypair, the new factor can be cryptographically bound to the existing factor authorization, but the existing factor ceremony can happen this first. This is an important UX improvement because when the user authorizes the new factor first (as it is right now), if the process fails the user can end up with useless passkeys.
+
 ## Local state and concurrency
 
 1. Store account state under `backup_manager/<account_id_segment>/`, where the segment is the full lowercase hex output of `blake3::keyed_hash(install_key, backup_account_id.as_bytes())`. Bedrock generates a random 32-byte key once per app installation and atomically persists it as private `backup_manager/.namespace_key` before creating account directories. Native excludes this directory, including the key, from OS backups and cross-app transfer. Keep the key across account logout/reset; a fresh installation gets a fresh key. Never log the key or raw account ID. A corrupt/unreadable key, or a missing key with existing account directories, is an error.
