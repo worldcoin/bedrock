@@ -31,10 +31,20 @@ sol! {
 
         // View functions
         function asset() public view returns (address assetTokenAddress);
+        function previewDeposit(uint256 assets) external view returns (uint256 shares);
         function previewWithdraw(uint256 assets) external view returns (uint256 shares);
         function previewRedeem(uint256 shares) external view returns (uint256 assets);
+        function maxRedeem(address owner) external view returns (uint256 maxShares);
     }
 }
+
+/// 100% in WAD scaling (`1e18`), matching Morpho SDK slippage units.
+const WAD: U256 = U256::from_limbs([1_000_000_000_000_000_000, 0, 0, 0]);
+
+/// Default migrate deposit haircut: 0.03% in WAD (`3e14`), matching Morpho SDK
+/// `DEFAULT_SLIPPAGE_TOLERANCE`.
+const MIGRATE_DEPOSIT_SLIPPAGE_TOLERANCE_WAD: U256 =
+    U256::from_limbs([300_000_000_000_000, 0, 0, 0]);
 
 // =============================================================================
 // Generic ERC-4626 Transaction Types
@@ -382,6 +392,311 @@ impl Erc4626Vault {
             metadata,
         })
     }
+
+    /// Creates a migration operation (redeem from one ERC-4626 vault + approve + deposit into another).
+    ///
+    /// Migrates the full **redeemable** position: `min(balanceOf, maxRedeem)`. If `maxRedeem` is
+    /// below `balanceOf` (liquidity / pause), leftover source shares remain and can be migrated
+    /// again later.
+    ///
+    /// The deposited amount is based on a `previewRedeem` snapshot at build time, with a 0.03%
+    /// haircut (Morpho SDK default slippage) so a small source-vault decline between build and
+    /// execution is less likely to make `deposit` consume pre-existing Safe balances. Any excess
+    /// redeemed assets remain as dust in the user's account.
+    ///
+    /// Do **not** gate Morpho V2 destinations on `maxDeposit` / `maxRedeem` (they often return 0
+    /// by design). Source-side `maxRedeem` is still applied.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The source and destination vault addresses are the same
+    /// - The two vaults use different underlying assets
+    /// - The user has no shares in the source vault (or `maxRedeem` is zero)
+    /// - `previewRedeem` returns zero assets
+    /// - The post-slippage deposit amount is zero
+    /// - Destination `previewDeposit` returns zero shares
+    /// - Any RPC call fails during transaction building
+    pub async fn migrate(
+        rpc_client: &RpcClient,
+        network: Network,
+        from_vault_address: Address,
+        to_vault_address: Address,
+        user_address: Address,
+        metadata: [u8; 10],
+    ) -> Result<Self, RpcError> {
+        if from_vault_address == to_vault_address {
+            return Err(RpcError::InvalidResponse {
+                error_message: "Source and destination ERC-4626 vaults must differ"
+                    .to_string(),
+            });
+        }
+
+        // 1. Query underlying asset addresses from both vaults
+        let from_asset_call_data = IERC4626::assetCall {}.abi_encode();
+        let from_asset_address = Self::fetch_asset_address(
+            rpc_client,
+            network,
+            from_vault_address,
+            from_asset_call_data,
+        )
+        .await?;
+
+        let to_asset_call_data = IERC4626::assetCall {}.abi_encode();
+        let to_asset_address = Self::fetch_asset_address(
+            rpc_client,
+            network,
+            to_vault_address,
+            to_asset_call_data,
+        )
+        .await?;
+
+        // 2. Both vaults must wrap the same underlying token
+        if from_asset_address != to_asset_address {
+            return Err(RpcError::InvalidResponse {
+                error_message:
+                    "Asset address mismatch between source and destination ERC-4626 vaults"
+                        .to_string(),
+            });
+        }
+
+        // 3. Full position: min(balanceOf, maxRedeem)
+        let actual_share_amount = Self::resolve_migrate_share_amount(
+            rpc_client,
+            network,
+            from_vault_address,
+            user_address,
+        )
+        .await?;
+
+        // 4. Snapshot assets via previewRedeem (build-time value for approve + deposit)
+        let preview_redeem_call_data = IERC4626::previewRedeemCall {
+            shares: actual_share_amount,
+        }
+        .abi_encode();
+        let preview_assets = Self::fetch_balance(
+            rpc_client,
+            network,
+            from_vault_address,
+            preview_redeem_call_data,
+            "previewRedeem",
+        )
+        .await?;
+
+        if preview_assets.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message:
+                    "Cannot migrate zero amount - previewRedeem returned zero assets"
+                        .to_string(),
+            });
+        }
+
+        // 5. Apply 0.03% haircut to the deposited amount (Morpho default slippage)
+        let deposit_assets = Self::deposit_assets_after_slippage(preview_assets)?;
+
+        // 6. Ensure destination would mint at least one share for the deposit amount
+        let preview_deposit_call_data = IERC4626::previewDepositCall {
+            assets: deposit_assets,
+        }
+        .abi_encode();
+        let preview_deposit_shares = Self::fetch_balance(
+            rpc_client,
+            network,
+            to_vault_address,
+            preview_deposit_call_data,
+            "previewDeposit",
+        )
+        .await?;
+        if preview_deposit_shares.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message:
+                    "Cannot migrate - destination previewDeposit returned zero shares"
+                        .to_string(),
+            });
+        }
+
+        // 7. Read current allowance so we can reset USDT-style tokens before approve
+        let existing_allowance = Erc20::fetch_allowance(
+            rpc_client,
+            network,
+            from_asset_address,
+            user_address,
+            to_vault_address,
+        )
+        .await?;
+
+        // 8. Encode redeem + approve(+ optional reset) + deposit and build MultiSend
+        Ok(Self::build_migrate_transaction(MigrateBundleParams {
+            from_vault_address,
+            to_vault_address,
+            from_asset_address,
+            user_address,
+            actual_share_amount,
+            deposit_assets,
+            existing_allowance,
+            metadata,
+        }))
+    }
+
+    /// Resolves the full redeemable share amount: `min(balanceOf, maxRedeem)`.
+    async fn resolve_migrate_share_amount(
+        rpc_client: &RpcClient,
+        network: Network,
+        from_vault_address: Address,
+        user_address: Address,
+    ) -> Result<U256, RpcError> {
+        let share_balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let share_balance = Self::fetch_balance(
+            rpc_client,
+            network,
+            from_vault_address,
+            share_balance_call_data,
+            "balanceOf",
+        )
+        .await?;
+
+        let max_redeem_call_data = IERC4626::maxRedeemCall {
+            owner: user_address,
+        }
+        .abi_encode();
+        let max_redeem = Self::fetch_balance(
+            rpc_client,
+            network,
+            from_vault_address,
+            max_redeem_call_data,
+            "maxRedeem",
+        )
+        .await?;
+
+        let actual_share_amount = share_balance.min(max_redeem);
+        if actual_share_amount.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Cannot migrate - no source vault shares are currently redeemable \
+                     (share_balance={share_balance}, max_redeem={max_redeem})"
+                ),
+            });
+        }
+
+        Ok(actual_share_amount)
+    }
+
+    /// Applies the migrate deposit haircut: `preview * (1e18 - 3e14) / 1e18`.
+    fn deposit_assets_after_slippage(preview_assets: U256) -> Result<U256, RpcError> {
+        let factor = WAD - MIGRATE_DEPOSIT_SLIPPAGE_TOLERANCE_WAD;
+        let deposit_assets = preview_assets
+            .checked_mul(factor)
+            .and_then(|value| value.checked_div(WAD))
+            .ok_or_else(|| RpcError::InvalidResponse {
+                error_message: "Failed to apply migrate deposit slippage haircut"
+                    .to_string(),
+            })?;
+
+        if deposit_assets.is_zero() {
+            return Err(RpcError::InvalidResponse {
+                error_message:
+                    "Cannot migrate zero amount - deposit amount is zero after slippage haircut"
+                        .to_string(),
+            });
+        }
+
+        Ok(deposit_assets)
+    }
+
+    /// Builds the `MultiSend` migrate transaction.
+    ///
+    /// When `existing_allowance` is nonzero and differs from `deposit_assets`, inserts
+    /// `approve(0)` before `approve(deposit_assets)` for tokens that require a zero-first reset.
+    /// If allowance already equals `deposit_assets`, the approve step is skipped.
+    fn build_migrate_transaction(params: MigrateBundleParams) -> Self {
+        let MigrateBundleParams {
+            from_vault_address,
+            to_vault_address,
+            from_asset_address,
+            user_address,
+            actual_share_amount,
+            deposit_assets,
+            existing_allowance,
+            metadata,
+        } = params;
+
+        let redeem_data = IERC4626::redeemCall {
+            shares: actual_share_amount,
+            receiver: user_address,
+            owner: user_address,
+        }
+        .abi_encode();
+
+        let deposit_data = IERC4626::depositCall {
+            assets: deposit_assets,
+            receiver: user_address,
+        }
+        .abi_encode();
+
+        let mut entries = vec![MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: from_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(redeem_data.len()),
+            data: redeem_data.into(),
+        }];
+
+        if existing_allowance < deposit_assets {
+            if !existing_allowance.is_zero() {
+                let reset_approve_data =
+                    Erc20::encode_approve(to_vault_address, U256::ZERO);
+                entries.push(MultiSendTx {
+                    operation: SafeOperation::Call as u8,
+                    to: from_asset_address,
+                    value: U256::ZERO,
+                    data_length: U256::from(reset_approve_data.len()),
+                    data: reset_approve_data.into(),
+                });
+            }
+
+            let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
+            entries.push(MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: from_asset_address,
+                value: U256::ZERO,
+                data_length: U256::from(approve_data.len()),
+                data: approve_data.into(),
+            });
+        }
+
+        entries.push(MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: to_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(deposit_data.len()),
+            data: deposit_data.into(),
+        });
+
+        let bundle = MultiSend::build_bundle(&entries);
+
+        Self {
+            call_data: bundle.data.into(),
+            action: TransactionTypeId::ERC4626Migrate,
+            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+            operation: SafeOperation::DelegateCall,
+            metadata,
+        }
+    }
+}
+
+/// Inputs for [`Erc4626Vault::build_migrate_transaction`].
+#[derive(Clone, Copy)]
+struct MigrateBundleParams {
+    from_vault_address: Address,
+    to_vault_address: Address,
+    from_asset_address: Address,
+    user_address: Address,
+    actual_share_amount: U256,
+    deposit_assets: U256,
+    existing_allowance: U256,
+    metadata: [u8; 10],
 }
 
 impl Is4337Encodable for Erc4626Vault {
@@ -786,5 +1101,577 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Cannot redeem zero amount - user has no vault shares"));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate() {
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let share_amount = U256::from(10u128.pow(18));
+        let preview_assets = U256::from(1_200_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+
+        let test_rpc_client = setup_migrate_rpc_client(MigrateRpcMockParams {
+            from_vault_address,
+            to_vault_address,
+            asset_address,
+            user_address,
+            share_balance: share_amount,
+            max_redeem: share_amount,
+            preview_assets,
+            existing_allowance: U256::ZERO,
+        });
+
+        let vault = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            metadata,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(vault.operation as u8, SafeOperation::DelegateCall as u8);
+        assert_eq!(
+            vault.to,
+            crate::transactions::contracts::multisend::MULTISEND_ADDRESS
+        );
+        assert_eq!(vault.action, TransactionTypeId::ERC4626Migrate);
+        assert!(deposit_assets < preview_assets);
+        assert_eq!(
+            vault.call_data.to_vec(),
+            expected_migrate_multisend_data(
+                from_vault_address,
+                to_vault_address,
+                asset_address,
+                user_address,
+                share_amount,
+                deposit_assets,
+                U256::ZERO,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_resets_nonzero_allowance() {
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let share_amount = U256::from(10u128.pow(18));
+        let preview_assets = U256::from(1_200_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+        let existing_allowance = U256::from(42u64);
+
+        let test_rpc_client = setup_migrate_rpc_client(MigrateRpcMockParams {
+            from_vault_address,
+            to_vault_address,
+            asset_address,
+            user_address,
+            share_balance: share_amount,
+            max_redeem: share_amount,
+            preview_assets,
+            existing_allowance,
+        });
+
+        let vault = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            metadata,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            vault.call_data.to_vec(),
+            expected_migrate_multisend_data(
+                from_vault_address,
+                to_vault_address,
+                asset_address,
+                user_address,
+                share_amount,
+                deposit_assets,
+                existing_allowance,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_preview_deposit_zero_error() {
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let share_amount = U256::from(10u128.pow(18));
+        let preview_assets = U256::from(1_200_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+
+        // Start from the shared migrate mock, then force previewDeposit → 0.
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        configure_migrate_rpc_mocks(
+            &mut http_client,
+            MigrateRpcMockParams {
+                from_vault_address,
+                to_vault_address,
+                asset_address,
+                user_address,
+                share_balance: share_amount,
+                max_redeem: share_amount,
+                preview_assets,
+                existing_allowance: U256::ZERO,
+            },
+        );
+        let preview_deposit_call_data = IERC4626::previewDepositCall {
+            assets: deposit_assets,
+        }
+        .abi_encode();
+        http_client.set_response_for_address_and_data(
+            to_vault_address,
+            format!("0x{}", hex::encode(preview_deposit_call_data)),
+            format!("0x{}", hex::encode([0u8; 32])),
+        );
+
+        let result = Erc4626Vault::migrate(
+            &RpcClient::new(Arc::new(http_client)),
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            [0u8; 10],
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("destination previewDeposit returned zero shares"));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_caps_by_max_redeem() {
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let balance = U256::from(10u128.pow(18));
+        let max_redeem = U256::from(10u128.pow(17)); // 0.1 of balance
+        let preview_assets = U256::from(120_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+
+        let test_rpc_client = setup_migrate_rpc_client(MigrateRpcMockParams {
+            from_vault_address,
+            to_vault_address,
+            asset_address,
+            user_address,
+            share_balance: balance,
+            max_redeem,
+            preview_assets,
+            existing_allowance: U256::ZERO,
+        });
+
+        let vault = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            [0u8; 10],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            vault.call_data.to_vec(),
+            expected_migrate_multisend_data(
+                from_vault_address,
+                to_vault_address,
+                asset_address,
+                user_address,
+                max_redeem,
+                deposit_assets,
+                U256::ZERO,
+            )
+        );
+    }
+
+    fn expected_migrate_multisend_data(
+        from_vault_address: Address,
+        to_vault_address: Address,
+        asset_address: Address,
+        user_address: Address,
+        share_amount: U256,
+        deposit_assets: U256,
+        existing_allowance: U256,
+    ) -> Vec<u8> {
+        let redeem_data = IERC4626::redeemCall {
+            shares: share_amount,
+            receiver: user_address,
+            owner: user_address,
+        }
+        .abi_encode();
+        let deposit_data = IERC4626::depositCall {
+            assets: deposit_assets,
+            receiver: user_address,
+        }
+        .abi_encode();
+        let mut entries = vec![MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: from_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(redeem_data.len()),
+            data: redeem_data.into(),
+        }];
+        if existing_allowance < deposit_assets {
+            if !existing_allowance.is_zero() {
+                let reset_approve_data =
+                    Erc20::encode_approve(to_vault_address, U256::ZERO);
+                entries.push(MultiSendTx {
+                    operation: SafeOperation::Call as u8,
+                    to: asset_address,
+                    value: U256::ZERO,
+                    data_length: U256::from(reset_approve_data.len()),
+                    data: reset_approve_data.into(),
+                });
+            }
+            let approve_data = Erc20::encode_approve(to_vault_address, deposit_assets);
+            entries.push(MultiSendTx {
+                operation: SafeOperation::Call as u8,
+                to: asset_address,
+                value: U256::ZERO,
+                data_length: U256::from(approve_data.len()),
+                data: approve_data.into(),
+            });
+        }
+        entries.push(MultiSendTx {
+            operation: SafeOperation::Call as u8,
+            to: to_vault_address,
+            value: U256::ZERO,
+            data_length: U256::from(deposit_data.len()),
+            data: deposit_data.into(),
+        });
+        MultiSend::build_bundle(&entries).data
+    }
+
+    #[test]
+    fn test_migrate_deposit_slippage_haircut() {
+        let preview_assets = U256::from(1_000_000_000_000_000_000u64);
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+        // 1e18 * (1e18 - 3e14) / 1e18 = 1e18 - 3e14
+        assert_eq!(
+            deposit_assets,
+            preview_assets - U256::from(300_000_000_000_000u64)
+        );
+
+        let err = Erc4626Vault::deposit_assets_after_slippage(U256::ZERO).unwrap_err();
+        assert!(err.to_string().contains("zero after slippage haircut"));
+    }
+
+    #[derive(Clone, Copy)]
+    struct MigrateRpcMockParams {
+        from_vault_address: Address,
+        to_vault_address: Address,
+        asset_address: Address,
+        user_address: Address,
+        share_balance: U256,
+        max_redeem: U256,
+        preview_assets: U256,
+        existing_allowance: U256,
+    }
+
+    fn setup_migrate_rpc_client(params: MigrateRpcMockParams) -> RpcClient {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        configure_migrate_rpc_mocks(&mut http_client, params);
+        RpcClient::new(Arc::new(http_client))
+    }
+
+    fn configure_migrate_rpc_mocks(
+        http_client: &mut crate::test_utils::AnvilBackedHttpClient<
+            impl alloy::providers::Provider + Clone + 'static,
+        >,
+        params: MigrateRpcMockParams,
+    ) {
+        let MigrateRpcMockParams {
+            from_vault_address,
+            to_vault_address,
+            asset_address,
+            user_address,
+            share_balance,
+            max_redeem,
+            preview_assets,
+            existing_allowance,
+        } = params;
+
+        let asset_call_data = IERC4626::assetCall {}.abi_encode();
+        let mut padded_asset = [0u8; 32];
+        padded_asset[12..32].copy_from_slice(asset_address.as_slice());
+        let asset_response = format!("0x{}", hex::encode(padded_asset));
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(asset_call_data.clone())),
+            asset_response.clone(),
+        );
+        http_client.set_response_for_address_and_data(
+            to_vault_address,
+            format!("0x{}", hex::encode(asset_call_data)),
+            asset_response,
+        );
+
+        let share_balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let mut padded_shares = [0u8; 32];
+        padded_shares[..32].copy_from_slice(&share_balance.to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(share_balance_call_data)),
+            format!("0x{}", hex::encode(padded_shares)),
+        );
+
+        let redeemable = share_balance.min(max_redeem);
+        let preview_redeem_call_data =
+            IERC4626::previewRedeemCall { shares: redeemable }.abi_encode();
+        let mut padded_assets = [0u8; 32];
+        padded_assets[..32].copy_from_slice(&preview_assets.to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(preview_redeem_call_data)),
+            format!("0x{}", hex::encode(padded_assets)),
+        );
+
+        let max_redeem_call_data = IERC4626::maxRedeemCall {
+            owner: user_address,
+        }
+        .abi_encode();
+        let mut padded_max_redeem = [0u8; 32];
+        padded_max_redeem[..32].copy_from_slice(&max_redeem.to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(max_redeem_call_data)),
+            format!("0x{}", hex::encode(padded_max_redeem)),
+        );
+
+        let deposit_assets =
+            Erc4626Vault::deposit_assets_after_slippage(preview_assets).unwrap();
+        let preview_deposit_call_data = IERC4626::previewDepositCall {
+            assets: deposit_assets,
+        }
+        .abi_encode();
+        let mut padded_preview_shares = [0u8; 32];
+        padded_preview_shares[..32]
+            .copy_from_slice(&U256::from(1u64).to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            to_vault_address,
+            format!("0x{}", hex::encode(preview_deposit_call_data)),
+            format!("0x{}", hex::encode(padded_preview_shares)),
+        );
+
+        let allowance_call_data = IErc20::allowanceCall {
+            owner: user_address,
+            spender: to_vault_address,
+        }
+        .abi_encode();
+        let mut padded_allowance = [0u8; 32];
+        padded_allowance[..32].copy_from_slice(&existing_allowance.to_be_bytes::<32>());
+        http_client.set_response_for_address_and_data(
+            asset_address,
+            format!("0x{}", hex::encode(allowance_call_data)),
+            format!("0x{}", hex::encode(padded_allowance)),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_same_vault_error() {
+        let vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [0u8; 10];
+
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        let result = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            vault_address,
+            vault_address,
+            user_address,
+            metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Source and destination ERC-4626 vaults must differ"));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_asset_mismatch_error() {
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let from_asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let to_asset_address =
+            Address::from_str("0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [0u8; 10];
+
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+
+        let asset_call_data = IERC4626::assetCall {}.abi_encode();
+
+        let mut from_padded_asset = [0u8; 32];
+        from_padded_asset[12..32].copy_from_slice(from_asset_address.as_slice());
+        let from_asset_response = format!("0x{}", hex::encode(from_padded_asset));
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(asset_call_data.clone())),
+            from_asset_response,
+        );
+
+        let mut to_padded_asset = [0u8; 32];
+        to_padded_asset[12..32].copy_from_slice(to_asset_address.as_slice());
+        let to_asset_response = format!("0x{}", hex::encode(to_padded_asset));
+        http_client.set_response_for_address_and_data(
+            to_vault_address,
+            format!("0x{}", hex::encode(asset_call_data)),
+            to_asset_response,
+        );
+
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        let result = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains(
+            "Asset address mismatch between source and destination ERC-4626 vaults"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_with_zero_shares_error() {
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let asset_address =
+            Address::from_str("0x2cfc85d8e48f8eab294be644d9e25c3030863003").unwrap();
+        let user_address =
+            Address::from_str("0x9bB365324EDeF7A608c316abBf1d88460c556AB0").unwrap();
+        let metadata = [0u8; 10];
+
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+
+        let asset_call_data = IERC4626::assetCall {}.abi_encode();
+        let mut padded_asset = [0u8; 32];
+        padded_asset[12..32].copy_from_slice(asset_address.as_slice());
+        let asset_response = format!("0x{}", hex::encode(padded_asset));
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(asset_call_data.clone())),
+            asset_response.clone(),
+        );
+        http_client.set_response_for_address_and_data(
+            to_vault_address,
+            format!("0x{}", hex::encode(asset_call_data)),
+            asset_response,
+        );
+
+        let share_balance_call_data = IErc20::balanceOfCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let mut padded_shares = [0u8; 32];
+        padded_shares[..32].copy_from_slice(&U256::ZERO.to_be_bytes::<32>());
+        let shares_response = format!("0x{}", hex::encode(padded_shares));
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(share_balance_call_data)),
+            shares_response.clone(),
+        );
+
+        let max_redeem_call_data = IERC4626::maxRedeemCall {
+            owner: user_address,
+        }
+        .abi_encode();
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(max_redeem_call_data)),
+            shares_response,
+        );
+
+        let test_rpc_client = RpcClient::new(Arc::new(http_client));
+
+        let result = Erc4626Vault::migrate(
+            &test_rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains(
+            "Cannot migrate - no source vault shares are currently redeemable"
+        ));
     }
 }
