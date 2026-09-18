@@ -193,7 +193,8 @@ login(authentication, sync_factor, purpose, expected_backup_id):
         stage data under Bedrock-chosen filenames
         // Root/version are metadata, never staged files.
         persist the original inventory, manifest hash, encryption public key,
-                recovery ID, purpose, authentication method, and sync public key
+                recovery ID, purpose, authentication method, sync public key,
+                and whether unsupported designators remain
         // Never persist root, tokens, or temporary private keys.
 
     bind the account and retain the attempt's signer
@@ -205,7 +206,9 @@ login(authentication, sync_factor, purpose, expected_backup_id):
 | `Login` | Signed-out onboarding with an empty vault. Store the root, import consumer data, and complete the native app-account login. |
 | `DownloadUpdates` | Confirm replacement of unsynced data for the initialized account. Keep the existing native root, discard the returned root handle, and import the complete remote data. This is not a merge. |
 
-Native routes unpacked files to WalletKit, Oxide, and referral consumers. Each validates its own keys, formats, identity bindings, and destinations. Validate all inputs before the first live import. Consumers report unsupported and explicitly retired entries to Bedrock.
+Bedrock owns the designator allowlist and explicit retirement rules. `login` skips unknown and retired designators; unknown ones set `requires_app_update` and the persisted sync block. Retired entries remain in the original inventory until the next successful sync removes them. No consumer classification callback is needed.
+
+Native routes returned files to WalletKit, Oxide, and referral consumers. Each validates its own keys, formats, identity bindings, and destinations before any live import. An unsupported consumer format stops restore with `UpdateRequired`; invalid contents fail validation. Native must not call `finalize_login` after either failure. `requires_app_update = false` only means Bedrock recognizes the archive's designators, not that consumer validation has succeeded.
 
 Native persists the pending signer and recovery ID across restart. A retry never rotates the key to escape an unresolved attempt or reuses an import receipt for different contents.
 
@@ -215,7 +218,7 @@ For the root handoff, fill the existing Siegel session in Rust and copy once thr
 
 ## `finalize_login(recovery_id)`
 
-Native calls this only after every required consumer import and native login step succeeds. The conceptual completion/classification checks below depend on the still-open consumer reporting interface; they do not introduce another public API.
+Calling this method confirms that every required consumer import and native login step succeeded. Bedrock uses the designator classification saved during `login`; no extra completion report or public API is needed.
 
 ```text
 finalize_login(recovery_id):
@@ -226,8 +229,6 @@ finalize_login(recovery_id):
         return success
 
     recovery = require_matching_pending_recovery(recovery_id)
-    require all native imports/login steps succeeded
-    require consumer classification results are available
 
     if service registration is not yet confirmed:
         if the required authentication has expired:
@@ -239,7 +240,7 @@ finalize_login(recovery_id):
         // On failure or uncertainty, keep recovery state for retry.
 
     acknowledge the full original inventory and verified encryption public key
-    persist UpdateRequired if unsupported entries remain
+    persist UpdateRequired if login found unsupported designators
     durably mark this recovery ID completed with the acknowledged state
 
     preserve the other platform's referral entry for future syncs
@@ -518,6 +519,8 @@ native after success:
 
 Preserve the backup and every other client's factors. Already-cleared state is a no-op. Native retains its key on Busy, RecoveryPending, or local clearing failure.
 
+**Previously shared keys:** native must establish exclusive ownership before binding an existing signer. Android's `importedFromCrossAppIdentity = false` is insufficient: the source app may have exported that key. If ownership is uncertain, persist a fresh app-private key, bind it, and require `reauthorize` before backup operations. Reuse that candidate across retries. Never bind or remotely revoke the old shared key during this transition; logout therefore targets only the new key. After successful authorization, discard this app's old private copy, leaving shared keychain entries untouched. Stop exporting/importing sync keys between apps. Old remote membership cleanup remains deferred.
+
 
 ## Device registration
 
@@ -613,16 +616,6 @@ Passkey/iCloud recovery may finish service enrollment while Turnkey is unavailab
 
 **Native ceremonies:** iOS retains main-thread presentation/dismissal and its OS capability guards. Android retains Activity access, cancellation/fallback handling, and the legacy PRF result. Android Apple authentication remains an explicit unsupported-capability error until its ceremony exists. Native forwards Bedrock's passkey labels unchanged; OS rename/orphan notifications remain native, without claiming unconfirmed credential deletion or rename.
 
-## Shared service types and native bindings
-
-Pin the public `backup-service-types` Git revision with `default-features = false` and update the lockfile. Keep UniFFI out of that crate. Reuse its endpoint declarations and request/response/auth/error types through the existing HTTP client; service changes update the shared types and Bedrock pin before native adoption.
-
-Use UniFFI remote declarations for identical types: enums such as `OidcProvider` and `BackupEncryptionKey`, records such as `BackupStatusResponse` and `ExportedFactorSlim`. Retain full typed metadata privately, including passkey registration and OIDC subject; project once into the existing native metadata views. Ceremony inputs remain separate from service authorization and registered-factor metadata.
-
-Remote declarations must fail compilation when closed variants or payloads change. Equal-set native mirrors use exhaustive conversions in both directions without default arms; narrower views explicitly handle every source variant/field without inventing reverse conversions. Keep the service's `ErrorCode::Unknown` fallback. Unknown metadata values are never valid authentication inputs.
-
-Delete native wire enums with their network callers and update analytics/last-login mappings. Retain UI provider enums only where a module boundary needs them; map exhaustively in the live adapter. Reuse Bedrock `Os` for service `Platform`; no additional public platform enum.
-
 ## Adoption and documentation
 
 Adopt each native button handler, flow call, and ceremony adapter together, deleting the replaced orchestration in that PR. Deploy service changes first while preserving released-client contracts. Existing creation/reauthorization callers must supply the verified encryption public key before server enforcement. App-backend wallet login/account deletion and legacy Drive/iCloud-file recovery remain native.
@@ -631,20 +624,5 @@ Update the existing docs alongside adoption: `world-app/backup/{index,components
 
 ## Verification across the boundaries
 
-- Use sanitized V0 fixtures from both apps, including both referral formats and PRF salt variants. Rust tests own shared flow behavior; native tests cover bindings, ceremony cancellation, secret transfer, and temporary-file lifetime.
+- Rust tests own shared flow behavior; native tests cover bindings, ceremony cancellation, secret transfer, and temporary-file lifetime.
 - Cover concurrent archive/factor writes, lost-response enrollment retries, simultaneous last-factor removals, and invalid/oversized/reused Siegel handles. These must preserve committed data, factor membership, and secret boundaries. Verify that a required activity-write failure fails authentication.
-- Compile the pinned service types and Swift/Kotlin bindings. Temporarily add source variants/fields, and native variants for equal-set mirrors, to prove the declarations/mappings fail compilation. Serialization fixtures check wire tags and fields separately.
-- Verify real provider ceremonies with working and missing PRF support, one prompt for login/reauthorization, existing-before-new prompts for addition, and recovery in both platform directions. iOS device/macOS checks remain required even when development happens on Linux.
-
-## Errors and reporting
-
-Use bounded network retries and Turnkey activity polling. OS ceremonies have their own cancellation and timeout; do not spend the HTTP retry deadline while the user is authenticating. Never blindly retry an ambiguous remote mutation.
-
-One Bedrock operation owns its existing ClientEventsReporter event. Keep native screen/funnel analytics and consent behavior; remove duplicate flow events. Surface actionable primary errors (`RemoteAhead`, `UpdateRequired`, `CommitUncertain`, `Busy`, `RecoveryPending`) and log secondary cleanup failures internally. Do not log secrets, response bodies, or unmasked identities. Telemetry failure never changes a successful operation result.
-
-## Interface decisions to finish
-
-These gaps are in the current design/stubs; implementation must not invent competing solutions.
-
-- **Consumer handoff:** the stubs still need a way to deliver consumer validation/classification results before `finalize_login`; otherwise it cannot know when to persist `UpdateRequired` or retire keys. Define when `requires_app_update` is authoritative, since consumer validation follows `login`. File identity/source handling is defined above.
-- **Previously shared sync keys:** define the transition to independent client keys before enabling unconditional revocation on logout. Revoking an old shared key would also revoke the other app.

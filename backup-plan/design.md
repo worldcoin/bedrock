@@ -2,6 +2,8 @@
 
 This is the overall design to migrate all logic related to the new login (prev. backup & restore) logic to Bedrock. This document outlines the whole plan. **Breaking changes** are introduced by design, we're removing all the old stuff. The plan is made to one-shot all functionality into Bedrock in one pass (multiple PRs, single release).
 
+`backup-service` changes must not be breaking.
+
 ## Structure
 
 ```text
