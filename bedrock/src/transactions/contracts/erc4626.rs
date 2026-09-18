@@ -643,7 +643,7 @@ impl Erc4626Vault {
             data: redeem_data.into(),
         }];
 
-        if existing_allowance != deposit_assets {
+        if existing_allowance < deposit_assets {
             if !existing_allowance.is_zero() {
                 let reset_approve_data =
                     Erc20::encode_approve(to_vault_address, U256::ZERO);
@@ -1353,7 +1353,7 @@ mod tests {
             data_length: U256::from(redeem_data.len()),
             data: redeem_data.into(),
         }];
-        if existing_allowance != deposit_assets {
+        if existing_allowance < deposit_assets {
             if !existing_allowance.is_zero() {
                 let reset_approve_data =
                     Erc20::encode_approve(to_vault_address, U256::ZERO);
