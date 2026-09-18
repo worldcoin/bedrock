@@ -57,6 +57,7 @@ impl BackupManager {
     pub async fn metadata() -> BackupMetadata;
     // Separate from metadata() because metadata is needed to render the factor list
     pub async fn check_for_remote_updates();
+    // Returns entry IDs, not filesystem paths.
     pub async fn list_files_in_backup(designator: BackupFileDesignator)
         -> Vec<String>;
     pub async fn sync(root: SiegelSession, encryption_public_key: String,
@@ -120,8 +121,26 @@ pub struct RetrievedBackup {
 #[derive(uniffi::Record)]
 pub struct RetrievedFile {
     pub designator: BackupFileDesignator,
-    pub path: String,
+    pub entry_id: String,
     pub staged_path: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct BackupFileSource {
+    pub entry_id: String,
+    pub source_path: String, // Local file to read for this call only.
+}
+
+#[derive(uniffi::Enum)]
+pub enum BackupFileChange {
+    Put { designator: BackupFileDesignator, file: BackupFileSource },
+    ReplaceFiles { designator: BackupFileDesignator, files: Vec<BackupFileSource> },
+    Remove { entry_id: String },
+    RemoveIfChecksumMatches {
+        designator: BackupFileDesignator,
+        entry_id: String,
+        checksum_hex: String,
+    },
 }
 ```
 
@@ -160,23 +179,25 @@ pub struct PasskeyResponse {
 
 ## Local state and concurrency
 
-1. Store all backup information under `backup_manager/<account_id_segment>/` where `account_id_segment` is the `backup_account_id mod 2^8` to both segment the backup information and avoid collisions from state clearing issues (e.g. at logout), but also to avoid logging the `backup_account_id` accidentally.
+1. Store account state under `backup_manager/<account_id_segment>/`, where the segment is the full lowercase hex output of `blake3::keyed_hash(install_key, backup_account_id.as_bytes())`. Bedrock generates a random 32-byte key once per app installation and atomically persists it as private `backup_manager/.namespace_key` before creating account directories. Native excludes this directory, including the key, from OS backups and cross-app transfer. Keep the key across account logout/reset; a fresh installation gets a fresh key. Never log the key or raw account ID. A corrupt/unreadable key, or a missing key with existing account directories, is an error.
 2. Importantly, all state from `BackupManager` is local per client. It is not shared between clients (i.e. World ID App and World Money App).
 3. With the introduction of these changes, migrate files from their current location on first app run (atomically with staged files). The migration must validate the local state with the remote state before executing or raise a `RemoteAhead` error.
 4. Any mutation on the backup state is done through a concurrency lock. Concurrent calls error with `Busy`. Native must generally not perform concurrent updates on the backup.
-5. `logout` revokes the `SyncFactor` from both the backup-service and Turnkey, then clears up all of Bedrock's local state (manifest, staged files, etc.). Native must then clear the `SyncFactor` from the secure storage.
+5. `logout` revokes the `SyncFactor` from both the backup-service and Turnkey, then clears this account's Bedrock state (manifest, staged files, etc.), retaining the installation namespace key. Native must then clear the `SyncFactor` from the secure storage.
 
 ## Backup Content Management
 
 1. Syncing the backup (i.e. adding, removing or replacing any file) follows this pattern. Importantly, multiple updates must be batched together:
   ```
   Oxide file change / WalletKit vault change / referral change
-  → native backup adapter prepares one batch
-  → native asks to materialize the vault export if needed (WalletKit)
-  → BackupManager.sync(..., changes) -> Bedrock will read the bytes from the filesystem from the `path` of each `V0BackupFile`
+  → native backup adapter prepares one batch, including sources for every retained consumer-owned entry
+  → native materializes a fresh WalletKit export whenever the resulting archive contains a vault
+  → BackupManager.sync(..., changes) reads each source_path and writes entry_id into V0BackupFile.path
   → native deletes temporary exports (e.g. WalletKit vault)
   ```
-  - If an unsupported `designator` is found in a remote backup, it is skipped and an `UpdateRequired` error is surfaced. This usually signals that a new type of file has been added to the backup that this client does not recognize.
+  - **Each upload contains the complete backup.** If it contains A, B, and C, deleting B still requires reading A and C. Native supplies a source for each of its files that remains in the backup, including unchanged files, and keeps those sources unchanged until `sync` returns. A missing source fails sync; it does not delete the entry.
+  - **An entry keeps its ID when its local file moves.** `entry_id` identifies the backed-up item across syncs and restores. `source_path` tells Bedrock where to read it for this call; that location is not saved for future calls. **This changes the current behavior today**.
+  - Unsupported entries are skipped during restore and flagged by `requires_app_update`. They block sync with `UpdateRequired` and must not be deleted just because this app version does not recognize them.
   - If the specific designator has been marked for retirement, then the file is actually removed.
 2. **Major Change**. Before this update, the `path` in `V0BackupFile` determined both the **source** of the file that was added to the backup **and the destination** where it would be unpacked. With this update now, the `path` will no longer determine where the file gets unpacked to. This is for both security and increased resilience. Instead, unpacking the backup will work as follows:
   ```
@@ -196,6 +217,7 @@ pub struct PasskeyResponse {
 3. **Oxide changes:** add backup validation/import operations for orb, document, and face packages. Oxide validates its own keys, package formats, and identity bindings, then chooses destinations within its owned storage. Import must resume safely with the same  recovery ID; native should only invoke these operations and reload Oxide afterward.
 4. Explicit limits on backup sizes and unpacking: 15 MiB sealed, 32 MiB per entry, 128 MiB expanded, and 128 entries.
 
+
 ## Other Notes
 
 1. Rename `RemoteStaleAhead` to `RemoteAhead` errors everywhere.
@@ -205,7 +227,8 @@ pub struct PasskeyResponse {
 
 
 ## Future Improvements
-1. Log in reminders.
+1. Missing Turnkey migrations from Bedrock (marked as TODOs in the code).
+2. Missing migration to remove stale sync factors from backup-service and sync with Turnkey.
+2. Log in reminders.
 2. Introduce flow to delete legacy iCloud / Google Drive backup.
-2. Introduce a `V1BackupFile` enum and replace `path` with a proper `entry_id`.
 3. Backup authentication.
