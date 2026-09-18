@@ -1,8 +1,8 @@
 # Backup migration: design
 
-This is the overall design to migrate all logic related to the new login (prev. backup & restore) logic to Bedrock. This document outlines the whole plan. **Breaking changes** are introduced by design. This plan is designed so that all functionality can be incorporated into Bedrock in one pass (multiple PRs, single release), including removing all the legacy functionality where Bedrock exposed low-level utility functions.
+This is the overall design to migrate all logic related to the new login (prev. backup & restore) logic to Bedrock. This document outlines the whole plan. **Breaking changes** are introduced by design, we're removing all the old stuff. The plan is made to one-shot all functionality into Bedrock in one pass (multiple PRs, single release).
 
-## Ownership
+## Structure
 
 ```text
 Native UI / account lifecycle
@@ -11,304 +11,200 @@ Native UI / account lifecycle
        ├─ TurnkeyApiClient          private activities, sessions, polling, policies
        ├─ manifest + backup_format private file inventory, packing, validation
        └─ migrations               existing plan/apply functions
-
-Native implements: MainFactorCeremony + existing P256Signer
-Existing shared bridges: authenticated app-backend HTTP, attestation, filesystem
 ```
+
+The Native App implements the following:
+
+1. Calls Bedrock's `BackupManager` to perform all operations on the backup.
+2. **Trait**. `MainFactorCeremonyHandler` allows Bedrock to trigger passkey or OIDC ceremonies.
+3. **Trait**. `P256Signer` so native handles keychain & Secure Enclave key management.
+4. **Trait**. Attestation, app backend HTTP client.
+
+## Important Flows
+
+1. **Logging in**.
+   - Native calls `BackupManager::login()` which executes the Main Factor log in, backup retrieval, decryption, and all validations, the root secret is given back to Native for storage.
+   - Native stores the `root_secret` in the keychain.
+   - Native calls `BackupManager::finalize_login()` to finalize the execution of the login. The decrypted backup files get fully unpacked and the new `SyncFactor` is registered.
+
+   > **Rationale**: Both native and Bedrock need to perform sequential operations to log in. A separate `finalize_login` is more concurrency-safe than callback traits which could have re-entrancy or deadlocks.
+2. **Checking for updates**. Native calls `check_for_remote_updates` once after startup initialization. If the `RemoteAhead` error shows up, native shows the screen to prompt for an update download. Native must define the priority for this blocking screen.
+3. **Initializing `BackupManager`**. The provided root key is consumed to compute and cache the `backupAccountId`. On a `login()`, this is derived automatically, no need to call `init()` again. Native MUST treat this as a unique signer, there must not be multiple signers at the same time (i.e. single `SyncFactor` at any time).
 
 ## Public surface
 
 ```rust
-pub use backup_service_types::OidcProvider;
+pub use backup_service_types::OidcProvider; // Remote UniFFI binding defined in execution.md.
 
-struct BackupManager {
+#[derive(uniffi::Object)]
+pub struct BackupManager {
     account_id: Option<String>,
     sync_signer: Option<P256Signer>,
-    main_factor_ceremony: MainFactorCeremony,
+    main_factor_ceremony: MainFactorCeremonyHandler,
     // Private clients, one operation mutex, and an optional pending recovery; never a root key.
 }
 
+#[bedrock_export]
 impl BackupManager {
-    fn new(main_factor_ceremony: MainFactorCeremony) -> Self;
-    // Derive the account ID, release the root, and retain the device signer.
-    fn init(root: SiegelSession, sync: P256Signer);
+    #[uniffi::constructor]
+    pub fn new(main_factor_ceremony: MainFactorCeremonyHandler) -> Self;
+    /// Initializes once a backup is available. Derives the account ID, and retains the device signer.
+    pub fn init(root: SiegelSession, sync: P256Signer);
 
-    async fn has_backup() -> bool;
-    // Retrieves the backup metadata, does not enforce the RemoteAhead gate.
-    async fn metadata() -> BackupMetadata;
+    /// Reports only whether the backup exists, not if this device is authorized or in sync.
+    pub async fn has_backup() -> bool;
+    // Retrieves the backup metadata, does not enforce the RemoteStaleAhead gate.
+    pub async fn metadata() -> BackupMetadata;
     // Separate from metadata() because metadata is needed to render the factor list
-    async fn check_for_remote_updates();
-    async fn list_files_in_backup(designator: BackupFileDesignator)
+    pub async fn check_for_remote_updates();
+    pub async fn list_files_in_backup(designator: BackupFileDesignator)
         -> Vec<String>;
-    async fn sync(root: SiegelSession, encryption_public_key: String,
+    pub async fn sync(root: SiegelSession, encryption_public_key: String,
                   changes: Vec<BackupFileChange>);
 
     // Return the backup encryption public key for native to persist and supply on sync.
-    async fn create(factor: FactorRegistration, root: SiegelSession,
+    pub async fn create(factor: FactorRegistration, root: SiegelSession,
                      files: Vec<BackupFileChange>) -> String;
-    // Fetches the backup, decrypts it and stages retrieved files.
-    async fn login(authentication: FactorAuthentication, sync_factor: P256Signer,
+    // Fetches the backup, decrypts it and stages retrieved files. Operations are read-only or staged changes.
+    pub async fn login(authentication: FactorAuthentication, sync_factor: P256Signer,
                    purpose: RetrievalPurpose, expected_backup_id: Option<String>)
         -> RetrievedBackup;
-    // Enroll the Sync Factor, unpacked staged files, and commit the restored manifest.
-    async fn finalize_login(recovery_id: String,
-                                reauth: Option<FactorAuthentication>,
-                                replace_device: Option<String>);
-    // Cancel before registration; native blocks cancellation once DownloadUpdates import starts.
-    fn cancel_recovery(recovery_id: String);
-    // Authorize and install the supplied device signer without restoring files or a root.
-    async fn reauthorize(login: FactorAuthentication, sync: P256Signer,
-                          replace_device: Option<String>);
+    // Executes the login. Enroll the Sync Factor, removes staged files, and commit the restored manifest.
+    pub async fn finalize_login(recovery_id: String);
+    // Abandons a login before committing (opposite to `finalize_login`). Generally only expected on the edge case
+    // of saving the root secret failing.
+    pub fn cancel_login(recovery_id: String);
+    // Authorize and register a new `SyncFactor`.
+    pub async fn reauthorize(login: FactorAuthentication, sync: P256Signer);
 
-    async fn add_factor(factor: FactorRegistration, existing: FactorAuthentication)
+    pub async fn add_factor(factor: FactorRegistration, existing: FactorAuthentication)
         -> BackupMetadata;
-    async fn remove_factor(id: String, reauth: Option<FactorAuthentication>,
+    pub async fn remove_factor(id: String, reauth: Option<FactorAuthentication>,
                            confirm_backup_deletion: bool)
         -> RemoveFactorOutcome;
     // Clear local backup state, optionally revoking the bound device key first.
-    async fn logout(revoke_device: bool);
-    async fn delete_backup();
-    // Performs the backup full `/reset`
-    async fn reset(root: SiegelSession);
-    async fn run_migrations(reauth: Option<FactorAuthentication>)
+    pub async fn logout();
+    pub async fn delete_backup();
+    // Performs the backup full `/reset`. Used when a user loses access to all their Main Factors.
+    pub async fn reset(root: SiegelSession);
+    pub async fn run_migrations(reauth: Option<FactorAuthentication>)
         -> TurnkeyMigrationOutcome;
 }
 
 /// Configuration for enrolling a Main Factor
-enum FactorRegistration {
-    Passkey { name: String, display_name: String },
+#[derive(uniffi::Enum)]
+pub enum FactorRegistration {
+    Passkey { username: Option<String>, wallet_address: String },
     Oidc { provider: OidcProvider },
 }
 
 /// Initialize a login with a specific type of Main Factor
-enum FactorAuthentication {
+#[derive(uniffi::Enum)]
+pub enum FactorAuthentication {
     Passkey,
     Oidc { provider: OidcProvider },
     IcloudKeychain { key_id: String },
 }
-enum RetrievalPurpose { Login, DownloadUpdates }
+#[derive(uniffi::Enum)]
+pub enum RetrievalPurpose { Login, DownloadUpdates }
 
-struct RetrievedBackup {
-    recovery_id: String,
-    root_secret: SiegelSession,
-    backup_keypair_public_key: String,
-    files: Vec<RetrievedFile>,
-    metadata: BackupMetadata,
-    requires_app_update: bool,
+#[derive(uniffi::Record)]
+pub struct RetrievedBackup {
+    pub recovery_id: String,
+    pub root_secret: SiegelSession,
+    pub backup_keypair_public_key: String,
+    pub files: Vec<RetrievedFile>,
+    pub metadata: BackupMetadata,
+    pub requires_app_update: bool,
 }
-struct RetrievedFile { designator: BackupFileDesignator, path: String, staged_path: String }
+#[derive(uniffi::Record)]
+pub struct RetrievedFile {
+    pub designator: BackupFileDesignator,
+    pub path: String,
+    pub staged_path: String,
+}
 ```
 
-Primarily reusing service types from the `backup-service` crate and expose the shared `OidcProvider` through UniFFI so
-native can do relevant high-level calls. The internal `backup_service_types::Authorization` contains
-completed proofs.
-
-File changes in the bcakup are declared as `Put { designator, path }`, `Remove { path }`, and `ReplaceFiles { designator,
-paths }`. `list_files_in_backup` is used by the Oxide bridge and returns files in the backup,
-after checking the remote state is in sync. Remove/ReplaceFiles changes the backup inventory, it does not change the actual
-files; removing an absent path is a no-op. Put/ReplaceFiles validate the same file policy before
-filesystem access or packing.
-
-`RemoveFactorOutcome` keeps its two existing meanings. Bedrock logs secondary registration and
-remote cleanup failures internally; they do not change a committed operation's native result.
-Primary operation failures and actionable local-state errors still propagate. Preserve the existing
-`TurnkeyMigrationOutcome`: Completed or MainFactorRequired with description-valued pending entries;
-failures remain Result errors. Extend `BackupOperationError` with `UpdateRequired`, `RemoteAhead`,
-`CommitUncertain`, `Busy`, `RecoveryPending { recovery_id: String, purpose: RetrievalPurpose }`,
-`Capacity { factors: Vec<BackupFactor> }`, and `Cancelled`.
-Keep existing reauth/confirmation failures:
-rejected/missing sync keys map to `NeedsReauth(SyncFactorInvalid)`, never a network retry. Use
-`NeedsReauth(BackupKeyUnverified)` when existing metadata has no verified encryption public key.
-Invalid local state or malformed archives use one contextual local-data error; do not export
-internal transport/codec error enums. `has_backup` requires an initialized account and calls public
-`/v1/backup/status` with the cached account ID; it reports remote existence, not sync health.
-Network failure is an error, never `false`. Add optional `last_used_at` to the existing
-BackupFactor, from service metadata. Capacity UI shows creation/last-active dates and the
-current-device marker.
-
-Native calls `check_for_remote_updates` once after startup initialization. Bedrock compares
-authenticated metadata with its acknowledged head and returns `RemoteAhead` or `UpdateRequired` when
-recovery is needed. Network/authentication failure preserves local state. Reuse this head check in
-sync and file queries; `metadata` remains available for factor management while sync is blocked.
-Native controls the prompt.
-
-A head check compares both the manifest hash and `BackupMetadata.encryption_public_key`. The key is
-immutable for one backup; recreating the same account and file inventory can change it. Recovery
-verifies it against the unwrapped key. Reauthorization never silently replaces a cached key: a
-mismatch requires explicit recovery. Existing metadata without this field needs main-factor key
-unwrapping; initialize it through the existing main-authorized sync-registration flow, without an
-archive import. Never infer it from an old native key just because manifest hashes match.
+1. Primarily reusing service types from the `backup-service` crate (e.g. `OidcProvider`).
+2. File changes in the backup are declared atomically through the `BackupFileChange` enum (i.e. multiple changes can be carried out in a single `sync` call).
+3. `has_backup` requires an initialized account and calls public `/v1/backup/status` with the cached account ID; it reports only remote existence, not sync health.
+4. All network failures are explicitly handled, either retried if appropriate or an error propagates. A network error never translates into a defined result (e.g. in `has_backup` a network error is an error, not an `Ok(false)`).
+5. Whenever performing backup `sync`s (or device authorization), Bedrock compares the local manifest hash and verified encryption public key with their corresponding remote values. If either differs, sync is blocked and native must prompt the user to download and restore the remote backup.
 
 ## Native callbacks and secrets
 
 ```rust
 /// Enables Bedrock to trigger passkey or OIDC authentication or set up, i.e. a factor ceremony.
-trait MainFactorCeremony {
-    async fn register_passkey(options_json: String) -> PasskeyResponse;
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait MainFactorCeremonyHandler: Send + Sync {
+    async fn create_passkey(options_json: String) -> PasskeyResponse;
     async fn authenticate_passkey(options_json: String) -> PasskeyResponse;
     async fn oidc_token(provider: OidcProvider, nonce: String) -> SiegelSession;
-    async fn icloud_factor(key_id: String) -> SiegelSession;
+    async fn authenticate_icloud(key_id: String) -> SiegelSession;
 }
-struct PasskeyResponse {
-    credential_json: String,
-    prf: Option<SiegelSession>,
-    legacy_prf: Option<SiegelSession>,
+
+#[derive(uniffi::Record)]
+pub struct PasskeyResponse {
+    pub credential_json: String,
+    pub prf: Option<SiegelSession>,
+    pub legacy_prf: Option<SiegelSession>,
 }
 ```
 
-Options and credential JSON are WebAuthn wire objects, not new native domain models. Bedrock
-constructs options, nonce bindings, and Turnkey stamps; native only invokes the OS/provider. Native
-supplies localized passkey name/display-name strings for create/add; Bedrock maps its existing
-configured OS into the service platform field, preserving Android's registration path. Bedrock
-generates and retains a per-attempt UUID for creation's `sessionId` body field, matching iOS's
-existing semantics. The authenticated HTTP bridge supplies identity, not that UUID. The response
-JSON excludes PRF results. Request PRF only when unwrapping/wrapping a backup key. Registration
-requires a usable PRF before any remote backup commit. Cancellation maps to the existing operation
-error enum; callback exceptions never unwind across FFI.
-
-Use `keys.world.app` and the current `world-app-backup` PRF salt. Preserve Android's legacy
-second-salt derivation and try its result only when the primary cannot unwrap the backup key. New
-factors use only the primary salt. Bedrock chooses the fallback; native returns requested results.
-
-`P256Signer` stays the reusable hardware boundary: compressed SEC1 public key; sign an already
-hashed 32-byte digest; DER ECDSA output, normalized in Bedrock. Never ask for its private key. Keep
-existing key-storage compatibility until the separate hardware rollout. Verify a replacement key is
-usable before removing the old value.
-
-`init(root, sync)` consumes the root, derives the account ID, and retains the signer capability.
-Normal startup and creation initialize with the available root. Login takes the persisted pending
-signer directly, derives the account ID from the validated recovered root, and retains the signer
-for finalization; no preliminary init is needed. Neither init nor login registers a key; login
-registration waits for finalization. Reauthorize accepts a fresh pending signer directly and installs
-it after confirmed backup-service registration. Subsequent flows use the stored signer.
-Reset derives/checks the account ID from its root and needs neither prior initialization nor a signer.
-Local-only `logout(false)` also needs neither signer nor account. Create requires prior init;
-Login purpose can establish the account itself. Other account operations require an ID;
-signer-using operations also require a stored signer. Missing state is a contextual local-state
-error. Root arguments must match an existing ID before any mutation. The break-glass public key is
-already encoded in that ID.
-
-A signer instance always identifies one fixed key; native must not implement it as a mutable
-"current key" lookup. Init cannot replace an initialized account or signer; use reauthorize for
-signer replacement. Reauthorize keeps the current signer on definite failure and retains the pending
-key on uncertainty. Native promotes the pending key only after confirmed registration. Preserve an
-unresolved sync manifest so the new signer can reconcile its outcome after authorization. No flow
-can switch accounts, change a key during another mutation, or replace an unresolved attempt's key.
-After restart, native initializes with its root and stored signer for creation/reauthorization,
-then passes the same persisted pending key to reauthorize when needed. Recovery resumes through
-login with its persisted pending signer. Bedrock checks the key against the pending operation
-before resuming. Account switching destroys the manager. Recovery establishes the ID before the
-one-use Login root handoff; no second root transfer to init is needed. Logout and successful backup
-deletion/reset release the signer together with the account binding. Native owns key storage and
-erasure; retaining the callback does not export the private key.
-
-Root, OIDC tokens, PRF, unwrapped backup keys, and ephemeral Turnkey session keys are zeroized when
-no longer needed. Pending recovery may hold its five-minute main session and one-use sync token in
-memory until completion/cancellation/expiry; a deadline wipes them even if native never finishes
-recovery. Neither is persisted. The root is never retained by the manager. Root is supplied
-explicitly for sync and reset; there is no root-provider callback. Native keeps the backup
-encryption **public** key in its existing store and passes it to every `sync`. Creation returns
-that key; recovery returns it with the staged result, and native promotes it after completion.
-Bedrock records the verified key with its acknowledged manifest for consistency checks. Before
-sealing a sync, the supplied key must match that record and authenticated remote metadata; a
-mismatch fails without uploading. Supplying a key cannot initialize a missing verified remote key.
-
-Both retrieval purposes return the existing root through a one-use Siegel handle after Bedrock
-validates its account ID. Native persists it for Login; DownloadUpdates keeps the native root and
-disposes of the returned handle. The Rust → native transfer extends Siegel's current native → Rust
-bridge. Bedrock does not generate a new root or retain it in the manager.
+1. Options and credential JSON are WebAuthn wire objects. Bedrock builds all of them, including passkey name.
+2. When a user selects a factor to use in the UI, Native calls `login()` or `reauthorize()`. Bedrock will then craft the passkey/OIDC request and trigger it through `MainFactorCeremonyHandler`. Native must update the UI after the user selects the factor (e.g. disabled buttons, loading state), and then handle the presentation of OIDC login screen (or dismissal on error). Importantly, these methods MUST NOT callback into Bedrock.
+3. Bedrock computes the passkey name for consistency. The passkey name will be "World ID App MMM DD HH::MM", dropping the username/wallet address.
+4. Bedrock configures the passkey RP (`keys.world.app`) and the PRF salt (`world-app-backup`). Bedrock will handle Android's legacy second-salt derivation when the primary cannot unwrap the backup key. This will also log a `critical!` error to track for migration.
+5. No changes to `P256Signer` (native signs arbitrary digest outputs).
 
 ## Local state and concurrency
 
-Persist under `backup_manager/<account_id>/`: acknowledged manifest/public key/compatibility, a
-pending manifest for an upload whose outcome is unresolved, and any staged recovery.
-Bedrock already owns the global manifest. Migrate it internally on the first authenticated state
-load: check the remote account ID against the binding and the old manifest hash against the remote
-head, then record the verified remote encryption public key with the inventory before removing the
-old manifest. Missing verified remote keys require reauthorization as above. The old manifest has no
-account field. If it is absent, initialize only when the remote inventory is canonically empty.
-Otherwise preserve existing state, return `RemoteAhead`, and block writes until explicit recovery.
-Native keeps its existing encryption public key and supplies it to sync; no public adoption call.
+1. Store all backup information under `backup_manager/<account_id_segment>/` where `account_id_segment` is the `backup_account_id mod 2^8` to both segment the backup information and avoid collisions from state clearing issues (e.g. at logout), but also to avoid logging the `backup_account_id` accidentally.
+2. Importantly, all state from `BackupManager` is local per client. It is not shared between clients (i.e. World ID App and World Money App).
+3. With the introduction of these changes, migrate files from their current location on first app run (atomically with staged files). The migration must validate the local state with the remote state before executing or raise a `RemoteAhead` error.
+4. Any mutation on the backup state is done through a concurrency lock. Concurrent calls error with `Busy`. Native must generally not perform concurrent updates on the backup.
+5. `logout` revokes the `SyncFactor` from both the backup-service and Turnkey, then clears up all of Bedrock's local state (manifest, staged files, etc.). Native must then clear the `SyncFactor` from the secure storage.
 
-Android cross-app transport reads the device key and backup encryption public key from native
-storage and retains the imported-from-peer marker. Remove the cached Turnkey sync-user ID from
-`BackupSyncData` and its native consumers; Bedrock resolves the user from the authenticated signer
-when needed. Handoff needs no BackupManager getter or separate metadata object. The receiver calls init
-with its root and imported signer, retains the imported public key for sync, and uses the startup head check. Today's handoff
-has no manifest: a fresh receiver of a nonempty backup must complete a main-factor `DownloadUpdates`
-recovery before
-syncing, with confirmation because transferred local data may differ. Retain its imported data and
-key while blocked; do not treat deprecated Drive upload callbacks as inventory. Remove duplicate
-native runtime account state; retain the key transport DTO and decoder. Replacing shared keys with
-separate hardware-backed keys remains a separate rollout.
+## Backup Content Management
 
-One manager per active account. A concurrent mutation returns `Busy`; no unbounded queue or
-background debounce. The native file adapter batches one logical change and may retry Busy once
-after the active call finishes, using fresh exports; otherwise return a visible unsynced result. An
-on-disk recovery returns RecoveryPending, not Busy. Startup with a persisted root restores the same
-signer through init. Init installs the matching capability but reports RecoveryPending with
-ID/purpose; native surfaces resume/cancel before enabling mutations.
-Before Login has persisted a root,
-restart resumes through login with the same persisted pending signer, without calling init. Only
-completion/cancel/resume may mutate pending recovery. Do not time-expire staged data that may
-already have been imported into the vault; explicit cancellation follows the flow contract. Reads do
-not observe half-published state. This does not replace backup-service's remote conditional writes;
-another device is a real concurrent writer.
+1. Syncing the backup (i.e. adding, removing or replacing any file) follows this pattern. Importantly, multiple updates must be batched together:
+  ```
+  Oxide file change / WalletKit vault change / referral change
+  → native backup adapter prepares one batch
+  → native asks to materialize the vault export if needed (WalletKit)
+  → BackupManager.sync(..., changes) -> Bedrock will read the bytes from the filesystem from the `path` of each `V0BackupFile`
+  → native deletes temporary exports (e.g. WalletKit vault)
+  ```
+  - On every sync, Bedrock verifies that each `designator` is valid and drops any unsupported `designator` entry from the backup, logging an error.
+2. **Major Change**. Before this update, the `path` in `V0BackupFile` determined both the **source** of the file that was added to the backup **and the destination** where it would be unpacked. With this update now, the `path` will no longer determine where the file gets unpacked to. This is for both security and increased resilience. Instead, unpacking the backup will work as follows:
+  ```
+  Native calls BackupManager.login(...)
+  → Bedrock retrieves and decrypts the backup
+  → Bedrock validates the archive and unpacks data into isolated staging files validating checksum and size (archive keys never become destination paths)
+  → Bedrock returns the root secret and staged file paths
+  → native securely stores the root for a new login
+  → native routes file paths to Oxide / WalletKit / referral consumers
+  → consumers validate their keys and contents before any live data changes (e.g. Oxide checks for a valid PCP)
+  → consumers import into their own storage, choosing their own destinations
+  → native calls BackupManager.finalize_login(...)
+  → Bedrock registers the sync factor and acknowledges the restored inventory
+  → Bedrock removes disposable staging; native reloads consumers and completes login
+  ```
+  - The above permits each module to determine integrity of their recovery (e.g. WalletKit can ensure a correct credential vault, or Oxide a correct PCP). Malicious, corrupted or fake files are not persisted and cannot replace other files in the filesystem.
+3. **Oxide changes:** add backup validation/import operations for orb, document, and face packages. Oxide validates its own keys, package formats, and identity bindings, then chooses destinations within its owned storage. Import must resume safely with the same  recovery ID; native should only invoke these operations and reload Oxide afterward.
+4. Explicit limits on backup sizes and unpacking: 15 MiB sealed, 32 MiB per entry, 128 MiB expanded, and 128 entries.
 
-`logout(true)` revokes this device and clears Bedrock's manifest/staging state, signer, and account
-binding. `logout(false)` clears only that local state; Android uses its existing imported-key marker
-to select this path, and native local-reset callers use it too. Wallet files and native keys remain
-native-owned. Share the private local-clear helper with delete/reset. The [logout
-contract](flows.md#delete-reset-logout) defines ordering and errors.
+## Other Notes
 
-## Restore file contract
+1. Rename `RemoteStaleAhead` to `RemoteAhead` errors everywhere.
+2. Add a `last_used_date` property to main and sync factors in the `backup-service` to track the last used date. Any auth with such factor updates the date. This is useful to remove stale sync factors and surface `MainFactor` usage information to the user.
+3. All sensitive secrets/tokens (e.g. OIDC tokens, unwrapped keys, PRF output, ...) are zeroized after use. All are handled only in `Siegel` sessions or `secrecy` boxes. Root secrets in particular MUST never linger in-memory, they are one-time used from their retrieval from the keychain.
+4. **High Impact**. Different native clients (i.e. World Money and World ID App) MUST NOT use the same `SyncFactor`s. Each must be authorized independently. When opening the other client for the first time, the user will be prompted to authorize their new client. This not only ensures proper key separation, but also ensures the user has access to their Main Factors.
 
-Allow **designator + relative path**, in Bedrock code, from actual writers. No caller-supplied
-directory wildcard and no allowlist inside the backup. Initial accepted paths:
 
-| Designator | Paths relative to Bedrock data directory |
-| --- | --- |
-| `orb_pkg` | `<hex commitment>/pcp_packages/pcp_lookup_table.json`; same directory's `encrypted-package-*.dat` |
-| `document_pkg` | `document-passport-v1.tar.gz.encrypted`; `document-personal-custody-<version>.tar.gz.encrypted` |
-| `face_pkg` | `face_pcp/face-pcp-v<digits>.tar.gz` |
-| `credential_vault` | `credential_vault/vault_export.bin` |
-| `anonymized_third_party_analytics` | `third-party-requests.json`; `ThirdPartyReferrals/third-party-referrals.json` |
-
-Bind dynamic segments to the existing Oxide filename grammar, with iOS and Android fixtures; `*`
-above is a basename suffix, never a slash or directory escape. Recognize the observed optional `0x`
-commitment prefix. Do not restrict document versions to the three iOS examples: Android already
-accepts versions such as `mnc-1.0`. Unknown future names are unsupported, not automatically retired.
-
-Both referral paths are legitimate and have different JSON schemas. Never rename one into the other
-or translate fields speculatively. Install both into these fixed, private paths; each native store
-reads only its own format. Sync preserves an unchanged foreign-platform file byte-for-byte. Referral
-writers use `Put` for their own path, never `ReplaceFiles` for the entire designator.
-
-The root/version tar entries are format fields, never filesystem destinations. Require exactly one
-valid root and supported version. Reject links/special files, duplicate normalized or case-folded
-paths, mismatched tar/CBOR paths, traversal, absolute paths, and symlink ancestors. Never write
-`backup_manager/manifest.json` from archive contents. Validate all entries/checksums and limits
-before publishing files; derive and compare the root's account ID with service metadata. Start with
-the server's 15 MiB sealed-size cap, 32 MiB per tar entry, and 128 MiB expanded/4096 entries;
-validate these against representative real fixtures before enabling enforcement.
-
-Decode raw designator strings at the archive boundary; the public enum remains closed. Hash the
-**full original inventory**, including unsupported/retired entries, with the existing V0 algorithm,
-and persist that full inventory as acknowledged. Its hash is not the hash of the installed subset.
-Change the existing internal V0BackupFile and V0BackupManifestEntry designator fields to String;
-classify into the public enum only for accepted operations. No second raw-manifest DTO.
-
-Classify entries as accepted, explicitly retired, or unsupported. Retirement rules live beside the
-allowlist and initially contain no invented obsolete filenames. Remove a retired local file only
-through a known owned path rule, never an arbitrary path from the old manifest. On next login,
-install accepted entries and remove retired files; on next successful sync, drop retired entries
-from the remote archive. Removing an allowlist entry alone means unsupported, not retirement.
-
-`RetrievedBackup.requires_app_update` is true exactly when unsupported entries remain. Recovery
-still returns supported data; completion persists `UpdateRequired` and blocks **all** archive
-rewrites, including empty/retirement-only syncs. Startup checks report that persisted state even
-when the remote head matches. Preserve the remote bytes. Clear the block only after a compatible
-client completes a confirmed DownloadUpdates restore of the complete archive.
-This deliberately avoids an encrypted
-opaque-entry cache. Native must show that backup updates are paused; recovering a wallet is not
-evidence that its new changes are being backed up.
+## Future Improvements
+1. Log in reminders.
+2. Introduce flow to delete legacy iCloud / Google Drive backup.
+2. Introduce a `V1BackupFile` enum and replace `path` with a proper `entry_id`.
+3. Backup authentication.
