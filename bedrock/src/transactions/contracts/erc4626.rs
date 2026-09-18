@@ -573,8 +573,10 @@ impl Erc4626Vault {
         let actual_share_amount = share_balance.min(max_redeem);
         if actual_share_amount.is_zero() {
             return Err(RpcError::InvalidResponse {
-                error_message: "Cannot migrate zero amount - user has no vault shares"
-                    .to_string(),
+                error_message: format!(
+                    "Cannot migrate - no source vault shares are currently redeemable \
+                     (share_balance={share_balance}, max_redeem={max_redeem})"
+                ),
             });
         }
 
