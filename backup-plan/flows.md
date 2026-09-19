@@ -58,10 +58,7 @@ init(root_session, sync_signer):
             pending_recovery: none
         }
 
-        atomically_write(account_directory, local_state)
-        delete_legacy_manifest()
-        // Write first: interruption must not lose the old manifest.
-        // If both copies exist after restart, use the account-specific copy.
+        // Keep this candidate in memory; leave the legacy file untouched until validation.
 
     else:
         local_state = {
@@ -105,9 +102,11 @@ init(root_session, sync_signer):
 
 `RemoteAhead` means native must trigger a backup download. `UpdateRequired` means this client cannot understand the whole archive.
 
+If `init` loaded a legacy manifest, the first authenticated remote-state check validates its manifest hash and encryption key before atomically saving account-scoped state, then deleting the legacy copy. Failure preserves the legacy file. If interrupted between those writes, use the saved account state and finish cleanup. A replacement restore removes the legacy copy only after `finalize_login` commits the restored state.
+
 ## `create(factor, root_secret, files)`
 
-1. Verify the root_secret matches the initialized account and that no backup already exists.
+1. Verify the root_secret matches the initialized account. A fresh creation requires no existing backup; a retry first checks whether its pending creation already succeeded.
 2. Run the selected factor ceremony. For passkeys, require a usable PRF result before any commit.
 3. Build the complete initial backup from the supplied vault, Oxide, and referral exports.
 4. Prove root ownership and possession of this client's sync key; create the remote backup.
@@ -119,43 +118,13 @@ init(root_session, sync_signer):
 
 Success includes the initial archive upload. Native must not mark backup enabled after factor registration alone. Keep exported source files alive until the awaited call finishes.
 
-**Creation and retry decisions:**
+**Creation retries:** if backup-service cannot be reached, return the network error and retry when it is reachable. Keep the pending signer, candidate manifest/encryption key, and any provisioned organization. Retry creation with the same `backup_account_id` and signer, obtaining fresh authentication proofs as needed. The service publishes creation only if that account does not exist; a delayed first request and a retry cannot overwrite each other.
 
-```text
-before provisioning or uploading:
-    persist one creation UUID and the pending sync key
-    reuse them for every retry of this attempt
+If creation reports that the account already exists, retrieve it using the pending signer. A matching manifest and encryption key acknowledge the earlier success; a different backup is an existing-backup error, never permission to overwrite it. No creation-attempt endpoint or service-side outcome journal is needed.
 
-if an earlier creation outcome is unresolved:
-    remote = inspect_backup_using_pending_sync_key()
-    if remote matches the pending manifest and encryption public key:
-        acknowledge_creation_locally()
-        return encryption_public_key
+The service must preserve factor lookups when a create write might have succeeded, reuse existing mappings to the same account on retry, and repair missing lookups from committed membership. Losing the response must not make the created backup inaccessible; retries cannot take over a factor mapped to another account.
 
-    keep the pending key and any provisional organization
-    fail CommitUncertain
-    // Current absence cannot rule out a delayed commit.
-
-if provisioning an OIDC organization:
-    organization = provision_using_the_same_creation_UUID()
-    persist its exact ID before further setup or writes
-
-persist the candidate manifest before submitting creation
-
-if creation is confirmed:
-    acknowledge_creation_locally()
-    return encryption_public_key
-
-if creation is definitively rejected before commit:
-    mark this attempt's provisional organization eligible for cleanup
-    propagate the rejection
-
-if the response is lost or ambiguous:
-    retain the attempt and its authority
-    fail CommitUncertain
-```
-
-An ambiguous provisioning response must be resolved using the same UUID. Do not create a replacement organization or treat a later rejected retry as proof that an earlier request never committed.
+Turnkey provisioning still reuses one creation UUID and persists the returned organization ID before further writes. A lost backend response must not create another organization. A rejected retry is not proof that an earlier request failed; only clean up an organization after confirming no successful creation uses it.
 
 Before rollout, confirm that app-backend provisioning supports the creation idempotency contract and recreation after a deleted organization; implement missing backend support with OIDC creation.
 
@@ -303,12 +272,12 @@ cancel_login(recovery_id):
 
 Native persists the completion-only guard before replacing existing consumer data. Never cancel by dropping a running mutation future, or log out midway through replacement. Native cleanup proceeds only after Bedrock cancellation succeeds; an interrupted onboarding reset resumes before the account becomes usable.
 
-## `reauthorize(authentication, sync)`
+## `reauthorize(authentication, sync, protected_sync_public_key)`
 
-Native persists a fresh candidate signer before calling. This authorizes the client without restoring files or transferring a root.
+Native persists a fresh candidate signer before replacing its device key. To repair only missing Turnkey authorization, reuse the current service-authorized signer. This authorizes the client without restoring files or transferring a root. `protected_sync_public_key` is the old shared key during migration, otherwise `None`.
 
 ```text
-reauthorize(authentication, candidate_signer):
+reauthorize(authentication, candidate_signer, protected_sync_public_key):
     require an initialized account and no concurrent mutation
     if an authorization attempt is unresolved:
         require its same persisted candidate key
@@ -319,7 +288,7 @@ reauthorize(authentication, candidate_signer):
     // An existing key cannot silently replace the acknowledged key.
 
     keep the current signer while registering the candidate
-    result = register_device(candidate_signer)
+    result = register_device(candidate_signer, protected_sync_public_key)
 
     if result confirms service enrollment:
         install the candidate as the manager's active signer
@@ -352,7 +321,11 @@ sync(root, encryption_public_key, changes):
         if remote matches the pending manifest hash and encryption key:
             acknowledge that completed upload locally
         else if remote matches the previous acknowledged hash and key:
-            discard the pending candidate; rebuild from fresh sources
+            retry the saved encrypted upload against that same previous head
+            remote = read_authenticated_remote_metadata()
+            if remote does not match the pending upload:
+                retain it and return the retry error or RemoteAhead
+            acknowledge that completed upload locally
         else:
             fail RemoteAhead
 
@@ -371,7 +344,7 @@ sync(root, encryption_public_key, changes):
     if the inventory and checksums are unchanged:
         return success without uploading
 
-    seal the candidate and persist its manifest/public key as pending
+    seal the candidate and persist its encrypted bytes and manifest/public key as pending
     upload conditionally against the acknowledged remote head
 
     if the remote commit is confirmed:
@@ -390,9 +363,11 @@ Native includes `Put` for unchanged retained entries too, including on removal-o
 
 Consumers update their own referral key, never replace the entire namespace. Explicitly retired entries can be dropped on the next real sync. Unsupported entries block every archive rewrite, including retirement-only updates.
 
-A delayed upload may commit after an old-head read; the next conditional write must fail rather than overwrite it. Reconcile pending state before another batch. No upload queue or automatic merge.
+A timeout does not prove the server stopped. Keep one pending encrypted upload and retry those same bytes before accepting another batch. If remote metadata already matches it, acknowledge success; if another update won, return `RemoteAhead`. Remove the saved upload after acknowledgement or a completed replacement restore. Use bounded request timeouts; no cancellation protocol, attempt-status endpoint, upload queue, or automatic merge.
 
-**Required service change:** upload to a new immutable archive object, then atomically select its reference, manifest hash, and expected encryption public key in the conditional metadata update. A failed update leaves the previous backup readable. Factor-only writes preserve the archive reference; cleanup must not remove selected objects or objects still being read. Initialize missing legacy keys through main-authorized registration, and deploy client key support before requiring it.
+**Required service change:** upload each new backup as a separate object, then switch the metadata to that copy only if the expected previous manifest hash and encryption key still match. Updating the selected copy, manifest hash, and key is one conditional write. Failure leaves the previous backup readable, and factor-only writes keep its selected copy unchanged. Cleanup must not remove selected objects or objects still being read. Initialize missing legacy keys through main-authorized registration, and deploy client key support before requiring it.
+
+Creation uses the same storage path, publishing metadata only if the account does not exist. An uploaded file without committed metadata must not reserve the account ID or block a retry.
 
 ## `add_factor(factor, existing)`
 
@@ -403,6 +378,7 @@ add_factor(new_factor, existing_method):
     existing = authenticate_existing_main_factor(existing_method)
     require the same account
     unwrap the existing backup key
+    remember the Turnkey organization/key state used to prepare this addition
 
     if adding a passkey and the backup already has one:
         reject before the new ceremony
@@ -420,7 +396,7 @@ add_factor(new_factor, existing_method):
     if Turnkey enrollment is required:
         reuse matching credentials; finish all required Apple audiences
 
-    conditionally commit the new factor to backup-service
+    conditionally commit only if that Turnkey organization/key state is unchanged
     if committed:
         return updated metadata
 
@@ -436,6 +412,8 @@ Existing authentication and key access must succeed before creating a new creden
 
 For Apple, install every audience from the existing canonical environment table before committing the factor. Share that table with migrations. Retries reuse already-installed audience entries; unknown audiences survive, and retirement requires an explicit rule. **Importantly** when adding a new factor, the `sub` is taken from the user's OIDC token. The migration must be short-lived as Turnkey's backend response can't be trusted.
 
+Bind the addition grant to the observed Turnkey organization/key reference, including its absence. Check that reference in the same conditional write that adds the factor. If removal changed it, reject the addition and replan Turnkey setup from current metadata; never carry the removed reference into a retry.
+
 A retry with different wrapped-key material is not idempotent. Never remove a main credential merely because this attempt created it or the service currently lacks it: another attempt may use it. Newly provisioned organizations follow the stricter creation cleanup rules.
 
 ## `remove_factor(id, reauth, confirm_backup_deletion)`
@@ -444,6 +422,7 @@ Reuse the existing Bedrock removal flow. Only these changes remain:
 
 - Use the manager's stored account and signer; obtain reauthentication through `MainFactorCeremonyHandler`.
 - Enforce last-factor deletion confirmation inside backup-service's conditional write. Bind `allowBackupDeletion` and the target factor ID to the challenge; default confirmation to false and reject unconfirmed deletion with `WouldDeleteBackup` before mutation.
+- Decide last-OIDC key removal and organization cleanup from the metadata committed by the service, not the earlier client snapshot; this shares the addition precondition above.
 - Support removal of existing iCloud Keychain main factors. Remove their encrypted key only when no surviving factor uses it.
 
 Sync-factor revocation belongs to `logout()` and device cleanup.
@@ -519,7 +498,7 @@ native after success:
 
 Preserve the backup and every other client's factors. Already-cleared state is a no-op. Native retains its key on Busy, RecoveryPending, or local clearing failure.
 
-**Previously shared keys:** native must establish exclusive ownership before binding an existing signer. Android's `importedFromCrossAppIdentity = false` is insufficient: the source app may have exported that key. If ownership is uncertain, persist a fresh app-private key, bind it, and require `reauthorize` before backup operations. Reuse that candidate across retries. Never bind or remotely revoke the old shared key during this transition; logout therefore targets only the new key. After successful authorization, discard this app's old private copy, leaving shared keychain entries untouched. Stop exporting/importing sync keys between apps. Old remote membership cleanup remains deferred.
+**Previously shared keys:** native must establish exclusive ownership before binding an existing signer. Android's `importedFromCrossAppIdentity = false` is insufficient: the source app may have exported that key. If ownership is uncertain, persist a fresh app-private key, bind it, and require `reauthorize` before backup operations, passing the old shared public key as `protected_sync_public_key`. Reuse both values across retries. Never bind or remotely revoke the old shared key during this transition; logout therefore targets only the new key. After successful authorization, discard this app's old private copy, leaving shared keychain entries untouched. Stop exporting/importing sync keys between apps. Old remote membership cleanup remains deferred.
 
 
 ## Device registration
@@ -529,7 +508,7 @@ Preserve the backup and every other client's factors. Already-cleared state is a
 Remove Android's cached Turnkey sync-user ID and its readers/writers. Bedrock resolves users by the signer's public key; native retains key storage and the verified backup encryption public key.
 
 ```text
-register_device(candidate):
+register_device(candidate, protected_sync_public_key = none):
     require the same candidate key if this attempt is unresolved
 
     if this attempt has already been submitted:
@@ -539,10 +518,6 @@ register_device(candidate):
             require fresh main authorization and a new candidate; do not promote this key
         if still uncertain:
             fail CommitUncertain
-
-    if service enrollment is confirmed and the candidate remains a member:
-        resume any recorded displaced-key cleanup
-        return success
 
     if this backup has a Turnkey organization:
         find sync-role users matching the candidate public key
@@ -558,8 +533,13 @@ register_device(candidate):
             else:
                 propagate the failure
 
+    if service enrollment is confirmed and the candidate remains a member:
+        resume any recorded displaced-key cleanup
+        return success
+
     prove candidate-key possession and use main-authorized registration
-    bind replace_oldest_if_full = true to the account, attempt, and new key
+    bind replace_oldest_if_full = true and protected_sync_public_key
+        to the account, attempt, and new key
     service conditionally enrolls it:
         if this attempt already committed:
             return its recorded result and current membership without another mutation
@@ -567,6 +547,7 @@ register_device(candidate):
             return success without eviction
         if at the 25-factor limit:
             select minimum (last_used_date or created_at, factor_id)
+                excluding protected_sync_public_key
         add candidate, remove selected member, and record result/displaced key
             in one metadata write conditional on the read revision
         // Bounded conflict retries reread current state and reselect.
@@ -612,7 +593,7 @@ The service verifies credential signature, `webauthn.get`, RP/origin/cross-origi
 
 **Existing iCloud:** load the selected main-factor key, never substitute a sync key. It can authorize service recovery and upgrades, but cannot grant Turnkey main authority. Android has no iCloud login ceremony; it can still display/remove these factors. No new iCloud enrollment.
 
-Passkey/iCloud recovery may finish service enrollment while Turnkey is unavailable, reporting incomplete device authorization. OIDC recovery cannot export its factor secret without Turnkey and must fail. A degraded result must never claim that both services authorized the device.
+Passkey/iCloud recovery may succeed with backup-service authorization while Turnkey is unavailable; log the incomplete Turnkey enrollment. A later operation requiring missing Turnkey authorization uses the existing `NeedsReauth` error, and `reauthorize` can repair it with the same service-authorized signer. No new result type, persisted health state, or background repair. OIDC recovery cannot export its factor secret without Turnkey and must fail.
 
 **Native ceremonies:** iOS retains main-thread presentation/dismissal and its OS capability guards. Android retains Activity access, cancellation/fallback handling, and the legacy PRF result. Android Apple authentication remains an explicit unsupported-capability error until its ceremony exists. Native forwards Bedrock's passkey labels unchanged; OS rename/orphan notifications remain native, without claiming unconfirmed credential deletion or rename.
 

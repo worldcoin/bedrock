@@ -77,8 +77,9 @@ impl BackupManager {
     // Abandons a login before committing (opposite to `finalize_login`). Generally only expected on the edge case
     // of saving the root secret failing.
     pub fn cancel_login(recovery_id: String);
-    // Authorize and register a new `SyncFactor`.
-    pub async fn reauthorize(login: FactorAuthentication, sync: P256Signer);
+    // Authorize the device signer; the optional protected key is excluded from eviction.
+    pub async fn reauthorize(login: FactorAuthentication, sync: P256Signer,
+                           protected_sync_public_key: Option<String>);
 
     pub async fn add_factor(factor: FactorRegistration, existing: FactorAuthentication)
         -> BackupMetadata;
@@ -198,7 +199,7 @@ With the ephemeral keypair, the new factor can be cryptographically bound to the
 
 1. Store account state under `backup_manager/<account_id_segment>/`, where the segment is the full lowercase hex output of `blake3::keyed_hash(install_key, backup_account_id.as_bytes())`. Bedrock generates a random 32-byte key once per app installation and atomically persists it as private `backup_manager/.namespace_key` before creating account directories. Native excludes this directory, including the key, from OS backups and cross-app transfer. Keep the key across account logout/reset; a fresh installation gets a fresh key. Never log the key or raw account ID. A corrupt/unreadable key, or a missing key with existing account directories, is an error.
 2. Importantly, all state from `BackupManager` is local per client. It is not shared between clients (i.e. World ID App and World Money App).
-3. With the introduction of these changes, migrate files from their current location on first app run (atomically with staged files). The migration must validate the local state with the remote state before executing or raise a `RemoteAhead` error.
+3. `init` reads legacy state without moving or deleting it. The first asynchronous remote-state check validates it before atomically saving account-scoped state and deleting the legacy copy. A mismatch raises `RemoteAhead` and leaves the legacy copy intact.
 4. Any mutation on the backup state is done through a concurrency lock. Concurrent calls error with `Busy`. Native must generally not perform concurrent updates on the backup.
 5. `logout` revokes the `SyncFactor` from both the backup-service and Turnkey, then clears this account's Bedrock state (manifest, staged files, etc.), retaining the installation namespace key. Native must then clear the `SyncFactor` from the secure storage.
 
