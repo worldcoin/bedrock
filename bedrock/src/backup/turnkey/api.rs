@@ -15,14 +15,17 @@ use sha2::{Digest, Sha256};
 use turnkey_api_key_stamper::{
     Stamp, StampHeader, StamperError, API_KEY_STAMP_HEADER_NAME, SIGNATURE_SCHEME_P256,
 };
+use turnkey_client::generated::external::activity::v1::Activity;
 use turnkey_client::generated::external::data::v1::{Policy, User};
+use turnkey_client::generated::external::options::v1::Pagination;
 use turnkey_client::generated::immutable::activity::v1::{
     CreateOauthProvidersIntentV2, CreatePolicyIntentV3, DeleteAuthenticatorsIntent,
-    DeleteOauthProvidersIntent, DeletePolicyIntent, DeleteSubOrganizationIntent,
-    OauthProviderParamsV2, UpdatePolicyIntentV2,
+    DeleteOauthProvidersIntent, DeletePoliciesIntent, DeletePolicyIntent,
+    DeleteSubOrganizationIntent, DeleteUsersIntent, OauthProviderParamsV2,
+    UpdatePolicyIntentV2,
 };
 use turnkey_client::generated::services::coordinator::public::v1::{
-    GetPoliciesRequest, GetUsersRequest, GetWhoamiRequest,
+    GetActivitiesRequest, GetPoliciesRequest, GetUsersRequest, GetWhoamiRequest,
 };
 use turnkey_client::{RetryConfig, TurnkeyClient};
 
@@ -285,6 +288,33 @@ impl TurnkeyApiClient {
         .await
     }
 
+    /// Returns the Turnkey user id that `signer` authenticates as in
+    /// `suborganization_id`.
+    ///
+    /// This is deliberately separate from [`Self::whoami_user_id`] so callers
+    /// cannot accidentally use a sync factor where a main factor is required.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    pub async fn whoami_sync_factor_user_id(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+    ) -> Result<String, TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let request = GetWhoamiRequest {
+            organization_id: suborganization_id.to_string(),
+        };
+        self.with_retry("whoami_sync_factor_user_id", || async {
+            client
+                .get_whoami(request.clone())
+                .await
+                .map(|response| response.user_id)
+                .map_err(TurnkeyApiError::from)
+        })
+        .await
+    }
+
     /// Lists users from Turnkey.
     ///
     /// # Errors
@@ -304,6 +334,38 @@ impl TurnkeyApiClient {
                 .get_users(request.clone())
                 .await
                 .map(|response| response.users)
+                .map_err(TurnkeyApiError::from)
+        })
+        .await
+    }
+
+    /// Lists up to 100 activities before `before_activity_id`, newest first.
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, or parsing failures.
+    pub async fn get_activities(
+        &self,
+        suborganization_id: &str,
+        signer: SyncFactor<'_>,
+        before_activity_id: Option<&str>,
+    ) -> Result<Vec<Activity>, TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let request = GetActivitiesRequest {
+            organization_id: suborganization_id.to_string(),
+            filter_by_status: Vec::new(),
+            pagination_options: Some(Pagination {
+                limit: "100".to_string(),
+                before: before_activity_id.unwrap_or_default().to_string(),
+                after: String::new(),
+            }),
+            filter_by_type: Vec::new(),
+        };
+
+        self.with_retry("get_activities", || async {
+            client
+                .get_activities(request.clone())
+                .await
+                .map(|response| response.activities)
                 .map_err(TurnkeyApiError::from)
         })
         .await
@@ -659,6 +721,81 @@ impl TurnkeyApiClient {
 
         // Policies have changed; drop the stale cache entry.
         self.policies_cache.clear();
+        Ok(())
+    }
+
+    /// Deletes policies from the sub-organization in one atomic activity (needs a
+    /// [`MainFactor`] signer).
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn delete_policies(
+        &self,
+        suborganization_id: &str,
+        policy_ids: Vec<String>,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let requested = policy_ids.len();
+        let intent = DeletePoliciesIntent { policy_ids };
+        let timestamp_ms = ntp_timestamp_ms()?;
+        let deleted = self
+            .with_retry("delete_policies", || async {
+                client
+                    .delete_policies(
+                        suborganization_id.to_string(),
+                        timestamp_ms,
+                        intent.clone(),
+                    )
+                    .await
+                    .map(|activity| activity.result.policy_ids.len())
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        if deleted != requested {
+            crate::critical!(
+                "turnkey.delete_policies.count_mismatch requested={requested} deleted={deleted}"
+            );
+        }
+        self.policies_cache.clear();
+        Ok(())
+    }
+
+    /// Deletes users from the sub-organization in one atomic activity (needs a
+    /// [`MainFactor`] signer).
+    ///
+    /// # Errors
+    /// Returns [`TurnkeyApiError`] on transport, stamping, activity, or parsing failures.
+    pub async fn delete_users(
+        &self,
+        suborganization_id: &str,
+        user_ids: Vec<String>,
+        signer: MainFactor<'_>,
+    ) -> Result<(), TurnkeyApiError> {
+        let client = self.sdk_client(signer.0)?;
+        let requested = user_ids.len();
+        let intent = DeleteUsersIntent { user_ids };
+        let timestamp_ms = ntp_timestamp_ms()?;
+        let deleted = self
+            .with_retry("delete_users", || async {
+                client
+                    .delete_users(
+                        suborganization_id.to_string(),
+                        timestamp_ms,
+                        intent.clone(),
+                    )
+                    .await
+                    .map(|activity| activity.result.user_ids.len())
+                    .map_err(TurnkeyApiError::from)
+            })
+            .await?;
+
+        if deleted != requested {
+            crate::critical!(
+                "turnkey.delete_users.count_mismatch requested={requested} deleted={deleted}"
+            );
+        }
         Ok(())
     }
 }

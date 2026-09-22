@@ -212,7 +212,7 @@ fn is_policy_for(policy: &Policy, user_id: &str) -> bool {
 /// regardless of the effect or any other conditions which the policy would apply.
 ///
 /// The match is strict: any other consensus shape is ignored.
-fn policy_bound_user(policy: &Policy) -> Option<&str> {
+pub(super) fn policy_bound_user(policy: &Policy) -> Option<&str> {
     const PREFIX: &str = "approvers.any(user, user.id == '";
     const SUFFIX: &str = "')";
 
