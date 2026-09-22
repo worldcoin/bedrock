@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate(from, to)`) migrates full redeemable shares (`min(balanceOf, maxRedeem)`); leftover source shares possible if `maxRedeem` binds; `previewRedeem` snapshot + 0.03% deposit haircut (dust stays on Safe); destination `previewDeposit > 0`; zero-first approve when needed
+- *(test)* Morpho Re7 WARS V1→V2 migrate fork e2e
+
+## [0.7.2](https://github.com/worldcoin/bedrock/compare/0.7.1...0.7.2) - 2026-09-17
+
+### Added
+
+- *(backup)* expose batch file changes (WIDC-267) ([#455](https://github.com/worldcoin/bedrock/pull/455))
+- *(backup)* guard legacy file removal by checksum (WIDC-217) ([#452](https://github.com/worldcoin/bedrock/pull/452))
+- batch backup file changes ([#440](https://github.com/worldcoin/bedrock/pull/440))
+- improvements to SIWE parsing ([#449](https://github.com/worldcoin/bedrock/pull/449))
+
+### Other
+
+- align Rust toolchains on 1.98.1 ([#437](https://github.com/worldcoin/bedrock/pull/437))
+- *(backup)* cover combined file updates (WIDC-267) ([#451](https://github.com/worldcoin/bedrock/pull/451))
+
 ## [0.7.1](https://github.com/worldcoin/bedrock/compare/0.7.0...0.7.1) - 2026-09-11
 
 ### Added

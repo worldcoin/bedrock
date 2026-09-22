@@ -197,6 +197,33 @@ impl ManifestManager {
         Ok(files)
     }
 
+    /// Applies file changes in order and syncs the backup if needed.
+    ///
+    /// Include all changed files, including recreated exports. Other files must
+    /// still match their saved checksums. Keep files unchanged until this returns
+    /// and serialize calls with other backup writes.
+    ///
+    /// The local manifest is saved after upload. A lost response or failed local
+    /// save can leave the server ahead; resolve that state before retrying.
+    ///
+    /// # Errors
+    /// See [`BackupError`].
+    pub async fn sync_changes(
+        &self,
+        root_secret: &str,
+        backup_keypair_public_key: String,
+        changes: Vec<BackupFileChange>,
+    ) -> Result<(), BackupError> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let result = self
+            .mutate_manifest_and_sync(root_secret, backup_keypair_public_key, changes)
+            .await;
+        Self::send_sync_event(&result).await;
+        result
+    }
+
     /// Adds or refreshes a file and syncs the backup when its manifest entry changes.
     ///
     /// # Errors
@@ -460,22 +487,6 @@ impl ManifestManager {
             })
     }
 
-    pub(super) async fn sync_changes(
-        &self,
-        root_secret: &str,
-        backup_keypair_public_key: String,
-        changes: Vec<BackupFileChange>,
-    ) -> Result<(), BackupError> {
-        if changes.is_empty() {
-            return Ok(());
-        }
-        let result = self
-            .mutate_manifest_and_sync(root_secret, backup_keypair_public_key, changes)
-            .await;
-        Self::send_sync_event(&result).await;
-        result
-    }
-
     async fn mutate_manifest_and_sync(
         &self,
         root_secret: &str,
@@ -543,6 +554,29 @@ impl ManifestManager {
                         )));
                     }
                 }
+                BackupFileChange::RemoveIfChecksumMatches {
+                    designator,
+                    path,
+                    checksum_hex,
+                } => {
+                    let path = Self::normalize_input_path(&path);
+                    if let Some(index) = manifest
+                        .files
+                        .iter()
+                        .position(|entry| entry.file_path == path)
+                    {
+                        let entry = &manifest.files[index];
+                        if entry.designator != designator
+                            || !entry.checksum_hex.eq_ignore_ascii_case(&checksum_hex)
+                        {
+                            return Err(BackupError::InvalidFileForBackup(
+                                "Backup entry changed before conditional removal"
+                                    .to_string(),
+                            ));
+                        }
+                        manifest.files.remove(index);
+                    }
+                }
                 BackupFileChange::ReplaceFiles { designator, paths } => {
                     manifest
                         .files
@@ -594,16 +628,37 @@ impl Default for ManifestManager {
     }
 }
 
-pub(super) enum BackupFileChange {
+/// A change applied by [`ManifestManager::sync_changes`].
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum BackupFileChange {
+    /// Adds or refreshes a file from its current contents.
     Put {
+        /// File category.
         designator: BackupFileDesignator,
+        /// Path relative to the app filesystem.
         path: String,
     },
+    /// Removes a file. Fails if it is not registered.
     Remove {
+        /// Registered path.
         path: String,
     },
-    ReplaceFiles {
+    /// Removes only the entry with the expected designator and recorded BLAKE3 checksum.
+    /// Missing entries are a retry-safe no-op; a mismatch rejects the whole batch.
+    /// The local file need not exist. Path normalization and matching follow `Remove`.
+    RemoveIfChecksumMatches {
+        /// Expected file category.
         designator: BackupFileDesignator,
+        /// Registered path.
+        path: String,
+        /// Expected BLAKE3 checksum recorded in the manifest.
+        checksum_hex: String,
+    },
+    /// Replaces all files for a designator.
+    ReplaceFiles {
+        /// File category to replace.
+        designator: BackupFileDesignator,
+        /// Paths relative to the app filesystem. Empty removes all files for the designator.
         paths: Vec<String>,
     },
 }

@@ -39,7 +39,7 @@ static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
 /// Hard ceiling on a full migration run. A degraded Turnkey (repeated timeouts
 /// plus retry backoff) must not block the caller indefinitely, and iOS cannot
 /// cancel a uniffi async call, so the deadline lives here.
-const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(3);
 
 /// High level manager to perform Turnkey account operations such as setup and
 /// migration reconciliation.
