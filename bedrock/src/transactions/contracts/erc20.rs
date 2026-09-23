@@ -32,6 +32,7 @@ sol! {
 }
 
 /// Enables operations with the ERC-20 token contract.
+#[derive(Clone)]
 pub struct Erc20 {
     /// The inner call data for the ERC-20 `transferCall` function.
     call_data: Bytes,
