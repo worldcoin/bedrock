@@ -124,8 +124,8 @@ async fn prepare_self_sponsored_transfer(
 ) -> Result<PreparedTransaction, TransactionError> {
     let estimated_cost = parse_fee_estimate(decline)?;
 
-    // The wallet migration establishes the TFH paymaster's fee-token allowance.
-    // The advisory already prices this transfer, so retry with the same calldata.
+    // The TFH paymaster's fee-token allowance must already be set by the wallet
+    // migration. Retry sponsorship for the transfer covered by the fee estimate.
     let retry = rpc_client
         .pm_sponsor_user_operation(
             Network::WorldChain,
