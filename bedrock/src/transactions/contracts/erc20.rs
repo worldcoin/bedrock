@@ -32,14 +32,11 @@ sol! {
 }
 
 /// Enables operations with the ERC-20 token contract.
-#[derive(Clone)]
 pub struct Erc20 {
     /// The inner call data for the ERC-20 `transferCall` function.
     call_data: Bytes,
     /// The address of the ERC-20 token contract.
     token_address: Address,
-    to: Address,
-    operation: SafeOperation,
 }
 
 impl Erc20 {
@@ -56,41 +53,7 @@ impl Erc20 {
         Self {
             call_data,
             token_address,
-            to: token_address,
-            operation: SafeOperation::Call,
         }
-    }
-
-    /// Prepends a fee-token approval to this transfer in one atomic Safe operation.
-    #[must_use]
-    pub(crate) fn with_fee_approval(
-        mut self,
-        fee_token: Address,
-        paymaster: Address,
-        value: U256,
-    ) -> Self {
-        let approval = Self::encode_approve(paymaster, value);
-        let entries = [
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: fee_token,
-                value: U256::ZERO,
-                data_length: U256::from(approval.len()),
-                data: approval.into(),
-            },
-            MultiSendTx {
-                operation: SafeOperation::Call as u8,
-                to: self.token_address,
-                value: U256::ZERO,
-                data_length: U256::from(self.call_data.len()),
-                data: self.call_data,
-            },
-        ];
-        let bundle = MultiSend::build_bundle(&entries);
-        self.call_data = bundle.data.into();
-        self.to = bundle.to;
-        self.operation = bundle.operation;
-        self
     }
 
     /// Encodes an ERC-20 approve call.
@@ -267,7 +230,7 @@ impl Is4337Encodable for BatchErc20Approval {
 
 /// First byte of the metadata field. Index starts at 1 as 0 is reserved for "not set".
 /// NOTE: Ordering should never change, only new values should be added.
-#[derive(Debug, Clone, Copy, uniffi::Enum)]
+#[derive(Debug, uniffi::Enum)]
 #[repr(u8)]
 pub enum TransferAssociation {
     /// No association.
@@ -288,10 +251,10 @@ impl Is4337Encodable for Erc20 {
     fn build_execute_user_op_call_data(&self) -> Bytes {
         ISafe4337Module::executeUserOpCall {
             // The token address
-            to: self.to,
+            to: self.token_address,
             value: U256::ZERO,
             data: self.call_data.clone(),
-            operation: self.operation as u8,
+            operation: SafeOperation::Call as u8,
         }
         .abi_encode()
         .into()
@@ -332,7 +295,6 @@ mod tests {
     use std::str::FromStr;
 
     use crate::primitives::BEDROCK_NONCE_PREFIX_CONST;
-    use crate::transactions::contracts::multisend::{IMultiSend, MULTISEND_ADDRESS};
 
     use super::*;
 
@@ -350,43 +312,6 @@ mod tests {
         let expected_call_data = bytes!("0x7bb374280000000000000000000000002cfc85d8e48f8eab294be644d9e25c30308630030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb0000000000000000000000001234567890123456789012345678901234567890000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000");
 
         assert_eq!(execute_user_op_call_data, expected_call_data);
-    }
-
-    #[test]
-    fn test_fee_approval_precedes_transfer_in_one_user_operation() {
-        let transfer_token =
-            Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
-        let fee_token =
-            Address::from_str("0x79A02482A880bCE3F13e09Da970dC34db4CD24d1").unwrap();
-        let paymaster =
-            Address::from_str("0x0000000000000039cd5e8aE05257CE51C473ddd1").unwrap();
-        let recipient =
-            Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
-        let operation = Erc20::new(transfer_token, recipient, U256::from(7))
-            .with_fee_approval(fee_token, paymaster, U256::from(12));
-        let call_data = operation.build_execute_user_op_call_data();
-        let safe_call =
-            ISafe4337Module::executeUserOpCall::abi_decode_raw(&call_data[4..])
-                .unwrap();
-        assert_eq!(safe_call.to, MULTISEND_ADDRESS);
-        assert_eq!(safe_call.operation, SafeOperation::DelegateCall as u8);
-        let batch =
-            IMultiSend::multiSendCall::abi_decode_raw(&safe_call.data[4..]).unwrap();
-        let approval = Erc20::encode_approve(paymaster, U256::from(12));
-        let transfer = IErc20::transferCall {
-            to: recipient,
-            value: U256::from(7),
-        }
-        .abi_encode();
-        let first_len = 85 + approval.len();
-        assert_eq!(batch.transactions.len(), first_len + 85 + transfer.len());
-        assert_eq!(&batch.transactions[1..21], fee_token.as_slice());
-        assert_eq!(&batch.transactions[85..first_len], approval);
-        assert_eq!(
-            &batch.transactions[first_len + 1..first_len + 21],
-            transfer_token.as_slice()
-        );
-        assert_eq!(&batch.transactions[first_len + 85..], transfer);
     }
 
     #[test]
