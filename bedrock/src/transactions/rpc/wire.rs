@@ -116,6 +116,8 @@ pub struct PmSponsorshipDecline {
     pub paymaster_address: Address,
     /// Policy reason for declining sponsorship.
     pub reason: PmSponsorshipDeclineReason,
+    /// Conservative fee estimate in the token's base units, as a decimal integer.
+    pub estimated_cost_in_token: String,
 }
 
 /// Reason a `pm_sponsorUserOperation` request was declined.

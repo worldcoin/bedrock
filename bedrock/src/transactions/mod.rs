@@ -18,8 +18,8 @@ use crate::{
             world_gift_manager::WorldGiftManager,
         },
         rpc::{
-            get_rpc_client, PmSponsorUserOperationResponse, SponsorshipContext,
-            WaGetUserOperationReceiptResponse,
+            get_rpc_client, PmSponsorUserOperationResponse, PmSponsorshipDecline,
+            SponsorshipContext, WaGetUserOperationReceiptResponse,
         },
     },
 };
@@ -57,7 +57,46 @@ pub struct WorldGiftManagerResult {
 #[derive(Debug, uniffi::Object)]
 pub struct PreparedTransaction {
     user_operation: UserOperation,
-    // TODO: Add sponsorship details like sponsorship decline reason, self-sponsorship fee details for user confirmation, etc.
+    fee_details: Option<PreparedTransactionFee>,
+}
+
+/// Conservative ERC-20 fee estimate for a prepared self-sponsored operation.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PreparedTransactionFee {
+    /// Fee token address.
+    pub token_address: String,
+    /// Paymaster that charges the fee token.
+    pub paymaster_address: String,
+    /// Estimated fee in token base units, as a decimal integer.
+    pub estimated_cost_in_token: String,
+    /// Policy reason for the original sponsorship decline.
+    pub decline_reason: String,
+}
+
+#[bedrock_export]
+impl PreparedTransaction {
+    /// Returns the final fee estimate for the completed operation, if token paid.
+    #[must_use]
+    pub fn fee_details(&self) -> Option<PreparedTransactionFee> {
+        self.fee_details.clone()
+    }
+}
+
+fn parse_fee_estimate(
+    decline: &PmSponsorshipDecline,
+) -> Result<U256, TransactionError> {
+    let estimate =
+        U256::from_str_radix(&decline.estimated_cost_in_token, 10).map_err(|e| {
+            TransactionError::Generic {
+                error_message: format!("Invalid self-sponsorship fee estimate: {e}"),
+            }
+        })?;
+    if estimate == U256::ZERO {
+        return Err(TransactionError::Generic {
+            error_message: "Self-sponsorship fee estimate must be positive".to_string(),
+        });
+    }
+    Ok(estimate)
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -74,7 +113,7 @@ impl SafeSmartAccount {
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if sponsorship preparation fails.
-    /// - Will throw an error if sponsorship is declined.
+    /// - Will throw an error if the self-sponsored retry cannot be prepared.
     /// - Will throw an error if the global HTTP client has not been initialized.
     pub async fn prepare_transaction_transfer(
         &self,
@@ -149,8 +188,11 @@ impl SafeSmartAccount {
                 }
             })?;
 
-        let approval = match sponsorship {
-            PmSponsorUserOperationResponse::Approved(approval) => approval,
+        let prepared_transaction = match sponsorship {
+            PmSponsorUserOperationResponse::Approved(approval) => PreparedTransaction {
+                user_operation: user_operation.with_pm_sponsorship_approval(&approval),
+                fee_details: None,
+            },
             PmSponsorUserOperationResponse::Declined(decline) => {
                 crate::info!(
                     transaction_type = "erc20_transfer",
@@ -160,14 +202,105 @@ impl SafeSmartAccount {
                     decline_reason = decline.reason,
                     "Sponsorship declined for ERC-20 transfer"
                 );
-                // TODO: Handle the self-sponsored UserOperation flow.
-                return Err(TransactionError::Generic {
-                    error_message: "Sponsorship declined".to_string(),
-                });
+                let mut approval_amount = parse_fee_estimate(&decline)?;
+                let mut prepared = None;
+                for _ in 0..4 {
+                    let operation = Erc20::new(token_address, to_address, amount)
+                        .with_fee_approval(
+                            decline.token,
+                            decline.paymaster_address,
+                            approval_amount,
+                        )
+                        .build_preflight_user_operation(
+                            self.wallet_address,
+                            Some(MetadataArg {
+                                association: transfer_association,
+                            }),
+                        )?;
+
+                    // Re-evaluate the completed callData: the first advisory only
+                    // priced the transfer, before its approval was added.
+                    let final_advisory = rpc_client
+                        .pm_sponsor_user_operation(
+                            Network::WorldChain,
+                            &operation,
+                            *ENTRYPOINT_4337,
+                            &SponsorshipContext::Protocol,
+                        )
+                        .await
+                        .map_err(|e| TransactionError::Generic {
+                            error_message: format!(
+                                "Failed to estimate completed transaction: {e}"
+                            ),
+                        })?;
+                    let PmSponsorUserOperationResponse::Declined(final_decline) =
+                        final_advisory
+                    else {
+                        return Err(TransactionError::Generic {
+                            error_message: "Completed transaction no longer requires self-sponsorship"
+                                .to_string(),
+                        });
+                    };
+                    if final_decline.token != decline.token
+                        || final_decline.paymaster_address != decline.paymaster_address
+                    {
+                        return Err(TransactionError::Generic {
+                            error_message: "Self-sponsorship fee token or paymaster changed during preparation"
+                                .to_string(),
+                        });
+                    }
+                    let final_cost = parse_fee_estimate(&final_decline)?;
+                    if final_cost > approval_amount {
+                        approval_amount = final_cost;
+                        continue;
+                    }
+
+                    let retry = rpc_client
+                        .pm_sponsor_user_operation(
+                            Network::WorldChain,
+                            &operation,
+                            *ENTRYPOINT_4337,
+                            &SponsorshipContext::SelfSponsoredToken(decline.token),
+                        )
+                        .await
+                        .map_err(|e| TransactionError::Generic {
+                            error_message: format!(
+                                "Failed to prepare token-paid transaction: {e}"
+                            ),
+                        })?;
+                    let PmSponsorUserOperationResponse::Approved(approval) = retry
+                    else {
+                        return Err(TransactionError::Generic {
+                            error_message: "Token-paid sponsorship was declined"
+                                .to_string(),
+                        });
+                    };
+                    if approval.paymaster != Some(decline.paymaster_address)
+                        || approval.paymaster_data.is_none()
+                        || approval.paymaster_verification_gas_limit.is_none()
+                        || approval.paymaster_post_op_gas_limit.is_none()
+                    {
+                        return Err(TransactionError::Generic {
+                            error_message: "Token-paid sponsorship returned incomplete paymaster fields"
+                                .to_string(),
+                        });
+                    }
+                    prepared = Some(PreparedTransaction {
+                        user_operation: operation
+                            .with_pm_sponsorship_approval(&approval),
+                        fee_details: Some(PreparedTransactionFee {
+                            token_address: decline.token.to_string(),
+                            paymaster_address: decline.paymaster_address.to_string(),
+                            estimated_cost_in_token: final_cost.to_string(),
+                            decline_reason: decline.reason.to_string(),
+                        }),
+                    });
+                    break;
+                }
+                prepared.ok_or_else(|| TransactionError::Generic {
+                    error_message: "Self-sponsorship fee did not stabilize".to_string(),
+                })?
             }
-        };
-        let prepared_transaction = PreparedTransaction {
-            user_operation: user_operation.with_pm_sponsorship_approval(&approval),
         };
 
         crate::debug!(

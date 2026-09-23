@@ -120,6 +120,7 @@ async fn test_pm_sponsor_user_operation_returns_typed_decline() {
                 "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
                 "paymasterAddress": "0x0000000000000039cd5e8ae05257ce51c473ddd1",
                 "reason": "gas_usage",
+                "estimatedCostInToken": "123456789",
             },
         },
     }))
@@ -148,6 +149,7 @@ async fn test_pm_sponsor_user_operation_returns_typed_decline() {
         address!("0000000000000039cd5e8ae05257ce51c473ddd1")
     );
     assert_eq!(decline.reason, PmSponsorshipDeclineReason::GasUsage);
+    assert_eq!(decline.estimated_cost_in_token, "123456789");
 }
 
 #[test]
@@ -177,6 +179,7 @@ fn test_sponsorship_decline_preserves_unknown_reason() {
             "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
             "paymasterAddress": "0x0000000000000039cd5e8ae05257ce51c473ddd1",
             "reason": "new_policy",
+            "estimatedCostInToken": "42",
         })),
     };
 
