@@ -90,7 +90,7 @@ fn parse_fee_estimate(
 ) -> Result<U256, TransactionError> {
     let estimate =
         U256::from_str_radix(&decline.estimated_cost_in_token, 10).map_err(|e| {
-            crate::critical!(
+            crate::error!(
                 network = Network::WorldChain.network_name(),
                 fee_token = decline.token,
                 paymaster = decline.paymaster_address,
@@ -103,7 +103,7 @@ fn parse_fee_estimate(
             }
         })?;
     if estimate == U256::ZERO {
-        crate::critical!(
+        crate::error!(
             network = Network::WorldChain.network_name(),
             fee_token = decline.token,
             paymaster = decline.paymaster_address,
@@ -147,7 +147,7 @@ async fn prepare_self_sponsored_transfer(
         || approval.paymaster_verification_gas_limit.is_none()
         || approval.paymaster_post_op_gas_limit.is_none()
     {
-        crate::critical!(
+        crate::error!(
             network = Network::WorldChain.network_name(),
             sender = operation.sender,
             fee_token = decline.token,
