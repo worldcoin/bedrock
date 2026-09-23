@@ -60,7 +60,7 @@ pub struct PreparedTransaction {
     fee_details: Option<PreparedTransactionFee>,
 }
 
-/// Conservative ERC-20 fee estimate for a prepared self-sponsored operation.
+/// ERC-20 fee estimate for a prepared self-sponsored operation.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct PreparedTransactionFee {
     /// Fee token address.
