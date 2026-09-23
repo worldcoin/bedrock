@@ -125,7 +125,14 @@ async fn token_retry_preserves_unsigned_transfer_and_exposes_advisory() {
 
 #[tokio::test]
 async fn invalid_fee_estimate_stops_before_token_retry() {
-    for estimate in ["0", "-1", "1.5", "invalid", "0x10"] {
+    for estimate in [
+        "0",
+        "-1",
+        "1.5",
+        "invalid",
+        "0x10",
+        "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+    ] {
         let mut decline = decline();
         decline.estimated_cost_in_token = estimate.to_string();
         let (rpc, http) = rpc(vec![]);

@@ -90,11 +90,26 @@ fn parse_fee_estimate(
 ) -> Result<U256, TransactionError> {
     let estimate =
         U256::from_str_radix(&decline.estimated_cost_in_token, 10).map_err(|e| {
+            crate::critical!(
+                network = Network::WorldChain.network_name(),
+                fee_token = decline.token,
+                paymaster = decline.paymaster_address,
+                estimated_cost_in_token = decline.estimated_cost_in_token,
+                error_message = e,
+                "Invalid self-sponsorship fee estimate"
+            );
             TransactionError::Generic {
                 error_message: format!("Invalid self-sponsorship fee estimate: {e}"),
             }
         })?;
     if estimate == U256::ZERO {
+        crate::critical!(
+            network = Network::WorldChain.network_name(),
+            fee_token = decline.token,
+            paymaster = decline.paymaster_address,
+            estimated_cost_in_token = decline.estimated_cost_in_token,
+            "Self-sponsorship fee estimate must be positive"
+        );
         return Err(TransactionError::Generic {
             error_message: "Self-sponsorship fee estimate must be positive".to_string(),
         });
@@ -132,6 +147,19 @@ async fn prepare_self_sponsored_transfer(
         || approval.paymaster_verification_gas_limit.is_none()
         || approval.paymaster_post_op_gas_limit.is_none()
     {
+        crate::critical!(
+            network = Network::WorldChain.network_name(),
+            sender = operation.sender,
+            fee_token = decline.token,
+            expected_paymaster = decline.paymaster_address,
+            actual_paymaster = format!("{:?}", approval.paymaster),
+            missing_paymaster_data = approval.paymaster_data.is_none(),
+            missing_paymaster_verification_gas_limit =
+                approval.paymaster_verification_gas_limit.is_none(),
+            missing_paymaster_post_op_gas_limit =
+                approval.paymaster_post_op_gas_limit.is_none(),
+            "Token-paid sponsorship returned incomplete or mismatched paymaster fields"
+        );
         return Err(TransactionError::Generic {
             error_message: "Token-paid sponsorship returned incomplete or mismatched paymaster fields"
                 .to_string(),
