@@ -8,13 +8,12 @@ use alloy::primitives::aliases::{U160, U48};
 use crate::{
     primitives::{ntp::now_with_ntp, HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{
-        Is4337Encodable, Permit2Approve, SafeSmartAccount, TransactionTypeId,
-        UnparsedPermitTransferFrom, UnparsedTokenPermissions, UserOperation,
-        ENTRYPOINT_4337,
+        Is4337Encodable, Permit2Approve, SafeSmartAccount, UnparsedPermitTransferFrom,
+        UnparsedTokenPermissions, UserOperation, ENTRYPOINT_4337,
     },
     transactions::{
         contracts::{
-            erc20::{BatchErc20Approval, Erc20, MetadataArg, TransferAssociation},
+            erc20::{Erc20, MetadataArg, TransferAssociation},
             usd_legacy_vault::Permit2Data,
             world_gift_manager::WorldGiftManager,
         },
@@ -31,14 +30,6 @@ pub mod foreign;
 pub mod rpc;
 
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
-
-// One fee refresh after ensuring allowance and up to three more if the fee
-// exceeds the allowance. RPC errors are not retried.
-const MAX_SELF_SPONSORSHIP_ESTIMATION_ATTEMPTS: usize = 4;
-const FEE_APPROVAL_RECEIPT_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(60);
-const FEE_APPROVAL_RECEIPT_POLL_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(2);
 
 #[cfg(test)]
 mod tests;
@@ -87,7 +78,7 @@ pub struct PreparedTransactionFee {
 
 #[bedrock_export]
 impl PreparedTransaction {
-    /// Returns the final fee estimate for the completed operation, if token paid.
+    /// Returns the fee estimate for the prepared operation, if token paid.
     #[must_use]
     pub fn fee_details(&self) -> Option<PreparedTransactionFee> {
         self.fee_details.clone()
@@ -111,211 +102,49 @@ fn parse_fee_estimate(
     Ok(estimate)
 }
 
-async fn ensure_fee_allowance(
-    rpc_client: &RpcClient,
-    account: &SafeSmartAccount,
-    decline: &PmSponsorshipDecline,
-    required_amount: U256,
-) -> Result<U256, TransactionError> {
-    let read_allowance = || async {
-        Erc20::fetch_allowance(
-            rpc_client,
-            Network::WorldChain,
-            decline.token,
-            account.wallet_address,
-            decline.paymaster_address,
-        )
-        .await
-        .map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to read fee-token allowance: {e}"),
-        })
-    };
-    let allowance = read_allowance().await?;
-    if allowance >= required_amount {
-        return Ok(allowance);
-    }
-
-    // Some ERC-20 tokens require a zero reset before changing a nonzero allowance.
-    let mut approvals = Vec::new();
-    if !allowance.is_zero() {
-        approvals.push((decline.token, U256::ZERO));
-    }
-    approvals.push((decline.token, required_amount));
-    let approval = BatchErc20Approval::new(
-        decline.paymaster_address,
-        &approvals,
-        TransactionTypeId::Erc20PaymasterApprove,
-    );
-    let user_op_hash = submit_fee_approval(rpc_client, account, &approval)
-        .await
-        .map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to submit fee-token approval: {e}"),
-        })?;
-    wait_for_fee_approval(rpc_client, &user_op_hash.to_string()).await?;
-
-    // A successful receipt alone does not prove an ERC-20 returning false approved.
-    let allowance = read_allowance().await?;
-    if allowance < required_amount {
-        return Err(TransactionError::Generic {
-            error_message: format!(
-                "Fee-token approval {user_op_hash} did not establish sufficient allowance"
-            ),
-        });
-    }
-    Ok(allowance)
-}
-
-async fn submit_fee_approval(
-    rpc_client: &RpcClient,
-    account: &SafeSmartAccount,
-    approval: &BatchErc20Approval,
-) -> Result<alloy::primitives::B256, RpcError> {
-    let operation =
-        approval.build_preflight_user_operation(account.wallet_address, None)?;
-    // Use the existing sponsored approval route: this operation must not depend
-    // on the fee-token allowance that it is establishing.
-    let sponsorship = rpc_client
-        .sponsor_user_operation(
-            Network::WorldChain,
-            &operation,
-            *ENTRYPOINT_4337,
-            None,
-            RpcProviderName::Any,
-        )
-        .await?;
-    let mut operation = operation.with_paymaster_data(&sponsorship);
-    account.sign_user_operation(&mut operation, Network::WorldChain)?;
-    rpc_client
-        .send_user_operation_v2(Network::WorldChain, &operation, *ENTRYPOINT_4337)
-        .await
-}
-
-async fn wait_for_fee_approval(
-    rpc_client: &RpcClient,
-    user_op_hash: &str,
-) -> Result<(), TransactionError> {
-    let wait = async {
-        loop {
-            let receipt = rpc_client
-                .wa_get_user_operation_receipt(Network::WorldChain, user_op_hash)
-                .await
-                .map_err(|e| TransactionError::Generic {
-                    error_message: format!(
-                        "Failed to read fee-token approval receipt: {e}"
-                    ),
-                })?;
-            match receipt.status.as_str() {
-                "mined_success" => {
-                    return Ok(());
-                }
-                "pending" => {
-                    tokio::time::sleep(FEE_APPROVAL_RECEIPT_POLL_INTERVAL).await;
-                }
-                _ => {
-                    return Err(TransactionError::Generic {
-                        error_message: format!(
-                            "Fee-token approval {user_op_hash} failed with status {}",
-                            receipt.status
-                        ),
-                    });
-                }
-            }
-        }
-    };
-    tokio::time::timeout(FEE_APPROVAL_RECEIPT_TIMEOUT, wait)
-        .await
-        .map_err(|_| TransactionError::Generic {
-            error_message: format!(
-                "Timed out waiting for fee-token approval {user_op_hash}"
-            ),
-        })?
-}
-
 async fn prepare_self_sponsored_transfer(
     rpc_client: &RpcClient,
-    account: &SafeSmartAccount,
     operation: UserOperation,
     decline: &PmSponsorshipDecline,
 ) -> Result<PreparedTransaction, TransactionError> {
-    let mut approval_amount = parse_fee_estimate(decline)?;
-    for _ in 0..MAX_SELF_SPONSORSHIP_ESTIMATION_ATTEMPTS {
-        let allowance =
-            ensure_fee_allowance(rpc_client, account, decline, approval_amount).await?;
+    let estimated_cost = parse_fee_estimate(decline)?;
 
-        // Refresh the transfer's fee after any approval has been mined.
-        let final_advisory = rpc_client
-            .pm_sponsor_user_operation(
-                Network::WorldChain,
-                &operation,
-                *ENTRYPOINT_4337,
-                &SponsorshipContext::Protocol,
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to estimate completed transaction: {e}"),
-            })?;
-        let PmSponsorUserOperationResponse::Declined(final_decline) = final_advisory
-        else {
-            return Err(TransactionError::Generic {
-                error_message:
-                    "Completed transaction no longer requires self-sponsorship"
-                        .to_string(),
-            });
-        };
-        if final_decline.token != decline.token
-            || final_decline.paymaster_address != decline.paymaster_address
-        {
-            return Err(TransactionError::Generic {
-                error_message:
-                    "Self-sponsorship fee token or paymaster changed during preparation"
-                        .to_string(),
-            });
-        }
-        let final_cost = parse_fee_estimate(&final_decline)?;
-        if final_cost > allowance {
-            approval_amount = final_cost;
-            continue;
-        }
-
-        let retry = rpc_client
-            .pm_sponsor_user_operation(
-                Network::WorldChain,
-                &operation,
-                *ENTRYPOINT_4337,
-                &SponsorshipContext::SelfSponsoredToken(decline.token),
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to prepare token-paid transaction: {e}"),
-            })?;
-        let PmSponsorUserOperationResponse::Approved(approval) = retry else {
-            return Err(TransactionError::Generic {
-                error_message: "Token-paid sponsorship was declined".to_string(),
-            });
-        };
-        if approval.paymaster != Some(decline.paymaster_address)
-            || approval.paymaster_data.is_none()
-            || approval.paymaster_verification_gas_limit.is_none()
-            || approval.paymaster_post_op_gas_limit.is_none()
-        {
-            return Err(TransactionError::Generic {
-                error_message:
-                    "Token-paid sponsorship returned incomplete paymaster fields"
-                        .to_string(),
-            });
-        }
-        return Ok(PreparedTransaction {
-            user_operation: operation.with_pm_sponsorship_approval(&approval),
-            fee_details: Some(PreparedTransactionFee {
-                token_address: decline.token.to_string(),
-                paymaster_address: decline.paymaster_address.to_string(),
-                estimated_cost_in_token: final_cost.to_string(),
-                decline_reason: decline.reason.to_string(),
-            }),
+    // The wallet migration establishes the TFH paymaster's fee-token allowance.
+    // The advisory already prices this transfer, so retry with the same calldata.
+    let retry = rpc_client
+        .pm_sponsor_user_operation(
+            Network::WorldChain,
+            &operation,
+            *ENTRYPOINT_4337,
+            &SponsorshipContext::SelfSponsoredToken(decline.token),
+        )
+        .await
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to prepare token-paid transaction: {e}"),
+        })?;
+    let PmSponsorUserOperationResponse::Approved(approval) = retry else {
+        return Err(TransactionError::Generic {
+            error_message: "Token-paid sponsorship was declined".to_string(),
+        });
+    };
+    if approval.paymaster != Some(decline.paymaster_address)
+        || approval.paymaster_data.is_none()
+        || approval.paymaster_verification_gas_limit.is_none()
+        || approval.paymaster_post_op_gas_limit.is_none()
+    {
+        return Err(TransactionError::Generic {
+            error_message: "Token-paid sponsorship returned incomplete or mismatched paymaster fields"
+                .to_string(),
         });
     }
-    Err(TransactionError::Generic {
-        error_message: "Self-sponsorship fee did not stabilize".to_string(),
+    Ok(PreparedTransaction {
+        user_operation: operation.with_pm_sponsorship_approval(&approval),
+        fee_details: Some(PreparedTransactionFee {
+            token_address: decline.token.to_string(),
+            paymaster_address: decline.paymaster_address.to_string(),
+            estimated_cost_in_token: estimated_cost.to_string(),
+            decline_reason: decline.reason.to_string(),
+        }),
     })
 }
 
@@ -324,8 +153,8 @@ async fn prepare_self_sponsored_transfer(
 impl SafeSmartAccount {
     /// Prepares an unsigned ERC-20 transfer on World Chain.
     ///
-    /// If self-sponsorship requires more allowance, signs and submits a separate
-    /// sponsored approval and waits for it to succeed before preparing the transfer.
+    /// Self-sponsorship assumes the wallet migration has already established the
+    /// TFH paymaster's fee-token allowance.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
@@ -425,13 +254,8 @@ impl SafeSmartAccount {
                     decline_reason = decline.reason,
                     "Sponsorship declined for ERC-20 transfer"
                 );
-                prepare_self_sponsored_transfer(
-                    rpc_client,
-                    self,
-                    user_operation,
-                    &decline,
-                )
-                .await?
+                prepare_self_sponsored_transfer(rpc_client, user_operation, &decline)
+                    .await?
             }
         };
 

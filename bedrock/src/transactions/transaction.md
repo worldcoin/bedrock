@@ -45,10 +45,9 @@ For every transaction:
    on the user's behalf) or returns a structured decline with the information
    needed to retry as a self-sponsored transaction.
 5. **(Decline branch only.) Prepare and price the token-paid operation.** Bedrock
-   checks the fee-token allowance for the returned paymaster. If insufficient,
-   it signs and submits a separate sponsored approval and waits for it to succeed.
-   It then refreshes the transfer's fee estimate and requests token-paid
-   sponsorship. The transfer and its fee estimate are retained for review.
+   retries sponsorship for the same transfer with the returned fee token. This
+   flow assumes the TFH paymaster's allowance was established by the wallet
+   migration. The transfer and the decline's fee estimate are retained for review.
 6. **Sign.** Bedrock merges the gas (and paymaster, if any) fields into the
    UserOp and signs locally with the device key.
 7. **Submit.** `eth_sendUserOperation` forwards the UserOp to a bundler which calls `handleOps` on the
@@ -98,15 +97,14 @@ omits are left unset on the UserOp.
 ## Decline → self-sponsored retry (user pays gas in an ERC-20 token)
 
 When the protocol declines to sponsor, the wallet falls back to the user
-paying gas in an ERC-20 token (e.g. WLD) routed through an ERC-20 paymaster
-contract.
+paying gas in an ERC-20 token (e.g. WLD) through the TFH paymaster. The wallet
+migration must have established sufficient fee-token allowance beforehand.
 
 ```mermaid
 sequenceDiagram
     actor User
     participant Bedrock as Bedrock (on-device)
     participant Endpoint as Sponsorship endpoint
-    participant Paymaster as ERC-20 paymaster contract
     participant Bundler
 
     User->>Bedrock: Intent
@@ -114,19 +112,6 @@ sequenceDiagram
 
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
     Endpoint-->>Bedrock: "sponsorship declined"<br/>data: { token, paymasterAddress, reason, estimatedCostInToken }
-
-    Bedrock->>Endpoint: Read fee-token allowance
-    opt Allowance is insufficient
-        Bedrock->>Endpoint: wa_sponsorUserOperation(approvalOp, entryPoint)
-        Endpoint-->>Bedrock: Sponsored approval gas fields
-        Bedrock->>Bedrock: Sign approvalOp
-        Bedrock->>Endpoint: eth_sendUserOperation(signedApprovalOp, entryPoint)
-        Bedrock->>Endpoint: Poll wa_getUserOperationReceipt
-        Endpoint-->>Bedrock: mined_success
-        Bedrock->>Endpoint: Verify fee-token allowance
-    end
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
-    Endpoint-->>Bedrock: Updated fee advisory for transfer
 
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, { token })
     Endpoint-->>Bedrock: gas + paymaster + paymasterData
@@ -146,7 +131,7 @@ sequenceDiagram
 | Field              | Required | Meaning                                                                                      |
 | ------------------ | -------- | -------------------------------------------------------------------------------------------- |
 | `token`            | yes      | ERC-20 token address the user should pay gas in (e.g. WLD). Bedrock uses this for the retry. |
-| `paymasterAddress` | yes      | ERC-20 paymaster contract that will pull the fee at execution time.                          |
+| `paymasterAddress` | yes      | ERC-20 paymaster contract that charges the fee during validation.                          |
 | `reason`           | yes      | Sponsorship policy reason, preserved for review.                                             |
 | `estimatedCostInToken` | yes | Fee estimate in token base units, as a decimal integer.                    |
 
@@ -197,20 +182,17 @@ callData, signature placeholder) and an empty context. The endpoint inspects cur
 
 ### 5. Self-sponsored retry
 
-When the protocol declines to sponsor, Bedrock uses `estimatedCostInToken` to
-check the ERC-20 allowance for `paymasterAddress`. When needed, it submits a
-separate approval using `wa_sponsorUserOperation` for sponsorship and V2
-`eth_sendUserOperation` for submission and receipt tracking. It waits up to
-60 seconds for `mined_success`, then reads the allowance again. A failed receipt, timeout, or insufficient
-allowance stops preparation. The approval is completed during preparation,
-before the app asks the user to confirm the transfer.
+When the protocol declines to sponsor, Bedrock retains `estimatedCostInToken`
+for confirmation and retries `pm_sponsorUserOperation` with the returned fee
+token. The retry uses the same transfer calldata and nonce. Bedrock requires a
+response with all paymaster fields present and the same `paymasterAddress`
+as the decline before returning the prepared operation.
 
-The transfer's calldata contains only the transfer. Keeping the approval
-separate allows paymasters to collect the fee during validation, before that
-calldata executes. Bedrock refreshes the transfer's fee estimate after the
-approval, and repeats the allowance check and approval if that estimate exceeds
-the allowance, with at most four fee refreshes. It then requests token-paid
-sponsorship and retains the final operation and estimate for confirmation.
+This flow assumes the TFH paymaster is used and its fee-token allowance was
+established by `TfhPaymasterApprovalMigration`. Preparation does not read or
+change allowances, sign operations, or submit transactions. The existing
+allowance lets the paymaster collect fees during validation, before the
+transfer executes. A failed token-paid sponsorship request stops preparation.
 
 ### 6. Sign
 

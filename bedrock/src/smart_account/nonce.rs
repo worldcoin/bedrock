@@ -50,7 +50,7 @@ pub enum TransactionTypeId {
     TfhPaymasterApprove = 141,
     /// ERC-4626 vault migration to another ERC-4626 vault
     ERC4626Migrate = 142,
-    /// ERC-20 approval for the fee token and paymaster selected during preparation
+    /// Reserved for standalone ERC-20 paymaster approvals; currently unused.
     Erc20PaymasterApprove = 143,
 }
 
