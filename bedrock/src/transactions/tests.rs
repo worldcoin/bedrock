@@ -136,7 +136,7 @@ async fn one_request_preserves_unsigned_transfer_and_exposes_final_fee() {
     assert_eq!(requests[2]["method"], "eth_call");
     assert_eq!(requests[0]["params"][0], json!(original));
     assert_eq!(requests[0]["params"][1], json!(*ENTRYPOINT_4337));
-    assert_eq!(requests[0]["params"][2], json!({}));
+    assert_eq!(requests[0]["params"].as_array().unwrap().len(), 2);
     assert!(http.responses.lock().unwrap().is_empty());
 }
 
@@ -277,7 +277,7 @@ async fn allowance_checks_fee_token_sender_and_migrated_spender() {
     assert_eq!(call.spender, TFH_PAYMASTER_ADDRESS);
     assert_eq!(requests[2]["method"], "eth_call");
     assert_eq!(requests[0]["method"], "pm_sponsorUserOperation");
-    assert_eq!(requests[0]["params"][2], json!({}));
+    assert_eq!(requests[0]["params"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]

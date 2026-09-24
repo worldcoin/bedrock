@@ -267,7 +267,7 @@ impl RpcClient {
     }
 
     /// Prepares a free or token-paid operation via `pm_sponsorUserOperation` (V2).
-    /// Sends `[userOperation, entryPoint, {}]`; a paid result includes fee metadata.
+    /// Sends `[userOperation, entryPoint]`; a paid result includes fee metadata.
     ///
     /// # Errors
     /// Returns an error if serialization, transport, preparation, or decoding fails.
@@ -280,7 +280,6 @@ impl RpcClient {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
             serde_json::Value::String(format!("{entry_point:?}")),
-            serde_json::json!({}),
         ];
         self.rpc_call(
             network,

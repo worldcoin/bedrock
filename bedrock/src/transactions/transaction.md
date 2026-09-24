@@ -41,8 +41,8 @@ For every transaction:
    dispatches it.
 3. **Compute the UserOp hash locally.** Used for confirmation UI.
 4. **Prepare sponsorship.** Bedrock calls `pm_sponsorUserOperation` once with
-   empty context. A successful response describes either a protocol-paid operation
-   or a TFH token-paid operation with its final fee estimate and policy reason.
+   the UserOp and EntryPoint. A successful response describes either a protocol-paid
+   operation or a TFH token-paid operation with its final fee estimate and policy reason.
 5. **Validate and review.** For a token-paid response, verify the paymaster and
    encoded fee token, then check allowance and balance against the final estimate.
    Wallet migration owns approvals. Present the transfer and fee before signing.
@@ -68,7 +68,7 @@ sequenceDiagram
     Bedrock->>Bedrock: Wrap in Safe executeUserOp
     Bedrock->>Bedrock: Compute userOpHash
 
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
+    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
     Endpoint-->>Bedrock: sponsored response (gas + paymaster fields as applicable)
 
     Bedrock->>User: Confirm: sign userOpHash = <decoded intent>
@@ -108,7 +108,7 @@ sequenceDiagram
     User->>Bedrock: Intent
     Bedrock->>Bedrock: Build callData, wrap in Safe executeUserOp
 
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
+    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
     Endpoint-->>Bedrock: gas + paymaster data + token + estimatedCostInToken + declineReason
     Bedrock->>Bedrock: Verify paymaster and encoded fee token
     Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
@@ -177,8 +177,8 @@ the EntryPoint address, and the chain ID. Bedrock computes it locally.
 ### 4. Prepare sponsorship
 
 `pm_sponsorUserOperation` takes the partial UserOp (sender, nonce, calldata,
-signature placeholder) and empty context. The endpoint returns either zeroed gas
-fields for protocol sponsorship or final gas, paymaster, and fee fields for a
+signature placeholder) and EntryPoint address. The endpoint returns either zeroed
+gas fields for protocol sponsorship or final gas, paymaster, and fee fields for a
 TFH token-paid operation. A policy decline is metadata on a successful paid
 result; preparation failures remain RPC errors.
 
