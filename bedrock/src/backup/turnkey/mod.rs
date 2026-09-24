@@ -41,7 +41,7 @@ static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
 /// cancel a uniffi async call, so the deadline lives here.
 const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
-fn cleanup_migration_error(error: &TurnkeyApiError) -> TurnkeyMigrationError {
+const fn cleanup_migration_error(error: &TurnkeyApiError) -> TurnkeyMigrationError {
     if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
         TurnkeyMigrationError::Retryable
     } else {
