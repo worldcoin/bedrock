@@ -45,9 +45,9 @@ For every transaction:
    on the user's behalf) or returns a structured decline with the information
    needed to retry as a self-sponsored transaction.
 5. **(Decline branch only.) Prepare and price the token-paid operation.** Bedrock
-   retries sponsorship for the same transfer with the returned fee token. This
-   flow assumes the TFH paymaster's allowance was established by the wallet
-   migration. The transfer and the decline's fee estimate are retained for review.
+   verifies that the TFH paymaster's fee-token allowance covers the estimate,
+   then retries sponsorship for the same transfer. The wallet migration owns
+   approvals. The transfer and the decline's fee estimate are retained for review.
 6. **Sign.** Bedrock merges the gas (and paymaster, if any) fields into the
    UserOp and signs locally with the device key.
 7. **Submit.** `eth_sendUserOperation` forwards the UserOp to a bundler which calls `handleOps` on the
@@ -113,6 +113,9 @@ sequenceDiagram
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
     Endpoint-->>Bedrock: "sponsorship declined"<br/>data: { token, paymasterAddress, reason, estimatedCostInToken }
 
+    Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
+    Endpoint-->>Bedrock: allowance
+    Bedrock->>Bedrock: Require allowance >= estimatedCostInToken
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, { token })
     Endpoint-->>Bedrock: gas + paymaster + paymasterData
 
@@ -184,16 +187,19 @@ callData, signature placeholder) and an empty context. The endpoint inspects cur
 
 When the protocol declines to sponsor, Bedrock retains `estimatedCostInToken`
 for confirmation, verifies that `paymasterAddress` is the migration's
-`TFH_PAYMASTER_ADDRESS`, and retries `pm_sponsorUserOperation` with the returned
-fee token. The retry uses the same transfer calldata and nonce. Bedrock requires a
-response with all paymaster fields present and the same `paymasterAddress`
-as the decline before returning the prepared operation.
+`TFH_PAYMASTER_ADDRESS`, and reads that paymaster's allowance from the fee-token
+contract for the sender. The allowance must cover the estimated amount before
+Bedrock retries `pm_sponsorUserOperation` with the returned fee token. The retry
+uses the same transfer calldata and nonce. Bedrock requires a response with all
+paymaster fields present and the same `paymasterAddress` as the decline before
+returning the prepared operation.
 
 This flow assumes the TFH paymaster is used and its fee-token allowance was
-established by `TfhPaymasterApprovalMigration`. Preparation does not read or
-change allowances, sign operations, or submit transactions. The existing
-allowance lets the paymaster collect fees during validation, before the
-transfer executes. A failed token-paid sponsorship request stops preparation.
+established by `TfhPaymasterApprovalMigration`. An insufficient allowance or
+failed allowance read stops preparation. Preparation does not change allowances,
+sign operations, or submit transactions. The existing allowance lets the paymaster
+collect fees during validation, before the transfer executes. A failed token-paid
+sponsorship request stops preparation.
 
 ### 6. Sign
 

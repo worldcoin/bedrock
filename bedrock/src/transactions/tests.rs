@@ -1,8 +1,12 @@
 use super::*;
 use crate::primitives::http_client::HttpHeader;
 use crate::primitives::{AuthenticatedHttpClient, HttpError, HttpMethod};
-use crate::transactions::contracts::worldchain::{TFH_PAYMASTER_ADDRESS, WLD_ADDRESS};
-use alloy::primitives::address;
+use crate::transactions::contracts::erc20::IErc20;
+use crate::transactions::contracts::worldchain::{
+    TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WLD_ADDRESS,
+};
+use alloy::primitives::{address, Bytes};
+use alloy::sol_types::SolCall;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -23,7 +27,10 @@ impl AuthenticatedHttpClient for ScriptedHttpClient {
     ) -> Result<Vec<u8>, HttpError> {
         let request: Value = serde_json::from_slice(&body.unwrap()).unwrap();
         assert_eq!(url, "/v2/rpc/worldchain");
-        assert_eq!(request["method"], "pm_sponsorUserOperation");
+        assert!(matches!(
+            request["method"].as_str(),
+            Some("eth_call" | "pm_sponsorUserOperation")
+        ));
         self.requests.lock().unwrap().push(request);
         let response = self
             .responses
@@ -51,6 +58,13 @@ fn decline() -> PmSponsorshipDecline {
         "estimatedCostInToken": "10",
     }))
     .unwrap()
+}
+
+fn allowance_response(amount: u64) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": "test",
+        "result": format!("0x{:064x}", U256::from(amount)),
+    })
 }
 
 fn token_sponsorship() -> Value {
@@ -89,7 +103,7 @@ fn transfer() -> UserOperation {
 async fn token_retry_preserves_unsigned_transfer_and_exposes_advisory() {
     let original = transfer();
     let response = token_sponsorship();
-    let (rpc, http) = rpc(vec![response.clone()]);
+    let (rpc, http) = rpc(vec![allowance_response(10), response.clone()]);
     let prepared = prepare_self_sponsored_transfer(&rpc, original.clone(), &decline())
         .await
         .unwrap();
@@ -114,13 +128,83 @@ async fn token_retry_preserves_unsigned_transfer_and_exposes_advisory() {
     assert_eq!(fee.decline_reason, "future_policy");
     assert_eq!(fee.estimated_cost_in_token, "10");
 
-    // Preparation only retries sponsorship: no allowance reads or submissions.
+    // Preparation only reads allowance and retries sponsorship.
     let requests = http.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0]["params"][0], json!(original));
-    assert_eq!(requests[0]["params"][1], json!(*ENTRYPOINT_4337));
-    assert_eq!(requests[0]["params"][2], json!({"token": WLD_ADDRESS}));
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["method"], "eth_call");
+    assert_eq!(requests[1]["method"], "pm_sponsorUserOperation");
+    assert_eq!(requests[1]["params"][0], json!(original));
+    assert_eq!(requests[1]["params"][1], json!(*ENTRYPOINT_4337));
+    assert_eq!(requests[1]["params"][2], json!({"token": WLD_ADDRESS}));
     assert!(http.responses.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn insufficient_allowance_stops_before_token_retry() {
+    for allowance in [0, 9] {
+        let (rpc, http) = rpc(vec![allowance_response(allowance)]);
+        let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline())
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Insufficient fee-token allowance"));
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "eth_call");
+    }
+}
+
+#[tokio::test]
+async fn allowance_read_failure_stops_before_token_retry() {
+    for response in [
+        json!({
+            "jsonrpc": "2.0", "id": "test",
+            "error": { "code": -32603, "message": "allowance unavailable" },
+        }),
+        json!({ "jsonrpc": "2.0", "id": "test", "result": "0x" }),
+    ] {
+        let (rpc, http) = rpc(vec![response]);
+        let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline())
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Failed to read fee-token allowance"));
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "eth_call");
+    }
+}
+
+#[tokio::test]
+async fn allowance_checks_fee_token_sender_and_migrated_spender() {
+    let original = transfer();
+    let sender = original.sender;
+    let mut decline = decline();
+    decline.token = USDC_ADDRESS;
+    let (rpc, http) = rpc(vec![allowance_response(11), token_sponsorship()]);
+    let prepared = prepare_self_sponsored_transfer(&rpc, original, &decline)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.fee_details().unwrap().estimated_cost_in_token,
+        "10"
+    );
+
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["method"], "eth_call");
+    assert_eq!(requests[0]["params"][0]["to"], json!(USDC_ADDRESS));
+    assert_eq!(requests[0]["params"][1], "latest");
+    let data: Bytes =
+        serde_json::from_value(requests[0]["params"][0]["data"].clone()).unwrap();
+    assert_eq!(&data[..4], &IErc20::allowanceCall::SELECTOR);
+    let call = IErc20::allowanceCall::abi_decode_raw(&data[4..]).unwrap();
+    assert_eq!(call.owner, sender);
+    assert_eq!(call.spender, TFH_PAYMASTER_ADDRESS);
+    assert_eq!(requests[1]["method"], "pm_sponsorUserOperation");
+    assert_eq!(requests[1]["params"][2], json!({ "token": USDC_ADDRESS }));
 }
 
 #[tokio::test]
@@ -177,45 +261,51 @@ async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
         } else {
             response["result"].as_object_mut().unwrap().remove(field);
         }
-        let (rpc, http) = rpc(vec![response]);
+        let (rpc, http) = rpc(vec![allowance_response(10), response]);
         let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline())
             .await
             .unwrap_err();
         assert!(error.to_string().contains("paymaster fields"), "{field}");
-        assert_eq!(http.requests.lock().unwrap().len(), 1);
+        assert_eq!(http.requests.lock().unwrap().len(), 2);
     }
 }
 
 #[tokio::test]
 async fn token_sponsorship_decline_stops_without_another_retry() {
-    let (rpc, http) = rpc(vec![json!({
-        "jsonrpc": "2.0", "id": "test",
-        "error": {
-            "code": -32602, "message": "sponsorship declined",
-            "data": {
-                "token": WLD_ADDRESS, "paymasterAddress": TFH_PAYMASTER_ADDRESS,
-                "reason": "future_policy", "estimatedCostInToken": "10",
+    let (rpc, http) = rpc(vec![
+        allowance_response(10),
+        json!({
+            "jsonrpc": "2.0", "id": "test",
+            "error": {
+                "code": -32602, "message": "sponsorship declined",
+                "data": {
+                    "token": WLD_ADDRESS, "paymasterAddress": TFH_PAYMASTER_ADDRESS,
+                    "reason": "future_policy", "estimatedCostInToken": "10",
+                },
             },
-        },
-    })]);
+        }),
+    ]);
     let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline())
         .await
         .unwrap_err();
     assert!(error
         .to_string()
         .contains("Token-paid sponsorship was declined"));
-    assert_eq!(http.requests.lock().unwrap().len(), 1);
+    assert_eq!(http.requests.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
 async fn token_sponsorship_error_stops_without_submission() {
-    let (rpc, http) = rpc(vec![json!({
-        "jsonrpc": "2.0", "id": "test",
-        "error": { "code": -32603, "message": "sponsorship unavailable" },
-    })]);
+    let (rpc, http) = rpc(vec![
+        allowance_response(10),
+        json!({
+            "jsonrpc": "2.0", "id": "test",
+            "error": { "code": -32603, "message": "sponsorship unavailable" },
+        }),
+    ]);
     let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline())
         .await
         .unwrap_err();
     assert!(error.to_string().contains("sponsorship unavailable"));
-    assert_eq!(http.requests.lock().unwrap().len(), 1);
+    assert_eq!(http.requests.lock().unwrap().len(), 2);
 }

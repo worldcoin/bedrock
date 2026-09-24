@@ -118,6 +118,55 @@ fn parse_fee_estimate(
     Ok(estimate)
 }
 
+async fn check_fee_allowance(
+    rpc_client: &RpcClient,
+    sender: Address,
+    fee_token: Address,
+    estimated_cost: U256,
+) -> Result<(), TransactionError> {
+    // Migration owns approvals; preparation only checks that the existing
+    // allowance covers the fee estimate before requesting token-paid sponsorship.
+    let allowance = Erc20::fetch_allowance(
+        rpc_client,
+        Network::WorldChain,
+        fee_token,
+        sender,
+        TFH_PAYMASTER_ADDRESS,
+    )
+    .await
+    .map_err(|e| {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            paymaster = TFH_PAYMASTER_ADDRESS,
+            error_message = e,
+            "Failed to read self-sponsorship fee-token allowance"
+        );
+        TransactionError::Generic {
+            error_message: format!("Failed to read fee-token allowance: {e}"),
+        }
+    })?;
+    if allowance < estimated_cost {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            paymaster = TFH_PAYMASTER_ADDRESS,
+            allowance = allowance,
+            estimated_cost_in_token = estimated_cost,
+            "Insufficient fee-token allowance for self-sponsorship"
+        );
+        return Err(TransactionError::Generic {
+            error_message: format!(
+                "Insufficient fee-token allowance: {allowance}, estimated fee: {estimated_cost}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 async fn prepare_self_sponsored_transfer(
     rpc_client: &RpcClient,
     operation: UserOperation,
@@ -139,8 +188,9 @@ async fn prepare_self_sponsored_transfer(
     }
     let estimated_cost = parse_fee_estimate(decline)?;
 
-    // The TFH paymaster's fee-token allowance must already be set by the wallet
-    // migration. Retry sponsorship for the transfer covered by the fee estimate.
+    check_fee_allowance(rpc_client, operation.sender, decline.token, estimated_cost)
+        .await?;
+
     let retry = rpc_client
         .pm_sponsor_user_operation(
             Network::WorldChain,
@@ -196,8 +246,8 @@ async fn prepare_self_sponsored_transfer(
 impl SafeSmartAccount {
     /// Prepares an unsigned ERC-20 transfer on World Chain.
     ///
-    /// Self-sponsorship assumes the wallet migration has already established the
-    /// TFH paymaster's fee-token allowance.
+    /// Self-sponsorship verifies that the TFH paymaster's fee-token allowance
+    /// established by the wallet migration covers the fee estimate.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
