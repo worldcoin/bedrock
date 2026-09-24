@@ -679,11 +679,11 @@ impl TurnkeyApiClient {
     pub async fn reconcile_legacy_sync_factor_user(
         &self,
         suborganization_id: &str,
-        legacy_user_id: &str,
+        previous_sync_factor_user_id: &str,
         replacement_sync_factor: SyncFactor<'_>,
     ) -> Result<(), TurnkeyApiError> {
-        let legacy_user_id = uuid::Uuid::try_parse(legacy_user_id)
-            .map_err(|_| {
+        let previous_sync_factor_user_id =
+            uuid::Uuid::try_parse(previous_sync_factor_user_id).map_err(|_| {
                 TurnkeyApiError::Client(
                     "legacy sync-factor user id is not a UUID".to_string(),
                 )
@@ -693,8 +693,9 @@ impl TurnkeyApiClient {
         let users = self
             .get_users(suborganization_id, replacement_sync_factor)
             .await?;
-        let Some(legacy_user) =
-            users.iter().find(|user| user.user_id == legacy_user_id)
+        let Some(legacy_user) = users
+            .iter()
+            .find(|user| user.user_id == previous_sync_factor_user_id)
         else {
             // A previous attempt may have deleted the user after the caller
             // lost the activity response. Absence is the desired terminal state.
@@ -710,7 +711,7 @@ impl TurnkeyApiClient {
 
         let client = self.sdk_client(replacement_sync_factor.0)?;
         let intent = DeleteUsersIntent {
-            user_ids: vec![legacy_user_id.clone()],
+            user_ids: vec![previous_sync_factor_user_id.clone()],
         };
         // Compute this once outside retries to keep the submitted activity
         // idempotent if the first response is lost.
@@ -729,7 +730,10 @@ impl TurnkeyApiClient {
             })
             .await?;
 
-        if !deleted_user_ids.iter().any(|id| id == &legacy_user_id) {
+        if !deleted_user_ids
+            .iter()
+            .any(|id| id == &previous_sync_factor_user_id)
+        {
             crate::critical!(
                 "turnkey.reconcile_legacy_sync_factor_user.response_missing_requested_user"
             );
