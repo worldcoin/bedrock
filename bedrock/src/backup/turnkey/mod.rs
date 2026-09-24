@@ -41,6 +41,14 @@ static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
 /// cancel a uniffi async call, so the deadline lives here.
 const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
+fn cleanup_migration_error(error: &TurnkeyApiError) -> TurnkeyMigrationError {
+    if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
+        TurnkeyMigrationError::Retryable
+    } else {
+        error.to_migration_error()
+    }
+}
+
 /// High level manager to perform Turnkey account operations such as setup and
 /// migration reconciliation.
 ///
@@ -187,7 +195,7 @@ impl TurnkeyManager {
                     error_class = error.code(),
                     "turnkey.legacy_sync_factor_cleanup_failed"
                 );
-                Err(error.to_migration_error())
+                Err(cleanup_migration_error(&error))
             }
         }
     }
@@ -583,6 +591,18 @@ mod tests {
     use p256::ecdsa::VerifyingKey;
     use p256::PublicKey;
     use serde_json::json;
+
+    #[test]
+    fn pending_cleanup_error_is_retryable() {
+        let error = TurnkeyApiError::ActivityPollingExceeded {
+            error_message: "still pending".to_string(),
+        };
+
+        assert!(matches!(
+            cleanup_migration_error(&error),
+            TurnkeyMigrationError::Retryable
+        ));
+    }
 
     #[test]
     fn test_derive_public_key() {
