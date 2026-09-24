@@ -93,9 +93,9 @@ impl PreparedTransaction {
 
 fn parse_fee_estimate(value: Option<&str>) -> Result<U256, TransactionError> {
     let value = value.ok_or_else(|| {
-        crate::error!("Token-paid sponsorship returned no final fee estimate");
+        crate::error!("Self-sponsorship returned no final fee estimate");
         TransactionError::Generic {
-            error_message: "Token-paid sponsorship returned no final fee estimate"
+            error_message: "Self-sponsorship returned no final fee estimate"
                 .to_string(),
         }
     })?;
@@ -284,7 +284,7 @@ async fn prepare_transfer(
             crate::info!(
                 sender = operation.sender,
                 decline_reason = reason,
-                "Prepared token-paid ERC-20 transfer"
+                "Prepared self-sponsored ERC-20 transfer"
             );
             Some(PreparedTransactionFee {
                 token_address: token.to_string(),
