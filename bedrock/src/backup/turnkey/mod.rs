@@ -164,14 +164,7 @@ impl TurnkeyManager {
         Ok(outcome)
     }
 
-    /// Reconciles deletion of one legacy sync-factor user after its Secure
-    /// Enclave-backed replacement has been accepted by the backup service.
-    ///
-    /// This is deliberately an operation-level API. The replacement signer can
-    /// observe whether the legacy user is already absent, so retries are safe
-    /// after a timeout or a pending Turnkey activity. Native clients must retain
-    /// the legacy credential until this succeeds, but never construct Turnkey
-    /// stamps or receive private key material.
+    /// Deletes a legacy sync-factor user after its replacement is registered. Safe to retry.
     pub async fn delete_replaced_sync_factor(
         &self,
         suborganization_id: String,
