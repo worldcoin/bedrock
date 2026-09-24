@@ -697,8 +697,6 @@ impl TurnkeyApiClient {
             .iter()
             .find(|user| user.user_id == previous_sync_factor_user_id)
         else {
-            // A previous attempt may have deleted the user after the caller
-            // lost the activity response. Absence is the desired terminal state.
             return Ok(());
         };
 
