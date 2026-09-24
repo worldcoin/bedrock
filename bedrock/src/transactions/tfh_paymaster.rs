@@ -5,17 +5,17 @@ use alloy::{
 
 use super::TransactionError;
 
-/// Verifies that the TFH payload matches the fee token and confirmed charge ceiling.
-pub(super) fn validate_fee(
+/// Verifies that the TFH payload charges the token shown in the fee estimate.
+pub(super) fn validate_fee_token(
     paymaster_data: &[u8],
     expected_token: Address,
-    expected_cost: U256,
 ) -> Result<(), TransactionError> {
     // TFH accepts (token, ceiling) or (token, ceiling, premiumBps).
-    let (token, ceiling) = match paymaster_data.len() {
-        64 => <(Address, U256)>::abi_decode_validate(paymaster_data),
+    let token = match paymaster_data.len() {
+        64 => <(Address, U256)>::abi_decode_validate(paymaster_data)
+            .map(|(token, _)| token),
         96 => <(Address, U256, U256)>::abi_decode_validate(paymaster_data)
-            .map(|(token, ceiling, _)| (token, ceiling)),
+            .map(|(token, _, _)| token),
         length => {
             crate::error!(
                 paymaster_data_length = length,
@@ -37,23 +37,11 @@ pub(super) fn validate_fee(
         crate::error!(
             expected_fee_token = expected_token,
             actual_fee_token = token,
-            "TFH paymaster fee token does not match the advisory"
+            "TFH paymaster fee token does not match the fee quote"
         );
         return Err(TransactionError::Generic {
-            error_message: "TFH paymaster fee token does not match the advisory"
+            error_message: "TFH paymaster fee token does not match the fee quote"
                 .to_string(),
-        });
-    }
-    if ceiling != expected_cost {
-        crate::error!(
-            expected_fee = expected_cost,
-            actual_ceiling = ceiling,
-            "TFH paymaster charge ceiling does not match the final fee estimate"
-        );
-        return Err(TransactionError::Generic {
-            error_message:
-                "TFH paymaster charge ceiling does not match the final fee estimate"
-                    .to_string(),
         });
     }
     Ok(())

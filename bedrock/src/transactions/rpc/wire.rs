@@ -97,30 +97,7 @@ pub struct JsonRpcError {
     pub data: Option<Value>,
 }
 
-/// Response from requesting paymaster sponsorship for a user operation.
-#[derive(Debug)]
-pub enum PmSponsorUserOperationResponse {
-    /// Sponsorship was approved with the returned gas and paymaster fields.
-    Approved(PmSponsorshipApproval),
-    /// Sponsorship was declined with a self-sponsorship advisory.
-    Declined(PmSponsorshipDecline),
-}
-
-/// Self-sponsorship advisory returned when sponsorship is declined.
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PmSponsorshipDecline {
-    /// ERC-20 token the user can use to pay the transaction fee.
-    pub token: Address,
-    /// Paymaster contract that accepts the fee token.
-    pub paymaster_address: Address,
-    /// Policy reason for declining sponsorship.
-    pub reason: PmSponsorshipDeclineReason,
-    /// Fee estimate in the token's base units, as a decimal integer.
-    pub estimated_cost_in_token: String,
-}
-
-/// Reason a `pm_sponsorUserOperation` request was declined.
+/// Policy reason the user pays the fee for a prepared operation.
 #[derive(Debug, PartialEq, Eq, strum::EnumIter)]
 pub enum PmSponsorshipDeclineReason {
     /// The L2 base fee exceeded the sponsorship threshold.
@@ -189,7 +166,7 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
-/// Approved sponsorship fields returned by `pm_sponsorUserOperation` (V2).
+/// Prepared gas, paymaster, and fee fields returned by `pm_sponsorUserOperation` (V2).
 ///
 /// Paymaster fields (`paymaster`, `paymaster_data`,
 /// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
@@ -199,7 +176,7 @@ pub struct SponsorUserOperationResponse {
 /// `Option<T>` so both shapes deserialize.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PmSponsorshipApproval {
+pub struct PmSponsorUserOperationResponse {
     /// Call gas limit
     pub call_gas_limit: U128,
     /// Verification gas limit
@@ -218,35 +195,12 @@ pub struct PmSponsorshipApproval {
     pub paymaster_post_op_gas_limit: Option<U128>,
     /// Paymaster data (absent on the bundler-sponsored path)
     pub paymaster_data: Option<Bytes>,
-    /// Final TFH fee estimate, also encoded as the token charge ceiling.
+    /// Final TFH fee estimate in token base units, separate from the signed ceiling.
     pub estimated_cost_in_token: Option<String>,
-}
-
-/// Context object passed as the third parameter of `pm_sponsorUserOperation`.
-///
-/// V2 sponsorship is a two-mode protocol: an initial protocol-sponsored
-/// attempt with empty context, followed (on a structured decline) by a
-/// self-sponsored retry that names the ERC-20 token paying for gas. See
-/// `bedrock/src/transactions/transaction.md`.
-#[derive(Debug, Clone)]
-pub enum SponsorshipContext {
-    /// Empty context — request protocol sponsorship (the wallet provider
-    /// pays gas). Distinct from the ERC-4337 notion of bundler sponsorship,
-    /// which implies a user-appointed bundler choosing to sponsor.
-    Protocol,
-    /// Self-sponsored mode with the given ERC-20 token paying for gas.
-    SelfSponsoredToken(Address),
-}
-
-impl SponsorshipContext {
-    pub(super) fn to_json_value(&self) -> serde_json::Value {
-        match self {
-            Self::Protocol => serde_json::json!({}),
-            Self::SelfSponsoredToken(token) => {
-                serde_json::json!({ "token": format!("{token:?}") })
-            }
-        }
-    }
+    /// Token used for the network fee; absent when protocol sponsored.
+    pub token: Option<Address>,
+    /// Policy reason the user pays the network fee.
+    pub decline_reason: Option<PmSponsorshipDeclineReason>,
 }
 
 /// Response from `wa_getUserOperationReceipt`
