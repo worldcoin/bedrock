@@ -41,6 +41,13 @@ pub enum TransactionError {
     /// An error occurred with a primitive type. See `PrimitiveError` for more details.
     #[error("Primitive error: {0}")]
     PrimitiveError(String),
+
+    /// The fee-token balance cannot cover the transfer and estimated network fee.
+    #[error("Not enough funds to cover the transfer and network fee.")]
+    InsufficientFunds {
+        /// Token whose balance is insufficient.
+        token_address: String,
+    },
 }
 
 impl From<crate::primitives::PrimitiveError> for TransactionError {
@@ -168,10 +175,60 @@ async fn check_fee_allowance(
     Ok(())
 }
 
+async fn check_fee_balance(
+    rpc_client: &RpcClient,
+    sender: Address,
+    fee_token: Address,
+    transfer_token: Address,
+    transfer_amount: U256,
+    estimated_cost: U256,
+) -> Result<(), TransactionError> {
+    let balance =
+        Erc20::fetch_balance(rpc_client, Network::WorldChain, fee_token, sender)
+            .await
+            .map_err(|error| {
+                crate::error!(
+                    network = Network::WorldChain.network_name(),
+                    sender = sender,
+                    fee_token = fee_token,
+                    error_message = error,
+                    "Failed to read self-sponsorship fee-token balance"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to read fee-token balance: {error}"),
+                }
+            })?;
+    // If the transfer spends the fee token, its balance must cover both amounts.
+    // Subtraction avoids overflowing when the amount and fee exceed U256::MAX.
+    let available_for_fee = if transfer_token == fee_token {
+        balance.checked_sub(transfer_amount)
+    } else {
+        Some(balance)
+    };
+    if available_for_fee.is_none_or(|available| available < estimated_cost) {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            balance = balance,
+            transfer_token = transfer_token,
+            transfer_amount = transfer_amount,
+            estimated_cost_in_token = estimated_cost,
+            "Insufficient balance for the transfer and estimated network fee"
+        );
+        return Err(TransactionError::InsufficientFunds {
+            token_address: fee_token.to_string(),
+        });
+    }
+    Ok(())
+}
+
 async fn prepare_self_sponsored_transfer(
     rpc_client: &RpcClient,
     operation: UserOperation,
     decline: &PmSponsorshipDecline,
+    transfer_token: Address,
+    transfer_amount: U256,
 ) -> Result<PreparedTransaction, TransactionError> {
     if decline.paymaster_address != TFH_PAYMASTER_ADDRESS {
         crate::error!(
@@ -197,6 +254,16 @@ async fn prepare_self_sponsored_transfer(
     )
     .await?;
 
+    check_fee_balance(
+        rpc_client,
+        operation.sender,
+        decline.token,
+        transfer_token,
+        transfer_amount,
+        estimated_cost,
+    )
+    .await?;
+
     let retry = rpc_client
         .pm_sponsor_user_operation(
             Network::WorldChain,
@@ -205,8 +272,18 @@ async fn prepare_self_sponsored_transfer(
             &SponsorshipContext::SelfSponsoredToken(decline.token),
         )
         .await
-        .map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to prepare token-paid transaction: {e}"),
+        .map_err(|error| {
+            crate::error!(
+                sender = operation.sender,
+                fee_token = decline.token,
+                error_message = error,
+                "Failed to prepare token-paid transaction"
+            );
+            TransactionError::Generic {
+                error_message: format!(
+                    "Failed to prepare token-paid transaction: {error}"
+                ),
+            }
         })?;
     let PmSponsorUserOperationResponse::Approved(approval) = retry else {
         return Err(TransactionError::Generic {
@@ -253,7 +330,8 @@ impl SafeSmartAccount {
     /// Prepares an unsigned ERC-20 transfer on World Chain.
     ///
     /// Self-sponsorship verifies that the TFH paymaster's fee-token allowance
-    /// established by the wallet migration covers the fee estimate.
+    /// established by the wallet migration covers the fee estimate, and checks
+    /// that the fee-token balance covers the transfer and estimated fee.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
@@ -264,6 +342,7 @@ impl SafeSmartAccount {
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if sponsorship preparation fails.
+    /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
     /// - Will throw an error if the self-sponsored retry cannot be prepared.
     /// - Will throw an error if the global HTTP client has not been initialized.
     pub async fn prepare_transaction_transfer(
@@ -353,8 +432,14 @@ impl SafeSmartAccount {
                     decline_reason = decline.reason,
                     "Sponsorship declined for ERC-20 transfer"
                 );
-                prepare_self_sponsored_transfer(rpc_client, user_operation, &decline)
-                    .await?
+                prepare_self_sponsored_transfer(
+                    rpc_client,
+                    user_operation,
+                    &decline,
+                    token_address,
+                    amount,
+                )
+                .await?
             }
         };
 

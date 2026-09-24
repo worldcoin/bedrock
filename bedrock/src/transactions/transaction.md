@@ -46,8 +46,9 @@ For every transaction:
    needed to retry as a self-sponsored transaction.
 5. **(Decline branch only.) Prepare and price the token-paid operation.** Bedrock
    verifies that the TFH paymaster's fee-token allowance covers the estimate,
-   then retries sponsorship for the same transfer. The wallet migration owns
-   approvals. The transfer and the decline's fee estimate are retained for review.
+   checks that the fee-token balance covers the transfer and fee, then retries
+   sponsorship for the same transfer. The wallet migration owns approvals.
+   The transfer and the decline's fee estimate are retained for review.
 6. **Sign.** Bedrock merges the gas (and paymaster, if any) fields into the
    UserOp and signs locally with the device key.
 7. **Submit.** `eth_sendUserOperation` forwards the UserOp to a bundler which calls `handleOps` on the
@@ -116,6 +117,9 @@ sequenceDiagram
     Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
     Endpoint-->>Bedrock: allowance
     Bedrock->>Bedrock: Require allowance >= estimatedCostInToken
+    Bedrock->>Endpoint: eth_call feeToken.balanceOf(sender)
+    Endpoint-->>Bedrock: balance
+    Bedrock->>Bedrock: Require balance covers fee (plus transfer if same token)
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, { token })
     Endpoint-->>Bedrock: gas + paymaster + paymasterData
 
@@ -200,6 +204,15 @@ failed allowance read stops preparation. Preparation does not change allowances,
 sign operations, or submit transactions. The existing allowance lets the paymaster
 collect fees during validation, before the transfer executes. A failed token-paid
 sponsorship request stops preparation.
+
+Before requesting token-paid sponsorship, Bedrock also reads the fee-token
+balance. When the transfer spends the same token, the balance must cover the
+transfer amount plus the estimated fee; otherwise it must cover the estimated
+fee. A shortfall returns `TransactionError::InsufficientFunds`, including the
+fee-token address, with the message "Not enough funds to cover the transfer and
+network fee." Mobile can map this error to localized confirmation text. A failed
+balance read stops preparation with an RPC-related error. The checks use current
+state and a fee estimate; they do not reserve funds or guarantee execution.
 
 ### 6. Sign
 
