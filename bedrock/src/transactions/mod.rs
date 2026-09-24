@@ -29,6 +29,7 @@ pub mod contracts;
 pub mod custom_bundler;
 pub mod foreign;
 pub mod rpc;
+mod tfh_paymaster;
 
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
@@ -312,6 +313,9 @@ async fn prepare_self_sponsored_transfer(
             error_message: "Token-paid sponsorship returned incomplete or mismatched paymaster fields"
                 .to_string(),
         });
+    }
+    if let Some(paymaster_data) = &approval.paymaster_data {
+        tfh_paymaster::validate_fee_token(paymaster_data, decline.token)?;
     }
     Ok(PreparedTransaction {
         user_operation: operation.with_pm_sponsorship_approval(&approval),

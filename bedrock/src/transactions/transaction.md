@@ -205,6 +205,10 @@ sign operations, or submit transactions. The existing allowance lets the paymast
 collect fees during validation, before the transfer executes. A failed token-paid
 sponsorship request stops preparation.
 
+After token-paid sponsorship, Bedrock decodes the TFH paymaster data and requires
+its fee token to match the advisory shown to the user. Malformed data or a
+different token stops preparation before the operation is returned for signing.
+
 Before requesting token-paid sponsorship, Bedrock also reads the fee-token
 balance. When the transfer spends the same token, the balance must cover the
 transfer amount plus the estimated fee; otherwise it must cover the estimated

@@ -6,7 +6,7 @@ use crate::transactions::contracts::worldchain::{
     TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WLD_ADDRESS,
 };
 use alloy::primitives::{address, Bytes};
-use alloy::sol_types::SolCall;
+use alloy::sol_types::{SolCall, SolValue};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -67,7 +67,7 @@ fn uint_response(amount: u64) -> Value {
     })
 }
 
-fn token_sponsorship() -> Value {
+fn token_sponsorship(token: Address) -> Value {
     json!({
         "jsonrpc": "2.0", "id": "test",
         "result": {
@@ -77,7 +77,7 @@ fn token_sponsorship() -> Value {
             "maxFeePerGas": "0xa",
             "maxPriorityFeePerGas": "0x1",
             "paymaster": TFH_PAYMASTER_ADDRESS,
-            "paymasterData": "0x1234",
+            "paymasterData": Bytes::from((token, U256::from(10), U256::from(2000)).abi_encode()),
             "paymasterVerificationGasLimit": "0x10000",
             "paymasterPostOpGasLimit": "0x1000",
         },
@@ -102,7 +102,7 @@ fn transfer() -> UserOperation {
 #[tokio::test]
 async fn token_retry_preserves_unsigned_transfer_and_exposes_advisory() {
     let original = transfer();
-    let response = token_sponsorship();
+    let response = token_sponsorship(WLD_ADDRESS);
     let (rpc, http) = rpc(vec![uint_response(10), uint_response(17), response.clone()]);
     let prepared = prepare_self_sponsored_transfer(
         &rpc,
@@ -205,7 +205,7 @@ async fn allowance_checks_fee_token_sender_and_migrated_spender() {
     let (rpc, http) = rpc(vec![
         uint_response(11),
         uint_response(10),
-        token_sponsorship(),
+        token_sponsorship(USDC_ADDRESS),
     ]);
     let prepared = prepare_self_sponsored_transfer(
         &rpc,
@@ -263,7 +263,7 @@ async fn non_tfh_advisory_stops_even_if_token_sponsorship_would_match() {
     let unexpected_paymaster = address!("1111111111111111111111111111111111111111");
     let mut decline = decline();
     decline.paymaster_address = unexpected_paymaster;
-    let mut response = token_sponsorship();
+    let mut response = token_sponsorship(WLD_ADDRESS);
     response["result"]["paymaster"] = json!(unexpected_paymaster);
     let (rpc, http) = rpc(vec![response]);
 
@@ -291,7 +291,7 @@ async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
         "paymasterPostOpGasLimit",
         "mismatchedPaymaster",
     ] {
-        let mut response = token_sponsorship();
+        let mut response = token_sponsorship(WLD_ADDRESS);
         if field == "mismatchedPaymaster" {
             response["result"]["paymaster"] = json!(Address::ZERO);
         } else {
@@ -309,6 +309,96 @@ async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
         .unwrap_err();
         assert!(error.to_string().contains("paymaster fields"), "{field}");
         assert_eq!(http.requests.lock().unwrap().len(), 3);
+    }
+}
+
+#[tokio::test]
+async fn both_tfh_payload_formats_preserve_the_advertised_fee_token() {
+    for token in [WLD_ADDRESS, USDC_ADDRESS] {
+        for data in [
+            (token, U256::from(10)).abi_encode(),
+            (token, U256::from(10), U256::from(2000)).abi_encode(),
+        ] {
+            let data = Bytes::from(data);
+            let mut response = token_sponsorship(token);
+            response["result"]["paymasterData"] = json!(data);
+            let mut decline = decline();
+            decline.token = token;
+            let (rpc, _) = rpc(vec![uint_response(10), uint_response(17), response]);
+            let prepared = prepare_self_sponsored_transfer(
+                &rpc,
+                transfer(),
+                &decline,
+                WLD_ADDRESS,
+                U256::from(7),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                prepared.fee_details().unwrap().token_address,
+                token.to_string()
+            );
+            assert_eq!(prepared.user_operation.paymaster_data, Some(data));
+        }
+    }
+}
+
+#[tokio::test]
+async fn mismatched_fee_token_in_paymaster_data_stops_preparation() {
+    for token in [USDC_ADDRESS, Address::ZERO] {
+        for data in [
+            (token, U256::from(10)).abi_encode(),
+            (token, U256::from(10), U256::from(2000)).abi_encode(),
+        ] {
+            let mut response = token_sponsorship(token);
+            response["result"]["paymasterData"] = json!(Bytes::from(data));
+            let (rpc, _) = rpc(vec![uint_response(10), uint_response(17), response]);
+            let error = prepare_self_sponsored_transfer(
+                &rpc,
+                transfer(),
+                &decline(),
+                WLD_ADDRESS,
+                U256::from(7),
+            )
+            .await
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("fee token does not match the advisory"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_tfh_paymaster_data_stops_preparation() {
+    let mut invalid_payloads: Vec<_> = [0, 32, 63, 65, 95, 97, 128]
+        .into_iter()
+        .map(|length| (vec![0; length], "length"))
+        .collect();
+    for mut data in [
+        (WLD_ADDRESS, U256::from(10)).abi_encode(),
+        (WLD_ADDRESS, U256::from(10), U256::from(2000)).abi_encode(),
+    ] {
+        // Solidity rejects nonzero padding in the ABI address word.
+        data[0] = 1;
+        invalid_payloads.push((data, "encoding"));
+    }
+    for (data, reason) in invalid_payloads {
+        let mut response = token_sponsorship(WLD_ADDRESS);
+        response["result"]["paymasterData"] = json!(Bytes::from(data));
+        let (rpc, _) = rpc(vec![uint_response(10), uint_response(17), response]);
+        let error = prepare_self_sponsored_transfer(
+            &rpc,
+            transfer(),
+            &decline(),
+            WLD_ADDRESS,
+            U256::from(7),
+        )
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains(&format!("Invalid TFH paymaster data {reason}")));
     }
 }
 
@@ -383,7 +473,7 @@ async fn balance_covers_transfer_and_fee_before_token_retry() {
         let sender = original.sender;
         let mut responses = vec![uint_response(10), uint_response(balance)];
         if !insufficient {
-            responses.push(token_sponsorship());
+            responses.push(token_sponsorship(fee_token));
         }
         let (rpc, http) = rpc(responses);
         let result = prepare_self_sponsored_transfer(
