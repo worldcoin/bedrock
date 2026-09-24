@@ -683,16 +683,15 @@ impl TurnkeyApiClient {
         sync_factor: SyncFactor<'_>,
     ) -> Result<(), TurnkeyApiError> {
         let previous_sync_factor_user_id =
-            uuid::Uuid::try_parse(previous_sync_factor_user_id).map_err(|_| {
-                TurnkeyApiError::Client(
-                    "legacy sync-factor user id is not a UUID".to_string(),
-                )
-            })?
-            .to_string();
+            uuid::Uuid::try_parse(previous_sync_factor_user_id)
+                .map_err(|_| {
+                    TurnkeyApiError::Client(
+                        "legacy sync-factor user id is not a UUID".to_string(),
+                    )
+                })?
+                .to_string();
 
-        let users = self
-            .get_users(suborganization_id, sync_factor)
-            .await?;
+        let users = self.get_users(suborganization_id, sync_factor).await?;
         let Some(legacy_user) = users
             .iter()
             .find(|user| user.user_id == previous_sync_factor_user_id)

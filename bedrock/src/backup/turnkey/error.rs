@@ -174,7 +174,6 @@ impl TurnkeyApiError {
             TurnkeyMigrationError::Failed
         }
     }
-
 }
 
 /// Maps a signer failure to [`TurnkeyApiError::Signer`], preserving its message.
@@ -332,5 +331,4 @@ mod tests {
             ));
         }
     }
-
 }
