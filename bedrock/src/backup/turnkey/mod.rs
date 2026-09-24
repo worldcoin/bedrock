@@ -41,6 +41,14 @@ static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
 /// cancel a uniffi async call, so the deadline lives here.
 const MIGRATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(3);
 
+const fn cleanup_migration_error(error: &TurnkeyApiError) -> TurnkeyMigrationError {
+    if matches!(error, TurnkeyApiError::ActivityPollingExceeded { .. }) {
+        TurnkeyMigrationError::Retryable
+    } else {
+        error.to_migration_error()
+    }
+}
+
 /// High level manager to perform Turnkey account operations such as setup and
 /// migration reconciliation.
 ///
@@ -162,6 +170,34 @@ impl TurnkeyManager {
             }
         }
         Ok(outcome)
+    }
+
+    /// Deletes a legacy sync-factor user after its replacement is registered. Safe to retry.
+    pub async fn delete_replaced_sync_factor(
+        &self,
+        suborganization_id: String,
+        legacy_user_id: String,
+        sync_factor: &P256Signer,
+    ) -> Result<(), TurnkeyMigrationError> {
+        let api = TurnkeyApiClient::new();
+        match api
+            .reconcile_legacy_sync_factor_user(
+                &suborganization_id,
+                &legacy_user_id,
+                SyncFactor(sync_factor),
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                crate::warn!(
+                    operation = "reconcile_legacy_sync_factor_user",
+                    error_class = error.code(),
+                    "turnkey.legacy_sync_factor_cleanup_failed"
+                );
+                Err(cleanup_migration_error(&error))
+            }
+        }
     }
 }
 
@@ -555,6 +591,18 @@ mod tests {
     use p256::ecdsa::VerifyingKey;
     use p256::PublicKey;
     use serde_json::json;
+
+    #[test]
+    fn pending_cleanup_error_is_retryable() {
+        let error = TurnkeyApiError::ActivityPollingExceeded {
+            error_message: "still pending".to_string(),
+        };
+
+        assert!(matches!(
+            cleanup_migration_error(&error),
+            TurnkeyMigrationError::Retryable
+        ));
+    }
 
     #[test]
     fn test_derive_public_key() {
