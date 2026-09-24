@@ -26,7 +26,7 @@ mod policies;
 pub(in crate::backup) mod test;
 
 pub use api::TurnkeyApiClient;
-pub use error::{TurnkeyApiError, TurnkeyCleanupError, TurnkeyMigrationError};
+pub use error::{TurnkeyApiError, TurnkeyMigrationError};
 use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::get_config;
@@ -177,7 +177,7 @@ impl TurnkeyManager {
         suborganization_id: String,
         legacy_user_id: String,
         replacement_sync_factor: &P256Signer,
-    ) -> Result<(), TurnkeyCleanupError> {
+    ) -> Result<(), TurnkeyMigrationError> {
         let api = TurnkeyApiClient::new();
         match api
             .reconcile_legacy_sync_factor_user(
@@ -194,7 +194,7 @@ impl TurnkeyManager {
                     error_class = error.code(),
                     "turnkey.legacy_sync_factor_cleanup_failed"
                 );
-                Err(error.to_cleanup_error())
+                Err(error.to_migration_error())
             }
         }
     }
