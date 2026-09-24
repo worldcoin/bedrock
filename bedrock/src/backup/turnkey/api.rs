@@ -680,7 +680,7 @@ impl TurnkeyApiClient {
         &self,
         suborganization_id: &str,
         previous_sync_factor_user_id: &str,
-        replacement_sync_factor: SyncFactor<'_>,
+        sync_factor: SyncFactor<'_>,
     ) -> Result<(), TurnkeyApiError> {
         let previous_sync_factor_user_id =
             uuid::Uuid::try_parse(previous_sync_factor_user_id).map_err(|_| {
@@ -691,7 +691,7 @@ impl TurnkeyApiClient {
             .to_string();
 
         let users = self
-            .get_users(suborganization_id, replacement_sync_factor)
+            .get_users(suborganization_id, sync_factor)
             .await?;
         let Some(legacy_user) = users
             .iter()
@@ -709,7 +709,7 @@ impl TurnkeyApiClient {
             return Err(TurnkeyApiError::Consistency);
         }
 
-        let client = self.sdk_client(replacement_sync_factor.0)?;
+        let client = self.sdk_client(sync_factor.0)?;
         let intent = DeleteUsersIntent {
             user_ids: vec![previous_sync_factor_user_id.clone()],
         };

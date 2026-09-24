@@ -169,14 +169,14 @@ impl TurnkeyManager {
         &self,
         suborganization_id: String,
         legacy_user_id: String,
-        replacement_sync_factor: &P256Signer,
+        sync_factor: &P256Signer,
     ) -> Result<(), TurnkeyMigrationError> {
         let api = TurnkeyApiClient::new();
         match api
             .reconcile_legacy_sync_factor_user(
                 &suborganization_id,
                 &legacy_user_id,
-                SyncFactor(replacement_sync_factor),
+                SyncFactor(sync_factor),
             )
             .await
         {
