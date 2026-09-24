@@ -45,10 +45,10 @@ For every transaction:
    on the user's behalf) or returns a structured decline with the information
    needed to retry as a self-sponsored transaction.
 5. **(Decline branch only.) Prepare and price the token-paid operation.** Bedrock
-   verifies that the TFH paymaster's fee-token allowance covers the estimate,
-   checks that the fee-token balance covers the transfer and fee, then retries
-   sponsorship for the same transfer. The wallet migration owns approvals.
-   The transfer and the decline's fee estimate are retained for review.
+   retries sponsorship for the same transfer, verifies the final fee matches
+   the signed paymaster charge ceiling, and checks allowance and balance against
+   that fee. The wallet migration owns approvals. The transfer and final fee
+   estimate are retained for review.
 6. **Sign.** Bedrock merges the gas (and paymaster, if any) fields into the
    UserOp and signs locally with the device key.
 7. **Submit.** `eth_sendUserOperation` forwards the UserOp to a bundler which calls `handleOps` on the
@@ -114,14 +114,15 @@ sequenceDiagram
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
     Endpoint-->>Bedrock: "sponsorship declined"<br/>data: { token, paymasterAddress, reason, estimatedCostInToken }
 
+    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, { token })
+    Endpoint-->>Bedrock: gas + paymaster + paymasterData + estimatedCostInToken
+    Bedrock->>Bedrock: Verify fee token and charge ceiling match final fee
     Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
     Endpoint-->>Bedrock: allowance
     Bedrock->>Bedrock: Require allowance >= estimatedCostInToken
     Bedrock->>Endpoint: eth_call feeToken.balanceOf(sender)
     Endpoint-->>Bedrock: balance
-    Bedrock->>Bedrock: Require balance covers fee (plus transfer if same token)
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, { token })
-    Endpoint-->>Bedrock: gas + paymaster + paymasterData
+    Bedrock->>Bedrock: Require balance covers final fee (plus transfer if same token)
 
     Bedrock->>User: Confirm: pay ~Y WLD in gas
     User-->>Bedrock: Approve
@@ -154,12 +155,16 @@ sequenceDiagram
   "paymaster": "0x…",
   "paymasterData": "0x…",
   "paymasterVerificationGasLimit": "0x…",
-  "paymasterPostOpGasLimit": "0x…"
+  "paymasterPostOpGasLimit": "0x…",
+  "estimatedCostInToken": "123456789"
 }
 ```
 
-All gas fields populated, all paymaster fields present. Bedrock merges them
-into the prepared UserOp before confirmation and signing.
+All gas fields are populated and all paymaster fields are present. The positive
+`estimatedCostInToken` is in token base units and must equal the charge ceiling
+encoded in `paymasterData`. It replaces the initial decline estimate for
+confirmation and balance/allowance checks. Protocol-sponsored responses omit it.
+Bedrock merges the gas and paymaster fields into the prepared UserOp before signing.
 
 ## Per-step details
 
@@ -189,34 +194,30 @@ callData, signature placeholder) and an empty context. The endpoint inspects cur
 
 ### 5. Self-sponsored retry
 
-When the protocol declines to sponsor, Bedrock retains `estimatedCostInToken`
-for confirmation, verifies that `paymasterAddress` is the migration's
-`TFH_PAYMASTER_ADDRESS`, and reads that paymaster's allowance from the fee-token
-contract for the sender. The allowance must cover the estimated amount before
-Bedrock retries `pm_sponsorUserOperation` with the returned fee token. The retry
-uses the same transfer calldata and nonce. Bedrock requires a response with all
-paymaster fields present and the same `paymasterAddress` as the decline before
-returning the prepared operation.
+When the protocol declines to sponsor, Bedrock verifies that `paymasterAddress`
+is the migration's `TFH_PAYMASTER_ADDRESS` and retries `pm_sponsorUserOperation`
+with the returned fee token, using the same transfer calldata and nonce.
+The retry must include all paymaster fields, the same paymaster address, and a
+positive final `estimatedCostInToken`.
 
-This flow assumes the TFH paymaster is used and its fee-token allowance was
-established by `TfhPaymasterApprovalMigration`. An insufficient allowance or
-failed allowance read stops preparation. Preparation does not change allowances,
-sign operations, or submit transactions. The existing allowance lets the paymaster
-collect fees during validation, before the transfer executes. A failed token-paid
-sponsorship request stops preparation.
+Bedrock decodes the TFH paymaster data and requires its token to match the
+advisory and its charge ceiling to equal the final fee estimate. Malformed data
+or mismatched fields stop preparation. The final estimate replaces the decline's
+estimate in `PreparedTransactionFee`; the initial decline reason is preserved.
+The contract cannot collect more than the signed ceiling and refunds any excess
+upfront collection after execution.
 
-After token-paid sponsorship, Bedrock decodes the TFH paymaster data and requires
-its fee token to match the advisory shown to the user. Malformed data or a
-different token stops preparation before the operation is returned for signing.
+After token-paid sponsorship, Bedrock reads the fee-token allowance and balance.
+The allowance must cover the final fee. When the transfer spends the same token,
+the balance must cover the transfer amount plus that fee; otherwise it must cover
+the fee alone. A shortfall returns `TransactionError::InsufficientFunds`, including
+the fee-token address, with "Not enough funds to cover the transfer and network
+fee." Mobile can map this error to localized confirmation text. Failed reads or
+insufficient allowance also stop preparation.
 
-Before requesting token-paid sponsorship, Bedrock also reads the fee-token
-balance. When the transfer spends the same token, the balance must cover the
-transfer amount plus the estimated fee; otherwise it must cover the estimated
-fee. A shortfall returns `TransactionError::InsufficientFunds`, including the
-fee-token address, with the message "Not enough funds to cover the transfer and
-network fee." Mobile can map this error to localized confirmation text. A failed
-balance read stops preparation with an RPC-related error. The checks use current
-state and a fee estimate; they do not reserve funds or guarantee execution.
+`TfhPaymasterApprovalMigration` owns approvals. Preparation does not change
+allowances, sign operations, or submit transactions. These checks do not reserve
+funds or guarantee execution: balances and contract state can change afterward.
 
 ### 6. Sign
 

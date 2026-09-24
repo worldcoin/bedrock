@@ -79,7 +79,7 @@ pub struct PreparedTransactionFee {
     pub token_address: String,
     /// Paymaster that charges the fee token.
     pub paymaster_address: String,
-    /// Estimated fee in token base units, as a decimal integer.
+    /// Final fee estimate and signed charge ceiling in token base units, as a decimal integer.
     pub estimated_cost_in_token: String,
     /// Policy reason for the original sponsorship decline.
     pub decline_reason: String,
@@ -94,31 +94,26 @@ impl PreparedTransaction {
     }
 }
 
-fn parse_fee_estimate(
-    decline: &PmSponsorshipDecline,
-) -> Result<U256, TransactionError> {
-    let estimate =
-        U256::from_str_radix(&decline.estimated_cost_in_token, 10).map_err(|e| {
-            crate::error!(
-                network = Network::WorldChain.network_name(),
-                fee_token = decline.token,
-                paymaster = decline.paymaster_address,
-                estimated_cost_in_token = decline.estimated_cost_in_token,
-                error_message = e,
-                "Invalid self-sponsorship fee estimate"
-            );
-            TransactionError::Generic {
-                error_message: format!("Invalid self-sponsorship fee estimate: {e}"),
-            }
-        })?;
-    if estimate == U256::ZERO {
+fn parse_fee_estimate(value: Option<&str>) -> Result<U256, TransactionError> {
+    let value = value.ok_or_else(|| {
+        crate::error!("Token-paid sponsorship returned no final fee estimate");
+        TransactionError::Generic {
+            error_message: "Token-paid sponsorship returned no final fee estimate"
+                .to_string(),
+        }
+    })?;
+    let estimate = U256::from_str_radix(value, 10).map_err(|error| {
         crate::error!(
-            network = Network::WorldChain.network_name(),
-            fee_token = decline.token,
-            paymaster = decline.paymaster_address,
-            estimated_cost_in_token = decline.estimated_cost_in_token,
-            "Self-sponsorship fee estimate must be positive"
+            estimated_cost_in_token = value,
+            error_message = error,
+            "Invalid self-sponsorship fee estimate"
         );
+        TransactionError::Generic {
+            error_message: format!("Invalid self-sponsorship fee estimate: {error}"),
+        }
+    })?;
+    if estimate == U256::ZERO {
+        crate::error!("Self-sponsorship fee estimate must be positive");
         return Err(TransactionError::Generic {
             error_message: "Self-sponsorship fee estimate must be positive".to_string(),
         });
@@ -134,7 +129,7 @@ async fn check_fee_allowance(
     estimated_cost: U256,
 ) -> Result<(), TransactionError> {
     // Migration owns approvals; preparation only checks that the existing
-    // allowance covers the fee estimate before requesting token-paid sponsorship.
+    // allowance covers the final token-paid fee estimate.
     let allowance = Erc20::fetch_allowance(
         rpc_client,
         Network::WorldChain,
@@ -244,26 +239,6 @@ async fn prepare_self_sponsored_transfer(
             error_message: "Self-sponsorship requires TFH paymaster".to_string(),
         });
     }
-    let estimated_cost = parse_fee_estimate(decline)?;
-
-    check_fee_allowance(
-        rpc_client,
-        operation.sender,
-        decline.token,
-        decline.paymaster_address,
-        estimated_cost,
-    )
-    .await?;
-
-    check_fee_balance(
-        rpc_client,
-        operation.sender,
-        decline.token,
-        transfer_token,
-        transfer_amount,
-        estimated_cost,
-    )
-    .await?;
 
     let retry = rpc_client
         .pm_sponsor_user_operation(
@@ -314,9 +289,31 @@ async fn prepare_self_sponsored_transfer(
                 .to_string(),
         });
     }
+    let estimated_cost =
+        parse_fee_estimate(approval.estimated_cost_in_token.as_deref())?;
     if let Some(paymaster_data) = &approval.paymaster_data {
-        tfh_paymaster::validate_fee_token(paymaster_data, decline.token)?;
+        tfh_paymaster::validate_fee(paymaster_data, decline.token, estimated_cost)?;
     }
+
+    check_fee_allowance(
+        rpc_client,
+        operation.sender,
+        decline.token,
+        decline.paymaster_address,
+        estimated_cost,
+    )
+    .await?;
+
+    check_fee_balance(
+        rpc_client,
+        operation.sender,
+        decline.token,
+        transfer_token,
+        transfer_amount,
+        estimated_cost,
+    )
+    .await?;
+
     Ok(PreparedTransaction {
         user_operation: operation.with_pm_sponsorship_approval(&approval),
         fee_details: Some(PreparedTransactionFee {
@@ -334,7 +331,7 @@ impl SafeSmartAccount {
     /// Prepares an unsigned ERC-20 transfer on World Chain.
     ///
     /// Self-sponsorship verifies that the TFH paymaster's fee-token allowance
-    /// established by the wallet migration covers the fee estimate, and checks
+    /// established by the wallet migration covers the final fee estimate, and checks
     /// that the fee-token balance covers the transfer and estimated fee.
     ///
     /// # Arguments

@@ -77,6 +77,7 @@ fn token_sponsorship(token: Address) -> Value {
             "maxFeePerGas": "0xa",
             "maxPriorityFeePerGas": "0x1",
             "paymaster": TFH_PAYMASTER_ADDRESS,
+            "estimatedCostInToken": "10",
             "paymasterData": Bytes::from((token, U256::from(10), U256::from(2000)).abi_encode()),
             "paymasterVerificationGasLimit": "0x10000",
             "paymasterPostOpGasLimit": "0x1000",
@@ -100,10 +101,10 @@ fn transfer() -> UserOperation {
 }
 
 #[tokio::test]
-async fn token_retry_preserves_unsigned_transfer_and_exposes_advisory() {
+async fn token_retry_preserves_unsigned_transfer_and_exposes_final_fee() {
     let original = transfer();
     let response = token_sponsorship(WLD_ADDRESS);
-    let (rpc, http) = rpc(vec![uint_response(10), uint_response(17), response.clone()]);
+    let (rpc, http) = rpc(vec![response.clone(), uint_response(10), uint_response(17)]);
     let prepared = prepare_self_sponsored_transfer(
         &rpc,
         original.clone(),
@@ -123,7 +124,7 @@ async fn token_retry_preserves_unsigned_transfer_and_exposes_advisory() {
     );
     let operation = serde_json::to_value(&prepared.user_operation).unwrap();
     for (field, value) in response["result"].as_object().unwrap() {
-        if field == "paymaster" {
+        if field == "paymaster" || field == "estimatedCostInToken" {
             continue;
         }
         assert_eq!(&operation[field], value, "{field}");
@@ -134,22 +135,114 @@ async fn token_retry_preserves_unsigned_transfer_and_exposes_advisory() {
     assert_eq!(fee.decline_reason, "future_policy");
     assert_eq!(fee.estimated_cost_in_token, "10");
 
-    // Preparation reads allowance and balance before retrying sponsorship.
+    // Preparation checks the final fee after token-paid sponsorship.
     let requests = http.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
-    assert_eq!(requests[0]["method"], "eth_call");
+    assert_eq!(requests[0]["method"], "pm_sponsorUserOperation");
     assert_eq!(requests[1]["method"], "eth_call");
-    assert_eq!(requests[2]["method"], "pm_sponsorUserOperation");
-    assert_eq!(requests[2]["params"][0], json!(original));
-    assert_eq!(requests[2]["params"][1], json!(*ENTRYPOINT_4337));
-    assert_eq!(requests[2]["params"][2], json!({"token": WLD_ADDRESS}));
+    assert_eq!(requests[2]["method"], "eth_call");
+    assert_eq!(requests[0]["params"][0], json!(original));
+    assert_eq!(requests[0]["params"][1], json!(*ENTRYPOINT_4337));
+    assert_eq!(requests[0]["params"][2], json!({"token": WLD_ADDRESS}));
     assert!(http.responses.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn insufficient_allowance_stops_before_token_retry() {
+async fn final_fee_replaces_advisory_for_confirmation_and_coverage() {
+    for (advisory, allowance, balance, failure) in [
+        ("10", 20, 27, None),
+        ("30", 20, 27, None),
+        ("10", 10, 27, Some("Insufficient fee-token allowance")),
+        ("10", 20, 17, Some("Not enough funds")),
+    ] {
+        let mut decline = decline();
+        decline.estimated_cost_in_token = advisory.to_string();
+        let mut response = token_sponsorship(WLD_ADDRESS);
+        response["result"]["estimatedCostInToken"] = json!("20");
+        response["result"]["paymasterData"] = json!(Bytes::from(
+            (WLD_ADDRESS, U256::from(20), U256::from(2000)).abi_encode()
+        ));
+        let (rpc, _) = rpc(vec![
+            response,
+            uint_response(allowance),
+            uint_response(balance),
+        ]);
+        let result = prepare_self_sponsored_transfer(
+            &rpc,
+            transfer(),
+            &decline,
+            WLD_ADDRESS,
+            U256::from(7),
+        )
+        .await;
+        if let Some(failure) = failure {
+            assert!(result.unwrap_err().to_string().contains(failure));
+        } else {
+            assert_eq!(
+                result
+                    .unwrap()
+                    .fee_details()
+                    .unwrap()
+                    .estimated_cost_in_token,
+                "20"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn missing_final_fee_stops_preparation() {
+    let mut response = token_sponsorship(WLD_ADDRESS);
+    response["result"]
+        .as_object_mut()
+        .unwrap()
+        .remove("estimatedCostInToken");
+    let (rpc, http) = rpc(vec![response]);
+    let error = prepare_self_sponsored_transfer(
+        &rpc,
+        transfer(),
+        &decline(),
+        WLD_ADDRESS,
+        U256::from(7),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("no final fee estimate"));
+    assert_eq!(http.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn mismatched_charge_ceiling_stops_preparation() {
+    for ceiling in [U256::ZERO, U256::from(9), U256::from(11), U256::MAX] {
+        for data in [
+            (WLD_ADDRESS, ceiling).abi_encode(),
+            (WLD_ADDRESS, ceiling, U256::from(2000)).abi_encode(),
+        ] {
+            let mut response = token_sponsorship(WLD_ADDRESS);
+            response["result"]["paymasterData"] = json!(Bytes::from(data));
+            let (rpc, http) = rpc(vec![response]);
+            let error = prepare_self_sponsored_transfer(
+                &rpc,
+                transfer(),
+                &decline(),
+                WLD_ADDRESS,
+                U256::from(7),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("charge ceiling does not match"));
+            assert_eq!(http.requests.lock().unwrap().len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn insufficient_allowance_stops_preparation() {
     for allowance in [0, 9] {
-        let (rpc, http) = rpc(vec![uint_response(allowance)]);
+        let (rpc, http) = rpc(vec![
+            token_sponsorship(WLD_ADDRESS),
+            uint_response(allowance),
+        ]);
         let error = prepare_self_sponsored_transfer(
             &rpc,
             transfer(),
@@ -163,13 +256,13 @@ async fn insufficient_allowance_stops_before_token_retry() {
             .to_string()
             .contains("Insufficient fee-token allowance"));
         let requests = http.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["method"], "eth_call");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["method"], "eth_call");
     }
 }
 
 #[tokio::test]
-async fn allowance_read_failure_stops_before_token_retry() {
+async fn allowance_read_failure_stops_preparation() {
     for response in [
         json!({
             "jsonrpc": "2.0", "id": "test",
@@ -177,7 +270,7 @@ async fn allowance_read_failure_stops_before_token_retry() {
         }),
         json!({ "jsonrpc": "2.0", "id": "test", "result": "0x" }),
     ] {
-        let (rpc, http) = rpc(vec![response]);
+        let (rpc, http) = rpc(vec![token_sponsorship(WLD_ADDRESS), response]);
         let error = prepare_self_sponsored_transfer(
             &rpc,
             transfer(),
@@ -191,8 +284,8 @@ async fn allowance_read_failure_stops_before_token_retry() {
             .to_string()
             .contains("Failed to read fee-token allowance"));
         let requests = http.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["method"], "eth_call");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["method"], "eth_call");
     }
 }
 
@@ -203,9 +296,9 @@ async fn allowance_checks_fee_token_sender_and_migrated_spender() {
     let mut decline = decline();
     decline.token = USDC_ADDRESS;
     let (rpc, http) = rpc(vec![
+        token_sponsorship(USDC_ADDRESS),
         uint_response(11),
         uint_response(10),
-        token_sponsorship(USDC_ADDRESS),
     ]);
     let prepared = prepare_self_sponsored_transfer(
         &rpc,
@@ -223,22 +316,22 @@ async fn allowance_checks_fee_token_sender_and_migrated_spender() {
 
     let requests = http.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
-    assert_eq!(requests[0]["method"], "eth_call");
-    assert_eq!(requests[0]["params"][0]["to"], json!(USDC_ADDRESS));
-    assert_eq!(requests[0]["params"][1], "latest");
+    assert_eq!(requests[1]["method"], "eth_call");
+    assert_eq!(requests[1]["params"][0]["to"], json!(USDC_ADDRESS));
+    assert_eq!(requests[1]["params"][1], "latest");
     let data: Bytes =
-        serde_json::from_value(requests[0]["params"][0]["data"].clone()).unwrap();
+        serde_json::from_value(requests[1]["params"][0]["data"].clone()).unwrap();
     assert_eq!(&data[..4], &IErc20::allowanceCall::SELECTOR);
     let call = IErc20::allowanceCall::abi_decode_raw(&data[4..]).unwrap();
     assert_eq!(call.owner, sender);
     assert_eq!(call.spender, TFH_PAYMASTER_ADDRESS);
-    assert_eq!(requests[1]["method"], "eth_call");
-    assert_eq!(requests[2]["method"], "pm_sponsorUserOperation");
-    assert_eq!(requests[2]["params"][2], json!({ "token": USDC_ADDRESS }));
+    assert_eq!(requests[2]["method"], "eth_call");
+    assert_eq!(requests[0]["method"], "pm_sponsorUserOperation");
+    assert_eq!(requests[0]["params"][2], json!({ "token": USDC_ADDRESS }));
 }
 
 #[tokio::test]
-async fn invalid_fee_estimate_stops_before_token_retry() {
+async fn invalid_final_fee_estimate_stops_preparation() {
     for estimate in [
         "0",
         "-1",
@@ -247,14 +340,14 @@ async fn invalid_fee_estimate_stops_before_token_retry() {
         "0x10",
         "115792089237316195423570985008687907853269984665640564039457584007913129639936",
     ] {
-        let mut decline = decline();
-        decline.estimated_cost_in_token = estimate.to_string();
-        let (rpc, http) = rpc(vec![]);
-        let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline, WLD_ADDRESS, U256::from(7))
+        let mut response = token_sponsorship(WLD_ADDRESS);
+        response["result"]["estimatedCostInToken"] = json!(estimate);
+        let (rpc, http) = rpc(vec![response]);
+        let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline(), WLD_ADDRESS, U256::from(7))
             .await
             .unwrap_err();
         assert!(error.to_string().contains("fee estimate"));
-        assert!(http.requests.lock().unwrap().is_empty());
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
     }
 }
 
@@ -297,7 +390,7 @@ async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
         } else {
             response["result"].as_object_mut().unwrap().remove(field);
         }
-        let (rpc, http) = rpc(vec![uint_response(10), uint_response(17), response]);
+        let (rpc, http) = rpc(vec![response]);
         let error = prepare_self_sponsored_transfer(
             &rpc,
             transfer(),
@@ -308,7 +401,7 @@ async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("paymaster fields"), "{field}");
-        assert_eq!(http.requests.lock().unwrap().len(), 3);
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
     }
 }
 
@@ -324,7 +417,7 @@ async fn both_tfh_payload_formats_preserve_the_advertised_fee_token() {
             response["result"]["paymasterData"] = json!(data);
             let mut decline = decline();
             decline.token = token;
-            let (rpc, _) = rpc(vec![uint_response(10), uint_response(17), response]);
+            let (rpc, _) = rpc(vec![response, uint_response(10), uint_response(17)]);
             let prepared = prepare_self_sponsored_transfer(
                 &rpc,
                 transfer(),
@@ -352,7 +445,7 @@ async fn mismatched_fee_token_in_paymaster_data_stops_preparation() {
         ] {
             let mut response = token_sponsorship(token);
             response["result"]["paymasterData"] = json!(Bytes::from(data));
-            let (rpc, _) = rpc(vec![uint_response(10), uint_response(17), response]);
+            let (rpc, _) = rpc(vec![response]);
             let error = prepare_self_sponsored_transfer(
                 &rpc,
                 transfer(),
@@ -386,7 +479,7 @@ async fn malformed_tfh_paymaster_data_stops_preparation() {
     for (data, reason) in invalid_payloads {
         let mut response = token_sponsorship(WLD_ADDRESS);
         response["result"]["paymasterData"] = json!(Bytes::from(data));
-        let (rpc, _) = rpc(vec![uint_response(10), uint_response(17), response]);
+        let (rpc, _) = rpc(vec![response]);
         let error = prepare_self_sponsored_transfer(
             &rpc,
             transfer(),
@@ -404,20 +497,16 @@ async fn malformed_tfh_paymaster_data_stops_preparation() {
 
 #[tokio::test]
 async fn token_sponsorship_decline_stops_without_another_retry() {
-    let (rpc, http) = rpc(vec![
-        uint_response(10),
-        uint_response(17),
-        json!({
-            "jsonrpc": "2.0", "id": "test",
-            "error": {
-                "code": -32602, "message": "sponsorship declined",
-                "data": {
-                    "token": WLD_ADDRESS, "paymasterAddress": TFH_PAYMASTER_ADDRESS,
-                    "reason": "future_policy", "estimatedCostInToken": "10",
-                },
+    let (rpc, http) = rpc(vec![json!({
+        "jsonrpc": "2.0", "id": "test",
+        "error": {
+            "code": -32602, "message": "sponsorship declined",
+            "data": {
+                "token": WLD_ADDRESS, "paymasterAddress": TFH_PAYMASTER_ADDRESS,
+                "reason": "future_policy", "estimatedCostInToken": "10",
             },
-        }),
-    ]);
+        },
+    })]);
     let error = prepare_self_sponsored_transfer(
         &rpc,
         transfer(),
@@ -430,19 +519,15 @@ async fn token_sponsorship_decline_stops_without_another_retry() {
     assert!(error
         .to_string()
         .contains("Token-paid sponsorship was declined"));
-    assert_eq!(http.requests.lock().unwrap().len(), 3);
+    assert_eq!(http.requests.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
 async fn token_sponsorship_error_stops_without_submission() {
-    let (rpc, http) = rpc(vec![
-        uint_response(10),
-        uint_response(17),
-        json!({
-            "jsonrpc": "2.0", "id": "test",
-            "error": { "code": -32603, "message": "sponsorship unavailable" },
-        }),
-    ]);
+    let (rpc, http) = rpc(vec![json!({
+        "jsonrpc": "2.0", "id": "test",
+        "error": { "code": -32603, "message": "sponsorship unavailable" },
+    })]);
     let error = prepare_self_sponsored_transfer(
         &rpc,
         transfer(),
@@ -453,11 +538,11 @@ async fn token_sponsorship_error_stops_without_submission() {
     .await
     .unwrap_err();
     assert!(error.to_string().contains("sponsorship unavailable"));
-    assert_eq!(http.requests.lock().unwrap().len(), 3);
+    assert_eq!(http.requests.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
-async fn balance_covers_transfer_and_fee_before_token_retry() {
+async fn balance_covers_transfer_and_final_fee() {
     for (fee_token, balance, insufficient) in [
         (WLD_ADDRESS, 17, false),
         (WLD_ADDRESS, 18, false),
@@ -471,11 +556,11 @@ async fn balance_covers_transfer_and_fee_before_token_retry() {
         decline.token = fee_token;
         let original = transfer();
         let sender = original.sender;
-        let mut responses = vec![uint_response(10), uint_response(balance)];
-        if !insufficient {
-            responses.push(token_sponsorship(fee_token));
-        }
-        let (rpc, http) = rpc(responses);
+        let (rpc, http) = rpc(vec![
+            token_sponsorship(fee_token),
+            uint_response(10),
+            uint_response(balance),
+        ]);
         let result = prepare_self_sponsored_transfer(
             &rpc,
             original,
@@ -505,11 +590,11 @@ async fn balance_covers_transfer_and_fee_before_token_retry() {
             );
         }
         let requests = http.requests.lock().unwrap();
-        assert_eq!(requests.len(), if insufficient { 2 } else { 3 });
-        assert_eq!(requests[1]["method"], "eth_call");
-        assert_eq!(requests[1]["params"][0]["to"], json!(fee_token));
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2]["method"], "eth_call");
+        assert_eq!(requests[2]["params"][0]["to"], json!(fee_token));
         let data: Bytes =
-            serde_json::from_value(requests[1]["params"][0]["data"].clone()).unwrap();
+            serde_json::from_value(requests[2]["params"][0]["data"].clone()).unwrap();
         drop(requests);
         assert_eq!(&data[..4], &IErc20::balanceOfCall::SELECTOR);
         let call = IErc20::balanceOfCall::abi_decode_raw(&data[4..]).unwrap();
@@ -519,7 +604,7 @@ async fn balance_covers_transfer_and_fee_before_token_retry() {
 }
 
 #[tokio::test]
-async fn balance_read_failure_stops_before_token_retry() {
+async fn balance_read_failure_stops_preparation() {
     for response in [
         json!({ "jsonrpc": "2.0", "id": "test", "result": "0x" }),
         json!({
@@ -527,7 +612,11 @@ async fn balance_read_failure_stops_before_token_retry() {
             "error": { "code": -32603, "message": "balance unavailable" },
         }),
     ] {
-        let (rpc, http) = rpc(vec![uint_response(10), response]);
+        let (rpc, http) = rpc(vec![
+            token_sponsorship(WLD_ADDRESS),
+            uint_response(10),
+            response,
+        ]);
         let error = prepare_self_sponsored_transfer(
             &rpc,
             transfer(),
@@ -542,9 +631,10 @@ async fn balance_read_failure_stops_before_token_retry() {
             .contains("Failed to read fee-token balance"));
         assert!(matches!(error, TransactionError::Generic { .. }));
         let requests = http.requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert!(requests
             .iter()
+            .skip(1)
             .all(|request| request["method"] == "eth_call"));
         drop(requests);
     }

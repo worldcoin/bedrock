@@ -387,6 +387,7 @@ fn test_pm_sponsor_response_parsing() {
     assert!(r.paymaster_verification_gas_limit.is_none());
     assert!(r.paymaster_post_op_gas_limit.is_none());
     assert!(r.paymaster_data.is_none());
+    assert!(r.estimated_cost_in_token.is_none());
 
     // Self-sponsored shape — all four paymaster fields present with real
     // values from Pimlico's ERC-20 paymaster.

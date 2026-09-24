@@ -218,6 +218,8 @@ pub struct PmSponsorshipApproval {
     pub paymaster_post_op_gas_limit: Option<U128>,
     /// Paymaster data (absent on the bundler-sponsored path)
     pub paymaster_data: Option<Bytes>,
+    /// Final TFH fee estimate, also encoded as the token charge ceiling.
+    pub estimated_cost_in_token: Option<String>,
 }
 
 /// Context object passed as the third parameter of `pm_sponsorUserOperation`.
