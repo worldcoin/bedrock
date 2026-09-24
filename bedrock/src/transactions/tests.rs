@@ -242,7 +242,7 @@ async fn non_tfh_advisory_stops_even_if_token_sponsorship_would_match() {
         .unwrap_err();
     assert!(error
         .to_string()
-        .contains("requires the migrated TFH paymaster"));
+        .contains("Self-sponsorship requires TFH paymaster"));
     assert!(http.requests.lock().unwrap().is_empty());
 }
 

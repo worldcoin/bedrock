@@ -182,8 +182,7 @@ async fn prepare_self_sponsored_transfer(
             "Self-sponsorship advisory returned an unsupported paymaster"
         );
         return Err(TransactionError::Generic {
-            error_message: "Self-sponsorship requires the migrated TFH paymaster"
-                .to_string(),
+            error_message: "Self-sponsorship requires TFH paymaster".to_string(),
         });
     }
     let estimated_cost = parse_fee_estimate(decline)?;
