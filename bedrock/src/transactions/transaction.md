@@ -40,10 +40,11 @@ For every transaction:
    the UserOp executes through the smart account when the EntryPoint
    dispatches it.
 3. **Compute the UserOp hash locally.** Used for confirmation UI.
-4. **Prepare sponsorship.** Bedrock calls `pm_sponsorUserOperation` once with
-   the UserOp and EntryPoint. A successful response describes either a protocol-paid
-   operation or a TFH token-paid operation with its final fee estimate and policy reason.
-5. **Validate and review.** For a token-paid response, verify the paymaster and
+4. **Request sponsorship.** Bedrock calls `pm_sponsorUserOperation` with the UserOp
+   and EntryPoint. If approved, TFH pays for the operation. If declined, the response
+   includes gas, paymaster, and fee information for self-sponsorship through the
+   TFH paymaster.
+5. **Validate and review.** For a self-sponsored response, verify the paymaster and
    encoded fee token, then check allowance and balance against the final estimate.
    Wallet migration owns approvals. Present the transfer and fee before signing.
 6. **Sign.** Bedrock merges the gas (and paymaster, if any) fields into the
@@ -92,11 +93,11 @@ applicable) needed for Bedrock to finalise and sign the UserOp. Bedrock
 merges the populated fields into the UserOp and signs; fields the response
 omits are left unset on the UserOp.
 
-## Token-paid path (user pays gas in an ERC-20 token)
+## Self-sponsored path (user pays gas in an ERC-20 token)
 
-When the protocol declines to sponsor, the wallet falls back to the user
-paying gas in an ERC-20 token (e.g. WLD) through the TFH paymaster. The wallet
-migration must have established sufficient fee-token allowance beforehand.
+When TFH declines sponsorship, the user pays gas in an ERC-20 token (e.g. WLD)
+through the TFH paymaster. Self-sponsorship requires sufficient fee-token
+allowance, maintained by wallet migration.
 
 ```mermaid
 sequenceDiagram
@@ -147,14 +148,14 @@ sequenceDiagram
 }
 ```
 
-All gas and paymaster fields are present on token-paid results. The positive
+All gas and paymaster fields are present on self-sponsored results. The positive
 `estimatedCostInToken` is a decimal integer in token base units, priced from the
 final gas fields. It is used for confirmation and balance/allowance checks.
-The encoded charge ceiling is a separate contract limit, not the displayed estimate.
-Protocol-sponsored results omit all paymaster and fee fields.
+The charge ceiling encoded in `paymasterData` limits the authorized token charge.
+TFH-sponsored results omit all paymaster and fee fields.
 
-Bedrock preserves unknown `declineReason` strings for newer sponsorship policies.
-Incomplete paid results and malformed fee data stop preparation.
+Bedrock preserves unknown `declineReason` strings for unrecognized sponsorship policies.
+Incomplete self-sponsored results and malformed fee data stop preparation.
 
 ## Per-step details
 
@@ -174,23 +175,23 @@ smart account, which performs the inner call.
 ERC-4337's UserOp hash is deterministic given the fully-assembled UserOp,
 the EntryPoint address, and the chain ID. Bedrock computes it locally.
 
-### 4. Prepare sponsorship
+### 4. Request sponsorship
 
 `pm_sponsorUserOperation` takes the partial UserOp (sender, nonce, calldata,
 signature placeholder) and EntryPoint address. The endpoint returns either zeroed
-gas fields for protocol sponsorship or final gas, paymaster, and fee fields for a
-TFH token-paid operation. A policy decline is metadata on a successful paid
-result; preparation failures remain RPC errors.
+gas fields when TFH sponsors the operation, or gas, paymaster, and fee fields for
+self-sponsorship through the TFH paymaster. Self-sponsored responses include the
+reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
+errors.
 
 ### 5. Validate the fee and review
 
-A token-paid result must name `TFH_PAYMASTER_ADDRESS`, include all paymaster
+A self-sponsored result must name `TFH_PAYMASTER_ADDRESS`, include all paymaster
 fields, and supply the token, positive fee estimate, and policy reason. Bedrock
 decodes the paymaster data and verifies that its token matches the fee quote.
-The estimate is retained in `PreparedTransactionFee` for confirmation; it does
-not replace the independent charge ceiling encoded in `paymasterData`.
+The estimate is stored in `PreparedTransactionFee` for confirmation.
 
-After token-paid preparation, Bedrock reads the fee-token allowance and balance.
+For self-sponsored operations, Bedrock reads the fee-token allowance and balance.
 The allowance must cover the final fee. When the transfer spends the same token,
 the balance must cover the transfer amount plus that fee; otherwise it must cover
 the fee alone. A shortfall returns `TransactionError::InsufficientFunds`, including
@@ -199,9 +200,9 @@ fee." Mobile can map this error to localized confirmation text. Failed reads or
 insufficient allowance also stop preparation.
 
 `TfhPaymasterApprovalMigration` maintains approvals through client-built,
-client-signed operations with sponsored gas. Preparation does not change
-allowances, sign operations, or submit transactions. These checks do not reserve
-funds or guarantee execution: balances and contract state can change afterward.
+client-signed operations with TFH-sponsored gas. Allowance and balance checks
+reflect the state at preparation time; balances and contract state can change
+before execution.
 
 ### 6. Sign
 

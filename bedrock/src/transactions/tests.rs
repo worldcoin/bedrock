@@ -128,7 +128,7 @@ async fn one_request_preserves_unsigned_transfer_and_exposes_final_fee() {
     assert_eq!(fee.decline_reason, "future_policy");
     assert_eq!(fee.estimated_cost_in_token, "10");
 
-    // Preparation checks the final fee after token-paid sponsorship.
+    // Allowance and balance checks use the returned fee estimate.
     let requests = http.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[0]["method"], "pm_sponsorUserOperation");

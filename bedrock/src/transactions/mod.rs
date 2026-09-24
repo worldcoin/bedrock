@@ -84,7 +84,7 @@ pub struct PreparedTransactionFee {
 
 #[bedrock_export]
 impl PreparedTransaction {
-    /// Returns the fee estimate for the prepared operation, if token paid.
+    /// Returns the fee estimate for a prepared self-sponsored operation.
     #[must_use]
     pub fn fee_details(&self) -> Option<PreparedTransactionFee> {
         self.fee_details.clone()
@@ -125,8 +125,7 @@ async fn check_fee_allowance(
     paymaster: Address,
     estimated_cost: U256,
 ) -> Result<(), TransactionError> {
-    // Migration owns approvals; preparation only checks that the existing
-    // allowance covers the final token-paid fee estimate.
+    // The fee-token allowance maintained by migration must cover the estimated fee.
     let allowance = Erc20::fetch_allowance(
         rpc_client,
         Network::WorldChain,

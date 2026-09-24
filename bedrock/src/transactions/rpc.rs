@@ -266,11 +266,11 @@ impl RpcClient {
             .map_err(RpcError::from)
     }
 
-    /// Prepares a free or token-paid operation via `pm_sponsorUserOperation` (V2).
-    /// Sends `[userOperation, entryPoint]`; a paid result includes fee metadata.
+    /// Fetches gas, paymaster, and fee information via `pm_sponsorUserOperation` (V2).
+    /// Sends `[userOperation, entryPoint]`; self-sponsored results include fee metadata.
     ///
     /// # Errors
-    /// Returns an error if serialization, transport, preparation, or decoding fails.
+    /// Returns an error if serialization, transport, sponsorship, or decoding fails.
     pub async fn pm_sponsor_user_operation(
         &self,
         network: Network,

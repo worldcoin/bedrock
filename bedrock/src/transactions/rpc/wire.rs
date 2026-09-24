@@ -166,7 +166,7 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
-/// Prepared gas, paymaster, and fee fields returned by `pm_sponsorUserOperation` (V2).
+/// Gas, paymaster, and fee fields returned by `pm_sponsorUserOperation` (V2).
 ///
 /// Paymaster fields (`paymaster`, `paymaster_data`,
 /// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
@@ -195,7 +195,7 @@ pub struct PmSponsorUserOperationResponse {
     pub paymaster_post_op_gas_limit: Option<U128>,
     /// Paymaster data (absent on the bundler-sponsored path)
     pub paymaster_data: Option<Bytes>,
-    /// Final TFH fee estimate in token base units, separate from the signed ceiling.
+    /// Estimated ERC-20 network fee in token base units.
     pub estimated_cost_in_token: Option<String>,
     /// Token used for the network fee; absent when protocol sponsored.
     pub token: Option<Address>,
