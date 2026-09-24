@@ -16,6 +16,7 @@ use crate::{
             erc20::{Erc20, MetadataArg, TransferAssociation},
             usd_legacy_vault::Permit2Data,
             world_gift_manager::WorldGiftManager,
+            worldchain::TFH_PAYMASTER_ADDRESS,
         },
         rpc::{
             get_rpc_client, PmSponsorUserOperationResponse, PmSponsorshipDecline,
@@ -122,6 +123,20 @@ async fn prepare_self_sponsored_transfer(
     operation: UserOperation,
     decline: &PmSponsorshipDecline,
 ) -> Result<PreparedTransaction, TransactionError> {
+    if decline.paymaster_address != TFH_PAYMASTER_ADDRESS {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = operation.sender,
+            fee_token = decline.token,
+            expected_paymaster = TFH_PAYMASTER_ADDRESS,
+            actual_paymaster = decline.paymaster_address,
+            "Self-sponsorship advisory returned an unsupported paymaster"
+        );
+        return Err(TransactionError::Generic {
+            error_message: "Self-sponsorship requires the migrated TFH paymaster"
+                .to_string(),
+        });
+    }
     let estimated_cost = parse_fee_estimate(decline)?;
 
     // The TFH paymaster's fee-token allowance must already be set by the wallet

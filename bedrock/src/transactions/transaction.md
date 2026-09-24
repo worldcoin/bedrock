@@ -183,8 +183,9 @@ callData, signature placeholder) and an empty context. The endpoint inspects cur
 ### 5. Self-sponsored retry
 
 When the protocol declines to sponsor, Bedrock retains `estimatedCostInToken`
-for confirmation and retries `pm_sponsorUserOperation` with the returned fee
-token. The retry uses the same transfer calldata and nonce. Bedrock requires a
+for confirmation, verifies that `paymasterAddress` is the migration's
+`TFH_PAYMASTER_ADDRESS`, and retries `pm_sponsorUserOperation` with the returned
+fee token. The retry uses the same transfer calldata and nonce. Bedrock requires a
 response with all paymaster fields present and the same `paymasterAddress`
 as the decline before returning the prepared operation.
 

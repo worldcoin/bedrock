@@ -145,6 +145,24 @@ async fn invalid_fee_estimate_stops_before_token_retry() {
 }
 
 #[tokio::test]
+async fn non_tfh_advisory_stops_even_if_token_sponsorship_would_match() {
+    let unexpected_paymaster = address!("1111111111111111111111111111111111111111");
+    let mut decline = decline();
+    decline.paymaster_address = unexpected_paymaster;
+    let mut response = token_sponsorship();
+    response["result"]["paymaster"] = json!(unexpected_paymaster);
+    let (rpc, http) = rpc(vec![response]);
+
+    let error = prepare_self_sponsored_transfer(&rpc, transfer(), &decline)
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("requires the migrated TFH paymaster"));
+    assert!(http.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
     for field in [
         "paymaster",
