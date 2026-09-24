@@ -172,7 +172,7 @@ impl TurnkeyManager {
     /// after a timeout or a pending Turnkey activity. Native clients must retain
     /// the legacy credential until this succeeds, but never construct Turnkey
     /// stamps or receive private key material.
-    pub async fn reconcile_legacy_sync_factor_user(
+    pub async fn delete_replaced_sync_factor(
         &self,
         suborganization_id: String,
         legacy_user_id: String,
