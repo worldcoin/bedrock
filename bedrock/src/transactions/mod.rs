@@ -122,6 +122,7 @@ async fn check_fee_allowance(
     rpc_client: &RpcClient,
     sender: Address,
     fee_token: Address,
+    paymaster: Address,
     estimated_cost: U256,
 ) -> Result<(), TransactionError> {
     // Migration owns approvals; preparation only checks that the existing
@@ -131,7 +132,7 @@ async fn check_fee_allowance(
         Network::WorldChain,
         fee_token,
         sender,
-        TFH_PAYMASTER_ADDRESS,
+        paymaster,
     )
     .await
     .map_err(|e| {
@@ -139,7 +140,7 @@ async fn check_fee_allowance(
             network = Network::WorldChain.network_name(),
             sender = sender,
             fee_token = fee_token,
-            paymaster = TFH_PAYMASTER_ADDRESS,
+            paymaster = paymaster,
             error_message = e,
             "Failed to read self-sponsorship fee-token allowance"
         );
@@ -152,7 +153,7 @@ async fn check_fee_allowance(
             network = Network::WorldChain.network_name(),
             sender = sender,
             fee_token = fee_token,
-            paymaster = TFH_PAYMASTER_ADDRESS,
+            paymaster = paymaster,
             allowance = allowance,
             estimated_cost_in_token = estimated_cost,
             "Insufficient fee-token allowance for self-sponsorship"
@@ -187,8 +188,14 @@ async fn prepare_self_sponsored_transfer(
     }
     let estimated_cost = parse_fee_estimate(decline)?;
 
-    check_fee_allowance(rpc_client, operation.sender, decline.token, estimated_cost)
-        .await?;
+    check_fee_allowance(
+        rpc_client,
+        operation.sender,
+        decline.token,
+        decline.paymaster_address,
+        estimated_cost,
+    )
+    .await?;
 
     let retry = rpc_client
         .pm_sponsor_user_operation(
