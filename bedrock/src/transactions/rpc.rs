@@ -25,10 +25,9 @@ use std::sync::{Arc, OnceLock};
 mod wire;
 
 pub use wire::{
-    Id, PmSponsorUserOperationResponse, PmSponsorshipApproval, PmSponsorshipDecline,
+    Id, PmSelfSponsorshipFee, PmSponsorUserOperationResponse,
     PmSponsorshipDeclineReason, RelaySafeTransactionRequest, RpcMethod,
-    RpcProviderName, SponsorUserOperationResponse, SponsorshipContext,
-    WaGetUserOperationReceiptResponse,
+    RpcProviderName, SponsorUserOperationResponse, WaGetUserOperationReceiptResponse,
 };
 pub(crate) use wire::{JsonRpcError, JsonRpcRequest};
 
@@ -37,30 +36,6 @@ mod tests;
 
 /// Global RPC client instance for Bedrock operations
 static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
-
-const SPONSORSHIP_DECLINED_CODE: i64 = -32602;
-const SPONSORSHIP_DECLINED_MESSAGE: &str = "sponsorship declined";
-
-impl TryFrom<JsonRpcError> for PmSponsorshipDecline {
-    type Error = JsonRpcError;
-
-    fn try_from(error: JsonRpcError) -> Result<Self, Self::Error> {
-        if error.code != SPONSORSHIP_DECLINED_CODE
-            || error.message != SPONSORSHIP_DECLINED_MESSAGE
-        {
-            return Err(error);
-        }
-
-        let Some(data) = error.data.as_ref() else {
-            return Err(error);
-        };
-        let Ok(decline) = serde_json::from_value(data.clone()) else {
-            return Err(error);
-        };
-
-        Ok(decline)
-    }
-}
 
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
@@ -291,53 +266,29 @@ impl RpcClient {
             .map_err(RpcError::from)
     }
 
-    /// Requests sponsorship for a `UserOperation` via `pm_sponsorUserOperation` (V2)
-    ///
-    /// Sends the three-element params vec `[userOperation, entryPoint, context]`
-    /// per the V2 contract. `context` is `SponsorshipContext::Protocol`
-    /// (serializes to `{}`) for the initial attempt and
-    /// `SponsorshipContext::SelfSponsoredToken` for the self-sponsored retry
-    /// after a decline.
+    /// Fetches gas, paymaster, and fee information via `pm_sponsorUserOperation` (V2).
+    /// Sends `[userOperation, entryPoint]`; self-sponsored results include fee metadata.
     ///
     /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The HTTP request fails
-    /// - The request serialization fails
-    /// - The response parsing fails
-    /// - The RPC returns an unexpected error response
+    /// Returns an error if serialization, transport, sponsorship, or decoding fails.
     pub async fn pm_sponsor_user_operation(
         &self,
         network: Network,
         user_operation: &UserOperation,
         entry_point: Address,
-        context: &SponsorshipContext,
     ) -> Result<PmSponsorUserOperationResponse, RpcError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
             serde_json::Value::String(format!("{entry_point:?}")),
-            context.to_json_value(),
         ];
-        match self
-            .rpc_call(
-                network,
-                RpcMethod::PmSponsorUserOperation,
-                params,
-                RpcProviderName::Any,
-            )
-            .await
-        {
-            Ok(response) => Ok(PmSponsorUserOperationResponse::Approved(response)),
-            Err(RpcCallError::Response(error)) => {
-                match PmSponsorshipDecline::try_from(error) {
-                    Ok(decline) => {
-                        Ok(PmSponsorUserOperationResponse::Declined(decline))
-                    }
-                    Err(error) => Err(error.into()),
-                }
-            }
-            Err(RpcCallError::Rpc(error)) => Err(error),
-        }
+        self.rpc_call(
+            network,
+            RpcMethod::PmSponsorUserOperation,
+            params,
+            RpcProviderName::Any,
+        )
+        .await
+        .map_err(RpcError::from)
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`

@@ -109,83 +109,21 @@ async fn test_rpc_call_preserves_structured_error_data() {
 }
 
 #[tokio::test]
-async fn test_pm_sponsor_user_operation_returns_typed_decline() {
+async fn test_pm_sponsor_user_operation_propagates_rpc_errors() {
     let response = serde_json::to_vec(&json!({
-        "jsonrpc": "2.0",
-        "id": "tx_test",
-        "error": {
-            "code": SPONSORSHIP_DECLINED_CODE,
-            "message": SPONSORSHIP_DECLINED_MESSAGE,
-            "data": {
-                "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
-                "paymasterAddress": "0x0000000000000039cd5e8ae05257ce51c473ddd1",
-                "reason": "gas_usage",
-            },
-        },
-    }))
-    .unwrap();
+        "jsonrpc": "2.0", "id": "tx_test",
+        "error": { "code": -32602, "message": "sponsorship declined", "data": {"reason": "gas_usage"} }
+    })).unwrap();
     let client = RpcClient::new(Arc::new(StaticHttpClient { response }));
-
-    let outcome = client
+    let error = client
         .pm_sponsor_user_operation(
             Network::WorldChain,
             &UserOperation::default(),
             Address::ZERO,
-            &SponsorshipContext::Protocol,
         )
         .await
-        .unwrap();
-
-    let PmSponsorUserOperationResponse::Declined(decline) = outcome else {
-        panic!("expected sponsorship to be declined");
-    };
-    assert_eq!(
-        decline.token,
-        address!("2cfc85d8e48f8eab294be644d9e25c3030863003")
-    );
-    assert_eq!(
-        decline.paymaster_address,
-        address!("0000000000000039cd5e8ae05257ce51c473ddd1")
-    );
-    assert_eq!(decline.reason, PmSponsorshipDeclineReason::GasUsage);
-}
-
-#[test]
-fn test_malformed_sponsorship_decline_preserves_rpc_error() {
-    let data = json!({
-        "token": "not-an-address",
-        "paymasterAddress": "0x0000000000000039cd5e8ae05257ce51c473ddd1",
-        "reason": "gas_usage",
-    });
-    let error = JsonRpcError {
-        code: SPONSORSHIP_DECLINED_CODE,
-        message: SPONSORSHIP_DECLINED_MESSAGE.to_string(),
-        data: Some(data.clone()),
-    };
-
-    let error = PmSponsorshipDecline::try_from(error).unwrap_err();
-
-    assert_eq!(error.data, Some(data));
-}
-
-#[test]
-fn test_sponsorship_decline_preserves_unknown_reason() {
-    let error = JsonRpcError {
-        code: SPONSORSHIP_DECLINED_CODE,
-        message: SPONSORSHIP_DECLINED_MESSAGE.to_string(),
-        data: Some(json!({
-            "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
-            "paymasterAddress": "0x0000000000000039cd5e8ae05257ce51c473ddd1",
-            "reason": "new_policy",
-        })),
-    };
-
-    let decline = PmSponsorshipDecline::try_from(error).unwrap();
-
-    assert_eq!(
-        decline.reason,
-        PmSponsorshipDeclineReason::Unknown("new_policy".to_string())
-    );
+        .unwrap_err();
+    assert!(error.to_string().contains("sponsorship declined"));
 }
 
 #[test]
@@ -374,7 +312,8 @@ fn test_pm_sponsor_response_parsing() {
         "maxFeePerGas": "0x0",
         "maxPriorityFeePerGas": "0x0",
     });
-    let r: PmSponsorshipApproval = serde_json::from_value(no_paymaster).unwrap();
+    let r: PmSponsorUserOperationResponse =
+        serde_json::from_value(no_paymaster).unwrap();
     assert_eq!(r.call_gas_limit, U128::ZERO);
     assert_eq!(r.verification_gas_limit, U128::ZERO);
     assert_eq!(r.pre_verification_gas, U256::ZERO);
@@ -384,9 +323,10 @@ fn test_pm_sponsor_response_parsing() {
     assert!(r.paymaster_verification_gas_limit.is_none());
     assert!(r.paymaster_post_op_gas_limit.is_none());
     assert!(r.paymaster_data.is_none());
+    assert!(r.fee.is_none());
 
     // Self-sponsored shape — all four paymaster fields present with real
-    // values from Pimlico's ERC-20 paymaster.
+    // values and final fee metadata.
     let with_paymaster = json!({
         "callGasLimit": "0x212df",
         "verificationGasLimit": "0x501ab",
@@ -398,7 +338,24 @@ fn test_pm_sponsor_response_parsing() {
         "paymasterPostOpGasLimit": "0x706e",
         "paymasterData": "0x01000066d1a1a4",
     });
-    let r: PmSponsorshipApproval = serde_json::from_value(with_paymaster).unwrap();
+    let mut with_paymaster = with_paymaster;
+    with_paymaster["fee"] = json!({
+        "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
+        "estimatedCostInToken": "42",
+        "declineReason": "future_policy",
+    });
+    let r: PmSponsorUserOperationResponse =
+        serde_json::from_value(with_paymaster).unwrap();
+    let fee = r.fee.unwrap();
+    assert_eq!(fee.estimated_cost_in_token, "42");
+    assert_eq!(
+        fee.token,
+        address!("2cfc85d8e48f8eab294be644d9e25c3030863003")
+    );
+    assert_eq!(
+        fee.decline_reason,
+        PmSponsorshipDeclineReason::Unknown("future_policy".to_string())
+    );
     assert_eq!(
         r.paymaster,
         Some(address!("0000000000000039cd5e8aE05257CE51C473ddd1"))
@@ -409,18 +366,4 @@ fn test_pm_sponsor_response_parsing() {
     );
     assert_eq!(r.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
     assert!(r.paymaster_data.is_some());
-}
-
-#[test]
-fn test_sponsorship_context_serialization() {
-    // Protocol-sponsored: empty object is sent as the third param.
-    assert_eq!(SponsorshipContext::Protocol.to_json_value(), json!({}));
-
-    // Self-sponsored: { "token": "0x..." } with a lowercase 0x-prefixed
-    // hex address, matching the entry_point formatting convention.
-    let token = address!("2cfc85d8e48f8eab294be644d9e25c3030863003");
-    assert_eq!(
-        SponsorshipContext::SelfSponsoredToken(token).to_json_value(),
-        json!({ "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003" })
-    );
 }

@@ -268,8 +268,23 @@ where
             .unwrap_or(serde_json::Value::Null);
 
         match method {
+            "pm_sponsorUserOperation" => {
+                // Anvil needs execution gas limits; zero fee prices model sponsorship.
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "preVerificationGas": "0x200000",
+                        "verificationGasLimit": "0x200000",
+                        "callGasLimit": "0x200000",
+                        "maxPriorityFeePerGas": "0x0",
+                        "maxFeePerGas": "0x0",
+                    },
+                });
+                Ok(serde_json::to_vec(&resp).unwrap())
+            }
             // Respond with minimal, sane gas values and no paymaster
-            "wa_sponsorUserOperation" | "pm_sponsorUserOperation" => {
+            "wa_sponsorUserOperation" => {
                 let result = SponsorUserOperationResponseLite {
                     paymaster: None,
                     paymaster_data: None,

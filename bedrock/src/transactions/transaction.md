@@ -40,14 +40,13 @@ For every transaction:
    the UserOp executes through the smart account when the EntryPoint
    dispatches it.
 3. **Compute the UserOp hash locally.** Used for confirmation UI.
-4. **Ask for sponsorship.** Bedrock calls `pm_sponsorUserOperation` with an
-   empty context. The endpoint either sponsors directly (the protocol pays gas
-   on the user's behalf) or returns a structured decline with the information
-   needed to retry as a self-sponsored transaction.
-5. **(Decline branch only.) Retry as self-sponsored.** Bedrock retries the
-   request in self-sponsored mode using the token returned in the decline
-   payload; the endpoint then returns the gas estimates and paymaster
-   fields needed to finalise the UserOp.
+4. **Request sponsorship.** Bedrock calls `pm_sponsorUserOperation` with the UserOp
+   and EntryPoint. If approved, TFH pays for the operation. If declined, the response
+   includes gas, paymaster, and fee information for self-sponsorship through the
+   TFH paymaster.
+5. **Validate and review.** For a self-sponsored response, verify the paymaster and
+   encoded fee token, then check allowance and balance against the final estimate.
+   Wallet migration owns approvals. Present the transfer and fee before signing.
 6. **Sign.** Bedrock merges the gas (and paymaster, if any) fields into the
    UserOp and signs locally with the device key.
 7. **Submit.** `eth_sendUserOperation` forwards the UserOp to a bundler which calls `handleOps` on the
@@ -70,7 +69,7 @@ sequenceDiagram
     Bedrock->>Bedrock: Wrap in Safe executeUserOp
     Bedrock->>Bedrock: Compute userOpHash
 
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
+    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
     Endpoint-->>Bedrock: sponsored response (gas + paymaster fields as applicable)
 
     Bedrock->>User: Confirm: sign userOpHash = <decoded intent>
@@ -94,30 +93,31 @@ applicable) needed for Bedrock to finalise and sign the UserOp. Bedrock
 merges the populated fields into the UserOp and signs; fields the response
 omits are left unset on the UserOp.
 
-## Decline → self-sponsored retry (user pays gas in an ERC-20 token)
+## Self-sponsored path (user pays gas in an ERC-20 token)
 
-When the protocol declines to sponsor, the wallet falls back to the user
-paying gas in an ERC-20 token (e.g. WLD) routed through an ERC-20 paymaster
-contract.
+When TFH declines sponsorship, the user pays gas in an ERC-20 token (e.g. WLD)
+through the TFH paymaster. Self-sponsorship requires sufficient fee-token
+allowance, maintained by wallet migration.
 
 ```mermaid
 sequenceDiagram
     actor User
     participant Bedrock as Bedrock (on-device)
     participant Endpoint as Sponsorship endpoint
-    participant Paymaster as ERC-20 paymaster contract
     participant Bundler
 
     User->>Bedrock: Intent
     Bedrock->>Bedrock: Build callData, wrap in Safe executeUserOp
 
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint, {})
-    Endpoint-->>Bedrock: "sponsorship declined"<br/>data: { token, paymasterAddress, costNative, costToken }
-
-    Bedrock->>Bedrock: Prepare self-sponsored userOp
-
-    Bedrock->>Endpoint: pm_sponsorUserOperation(updatedUserOp, entryPoint, { token })
-    Endpoint-->>Bedrock: gas + paymaster + paymasterData
+    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
+    Endpoint-->>Bedrock: gas + paymaster data + fee { token, estimatedCostInToken, declineReason }
+    Bedrock->>Bedrock: Verify paymaster and encoded fee token
+    Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
+    Endpoint-->>Bedrock: allowance
+    Bedrock->>Bedrock: Require allowance >= fee.estimatedCostInToken
+    Bedrock->>Endpoint: eth_call feeToken.balanceOf(sender)
+    Endpoint-->>Bedrock: balance
+    Bedrock->>Bedrock: Require balance covers final fee (plus transfer if same token)
 
     Bedrock->>User: Confirm: pay ~Y WLD in gas
     User-->>Bedrock: Approve
@@ -128,15 +128,6 @@ sequenceDiagram
     Bundler-->>Endpoint: userOpHash
     Endpoint-->>Bedrock: userOpHash
 ```
-
-**Wire shape — decline payload (`-32602`):**
-
-| Field              | Required | Meaning                                                                                      |
-| ------------------ | -------- | -------------------------------------------------------------------------------------------- |
-| `token`            | yes      | ERC-20 token address the user should pay gas in (e.g. WLD). Bedrock uses this for the retry. |
-| `paymasterAddress` | yes      | ERC-20 paymaster contract that will pull the fee at execution time.                          |
-| `costNative`       | yes      | Estimated gas cost in native currency.                                                       |
-| `costToken`        | yes      | Estimated gas cost in ERC-20 token currency.                                                 |
 
 **Wire shape — self-sponsored response:**
 
@@ -150,12 +141,23 @@ sequenceDiagram
   "paymaster": "0x…",
   "paymasterData": "0x…",
   "paymasterVerificationGasLimit": "0x…",
-  "paymasterPostOpGasLimit": "0x…"
+  "paymasterPostOpGasLimit": "0x…",
+  "fee": {
+    "estimatedCostInToken": "123456789",
+    "token": "0x…",
+    "declineReason": "gas_usage"
+  }
 }
 ```
 
-All gas fields populated, all paymaster fields present. Bedrock merges them
-into the UserOp and calls `with_paymaster_data()` before signing.
+All gas and paymaster fields are present on self-sponsored results. The positive
+`fee.estimatedCostInToken` is a decimal integer in token base units, priced from the
+final gas fields. It is used for confirmation and balance/allowance checks.
+The charge ceiling encoded in `paymasterData` limits the authorized token charge.
+TFH-sponsored results omit all paymaster fields and the `fee` object.
+
+Bedrock preserves unknown `fee.declineReason` strings for unrecognized sponsorship policies.
+Incomplete self-sponsored results and malformed fee data stop preparation.
 
 ## Per-step details
 
@@ -175,20 +177,34 @@ smart account, which performs the inner call.
 ERC-4337's UserOp hash is deterministic given the fully-assembled UserOp,
 the EntryPoint address, and the chain ID. Bedrock computes it locally.
 
-### 4. First sponsorship call
+### 4. Request sponsorship
 
-`pm_sponsorUserOperation` is called with the partial UserOp (sender, nonce,
-callData, signature placeholder) and an empty context. The endpoint inspects current conditions and either:
+`pm_sponsorUserOperation` takes the partial UserOp (sender, nonce, calldata,
+signature placeholder) and EntryPoint address. The endpoint returns either zeroed
+gas fields when TFH sponsors the operation, or gas, paymaster, and fee fields for
+self-sponsorship through the TFH paymaster. Self-sponsored responses include the
+reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
+errors.
 
-- returns a 200 response carrying the fields needed to sign and submit, or
-- returns `-32602 "sponsorship declined"` with the structured payload above.
+### 5. Validate the fee and review
 
-### 5. Self-sponsored retry
+A self-sponsored result must name `TFH_PAYMASTER_ADDRESS`, include all paymaster
+fields, and supply a `fee` object with the token, positive fee estimate, and policy reason. Bedrock
+decodes the paymaster data and verifies that its token matches the fee quote.
+The estimate is stored in `PreparedTransactionFee` for confirmation.
 
-When the protocol declines to sponsor, Bedrock retries the request in
-self-sponsored mode using the token returned in the decline payload. The
-second response carries the gas estimates and paymaster fields needed to
-finalise the UserOp.
+For self-sponsored operations, Bedrock reads the fee-token allowance and balance.
+The allowance must cover the final fee. When the transfer spends the same token,
+the balance must cover the transfer amount plus that fee; otherwise it must cover
+the fee alone. A shortfall returns `TransactionError::InsufficientFunds`, including
+the fee-token address, with "Not enough funds to cover the transfer and network
+fee." Mobile can map this error to localized confirmation text. Failed reads or
+insufficient allowance also stop preparation.
+
+`TfhPaymasterApprovalMigration` maintains approvals through client-built,
+client-signed operations with TFH-sponsored gas. Allowance and balance checks
+reflect the state at preparation time; balances and contract state can change
+before execution.
 
 ### 6. Sign
 
