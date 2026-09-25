@@ -25,9 +25,9 @@ use std::sync::{Arc, OnceLock};
 mod wire;
 
 pub use wire::{
-    Id, PmSponsorUserOperationResponse, PmSponsorshipDeclineReason,
-    RelaySafeTransactionRequest, RpcMethod, RpcProviderName,
-    SponsorUserOperationResponse, WaGetUserOperationReceiptResponse,
+    Id, PmSelfSponsorshipFee, PmSponsorUserOperationResponse,
+    PmSponsorshipDeclineReason, RelaySafeTransactionRequest, RpcMethod,
+    RpcProviderName, SponsorUserOperationResponse, WaGetUserOperationReceiptResponse,
 };
 pub(crate) use wire::{JsonRpcError, JsonRpcRequest};
 

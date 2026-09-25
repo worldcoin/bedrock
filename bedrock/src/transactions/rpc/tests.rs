@@ -323,7 +323,7 @@ fn test_pm_sponsor_response_parsing() {
     assert!(r.paymaster_verification_gas_limit.is_none());
     assert!(r.paymaster_post_op_gas_limit.is_none());
     assert!(r.paymaster_data.is_none());
-    assert!(r.estimated_cost_in_token.is_none());
+    assert!(r.fee.is_none());
 
     // Self-sponsored shape — all four paymaster fields present with real
     // values and final fee metadata.
@@ -339,17 +339,22 @@ fn test_pm_sponsor_response_parsing() {
         "paymasterData": "0x01000066d1a1a4",
     });
     let mut with_paymaster = with_paymaster;
-    with_paymaster["token"] = json!("0x2cfc85d8e48f8eab294be644d9e25c3030863003");
-    with_paymaster["estimatedCostInToken"] = json!("42");
-    with_paymaster["declineReason"] = json!("future_policy");
+    with_paymaster["fee"] = json!({
+        "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
+        "estimatedCostInToken": "42",
+        "declineReason": "future_policy",
+    });
     let r: PmSponsorUserOperationResponse =
         serde_json::from_value(with_paymaster).unwrap();
-    assert_eq!(r.estimated_cost_in_token.as_deref(), Some("42"));
+    let fee = r.fee.unwrap();
+    assert_eq!(fee.estimated_cost_in_token, "42");
     assert_eq!(
-        r.decline_reason,
-        Some(PmSponsorshipDeclineReason::Unknown(
-            "future_policy".to_string()
-        ))
+        fee.token,
+        address!("2cfc85d8e48f8eab294be644d9e25c3030863003")
+    );
+    assert_eq!(
+        fee.decline_reason,
+        PmSponsorshipDeclineReason::Unknown("future_policy".to_string())
     );
     assert_eq!(
         r.paymaster,

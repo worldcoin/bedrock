@@ -110,11 +110,11 @@ sequenceDiagram
     Bedrock->>Bedrock: Build callData, wrap in Safe executeUserOp
 
     Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
-    Endpoint-->>Bedrock: gas + paymaster data + token + estimatedCostInToken + declineReason
+    Endpoint-->>Bedrock: gas + paymaster data + fee { token, estimatedCostInToken, declineReason }
     Bedrock->>Bedrock: Verify paymaster and encoded fee token
     Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
     Endpoint-->>Bedrock: allowance
-    Bedrock->>Bedrock: Require allowance >= estimatedCostInToken
+    Bedrock->>Bedrock: Require allowance >= fee.estimatedCostInToken
     Bedrock->>Endpoint: eth_call feeToken.balanceOf(sender)
     Endpoint-->>Bedrock: balance
     Bedrock->>Bedrock: Require balance covers final fee (plus transfer if same token)
@@ -142,19 +142,21 @@ sequenceDiagram
   "paymasterData": "0x…",
   "paymasterVerificationGasLimit": "0x…",
   "paymasterPostOpGasLimit": "0x…",
-  "estimatedCostInToken": "123456789",
-  "token": "0x…",
-  "declineReason": "gas_usage"
+  "fee": {
+    "estimatedCostInToken": "123456789",
+    "token": "0x…",
+    "declineReason": "gas_usage"
+  }
 }
 ```
 
 All gas and paymaster fields are present on self-sponsored results. The positive
-`estimatedCostInToken` is a decimal integer in token base units, priced from the
+`fee.estimatedCostInToken` is a decimal integer in token base units, priced from the
 final gas fields. It is used for confirmation and balance/allowance checks.
 The charge ceiling encoded in `paymasterData` limits the authorized token charge.
-TFH-sponsored results omit all paymaster and fee fields.
+TFH-sponsored results omit all paymaster fields and the `fee` object.
 
-Bedrock preserves unknown `declineReason` strings for unrecognized sponsorship policies.
+Bedrock preserves unknown `fee.declineReason` strings for unrecognized sponsorship policies.
 Incomplete self-sponsored results and malformed fee data stop preparation.
 
 ## Per-step details
@@ -187,7 +189,7 @@ errors.
 ### 5. Validate the fee and review
 
 A self-sponsored result must name `TFH_PAYMASTER_ADDRESS`, include all paymaster
-fields, and supply the token, positive fee estimate, and policy reason. Bedrock
+fields, and supply a `fee` object with the token, positive fee estimate, and policy reason. Bedrock
 decodes the paymaster data and verifies that its token matches the fee quote.
 The estimate is stored in `PreparedTransactionFee` for confirmation.
 

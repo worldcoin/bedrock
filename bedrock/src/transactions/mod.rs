@@ -91,14 +91,7 @@ impl PreparedTransaction {
     }
 }
 
-fn parse_fee_estimate(value: Option<&str>) -> Result<U256, TransactionError> {
-    let value = value.ok_or_else(|| {
-        crate::error!("Self-sponsorship returned no final fee estimate");
-        TransactionError::Generic {
-            error_message: "Self-sponsorship returned no final fee estimate"
-                .to_string(),
-        }
-    })?;
+fn parse_fee_estimate(value: &str) -> Result<U256, TransactionError> {
     let estimate = U256::from_str_radix(value, 10).map_err(|error| {
         crate::error!(
             estimated_cost_in_token = value,
@@ -237,20 +230,20 @@ async fn prepare_transfer(
 
     let fee_details = match (
         response.paymaster,
-        response.token,
-        response.decline_reason.as_ref(),
+        response.fee.as_ref(),
         response.paymaster_data.as_ref(),
         response.paymaster_verification_gas_limit,
         response.paymaster_post_op_gas_limit,
     ) {
-        (None, None, None, None, None, None)
-            if response.estimated_cost_in_token.is_none()
-                && response.max_fee_per_gas.is_zero()
+        (None, None, None, None, None)
+            if response.max_fee_per_gas.is_zero()
                 && response.max_priority_fee_per_gas.is_zero() =>
         {
             None
         }
-        (Some(paymaster), Some(token), Some(reason), Some(data), Some(_), Some(_)) => {
+        (Some(paymaster), Some(fee), Some(data), Some(_), Some(_)) => {
+            let token = fee.token;
+            let reason = &fee.decline_reason;
             if paymaster != TFH_PAYMASTER_ADDRESS {
                 crate::error!(
                     paymaster = paymaster,
@@ -261,8 +254,7 @@ async fn prepare_transfer(
                         .to_string(),
                 });
             }
-            let estimated_cost =
-                parse_fee_estimate(response.estimated_cost_in_token.as_deref())?;
+            let estimated_cost = parse_fee_estimate(&fee.estimated_cost_in_token)?;
             tfh_paymaster::validate_fee_token(data, token)?;
             check_fee_allowance(
                 rpc_client,

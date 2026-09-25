@@ -67,9 +67,11 @@ fn token_sponsorship(token: Address) -> Value {
             "maxFeePerGas": "0xa",
             "maxPriorityFeePerGas": "0x1",
             "paymaster": TFH_PAYMASTER_ADDRESS,
-            "estimatedCostInToken": "10",
-            "token": token,
-            "declineReason": "future_policy",
+            "fee": {
+                "estimatedCostInToken": "10",
+                "token": token,
+                "declineReason": "future_policy",
+            },
             "paymasterData": Bytes::from((token, U256::from(1_000_000_000_000_000_000_u64), U256::from(2000)).abi_encode()),
             "paymasterVerificationGasLimit": "0x10000",
             "paymasterPostOpGasLimit": "0x1000",
@@ -110,14 +112,7 @@ async fn one_request_preserves_unsigned_transfer_and_exposes_final_fee() {
     );
     let operation = serde_json::to_value(&prepared.user_operation).unwrap();
     for (field, value) in response["result"].as_object().unwrap() {
-        if [
-            "paymaster",
-            "estimatedCostInToken",
-            "token",
-            "declineReason",
-        ]
-        .contains(&field.as_str())
-        {
+        if ["paymaster", "fee"].contains(&field.as_str()) {
             continue;
         }
         assert_eq!(&operation[field], value, "{field}");
@@ -167,7 +162,7 @@ async fn final_fee_drives_confirmation_and_coverage() {
         (20, 26, Some("Not enough funds")),
     ] {
         let mut response = token_sponsorship(WLD_ADDRESS);
-        response["result"]["estimatedCostInToken"] = json!("20");
+        response["result"]["fee"]["estimatedCostInToken"] = json!("20");
         let (rpc, _) = rpc(vec![
             response,
             uint_response(allowance),
@@ -191,18 +186,28 @@ async fn final_fee_drives_confirmation_and_coverage() {
 }
 
 #[tokio::test]
-async fn missing_final_fee_stops_preparation() {
-    let mut response = token_sponsorship(WLD_ADDRESS);
-    response["result"]
-        .as_object_mut()
-        .unwrap()
-        .remove("estimatedCostInToken");
-    let (rpc, http) = rpc(vec![response]);
-    let error = prepare_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("no final fee estimate"));
-    assert_eq!(http.requests.lock().unwrap().len(), 1);
+async fn incomplete_fee_object_stops_preparation() {
+    for field in ["token", "estimatedCostInToken", "declineReason"] {
+        for replace_with_null in [false, true] {
+            let mut response = token_sponsorship(WLD_ADDRESS);
+            if replace_with_null {
+                response["result"]["fee"][field] = Value::Null;
+            } else {
+                response["result"]["fee"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+            }
+            let (rpc, http) = rpc(vec![response]);
+            assert!(
+                prepare_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+                    .await
+                    .is_err(),
+                "{field}"
+            );
+            assert_eq!(http.requests.lock().unwrap().len(), 1);
+        }
+    }
 }
 
 #[tokio::test]
@@ -291,7 +296,7 @@ async fn invalid_final_fee_estimate_stops_preparation() {
         "115792089237316195423570985008687907853269984665640564039457584007913129639936",
     ] {
         let mut response = token_sponsorship(WLD_ADDRESS);
-        response["result"]["estimatedCostInToken"] = json!(estimate);
+        response["result"]["fee"]["estimatedCostInToken"] = json!(estimate);
         let (rpc, http) = rpc(vec![response]);
         let error = prepare_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
             .await
@@ -325,8 +330,7 @@ async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
         "paymasterData",
         "paymasterVerificationGasLimit",
         "paymasterPostOpGasLimit",
-        "token",
-        "declineReason",
+        "fee",
     ] {
         let mut response = token_sponsorship(WLD_ADDRESS);
         response["result"].as_object_mut().unwrap().remove(field);
@@ -548,9 +552,10 @@ async fn transfer_and_fee_exceeding_u256_max_is_insufficient() {
 #[tokio::test]
 async fn incomplete_fee_metadata_cannot_be_treated_as_free() {
     for (field, value) in [
-        ("token", json!(WLD_ADDRESS)),
-        ("estimatedCostInToken", json!("10")),
-        ("declineReason", json!("gas_usage")),
+        (
+            "fee",
+            token_sponsorship(WLD_ADDRESS)["result"]["fee"].clone(),
+        ),
         ("paymasterData", json!("0x")),
         ("maxFeePerGas", json!("0x1")),
     ] {

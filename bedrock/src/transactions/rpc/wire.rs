@@ -195,12 +195,20 @@ pub struct PmSponsorUserOperationResponse {
     pub paymaster_post_op_gas_limit: Option<U128>,
     /// Paymaster data (absent on the bundler-sponsored path)
     pub paymaster_data: Option<Bytes>,
+    /// Fee metadata; absent when TFH sponsors the operation.
+    pub fee: Option<PmSelfSponsorshipFee>,
+}
+
+/// Fee metadata for an operation the user self-sponsors through the TFH paymaster.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PmSelfSponsorshipFee {
     /// Estimated ERC-20 network fee in token base units.
-    pub estimated_cost_in_token: Option<String>,
-    /// Token used for the network fee; absent when protocol sponsored.
-    pub token: Option<Address>,
+    pub estimated_cost_in_token: String,
+    /// Token used for the network fee.
+    pub token: Address,
     /// Policy reason the user pays the network fee.
-    pub decline_reason: Option<PmSponsorshipDeclineReason>,
+    pub decline_reason: PmSponsorshipDeclineReason,
 }
 
 /// Response from `wa_getUserOperationReceipt`
