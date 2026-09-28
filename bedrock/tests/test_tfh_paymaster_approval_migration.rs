@@ -1,8 +1,7 @@
 //! End-to-end coverage for [`TfhPaymasterApprovalMigration`] against a real chain.
 //!
-//! Proves the two conditions that gate a top-up — the Safe holds the token, and
-//! its allowance has fallen below half the target — and that the paymaster
-//! draining the allowance is what brings the migration back.
+//! Proves both tokens are approved even with zero balances, and that the
+//! paymaster draining an allowance brings the migration back.
 
 use std::sync::Arc;
 
@@ -161,32 +160,19 @@ async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()>
     let wld = IERC20::new(WLD_ADDRESS, &provider);
     let usdc = IERC20::new(USDC_ADDRESS, &provider);
 
-    // 3) No balances: nothing to approve, even though both allowances are zero.
-    //    A wallet with no tokens never needs the paymaster.
+    // 3) No balances: both allowances are still approved in one batch.
     assert_eq!(
         wld.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
             .call()
             .await?,
         U256::ZERO
     );
-    assert!(
-        migration.end_state_holds().await?,
-        "a Safe holding neither token has nothing to approve"
+    assert_eq!(
+        usdc.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
+            .call()
+            .await?,
+        U256::ZERO
     );
-    assert!(matches!(
-        migration.reconcile().await?,
-        WalletMigrationResult::Converged
-    ));
-
-    // 4) WLD only. The gap is per-token, so USDC must stay untouched.
-    fund(
-        &provider,
-        WLD_ADDRESS,
-        safe_address,
-        wld_target(),
-        WLD_BALANCES_SLOT,
-    )
-    .await?;
     assert!(!migration.end_state_holds().await?);
     assert!(matches!(
         migration.reconcile().await?,
@@ -203,12 +189,24 @@ async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()>
         usdc.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
             .call()
             .await?,
-        U256::ZERO,
-        "USDC is not held, so it must not have been approved"
+        usdc_target(),
+        "USDC should be approved for exactly 30 USDC"
     );
     assert!(migration.end_state_holds().await?);
+    assert!(matches!(
+        migration.reconcile().await?,
+        WalletMigrationResult::Converged
+    ));
 
-    // 5) Now USDC too. WLD is already at target, so only USDC is submitted.
+    // 4) Fund the Safe so the paymaster can spend the approved tokens.
+    fund(
+        &provider,
+        WLD_ADDRESS,
+        safe_address,
+        wld_target(),
+        WLD_BALANCES_SLOT,
+    )
+    .await?;
     fund(
         &provider,
         USDC_ADDRESS,
@@ -217,27 +215,8 @@ async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()>
         USDC_BALANCES_SLOT,
     )
     .await?;
-    assert!(!migration.end_state_holds().await?);
-    assert!(matches!(
-        migration.reconcile().await?,
-        WalletMigrationResult::Submitted { .. }
-    ));
-    assert_eq!(
-        usdc.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
-            .call()
-            .await?,
-        usdc_target(),
-        "USDC should be approved for exactly 30 USDC"
-    );
-    assert_eq!(
-        wld.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
-            .call()
-            .await?,
-        wld_target(),
-        "the WLD allowance was already at target and must be left alone"
-    );
 
-    // 6) The paymaster spends a little WLD. Still at or above half, so no work.
+    // 5) The paymaster spends a little WLD. Still at or above half, so no work.
     let ten_wld = U256::from(10u64) * U256::from(10u64).pow(U256::from(18));
     paymaster_spends(&anvil.endpoint_url(), WLD_ADDRESS, safe_address, ten_wld).await?;
     assert_eq!(
@@ -251,7 +230,7 @@ async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()>
         "90 WLD is still above half the target, so nothing is topped up"
     );
 
-    // 7) It spends past half. That reopens the gap and the top-up restores the
+    // 6) It spends past half. That reopens the gap and the top-up restores the
     //    full target.
     let fifty_wld = U256::from(50u64) * U256::from(10u64).pow(U256::from(18));
     paymaster_spends(&anvil.endpoint_url(), WLD_ADDRESS, safe_address, fifty_wld)
@@ -279,7 +258,7 @@ async fn test_tfh_paymaster_approval_migration_full_flow() -> anyhow::Result<()>
     );
     assert!(migration.end_state_holds().await?);
 
-    // 8) The same for USDC, which consumes allowance differently: Circle's
+    // 7) The same for USDC, which consumes allowance differently: Circle's
     //    FiatToken decrements even from `type(uint256).max`, where a standard
     //    ERC-20 skips the decrement there. Finite approvals sidestep that split
     //    — both decrement below MAX — so USDC needs no special case here, and

@@ -32,9 +32,9 @@ const PAYMASTER_TOKENS: [(Address, &str, U256); 2] = [
 
 /// Grants the TFH paymaster an ERC-20 allowance so it can charge for gas.
 ///
-/// A token is topped up when the Safe holds some of it *and* its allowance has
-/// fallen below half the target — the paymaster spends the allowance down, so
-/// this runs again as it drains. Registered in every environment.
+/// A token is topped up when its allowance has fallen below half the target,
+/// regardless of the Safe's balance. The paymaster spends the allowance down,
+/// so this runs again as it drains. Registered in every environment.
 pub struct TfhPaymasterApprovalMigration {
     safe_account: Arc<SafeSmartAccount>,
 }
@@ -46,8 +46,8 @@ impl TfhPaymasterApprovalMigration {
         Self { safe_account }
     }
 
-    /// **Observe.** One batched read of every token's balance and allowance,
-    /// returning those that are held and under half their target — the gap.
+    /// **Observe.** One batched read of every token's allowance, returning
+    /// those under half their target — the gap.
     async fn observe(
         &self,
     ) -> Result<Vec<(Address, U256, &'static str)>, MigrationError> {
@@ -57,14 +57,11 @@ impl TfhPaymasterApprovalMigration {
 
         let calls: Vec<(Address, Bytes)> = PAYMASTER_TOKENS
             .iter()
-            .flat_map(|(token, _, _)| {
-                [
-                    (*token, Erc20::encode_balance_of(safe).into()),
-                    (
-                        *token,
-                        Erc20::encode_allowance(safe, TFH_PAYMASTER_ADDRESS).into(),
-                    ),
-                ]
+            .map(|(token, _, _)| {
+                (
+                    *token,
+                    Erc20::encode_allowance(safe, TFH_PAYMASTER_ADDRESS).into(),
+                )
             })
             .collect();
 
@@ -82,21 +79,16 @@ impl TfhPaymasterApprovalMigration {
             )));
         }
 
-        // Two calls per token, in order, so the results pair up.
         let mut gap = Vec::new();
-        for ((token, name, target), pair) in
-            PAYMASTER_TOKENS.iter().zip(results.as_chunks::<2>().0)
-        {
-            if pair.iter().any(|r| !r.success || r.returnData.len() < 32) {
+        for ((token, name, target), result) in PAYMASTER_TOKENS.iter().zip(&results) {
+            if !result.success || result.returnData.len() < 32 {
                 return Err(MigrationError::InvalidOperation(format!(
-                    "Multicall3 balance/allowance query failed for {name}"
+                    "Multicall3 allowance query failed for {name}"
                 )));
             }
-            let balance = U256::from_be_slice(&pair[0].returnData[..32]);
-            let allowance = U256::from_be_slice(&pair[1].returnData[..32]);
+            let allowance = U256::from_be_slice(&result.returnData[..32]);
 
-            // Both conditions, per token: a WLD-only holder gets WLD alone.
-            if balance.is_zero() || allowance >= *target / uint!(2_U256) {
+            if allowance >= *target / uint!(2_U256) {
                 continue;
             }
             info!(
