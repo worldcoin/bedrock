@@ -1,5 +1,7 @@
 use crate::primitives::PrimitiveError;
-use crate::transactions::rpc::{PmSponsorshipApproval, SponsorUserOperationResponse};
+use crate::transactions::rpc::{
+    PmSponsorUserOperationResponse, SponsorUserOperationResponse,
+};
 use alloy::hex::FromHex;
 use alloy::primitives::{aliases::U48, keccak256, Address, Bytes, FixedBytes, U128};
 use alloy::sol;
@@ -277,22 +279,22 @@ impl UserOperation {
         self
     }
 
-    /// Applies approved V2 sponsorship fields to this `UserOperation`.
+    /// Applies prepared V2 sponsorship fields to this `UserOperation`.
     #[must_use]
-    pub fn with_pm_sponsorship_approval(
+    pub fn with_pm_sponsorship(
         mut self,
-        approval: &PmSponsorshipApproval,
+        response: &PmSponsorUserOperationResponse,
     ) -> Self {
-        self.paymaster = approval.paymaster;
-        self.paymaster_data.clone_from(&approval.paymaster_data);
+        self.paymaster = response.paymaster;
+        self.paymaster_data.clone_from(&response.paymaster_data);
         self.paymaster_verification_gas_limit =
-            approval.paymaster_verification_gas_limit;
-        self.paymaster_post_op_gas_limit = approval.paymaster_post_op_gas_limit;
-        self.pre_verification_gas = approval.pre_verification_gas;
-        self.verification_gas_limit = approval.verification_gas_limit;
-        self.call_gas_limit = approval.call_gas_limit;
-        self.max_fee_per_gas = approval.max_fee_per_gas;
-        self.max_priority_fee_per_gas = approval.max_priority_fee_per_gas;
+            response.paymaster_verification_gas_limit;
+        self.paymaster_post_op_gas_limit = response.paymaster_post_op_gas_limit;
+        self.pre_verification_gas = response.pre_verification_gas;
+        self.verification_gas_limit = response.verification_gas_limit;
+        self.call_gas_limit = response.call_gas_limit;
+        self.max_fee_per_gas = response.max_fee_per_gas;
+        self.max_priority_fee_per_gas = response.max_priority_fee_per_gas;
 
         self
     }

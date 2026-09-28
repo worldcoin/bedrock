@@ -16,11 +16,9 @@ use crate::{
             erc20::{Erc20, MetadataArg, TransferAssociation},
             usd_legacy_vault::Permit2Data,
             world_gift_manager::WorldGiftManager,
+            worldchain::TFH_PAYMASTER_ADDRESS,
         },
-        rpc::{
-            get_rpc_client, PmSponsorUserOperationResponse, SponsorshipContext,
-            WaGetUserOperationReceiptResponse,
-        },
+        rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
     },
 };
 
@@ -28,8 +26,12 @@ pub mod contracts;
 pub mod custom_bundler;
 pub mod foreign;
 pub mod rpc;
+mod tfh_paymaster;
 
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
+
+#[cfg(test)]
+mod tests;
 
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
@@ -37,6 +39,13 @@ pub enum TransactionError {
     /// An error occurred with a primitive type. See `PrimitiveError` for more details.
     #[error("Primitive error: {0}")]
     PrimitiveError(String),
+
+    /// The fee-token balance cannot cover the transfer and estimated network fee.
+    #[error("Not enough funds to cover the transfer and network fee.")]
+    InsufficientFunds {
+        /// Token whose balance is insufficient.
+        token_address: String,
+    },
 }
 
 impl From<crate::primitives::PrimitiveError> for TransactionError {
@@ -57,13 +66,251 @@ pub struct WorldGiftManagerResult {
 #[derive(Debug, uniffi::Object)]
 pub struct PreparedTransaction {
     user_operation: UserOperation,
-    // TODO: Add sponsorship details like sponsorship decline reason, self-sponsorship fee details for user confirmation, etc.
+    fee_details: Option<PreparedTransactionFee>,
+}
+
+/// ERC-20 fee estimate for a prepared self-sponsored operation.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PreparedTransactionFee {
+    /// Fee token address.
+    pub token_address: String,
+    /// Paymaster that charges the fee token.
+    pub paymaster_address: String,
+    /// Final fee estimate in token base units, as a decimal integer.
+    pub estimated_cost_in_token: String,
+    /// Policy reason the user pays the fee.
+    pub decline_reason: String,
+}
+
+#[bedrock_export]
+impl PreparedTransaction {
+    /// Returns the fee estimate for a prepared self-sponsored operation.
+    #[must_use]
+    pub fn fee_details(&self) -> Option<PreparedTransactionFee> {
+        self.fee_details.clone()
+    }
+}
+
+fn parse_fee_estimate(value: &str) -> Result<U256, TransactionError> {
+    let estimate = U256::from_str_radix(value, 10).map_err(|error| {
+        crate::error!(
+            estimated_cost_in_token = value,
+            error_message = error,
+            "Invalid self-sponsorship fee estimate"
+        );
+        TransactionError::Generic {
+            error_message: format!("Invalid self-sponsorship fee estimate: {error}"),
+        }
+    })?;
+    if estimate == U256::ZERO {
+        crate::error!("Self-sponsorship fee estimate must be positive");
+        return Err(TransactionError::Generic {
+            error_message: "Self-sponsorship fee estimate must be positive".to_string(),
+        });
+    }
+    Ok(estimate)
+}
+
+async fn check_fee_allowance(
+    rpc_client: &RpcClient,
+    sender: Address,
+    fee_token: Address,
+    paymaster: Address,
+    estimated_cost: U256,
+) -> Result<(), TransactionError> {
+    // The fee-token allowance maintained by migration must cover the estimated fee.
+    let allowance = Erc20::fetch_allowance(
+        rpc_client,
+        Network::WorldChain,
+        fee_token,
+        sender,
+        paymaster,
+    )
+    .await
+    .map_err(|e| {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            paymaster = paymaster,
+            error_message = e,
+            "Failed to read self-sponsorship fee-token allowance"
+        );
+        TransactionError::Generic {
+            error_message: format!("Failed to read fee-token allowance: {e}"),
+        }
+    })?;
+    if allowance < estimated_cost {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            paymaster = paymaster,
+            allowance = allowance,
+            estimated_cost_in_token = estimated_cost,
+            "Insufficient fee-token allowance for self-sponsorship"
+        );
+        return Err(TransactionError::Generic {
+            error_message: format!(
+                "Insufficient fee-token allowance: {allowance}, estimated fee: {estimated_cost}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+async fn check_fee_balance(
+    rpc_client: &RpcClient,
+    sender: Address,
+    fee_token: Address,
+    transfer_token: Address,
+    transfer_amount: U256,
+    estimated_cost: U256,
+) -> Result<(), TransactionError> {
+    let balance =
+        Erc20::fetch_balance(rpc_client, Network::WorldChain, fee_token, sender)
+            .await
+            .map_err(|error| {
+                crate::error!(
+                    network = Network::WorldChain.network_name(),
+                    sender = sender,
+                    fee_token = fee_token,
+                    error_message = error,
+                    "Failed to read self-sponsorship fee-token balance"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to read fee-token balance: {error}"),
+                }
+            })?;
+    // If the transfer spends the fee token, its balance must cover both amounts.
+    // Subtraction avoids overflowing when the amount and fee exceed U256::MAX.
+    let available_for_fee = if transfer_token == fee_token {
+        balance.checked_sub(transfer_amount)
+    } else {
+        Some(balance)
+    };
+    if available_for_fee.is_none_or(|available| available < estimated_cost) {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            balance = balance,
+            transfer_token = transfer_token,
+            transfer_amount = transfer_amount,
+            estimated_cost_in_token = estimated_cost,
+            "Insufficient balance for the transfer and estimated network fee"
+        );
+        return Err(TransactionError::InsufficientFunds {
+            token_address: fee_token.to_string(),
+        });
+    }
+    Ok(())
+}
+
+async fn prepare_transfer(
+    rpc_client: &RpcClient,
+    operation: UserOperation,
+    transfer_token: Address,
+    transfer_amount: U256,
+) -> Result<PreparedTransaction, TransactionError> {
+    let response = rpc_client
+        .pm_sponsor_user_operation(Network::WorldChain, &operation, *ENTRYPOINT_4337)
+        .await
+        .map_err(|error| {
+            crate::error!(
+                sender = operation.sender,
+                error_message = error,
+                "Failed to prepare ERC-20 transfer"
+            );
+            TransactionError::Generic {
+                error_message: format!("Failed to prepare ERC-20 transfer: {error}"),
+            }
+        })?;
+
+    let fee_details = match (
+        response.paymaster,
+        response.fee.as_ref(),
+        response.paymaster_data.as_ref(),
+        response.paymaster_verification_gas_limit,
+        response.paymaster_post_op_gas_limit,
+    ) {
+        (None, None, None, None, None)
+            if response.max_fee_per_gas.is_zero()
+                && response.max_priority_fee_per_gas.is_zero() =>
+        {
+            None
+        }
+        (Some(paymaster), Some(fee), Some(data), Some(_), Some(_)) => {
+            let token = fee.token;
+            let reason = &fee.decline_reason;
+            if paymaster != TFH_PAYMASTER_ADDRESS {
+                crate::error!(
+                    paymaster = paymaster,
+                    "Self-sponsorship requires TFH paymaster"
+                );
+                return Err(TransactionError::Generic {
+                    error_message: "Self-sponsorship requires TFH paymaster"
+                        .to_string(),
+                });
+            }
+            let estimated_cost = parse_fee_estimate(&fee.estimated_cost_in_token)?;
+            tfh_paymaster::validate_fee_token(data, token)?;
+            check_fee_allowance(
+                rpc_client,
+                operation.sender,
+                token,
+                paymaster,
+                estimated_cost,
+            )
+            .await?;
+            check_fee_balance(
+                rpc_client,
+                operation.sender,
+                token,
+                transfer_token,
+                transfer_amount,
+                estimated_cost,
+            )
+            .await?;
+            crate::info!(
+                sender = operation.sender,
+                decline_reason = reason,
+                "Prepared self-sponsored ERC-20 transfer"
+            );
+            Some(PreparedTransactionFee {
+                token_address: token.to_string(),
+                paymaster_address: paymaster.to_string(),
+                estimated_cost_in_token: estimated_cost.to_string(),
+                decline_reason: reason.to_string(),
+            })
+        }
+        _ => {
+            crate::error!(
+                sender = operation.sender,
+                "Incomplete paymaster fields or fee metadata"
+            );
+            return Err(TransactionError::Generic {
+                error_message: "Incomplete paymaster fields or fee metadata"
+                    .to_string(),
+            });
+        }
+    };
+
+    Ok(PreparedTransaction {
+        user_operation: operation.with_pm_sponsorship(&response),
+        fee_details,
+    })
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
     /// Prepares an unsigned ERC-20 transfer on World Chain.
+    ///
+    /// Self-sponsorship verifies that the TFH paymaster's fee-token allowance
+    /// established by the wallet migration covers the final fee estimate, and checks
+    /// that the fee-token balance covers the transfer and estimated fee.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
@@ -74,7 +321,7 @@ impl SafeSmartAccount {
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if sponsorship preparation fails.
-    /// - Will throw an error if sponsorship is declined.
+    /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
     /// - Will throw an error if the global HTTP client has not been initialized.
     pub async fn prepare_transaction_transfer(
         &self,
@@ -126,49 +373,8 @@ impl SafeSmartAccount {
                 ),
             }
         })?;
-        let sponsorship = rpc_client
-            .pm_sponsor_user_operation(
-                Network::WorldChain,
-                &user_operation,
-                *ENTRYPOINT_4337,
-                &SponsorshipContext::Protocol,
-            )
-            .await
-            .map_err(|e| {
-                crate::error!(
-                    transaction_type = "erc20_transfer",
-                    network = Network::WorldChain.network_name(),
-                    sender = self.wallet_address,
-                    outcome = "error",
-                    user_operation = format!("{user_operation:?}"),
-                    error_message = e,
-                    "Failed to request sponsorship for ERC-20 transfer"
-                );
-                TransactionError::Generic {
-                    error_message: format!("Failed to request sponsorship: {e}"),
-                }
-            })?;
-
-        let approval = match sponsorship {
-            PmSponsorUserOperationResponse::Approved(approval) => approval,
-            PmSponsorUserOperationResponse::Declined(decline) => {
-                crate::info!(
-                    transaction_type = "erc20_transfer",
-                    network = Network::WorldChain.network_name(),
-                    sender = self.wallet_address,
-                    outcome = "sponsorship_declined",
-                    decline_reason = decline.reason,
-                    "Sponsorship declined for ERC-20 transfer"
-                );
-                // TODO: Handle the self-sponsored UserOperation flow.
-                return Err(TransactionError::Generic {
-                    error_message: "Sponsorship declined".to_string(),
-                });
-            }
-        };
-        let prepared_transaction = PreparedTransaction {
-            user_operation: user_operation.with_pm_sponsorship_approval(&approval),
-        };
+        let prepared_transaction =
+            prepare_transfer(rpc_client, user_operation, token_address, amount).await?;
 
         crate::debug!(
             transaction_type = "erc20_transfer",
