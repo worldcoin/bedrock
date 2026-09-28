@@ -28,12 +28,14 @@ use bedrock::{
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337, PERMIT2_ADDRESS},
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
     transactions::contracts::{
-        safe_module::SAFE_FALLBACK_HANDLER_SLOT, worldchain::USDC_ADDRESS,
+        safe_module::SAFE_FALLBACK_HANDLER_SLOT,
+        worldchain::{TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WLD_ADDRESS},
     },
 };
 
 const REPAIR: &str = "wallet.safe.enable_4337_module.v1";
 const PERMIT2: &str = "wallet.permit2.approval";
+const PAYMASTER: &str = "wallet.tfh_paymaster.approval.v1";
 
 fn record<'a>(
     records: &'a [MigrationRecordEntry],
@@ -75,6 +77,7 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
         deploy_safe_without_4337_module(&provider, owner, U256::ZERO).await?;
     let safe = ISafe::new(safe_address, &provider);
     let usdc = IERC20::new(USDC_ADDRESS, &provider);
+    let wld = IERC20::new(WLD_ADDRESS, &provider);
 
     // The Permit2 approvals go out as a userOp, so the Safe needs a deposit.
     let entry_point = IEntryPoint::new(*ENTRYPOINT_4337, &provider);
@@ -131,6 +134,12 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
         U256::ZERO,
         "no approvals can have gone out before the repair converged"
     );
+    assert_eq!(
+        usdc.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
+            .call()
+            .await?,
+        U256::ZERO
+    );
 
     // The relay itself did land — being held back is a decision about the
     // *record*, not about the chain.
@@ -146,10 +155,10 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
     );
 
     // 4) Launch 2: the repair is observed in place, which converges it and
-    //    unblocks the dependent in the same pass.
+    //    unblocks both dependents in the same pass.
     let summary = controller.run().await;
     assert_eq!(summary.succeeded, 1, "the repair converged");
-    assert_eq!(summary.pending, 1, "and the dependent submitted");
+    assert_eq!(summary.pending, 2, "both dependents submitted");
 
     let records = controller.list_records()?;
     assert!(matches!(
@@ -160,25 +169,36 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
         record(&records, PERMIT2).status,
         MigrationStatus::InProgress
     ));
+    assert!(matches!(
+        record(&records, PAYMASTER).status,
+        MigrationStatus::InProgress
+    ));
     assert_eq!(
         usdc.allowance(safe_address, PERMIT2_ADDRESS).call().await?,
         U256::MAX,
         "the approvals landed once the Safe could validate a userOp"
     );
-
-    // 5) Launch 3: both observe their end state and settle. Nothing is
-    //    submitted, and the repair reports skipped rather than a fresh success.
-    let summary = controller.run().await;
-    assert_eq!(summary.succeeded, 1, "the approvals are proven landed");
     assert_eq!(
-        summary.skipped, 2,
-        "the repair was already done, and the paymaster approval is not needed \
-         on a Safe holding neither fee token"
+        wld.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
+            .call()
+            .await?,
+        U256::from(100u64) * U256::from(10u64).pow(U256::from(18))
     );
+    assert_eq!(
+        usdc.allowance(safe_address, TFH_PAYMASTER_ADDRESS)
+            .call()
+            .await?,
+        U256::from(30_000_000u64)
+    );
+
+    // 5) Launch 3: both approvals observe their end state and settle.
+    let summary = controller.run().await;
+    assert_eq!(summary.succeeded, 2, "both approvals are proven landed");
+    assert_eq!(summary.skipped, 1, "the repair was already done");
     assert_eq!(summary.pending, 0);
 
     let records = controller.list_records()?;
-    for id in [REPAIR, PERMIT2] {
+    for id in [REPAIR, PERMIT2, PAYMASTER] {
         assert!(
             matches!(record(&records, id).status, MigrationStatus::Succeeded),
             "{id} should be converged"
