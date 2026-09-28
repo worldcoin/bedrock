@@ -8,7 +8,7 @@
 //! requests through the World App backend.
 
 use alloy::hex::FromHex;
-use alloy::primitives::{Address, FixedBytes};
+use alloy::primitives::{Address, FixedBytes, U128};
 use bedrock_macros::bedrock_export;
 use once_cell::sync::OnceCell;
 use serde_json::Value;
@@ -182,6 +182,71 @@ fn parse_json_rpc_response(response_bytes: &[u8]) -> Result<Value, RpcError> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+fn serialize_user_operation(operation: &UserOperation) -> Result<Value, RpcError> {
+    let mut value = serde_json::to_value(operation).map_err(|_| RpcError::JsonError)?;
+    // ERC-4337 represents unused factory and paymaster fields by their absence.
+    if let Some(fields) = value.as_object_mut() {
+        fields.retain(|_, value| !value.is_null());
+    }
+    Ok(value)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GasEstimate {
+    call_gas_limit: U128,
+    verification_gas_limit: U128,
+}
+
+/// Estimates execution gas at the selected bundler without authorizing an operation.
+pub(crate) async fn prepare_bundler_sponsored_operation(
+    rpc_url: &str,
+    operation: UserOperation,
+) -> Result<UserOperation, RpcError> {
+    validate_rpc_url(rpc_url)?;
+    let mut operation = operation.as_bundler_sponsored();
+    // Safe signatures begin with validAfter and validUntil. Zero allows estimation
+    // at the current time; the remaining bytes are an invalid placeholder signature.
+    let mut signature = operation.signature.to_vec();
+    signature
+        .get_mut(..12)
+        .ok_or_else(|| RpcError::InvalidResponse {
+            error_message: "Safe signature is missing validity timestamps".to_string(),
+        })?
+        .fill(0);
+    operation.signature = signature.into();
+
+    let request = JsonRpcRequest::new(
+        RpcMethod::EstimateUserOperationGas,
+        Id::Number(u64::from(rand::random::<u32>())),
+        vec![
+            serialize_user_operation(&operation)?,
+            serde_json::json!(*ENTRYPOINT_4337),
+        ],
+    );
+    let request_bytes =
+        serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
+    let response_bytes = post_json_rpc_to_url(rpc_url, request_bytes).await?;
+
+    let estimate: GasEstimate = serde_json::from_value(parse_json_rpc_response(
+        &response_bytes,
+    )?)
+    .map_err(|_| RpcError::InvalidResponse {
+        error_message: "Invalid bundler gas estimate".to_string(),
+    })?;
+    if estimate.call_gas_limit.is_zero() || estimate.verification_gas_limit.is_zero() {
+        return Err(RpcError::InvalidResponse {
+            error_message: "Bundler execution gas estimates must be positive"
+                .to_string(),
+        });
+    }
+    operation.call_gas_limit = estimate.call_gas_limit;
+    operation.verification_gas_limit = estimate.verification_gas_limit;
+    // The bundler covers gas; preVerificationGas and fee prices stay zero even
+    // when estimation returns a nonzero preVerificationGas.
+    Ok(operation)
+}
+
 /// Submits a signed `UserOperation` via `eth_sendUserOperation` to an external RPC URL.
 ///
 /// # Errors
@@ -201,7 +266,7 @@ pub async fn send_user_operation_to_url(
     validate_rpc_url(rpc_url)?;
 
     let params = vec![
-        serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+        serialize_user_operation(user_operation)?,
         serde_json::Value::String(format!("{entrypoint:?}")),
     ];
 

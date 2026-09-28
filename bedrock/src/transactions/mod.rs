@@ -1,6 +1,7 @@
 use alloy::primitives::{Address, U256};
 use bedrock_macros::bedrock_export;
 use rand::{Rng, RngCore};
+use secrecy::{ExposeSecret, SecretString};
 use std::sync::Arc;
 
 use alloy::primitives::aliases::{U160, U48};
@@ -67,6 +68,8 @@ pub struct WorldGiftManagerResult {
 pub struct PreparedTransaction {
     user_operation: UserOperation,
     fee_details: Option<PreparedTransactionFee>,
+    // URLs may contain credentials; Debug must not reveal them.
+    custom_bundler_url: Option<SecretString>,
 }
 
 /// ERC-20 fee estimate for a prepared self-sponsored operation.
@@ -300,6 +303,7 @@ async fn prepare_transfer(
     Ok(PreparedTransaction {
         user_operation: operation.with_pm_sponsorship(&response),
         fee_details,
+        custom_bundler_url: None,
     })
 }
 
@@ -317,18 +321,21 @@ impl SafeSmartAccount {
     /// - `to_address`: The address of the recipient.
     /// - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
     /// - `transfer_association`: Metadata value. The association of the transfer.
+    /// - `custom_bundler_url`: Bundler that estimates and submits the operation,
+    ///   covering its gas costs. Omit to request sponsorship through the backend.
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    /// - Will throw an RPC error if sponsorship preparation fails.
+    /// - Will throw an RPC error if sponsorship preparation or custom estimation fails.
     /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
-    /// - Will throw an error if the global HTTP client has not been initialized.
+    /// - The backend route requires an initialized global HTTP client.
     pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,
         to_address: &str,
         amount: &str,
         transfer_association: Option<TransferAssociation>,
+        custom_bundler_url: Option<String>,
     ) -> Result<PreparedTransaction, TransactionError> {
         let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
             crate::error!(
@@ -365,6 +372,24 @@ impl SafeSmartAccount {
             .inspect_err(|e| {
                 log_failure("build_user_operation", e);
             })?;
+        if let Some(url) = custom_bundler_url {
+            let user_operation = custom_bundler::prepare_bundler_sponsored_operation(
+                &url,
+                user_operation,
+            )
+            .await
+            .map_err(|e| {
+                log_failure("estimate_custom_bundler", &e);
+                TransactionError::Generic {
+                    error_message: format!("Custom bundler preparation failed: {e}"),
+                }
+            })?;
+            return Ok(PreparedTransaction {
+                user_operation,
+                fee_details: None,
+                custom_bundler_url: Some(url.into()),
+            });
+        }
         let rpc_client = get_rpc_client().map_err(|e| {
             log_failure("get_rpc_client", &e);
             TransactionError::Generic {
@@ -388,11 +413,12 @@ impl SafeSmartAccount {
     }
 
     /// Signs and submits a previously prepared transaction on World Chain.
+    /// Uses the custom bundler URL retained during preparation when present.
     ///
     /// # Errors
     /// - Will throw an error if the transaction was prepared for another account.
     /// - Will throw an RPC error if signing or submission fails.
-    /// - Will throw an error if the global HTTP client has not been initialized.
+    /// - The backend route requires an initialized global HTTP client.
     pub async fn submit_prepared_transaction(
         &self,
         prepared_transaction: &PreparedTransaction,
@@ -433,6 +459,22 @@ impl SafeSmartAccount {
                     error_message: format!("Failed to sign transaction: {e}"),
                 }
             })?;
+
+        if let Some(url) = &prepared_transaction.custom_bundler_url {
+            let hash = custom_bundler::send_user_operation_to_url(
+                url.expose_secret(),
+                &user_operation,
+                *ENTRYPOINT_4337,
+            )
+            .await
+            .map_err(|e| {
+                log_failure("submit_custom_bundler", &e);
+                TransactionError::Generic {
+                    error_message: format!("Custom bundler submission failed: {e}"),
+                }
+            })?;
+            return Ok(HexEncodedData::new(&hash.to_string())?);
+        }
 
         let rpc_client = get_rpc_client().map_err(|e| {
             log_failure("get_rpc_client", &e);

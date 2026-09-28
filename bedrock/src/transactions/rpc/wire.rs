@@ -33,6 +33,9 @@ pub enum RpcMethod {
     /// Submit a signed `UserOperation` (V2)
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperationV2,
+    /// Estimate gas for an unsigned `UserOperation`
+    #[serde(rename = "eth_estimateUserOperationGas")]
+    EstimateUserOperationGas,
     /// Make a read call to a smart contract
     #[serde(rename = "eth_call")]
     EthCall,
