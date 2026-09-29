@@ -9,12 +9,42 @@ use alloy::{
 use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use bedrock::{
-    primitives::http_client::set_http_client,
+    primitives::{
+        http_client::{set_http_client, HttpHeader},
+        AuthenticatedHttpClient, HttpError, HttpMethod,
+    },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
 };
 
-// ------------------ The test for the full transaction transfer flow ------------------
+struct TransferHttpClient {
+    inner: Arc<dyn AuthenticatedHttpClient>,
+}
+
+#[async_trait::async_trait]
+impl AuthenticatedHttpClient for TransferHttpClient {
+    async fn fetch_from_app_backend(
+        &self,
+        url: String,
+        method: HttpMethod,
+        headers: Vec<HttpHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError> {
+        let request: serde_json::Value =
+            serde_json::from_slice(body.as_ref().unwrap()).unwrap();
+        match request["method"].as_str() {
+            Some("pm_sponsorUserOperation" | "eth_sendUserOperation") => {
+                assert_eq!(url, "/v3/rpc/worldchain");
+                assert_eq!(request["params"].as_array().unwrap().len(), 2);
+            }
+            Some("eth_call") => assert_eq!(url, "/v2/rpc/worldchain"),
+            method => panic!("unexpected RPC method: {method:?}"),
+        }
+        self.inner
+            .fetch_from_app_backend(url, method, headers, body)
+            .await
+    }
+}
 
 #[tokio::test]
 async fn test_transaction_transfer_full_flow_executes_user_operation(
@@ -68,7 +98,9 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     // 7) Install mocked HTTP client that routes calls to Anvil
     let client = AnvilBackedHttpClient::new(provider.clone());
 
-    set_http_client(Arc::new(client));
+    set_http_client(Arc::new(TransferHttpClient {
+        inner: Arc::new(client),
+    }));
 
     // 8) Prepare the transfer without signing or executing it
     let safe_account = SafeSmartAccount::from_private_key_hex(

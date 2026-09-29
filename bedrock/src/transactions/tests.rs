@@ -178,11 +178,11 @@ impl AuthenticatedHttpClient for ScriptedHttpClient {
         body: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, HttpError> {
         let request: Value = serde_json::from_slice(&body.unwrap()).unwrap();
-        assert_eq!(url, "/v2/rpc/worldchain");
-        assert!(matches!(
-            request["method"].as_str(),
-            Some("eth_call" | "pm_sponsorUserOperation")
-        ));
+        match request["method"].as_str() {
+            Some("pm_sponsorUserOperation") => assert_eq!(url, "/v3/rpc/worldchain"),
+            Some("eth_call") => assert_eq!(url, "/v2/rpc/worldchain"),
+            method => panic!("unexpected RPC method: {method:?}"),
+        }
         self.requests.lock().unwrap().push(request);
         let response = self
             .responses

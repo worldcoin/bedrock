@@ -485,7 +485,7 @@ impl SafeSmartAccount {
             }
         })?;
         let user_op_hash = rpc_client
-            .send_user_operation_v2(
+            .send_user_operation_v3(
                 Network::WorldChain,
                 &user_operation,
                 *ENTRYPOINT_4337,

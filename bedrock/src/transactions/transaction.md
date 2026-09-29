@@ -1,6 +1,6 @@
-# Prepare & Sign Transaction (V2 flow)
+# Prepare and submit ERC-20 transfers
 
-This document describes the **V2** on-device flow: how Bedrock — the
+This document describes the on-device prepared-transfer flow: how Bedrock — the
 open-source, on-device SDK that powers the wallet — turns a user intent
 (e.g. "send 5 WLD to `0x…`") into a signed
 [ERC-4337 UserOperation](https://eips.ethereum.org/EIPS/eip-4337) that lands on
@@ -51,8 +51,8 @@ For every transaction:
    UserOp and signs locally with the device key.
 7. **Submit.** `eth_sendUserOperation` forwards the UserOp to a bundler which calls `handleOps` on the
    [EntryPoint](https://eips.ethereum.org/EIPS/eip-4337#entrypoint).
-8. **Poll for receipt.** Bedrock polls `eth_getUserOperationReceipt` until
-   the UserOp is mined.
+8. **Poll for receipt.** The app can use Bedrock's `wa_getUserOperationReceipt`
+   call to track the UserOp until it is mined.
 
 ## Sponsored path (protocol pays gas)
 
@@ -83,7 +83,7 @@ sequenceDiagram
     Bundler-->>Endpoint: tx hash
     Endpoint-->>Bedrock: userOpHash
 
-    Bedrock->>Endpoint: poll eth_getUserOperationReceipt
+    Bedrock->>Endpoint: poll wa_getUserOperationReceipt
     Endpoint-->>Bedrock: receipt
     Bedrock-->>User: ✓ Sent
 ```
@@ -179,12 +179,14 @@ the EntryPoint address, and the chain ID. Bedrock computes it locally.
 
 ### 4. Request sponsorship
 
-With no custom bundler URL, preparation uses the backend sponsorship endpoint.
+With no custom bundler URL, preparation uses the authenticated backend endpoint
+`/v3/rpc/worldchain`. Contract reads use `/v2/rpc/worldchain`.
 
 `pm_sponsorUserOperation` takes the partial UserOp (sender, nonce, calldata,
-signature placeholder) and EntryPoint address. The endpoint returns either zeroed
-gas fields when TFH sponsors the operation, or gas, paymaster, and fee fields for
-self-sponsorship through the TFH paymaster. Self-sponsored responses include the
+signature placeholder) and EntryPoint address. Sponsored responses include nonzero
+`callGasLimit` and `verificationGasLimit`, zero `preVerificationGas` and fee prices,
+and no paymaster. Self-sponsored responses include gas, paymaster, and fee fields
+for payment through the TFH paymaster. Self-sponsored responses include the
 reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
 errors.
 
@@ -225,9 +227,11 @@ corresponds to the intent shown to the user, then signs with the device key.
 
 ### 7. Submit
 
-`eth_sendUserOperation(signedUserOp, entryPoint)`. The endpoint forwards to
-a bundler. Bedrock receives the userOpHash back and stores it for receipt
-polling.
+Bedrock submits `[signedUserOp, entryPoint]` with `eth_sendUserOperation` to
+`/v3/rpc/worldchain`. The backend selects the bundler and rechecks sponsorship
+policy for sponsored operations. Bedrock sends the signed fields unchanged and
+returns the userOpHash for receipt tracking. Submission errors are returned to
+the caller; Bedrock does not automatically re-prepare or resubmit the operation.
 
 For a prepared custom-bundler transaction, Bedrock signs after confirmation and
 submits directly to the retained URL. Submission errors are returned to the
@@ -235,9 +239,8 @@ caller without switching to the backend or another bundler.
 
 ### 8. Poll for receipt
 
-`eth_getUserOperationReceipt` is polled until the UserOp is mined or until a
-deadline is reached. The user-facing state machine (`pending`, `mined`,
-`failed`) is derived from the receipt.
+`wa_getUserOperationReceipt` uses `/v1/rpc/worldchain`. The caller polls until
+the UserOp reaches a terminal state or its tracking deadline is reached.
 
 ## References
 
