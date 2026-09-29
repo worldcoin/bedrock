@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/worldcoin/bedrock/compare/0.7.2...0.7.3) - 2026-09-29
+
+### Added
+
+- *(transactions)* use v3 RPC for prepared transfers ([#461](https://github.com/worldcoin/bedrock/pull/461))
+- *(transactions)* prepare transfers with a custom bundler ([#460](https://github.com/worldcoin/bedrock/pull/460))
+- *(transactions)* support ERC-20 self-sponsorship ([#458](https://github.com/worldcoin/bedrock/pull/458))
+- reconcile legacy sync factor cleanup with Secure Enclave signer ([#446](https://github.com/worldcoin/bedrock/pull/446))
+- ERC-4626 vault-to-vault migrate ([#436](https://github.com/worldcoin/bedrock/pull/436))
+
+### Fixed
+
+- approve TFH paymaster tokens without balance checks ([#459](https://github.com/worldcoin/bedrock/pull/459))
+
 ### Added
 
 - ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate(from, to)`) migrates full redeemable shares (`min(balanceOf, maxRedeem)`); leftover source shares possible if `maxRedeem` binds; `previewRedeem` snapshot + 0.03% deposit haircut (dust stays on Safe); destination `previewDeposit > 0`; zero-first approve when needed
