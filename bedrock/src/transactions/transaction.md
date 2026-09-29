@@ -179,12 +179,23 @@ the EntryPoint address, and the chain ID. Bedrock computes it locally.
 
 ### 4. Request sponsorship
 
+With no custom bundler URL, preparation uses the backend sponsorship endpoint.
+
 `pm_sponsorUserOperation` takes the partial UserOp (sender, nonce, calldata,
 signature placeholder) and EntryPoint address. The endpoint returns either zeroed
 gas fields when TFH sponsors the operation, or gas, paymaster, and fee fields for
 self-sponsorship through the TFH paymaster. Self-sponsored responses include the
 reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
 errors.
+
+When `prepare_transaction_transfer` receives a custom bundler URL, Bedrock calls
+`eth_estimateUserOperationGas` directly at that URL with the unsigned operation
+and EntryPoint. This route requires a bundler that covers gas costs. Bedrock uses
+the returned `callGasLimit` and `verificationGasLimit`, keeps `preVerificationGas`
+and both fee prices at zero, and leaves paymaster fields absent. It does not call
+either backend sponsorship method or offer ERC-20 self-sponsorship on this route.
+The prepared transaction retains the URL for submission. Estimation errors stop
+preparation; a successful estimate does not guarantee acceptance at submission.
 
 ### 5. Validate the fee and review
 
@@ -217,6 +228,10 @@ corresponds to the intent shown to the user, then signs with the device key.
 `eth_sendUserOperation(signedUserOp, entryPoint)`. The endpoint forwards to
 a bundler. Bedrock receives the userOpHash back and stores it for receipt
 polling.
+
+For a prepared custom-bundler transaction, Bedrock signs after confirmation and
+submits directly to the retained URL. Submission errors are returned to the
+caller without switching to the backend or another bundler.
 
 ### 8. Poll for receipt
 

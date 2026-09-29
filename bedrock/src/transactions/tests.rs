@@ -10,6 +10,158 @@ use alloy::sol_types::{SolCall, SolValue};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use wiremock::{matchers::body_partial_json, Mock, MockServer, ResponseTemplate};
+
+fn custom_bundler_account() -> SafeSmartAccount {
+    SafeSmartAccount::from_private_key_hex(
+        "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583".to_string(),
+        "0x4564420674EA68fcc61b463C0494807C759d47e6",
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn custom_bundler_prepares_then_submits_to_the_same_url() {
+    let server = MockServer::start().await;
+    Mock::given(body_partial_json(json!({"method": "eth_estimateUserOperationGas"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {"callGasLimit": "0xc350", "verificationGasLimit": "0xea60", "preVerificationGas": "0x10000"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(body_partial_json(
+        json!({"method": "eth_sendUserOperation"}),
+    ))
+    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        "jsonrpc": "2.0", "id": 1, "result": format!("0x{}", "ab".repeat(32))
+    })))
+    .expect(1)
+    .mount(&server)
+    .await;
+
+    let account = custom_bundler_account();
+    let prepared = account
+        .prepare_transaction_transfer(
+            &WLD_ADDRESS.to_string(),
+            &USDC_ADDRESS.to_string(),
+            "7",
+            Some(TransferAssociation::XmtpMessage),
+            Some(format!("{}/rpc?key=private-key", server.uri())),
+        )
+        .await
+        .unwrap();
+    assert!(prepared.fee_details().is_none());
+    assert!(!format!("{prepared:?}").contains("private-key"));
+    assert_eq!(
+        prepared.user_operation.call_gas_limit,
+        alloy::primitives::U128::from(50_000)
+    );
+    assert_eq!(
+        prepared.user_operation.verification_gas_limit,
+        alloy::primitives::U128::from(60_000)
+    );
+    assert_eq!(prepared.user_operation.pre_verification_gas, U256::ZERO);
+    assert!(prepared.user_operation.max_fee_per_gas.is_zero());
+    assert!(prepared.user_operation.max_priority_fee_per_gas.is_zero());
+    assert!(prepared.user_operation.paymaster.is_none());
+    assert_eq!(&prepared.user_operation.signature[..12], &[0; 12]);
+    assert_eq!(&prepared.user_operation.signature[12..], &[0xff; 65]);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1, "preparation must not submit");
+    let estimate: Value = requests[0].body_json().unwrap();
+    assert_eq!(estimate["params"][1], json!(*ENTRYPOINT_4337));
+    assert_eq!(estimate["params"].as_array().unwrap().len(), 2);
+    assert_eq!(estimate["params"][0].get("paymaster"), Some(&Value::Null));
+    let unsigned = prepared.user_operation.clone();
+
+    account
+        .submit_prepared_transaction(&prepared)
+        .await
+        .unwrap();
+    assert_eq!(prepared.user_operation, unsigned);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].url, requests[1].url);
+    let submitted: Value = requests[1].body_json().unwrap();
+    let mut signed: UserOperation =
+        serde_json::from_value(submitted["params"][0].clone()).unwrap();
+    assert_ne!(signed.signature, unsigned.signature);
+    signed.signature = unsigned.signature.clone();
+    assert_eq!(
+        signed, unsigned,
+        "signing must preserve every prepared field"
+    );
+}
+
+#[tokio::test]
+async fn custom_bundler_preparation_surfaces_rejections_and_invalid_estimates() {
+    for response in [
+        json!({"error": {"code": -32500, "message": "Sponsorship unsupported"}}),
+        json!({"result": {"callGasLimit": "0x0", "verificationGasLimit": "0xea60"}}),
+        json!({"result": {"callGasLimit": "0xc350"}}),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(body_partial_json(
+            json!({"method": "eth_estimateUserOperationGas"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .expect(1)
+        .mount(&server)
+        .await;
+        let error = custom_bundler_account()
+            .prepare_transaction_transfer(
+                &WLD_ADDRESS.to_string(),
+                &USDC_ADDRESS.to_string(),
+                "7",
+                None,
+                Some(server.uri()),
+            )
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Custom bundler preparation failed"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn custom_bundler_submission_rejects_wrong_account_and_surfaces_rpc_error() {
+    let server = MockServer::start().await;
+    Mock::given(body_partial_json(
+        json!({"method": "eth_sendUserOperation"}),
+    ))
+    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        "error": {"code": -32500, "message": "Zero fee operations unsupported"}
+    })))
+    .expect(1)
+    .mount(&server)
+    .await;
+    let mut prepared = PreparedTransaction {
+        user_operation: transfer().as_bundler_sponsored(),
+        fee_details: None,
+        custom_bundler_url: Some(server.uri().into()),
+    };
+    let account = custom_bundler_account();
+    prepared.user_operation.sender = USDC_ADDRESS;
+    let error = account
+        .submit_prepared_transaction(&prepared)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("another account"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    prepared.user_operation.sender = account.wallet_address;
+    let error = account
+        .submit_prepared_transaction(&prepared)
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("Zero fee operations unsupported"));
+}
 
 struct ScriptedHttpClient {
     responses: Mutex<VecDeque<Value>>,
