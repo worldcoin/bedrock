@@ -398,7 +398,7 @@ impl SafeSmartAccount {
                 ),
             }
         })?;
-        let prepared_transaction =
+        let prepared_transaction: PreparedTransaction =
             prepare_transfer(rpc_client, user_operation, token_address, amount).await?;
 
         crate::debug!(

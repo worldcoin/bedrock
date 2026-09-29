@@ -73,7 +73,7 @@ async fn custom_bundler_prepares_then_submits_to_the_same_url() {
     let estimate: Value = requests[0].body_json().unwrap();
     assert_eq!(estimate["params"][1], json!(*ENTRYPOINT_4337));
     assert_eq!(estimate["params"].as_array().unwrap().len(), 2);
-    assert!(estimate["params"][0].get("paymaster").is_none());
+    assert_eq!(estimate["params"][0].get("paymaster"), Some(&Value::Null));
     let unsigned = prepared.user_operation.clone();
 
     account

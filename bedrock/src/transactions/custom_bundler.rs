@@ -182,15 +182,6 @@ fn parse_json_rpc_response(response_bytes: &[u8]) -> Result<Value, RpcError> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-fn serialize_user_operation(operation: &UserOperation) -> Result<Value, RpcError> {
-    let mut value = serde_json::to_value(operation).map_err(|_| RpcError::JsonError)?;
-    // ERC-4337 represents unused factory and paymaster fields by their absence.
-    if let Some(fields) = value.as_object_mut() {
-        fields.retain(|_, value| !value.is_null());
-    }
-    Ok(value)
-}
-
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GasEstimate {
@@ -220,7 +211,7 @@ pub(crate) async fn prepare_bundler_sponsored_operation(
         RpcMethod::EstimateUserOperationGas,
         Id::Number(u64::from(rand::random::<u32>())),
         vec![
-            serialize_user_operation(&operation)?,
+            serde_json::to_value(&operation).map_err(|_| RpcError::JsonError)?,
             serde_json::json!(*ENTRYPOINT_4337),
         ],
     );
@@ -266,7 +257,7 @@ pub async fn send_user_operation_to_url(
     validate_rpc_url(rpc_url)?;
 
     let params = vec![
-        serialize_user_operation(user_operation)?,
+        serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
         serde_json::Value::String(format!("{entrypoint:?}")),
     ];
 
