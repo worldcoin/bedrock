@@ -167,8 +167,8 @@ async fn check_fee_balance(
     rpc_client: &RpcClient,
     sender: Address,
     fee_token: Address,
-    transfer_token: Address,
-    transfer_amount: U256,
+    spent_token: Address,
+    spent_amount: U256,
     estimated_cost: U256,
 ) -> Result<(), TransactionError> {
     let balance =
@@ -186,10 +186,10 @@ async fn check_fee_balance(
                     error_message: format!("Failed to read fee-token balance: {error}"),
                 }
             })?;
-    // If the transfer spends the fee token, its balance must cover both amounts.
+    // If the operation spends the fee token, its balance must cover both amounts.
     // Subtraction avoids overflowing when the amount and fee exceed U256::MAX.
-    let available_for_fee = if transfer_token == fee_token {
-        balance.checked_sub(transfer_amount)
+    let available_for_fee = if spent_token == fee_token {
+        balance.checked_sub(spent_amount)
     } else {
         Some(balance)
     };
@@ -199,10 +199,10 @@ async fn check_fee_balance(
             sender = sender,
             fee_token = fee_token,
             balance = balance,
-            transfer_token = transfer_token,
-            transfer_amount = transfer_amount,
+            spent_token = spent_token,
+            spent_amount = spent_amount,
             estimated_cost_in_token = estimated_cost,
-            "Insufficient balance for the transfer and estimated network fee"
+            "Insufficient balance for the transaction and estimated network fee"
         );
         return Err(TransactionError::InsufficientFunds {
             token_address: fee_token.to_string(),
@@ -211,11 +211,11 @@ async fn check_fee_balance(
     Ok(())
 }
 
-async fn prepare_transfer(
+async fn prepare_with_sponsorship(
     rpc_client: &RpcClient,
     operation: UserOperation,
-    transfer_token: Address,
-    transfer_amount: U256,
+    spent_token: Address,
+    spent_amount: U256,
 ) -> Result<PreparedTransaction, TransactionError> {
     let response = rpc_client
         .pm_sponsor_user_operation(Network::WorldChain, &operation, *ENTRYPOINT_4337)
@@ -224,10 +224,10 @@ async fn prepare_transfer(
             crate::error!(
                 sender = operation.sender,
                 error_message = error,
-                "Failed to prepare ERC-20 transfer"
+                "Failed to prepare transaction"
             );
             TransactionError::Generic {
-                error_message: format!("Failed to prepare ERC-20 transfer: {error}"),
+                error_message: format!("Failed to prepare transaction: {error}"),
             }
         })?;
 
@@ -271,15 +271,15 @@ async fn prepare_transfer(
                 rpc_client,
                 operation.sender,
                 token,
-                transfer_token,
-                transfer_amount,
+                spent_token,
+                spent_amount,
                 estimated_cost,
             )
             .await?;
             crate::info!(
                 sender = operation.sender,
                 decline_reason = reason,
-                "Prepared self-sponsored ERC-20 transfer"
+                "Prepared self-sponsored transaction"
             );
             Some(PreparedTransactionFee {
                 token_address: token.to_string(),
@@ -305,6 +305,33 @@ async fn prepare_transfer(
         fee_details,
         custom_bundler_url: None,
     })
+}
+
+async fn prepare_erc4626_deposit(
+    rpc_client: &RpcClient,
+    vault_address: Address,
+    asset_amount: U256,
+    wallet_address: Address,
+) -> Result<PreparedTransaction, TransactionError> {
+    let (deposit, asset, actual_amount) =
+        crate::transactions::contracts::erc4626::Erc4626Vault::deposit_with_details(
+            rpc_client,
+            Network::WorldChain,
+            vault_address,
+            asset_amount,
+            wallet_address,
+            [0u8; 10],
+        )
+        .await
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to create ERC4626 deposit: {e}"),
+        })?;
+    let operation = deposit
+        .build_preflight_user_operation(wallet_address, None)
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to build ERC4626 operation: {e}"),
+        })?;
+    prepare_with_sponsorship(rpc_client, operation, asset, actual_amount).await
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -399,7 +426,8 @@ impl SafeSmartAccount {
             }
         })?;
         let prepared_transaction: PreparedTransaction =
-            prepare_transfer(rpc_client, user_operation, token_address, amount).await?;
+            prepare_with_sponsorship(rpc_client, user_operation, token_address, amount)
+                .await?;
 
         crate::debug!(
             transaction_type = "erc20_transfer",
@@ -653,6 +681,34 @@ impl SafeSmartAccount {
         })
     }
 
+    /// Prepares an ERC-4626 deposit for review and signing through Temporal V3.
+    ///
+    /// The vault deposit and asset approval are built on device. Sponsorship is
+    /// requested once; when it is declined, the TFH paymaster fee is checked
+    /// against the Safe's WLD balance and allowance before confirmation.
+    ///
+    /// # Errors
+    /// Returns an error for invalid input, vault reads, sponsorship, or an
+    /// insufficient WLD fee balance or allowance.
+    pub async fn prepare_transaction_erc4626_deposit(
+        &self,
+        vault_address: &str,
+        asset_amount: &str,
+    ) -> Result<PreparedTransaction, TransactionError> {
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        prepare_erc4626_deposit(
+            rpc_client,
+            vault_address,
+            asset_amount,
+            self.wallet_address,
+        )
+        .await
+    }
+
     /// Deposits tokens into an ERC4626 vault on World Chain.
     ///
     /// This method uses the generic ERC4626 implementation that queries the vault's
@@ -670,38 +726,10 @@ impl SafeSmartAccount {
         vault_address: &str,
         asset_amount: &str,
     ) -> Result<HexEncodedData, TransactionError> {
-        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
-        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
-        let receiver = self.wallet_address;
-
-        // Get the RPC client and create the ERC4626 deposit transaction
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-        let transaction =
-            crate::transactions::contracts::erc4626::Erc4626Vault::deposit(
-                rpc_client,
-                Network::WorldChain,
-                vault_address,
-                asset_amount,
-                receiver,
-                [0u8; 10], // metadata
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create ERC4626 deposit: {e}"),
-            })?;
-
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, None, provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute ERC4626 deposit: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        let prepared = self
+            .prepare_transaction_erc4626_deposit(vault_address, asset_amount)
+            .await?;
+        self.submit_prepared_transaction(&prepared).await
     }
 
     /// Withdraws assets from an ERC4626 vault on World Chain.

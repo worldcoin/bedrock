@@ -151,6 +151,27 @@ impl Erc4626Vault {
         receiver: Address,
         metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
+        let (deposit, _, _) = Self::deposit_with_details(
+            rpc_client,
+            network,
+            vault_address,
+            asset_amount,
+            receiver,
+            metadata,
+        )
+        .await?;
+        Ok(deposit)
+    }
+
+    /// Builds a deposit and returns the asset and actual deposited amount for fee checks.
+    pub(crate) async fn deposit_with_details(
+        rpc_client: &RpcClient,
+        network: Network,
+        vault_address: Address,
+        asset_amount: U256,
+        receiver: Address,
+        metadata: [u8; 10],
+    ) -> Result<(Self, Address, U256), RpcError> {
         // 1. Query the asset address from the vault contract
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
         let asset_address = Self::fetch_asset_address(
@@ -213,13 +234,17 @@ impl Erc4626Vault {
 
         let bundle = MultiSend::build_bundle(&entries);
 
-        Ok(Self {
-            call_data: bundle.data.into(),
-            action: TransactionTypeId::ERC4626Deposit,
-            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
-            operation: SafeOperation::DelegateCall,
-            metadata,
-        })
+        Ok((
+            Self {
+                call_data: bundle.data.into(),
+                action: TransactionTypeId::ERC4626Deposit,
+                to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+                operation: SafeOperation::DelegateCall,
+                metadata,
+            },
+            asset_address,
+            actual_amount,
+        ))
     }
 
     /// Creates a new withdraw operation (direct call to vault, no approval needed).
