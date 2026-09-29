@@ -256,12 +256,25 @@ fn test_user_operation_serialization_with() {
 }
 
 #[test]
+fn test_rpc_endpoint_prepared_operations_route_to_v3() {
+    for method in [
+        RpcMethod::PmSponsorUserOperation,
+        RpcMethod::SendUserOperationV3,
+    ] {
+        assert_eq!(
+            RpcClient::rpc_endpoint(Network::WorldChain, &method),
+            "/v3/rpc/worldchain"
+        );
+    }
+}
+
+#[test]
 fn test_rpc_endpoint_v2_methods_route_to_v2() {
     let network = Network::WorldChain;
     for method in [
-        RpcMethod::PmSponsorUserOperation,
         RpcMethod::SendUserOperationV2,
         RpcMethod::EthCall,
+        RpcMethod::EthGetStorageAt,
     ] {
         let url = RpcClient::rpc_endpoint(network, &method);
         assert!(

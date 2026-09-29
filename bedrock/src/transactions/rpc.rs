@@ -137,7 +137,8 @@ impl From<SafeSmartAccountError> for RpcError {
 
 /// RPC client for handling 4337 `UserOperation` requests
 ///
-/// This client communicates with the RPC endpoint at `/v1/rpc/{network}` and `/v2/rpc/{network}`.
+/// This client uses versioned `/v1/rpc/{network}`, `/v2/rpc/{network}`, and
+/// `/v3/rpc/{network}` endpoints.
 pub struct RpcClient {
     http_client: Arc<dyn AuthenticatedHttpClient>,
 }
@@ -154,9 +155,9 @@ impl RpcClient {
     /// Constructs the RPC endpoint URL for the specified network and method
     fn rpc_endpoint(network: Network, method: &RpcMethod) -> String {
         let version = match method {
+            RpcMethod::PmSponsorUserOperation | RpcMethod::SendUserOperationV3 => "v3",
             RpcMethod::EthCall
             | RpcMethod::EthGetStorageAt
-            | RpcMethod::PmSponsorUserOperation
             | RpcMethod::SendUserOperationV2 => "v2",
             _ => "v1",
         };
@@ -266,7 +267,7 @@ impl RpcClient {
             .map_err(RpcError::from)
     }
 
-    /// Fetches gas, paymaster, and fee information via `pm_sponsorUserOperation` (V2).
+    /// Fetches gas, paymaster, and fee information via `pm_sponsorUserOperation` (V3).
     /// Sends `[userOperation, entryPoint]`; self-sponsored results include fee metadata.
     ///
     /// # Errors
@@ -351,6 +352,36 @@ impl RpcClient {
             .rpc_call(
                 network,
                 RpcMethod::SendUserOperationV2,
+                params,
+                RpcProviderName::Any,
+            )
+            .await?;
+
+        FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
+            error_message: format!("Invalid userOpHash format: {e}"),
+        })
+    }
+
+    /// Submits a signed prepared `UserOperation` via `/v3/rpc/{network}`.
+    /// The backend selects the bundler; signed fields are sent unchanged.
+    ///
+    /// # Errors
+    /// Returns an error if serialization, transport, RPC submission, or hash decoding fails.
+    pub async fn send_user_operation_v3(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entrypoint: Address,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let params = vec![
+            serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
+            serde_json::Value::String(format!("{entrypoint:?}")),
+        ];
+
+        let result: String = self
+            .rpc_call(
+                network,
+                RpcMethod::SendUserOperationV3,
                 params,
                 RpcProviderName::Any,
             )

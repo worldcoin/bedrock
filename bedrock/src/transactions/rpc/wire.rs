@@ -18,7 +18,7 @@ pub enum RpcMethod {
     /// Request sponsorship for a `UserOperation` (V1)
     #[serde(rename = "wa_sponsorUserOperation")]
     SponsorUserOperation,
-    /// Request sponsorship for a `UserOperation` (V2)
+    /// Request sponsorship for a `UserOperation` (V3)
     #[serde(rename = "pm_sponsorUserOperation")]
     PmSponsorUserOperation,
     /// Queries the status of a `UserOperation`
@@ -33,6 +33,9 @@ pub enum RpcMethod {
     /// Submit a signed `UserOperation` (V2)
     #[serde(rename = "eth_sendUserOperation")]
     SendUserOperationV2,
+    /// Submit a prepared `UserOperation` (V3)
+    #[serde(rename = "eth_sendUserOperation")]
+    SendUserOperationV3,
     /// Estimate gas for an unsigned `UserOperation`
     #[serde(rename = "eth_estimateUserOperationGas")]
     EstimateUserOperationGas,
@@ -169,7 +172,7 @@ pub struct SponsorUserOperationResponse {
     pub provider_name: RpcProviderName,
 }
 
-/// Gas, paymaster, and fee fields returned by `pm_sponsorUserOperation` (V2).
+/// Gas, paymaster, and fee fields returned by `pm_sponsorUserOperation` (V3).
 ///
 /// Paymaster fields (`paymaster`, `paymaster_data`,
 /// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
