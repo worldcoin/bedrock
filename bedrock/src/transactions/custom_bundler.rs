@@ -4,8 +4,8 @@
 //! RPC URL (e.g. Pimlico, Alchemy, or a self-hosted bundler) using a Rust-native
 //! HTTP client (`reqwest`).
 //!
-//! This is intentionally separate from [`super::rpc::RpcClient`], which routes
-//! requests through the World App backend.
+//! Preparation also screens the sender through [`super::rpc::RpcClient`] before
+//! returning an operation for signing.
 
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, FixedBytes, U128};
@@ -20,7 +20,7 @@ use crate::{
     smart_account::{SafeSmartAccount, UserOperation, ENTRYPOINT_4337},
     transactions::{
         foreign::UnparsedUserOperation,
-        rpc::{Id, JsonRpcError, JsonRpcRequest, RpcError, RpcMethod},
+        rpc::{Id, JsonRpcError, JsonRpcRequest, RpcClient, RpcError, RpcMethod},
         TransactionError,
     },
 };
@@ -189,8 +189,9 @@ struct GasEstimate {
     verification_gas_limit: U128,
 }
 
-/// Estimates execution gas at the selected bundler without authorizing an operation.
+/// Screens the sender and estimates execution gas concurrently, before signing.
 pub(crate) async fn prepare_bundler_sponsored_operation(
+    rpc_client: &RpcClient,
     rpc_url: &str,
     operation: UserOperation,
 ) -> Result<UserOperation, RpcError> {
@@ -217,7 +218,10 @@ pub(crate) async fn prepare_bundler_sponsored_operation(
     );
     let request_bytes =
         serde_json::to_vec(&request).map_err(|_| RpcError::JsonError)?;
-    let response_bytes = post_json_rpc_to_url(rpc_url, request_bytes).await?;
+    let ((), response_bytes) = tokio::try_join!(
+        rpc_client.check_user_operation_sender(Network::WorldChain, operation.sender),
+        post_json_rpc_to_url(rpc_url, request_bytes),
+    )?;
 
     let estimate: GasEstimate = serde_json::from_value(parse_json_rpc_response(
         &response_bytes,

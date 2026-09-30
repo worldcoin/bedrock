@@ -42,16 +42,31 @@ async fn custom_bundler_prepares_then_submits_to_the_same_url() {
     .await;
 
     let account = custom_bundler_account();
-    let prepared = account
-        .prepare_transaction_transfer(
-            &WLD_ADDRESS.to_string(),
-            &USDC_ADDRESS.to_string(),
-            "7",
-            Some(TransferAssociation::XmtpMessage),
-            Some(format!("{}/rpc?key=private-key", server.uri())),
+    let (client, http) = rpc(vec![json!({"result": true})]);
+    let url = format!("{}/rpc?key=private-key", server.uri());
+    let operation = Erc20::new(WLD_ADDRESS, USDC_ADDRESS, U256::from(7))
+        .build_preflight_user_operation(
+            account.wallet_address,
+            Some(MetadataArg {
+                association: Some(TransferAssociation::XmtpMessage),
+            }),
+        )
+        .unwrap();
+    let prepared = PreparedTransaction {
+        user_operation: custom_bundler::prepare_bundler_sponsored_operation(
+            &client, &url, operation,
         )
         .await
-        .unwrap();
+        .unwrap(),
+        fee_details: None,
+        custom_bundler_url: Some(url.into()),
+    };
+    {
+        let screening = http.requests.lock().unwrap();
+        assert_eq!(screening.len(), 1);
+        assert_eq!(screening[0]["method"], "wa_checkUserOperationSender");
+        assert_eq!(screening[0]["params"], json!([account.wallet_address]));
+    }
     assert!(prepared.fee_details().is_none());
     assert!(!format!("{prepared:?}").contains("private-key"));
     assert_eq!(
@@ -110,21 +125,120 @@ async fn custom_bundler_preparation_surfaces_rejections_and_invalid_estimates() 
         .expect(1)
         .mount(&server)
         .await;
-        let error = custom_bundler_account()
-            .prepare_transaction_transfer(
-                &WLD_ADDRESS.to_string(),
-                &USDC_ADDRESS.to_string(),
-                "7",
-                None,
-                Some(server.uri()),
-            )
-            .await
-            .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Custom bundler preparation failed"));
+        let (client, _) = rpc(vec![json!({"result": true})]);
+        let error = custom_bundler::prepare_bundler_sponsored_operation(
+            &client,
+            &server.uri(),
+            transfer(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            RpcError::RpcResponseError { .. } | RpcError::InvalidResponse { .. }
+        ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
+}
+
+#[tokio::test]
+async fn custom_bundler_requires_sender_clearance() {
+    for response in [
+        json!({"error": {"code": -32602, "message": "UserOperation sender is sanctioned"}}),
+        json!({"error": {"code": -32603, "message": "Sanctions screening unavailable"}}),
+        json!({"result": false}),
+        json!({"result": null}),
+        json!({"result": "true"}),
+        json!({}),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(body_partial_json(
+            json!({"method": "eth_estimateUserOperationGas"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {"callGasLimit": "0xc350", "verificationGasLimit": "0xea60"}
+        })))
+        .mount(&server)
+        .await;
+        let (client, http) = rpc(vec![response]);
+        assert!(custom_bundler::prepare_bundler_sponsored_operation(
+            &client,
+            &server.uri(),
+            transfer()
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            http.requests.lock().unwrap().len(),
+            1,
+            "screening must not retry through another route"
+        );
+        for request in server.received_requests().await.unwrap() {
+            let body: Value = request.body_json().unwrap();
+            assert_eq!(body["method"], "eth_estimateUserOperationGas");
+        }
+    }
+}
+
+struct PendingScreeningClient {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl AuthenticatedHttpClient for PendingScreeningClient {
+    async fn fetch_from_app_backend(
+        &self,
+        _url: String,
+        _method: HttpMethod,
+        _headers: Vec<HttpHeader>,
+        _body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(serde_json::to_vec(&json!({"result": true})).unwrap())
+    }
+}
+
+#[tokio::test]
+async fn custom_bundler_estimates_in_parallel_and_waits_for_screening() {
+    let screening_started = Arc::new(tokio::sync::Notify::new());
+    let release_screening = Arc::new(tokio::sync::Notify::new());
+    let estimation_started = Arc::new(tokio::sync::Notify::new());
+    let client = RpcClient::new(Arc::new(PendingScreeningClient {
+        started: screening_started.clone(),
+        release: release_screening.clone(),
+    }));
+    let server = MockServer::start().await;
+    let estimated = estimation_started.clone();
+    Mock::given(body_partial_json(
+        json!({"method": "eth_estimateUserOperationGas"}),
+    ))
+    .respond_with(move |_: &wiremock::Request| {
+        estimated.notify_one();
+        ResponseTemplate::new(200).set_body_json(json!({
+            "result": {"callGasLimit": "0xc350", "verificationGasLimit": "0xea60"}
+        }))
+    })
+    .expect(1)
+    .mount(&server)
+    .await;
+    let url = server.uri();
+    let preparation =
+        custom_bundler::prepare_bundler_sponsored_operation(&client, &url, transfer());
+    tokio::pin!(preparation);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::select! {
+            result = &mut preparation => panic!("preparation finished before clearance: {result:?}"),
+            () = async {
+                screening_started.notified().await;
+                estimation_started.notified().await;
+            } => {}
+        }
+        assert!(futures::poll!(&mut preparation).is_pending());
+        release_screening.notify_one();
+        preparation.await.unwrap();
+    }).await.expect("screening and estimation must start concurrently");
 }
 
 #[tokio::test]
@@ -179,7 +293,9 @@ impl AuthenticatedHttpClient for ScriptedHttpClient {
     ) -> Result<Vec<u8>, HttpError> {
         let request: Value = serde_json::from_slice(&body.unwrap()).unwrap();
         match request["method"].as_str() {
-            Some("pm_sponsorUserOperation") => assert_eq!(url, "/v3/rpc/worldchain"),
+            Some("pm_sponsorUserOperation" | "wa_checkUserOperationSender") => {
+                assert_eq!(url, "/v3/rpc/worldchain");
+            }
             Some("eth_call") => assert_eq!(url, "/v2/rpc/worldchain"),
             method => panic!("unexpected RPC method: {method:?}"),
         }
@@ -726,4 +842,46 @@ async fn incomplete_fee_metadata_cannot_be_treated_as_free() {
         );
         assert_eq!(http.requests.lock().unwrap().len(), 1);
     }
+}
+
+#[tokio::test]
+async fn custom_bundler_waits_for_estimation_after_clearance() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (client, http) = rpc(vec![json!({"result": true})]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let estimation_started = Arc::new(tokio::sync::Notify::new());
+    let release_estimation = Arc::new(tokio::sync::Notify::new());
+    let started = estimation_started.clone();
+    let release = release_estimation.clone();
+    let bundler = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0; 8192];
+        assert!(socket.read(&mut buffer).await.unwrap() > 0);
+        started.notify_one();
+        release.notified().await;
+        let body =
+            json!({"result":{"callGasLimit":"0xc350","verificationGasLimit":"0xea60"}})
+                .to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+    let preparation =
+        custom_bundler::prepare_bundler_sponsored_operation(&client, &url, transfer());
+    tokio::pin!(preparation);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::select! {
+            result = &mut preparation => panic!("preparation finished before estimation: {result:?}"),
+            () = estimation_started.notified() => {}
+        }
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+        assert!(futures::poll!(&mut preparation).is_pending());
+        release_estimation.notify_one();
+        preparation.await.unwrap();
+        bundler.await.unwrap();
+    }).await.expect("preparation must await estimation after sender clearance");
 }

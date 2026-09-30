@@ -193,16 +193,30 @@ signature placeholder) and EntryPoint address. Sponsored responses include nonze
 `callGasLimit` and `verificationGasLimit`, zero `preVerificationGas` and fee prices,
 and no paymaster. Self-sponsored responses include gas, paymaster, and fee fields
 for payment through the TFH paymaster. Self-sponsored responses include the
-reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
-errors.
+reason TFH declined sponsorship. The backend screens the sender before estimation
+and the sponsorship decision. Sanctioned senders and unavailable screening stop
+preparation. Simulation or fee-quotation failures return RPC errors.
 
 When `prepare_transaction_transfer` receives a custom bundler URL, Bedrock calls
 `eth_estimateUserOperationGas` directly at that URL with the unsigned operation
-and EntryPoint. This route requires a bundler that covers gas costs. Bedrock uses
+and EntryPoint, in parallel with authenticated `wa_checkUserOperationSender`
+on `/v3/rpc/worldchain` with `[sender]`. Screening must return JSON `true`;
+a sanctioned sender, unavailable screening, malformed response, or network
+failure stops preparation. Both requests must succeed before Bedrock returns a
+prepared transaction for signing. All preparation routes require an initialized
+HTTP client. The default backend route screens within `pm_sponsorUserOperation`
+and makes no separate screening request.
+
+The screening endpoint returns RPC error `-32602` for a sanctioned sender and
+`-32603` when screening is unavailable. Clients may retry preparation for the
+latter. The endpoint must be deployed before enabling custom-bundler preparation.
+
+This route requires a bundler that covers gas costs. Bedrock uses
 the returned `callGasLimit` and `verificationGasLimit`, keeps `preVerificationGas`
 and both fee prices at zero, and leaves paymaster fields absent. It does not call
 either backend sponsorship method or offer ERC-20 self-sponsorship on this route.
-The prepared transaction retains the URL for submission. Estimation errors stop
+The prepared transaction retains the URL for submission. Sender screening applies
+before signing; submission does not screen the signed operation. Estimation errors stop
 preparation; a successful estimate does not guarantee acceptance at submission.
 
 ### 5. Validate the fee and review

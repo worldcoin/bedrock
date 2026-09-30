@@ -328,7 +328,7 @@ impl SafeSmartAccount {
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if sponsorship preparation or custom estimation fails.
     /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
-    /// - The backend route requires an initialized global HTTP client.
+    /// - All preparation routes require an initialized global HTTP client for sender screening.
     pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,
@@ -372,14 +372,23 @@ impl SafeSmartAccount {
             .inspect_err(|e| {
                 log_failure("build_user_operation", e);
             })?;
+        let rpc_client = get_rpc_client().map_err(|e| {
+            log_failure("get_rpc_client", &e);
+            TransactionError::Generic {
+                error_message: format!(
+                    "Failed to get RPC client for ERC-20 transfer preparation: {e}"
+                ),
+            }
+        })?;
         if let Some(url) = custom_bundler_url {
             let user_operation = custom_bundler::prepare_bundler_sponsored_operation(
+                rpc_client,
                 &url,
                 user_operation,
             )
             .await
             .map_err(|e| {
-                log_failure("estimate_custom_bundler", &e);
+                log_failure("prepare_custom_bundler", &e);
                 TransactionError::Generic {
                     error_message: format!("Custom bundler preparation failed: {e}"),
                 }
@@ -390,14 +399,6 @@ impl SafeSmartAccount {
                 custom_bundler_url: Some(url.into()),
             });
         }
-        let rpc_client = get_rpc_client().map_err(|e| {
-            log_failure("get_rpc_client", &e);
-            TransactionError::Generic {
-                error_message: format!(
-                    "Failed to get RPC client for ERC-20 transfer preparation: {e}"
-                ),
-            }
-        })?;
         let prepared_transaction: PreparedTransaction =
             prepare_transfer(rpc_client, user_operation, token_address, amount).await?;
 
