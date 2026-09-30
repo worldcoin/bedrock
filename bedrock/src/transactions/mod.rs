@@ -211,7 +211,7 @@ async fn check_fee_balance(
     Ok(())
 }
 
-async fn prepare_transfer(
+async fn prepare_sponsored_transfer(
     rpc_client: &RpcClient,
     operation: UserOperation,
     transfer_token: Address,
@@ -307,6 +307,52 @@ async fn prepare_transfer(
     })
 }
 
+async fn prepare_transfer(
+    rpc_client: &RpcClient,
+    operation: UserOperation,
+    transfer_token: Address,
+    recipient: Address,
+    transfer_amount: U256,
+    custom_bundler_url: Option<&str>,
+) -> Result<PreparedTransaction, TransactionError> {
+    let addresses = [operation.sender, recipient];
+    let screening = async {
+        rpc_client
+            .screen_addresses(Network::WorldChain, &addresses)
+            .await
+            .map_err(|error| TransactionError::Generic {
+                error_message: format!("Address screening failed: {error}"),
+            })
+    };
+    let preparation = async {
+        if let Some(url) = custom_bundler_url {
+            let user_operation =
+                custom_bundler::prepare_bundler_sponsored_operation(url, operation)
+                    .await
+                    .map_err(|error| TransactionError::Generic {
+                        error_message: format!(
+                            "Custom bundler preparation failed: {error}"
+                        ),
+                    })?;
+            Ok(PreparedTransaction {
+                user_operation,
+                fee_details: None,
+                custom_bundler_url: Some(url.to_owned().into()),
+            })
+        } else {
+            prepare_sponsored_transfer(
+                rpc_client,
+                operation,
+                transfer_token,
+                transfer_amount,
+            )
+            .await
+        }
+    };
+    let ((), prepared) = tokio::try_join!(screening, preparation)?;
+    Ok(prepared)
+}
+
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
@@ -328,7 +374,7 @@ impl SafeSmartAccount {
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if sponsorship preparation or custom estimation fails.
     /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
-    /// - All preparation routes require an initialized global HTTP client for sender screening.
+    /// - All preparation routes require an initialized global HTTP client for address screening.
     pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,
@@ -380,27 +426,15 @@ impl SafeSmartAccount {
                 ),
             }
         })?;
-        if let Some(url) = custom_bundler_url {
-            let user_operation = custom_bundler::prepare_bundler_sponsored_operation(
-                rpc_client,
-                &url,
-                user_operation,
-            )
-            .await
-            .map_err(|e| {
-                log_failure("prepare_custom_bundler", &e);
-                TransactionError::Generic {
-                    error_message: format!("Custom bundler preparation failed: {e}"),
-                }
-            })?;
-            return Ok(PreparedTransaction {
-                user_operation,
-                fee_details: None,
-                custom_bundler_url: Some(url.into()),
-            });
-        }
-        let prepared_transaction: PreparedTransaction =
-            prepare_transfer(rpc_client, user_operation, token_address, amount).await?;
+        let prepared_transaction = prepare_transfer(
+            rpc_client,
+            user_operation,
+            token_address,
+            to_address,
+            amount,
+            custom_bundler_url.as_deref(),
+        )
+        .await?;
 
         crate::debug!(
             transaction_type = "erc20_transfer",

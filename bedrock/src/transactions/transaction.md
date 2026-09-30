@@ -45,7 +45,9 @@ The shared lifecycle is:
    the UserOp executes through the smart account when the EntryPoint
    dispatches it.
 3. **Compute the UserOp hash locally.** Used for confirmation UI.
-4. **Request sponsorship.** Bedrock calls `pm_sponsorUserOperation` with the UserOp
+4. **Screen addresses and request sponsorship.** Bedrock screens the Safe sender
+   and token recipient with `wa_screenAddresses`, in parallel with preparation.
+   Both must succeed before returning a prepared transaction. Bedrock calls `pm_sponsorUserOperation` with the UserOp
    and EntryPoint. If approved, TFH pays for the operation. If declined, the response
    includes gas, paymaster, and fee information for self-sponsorship through the
    TFH paymaster.
@@ -74,8 +76,14 @@ sequenceDiagram
     Bedrock->>Bedrock: Wrap in Safe executeUserOp
     Bedrock->>Bedrock: Compute userOpHash
 
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
-    Endpoint-->>Bedrock: sponsored response (gas + paymaster fields as applicable)
+    par Screen participants
+        Bedrock->>Endpoint: wa_screenAddresses([[sender, recipient]])
+        Endpoint-->>Bedrock: true or screening error
+    and Prepare sponsorship
+        Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
+        Endpoint-->>Bedrock: sponsored response (gas + paymaster fields as applicable)
+    end
+    Note over Bedrock: Continue only if both succeed
 
     Bedrock->>User: Confirm: sign userOpHash = <decoded intent>
     User-->>Bedrock: Approve
@@ -114,15 +122,21 @@ sequenceDiagram
     User->>Bedrock: Intent
     Bedrock->>Bedrock: Build callData, wrap in Safe executeUserOp
 
-    Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
-    Endpoint-->>Bedrock: gas + paymaster data + fee { token, estimatedCostInToken, declineReason }
-    Bedrock->>Bedrock: Verify paymaster and encoded fee token
-    Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
-    Endpoint-->>Bedrock: allowance
-    Bedrock->>Bedrock: Require allowance >= fee.estimatedCostInToken
-    Bedrock->>Endpoint: eth_call feeToken.balanceOf(sender)
-    Endpoint-->>Bedrock: balance
-    Bedrock->>Bedrock: Require balance covers final fee (plus transfer if same token)
+    par Screen participants
+        Bedrock->>Endpoint: wa_screenAddresses([[sender, recipient]])
+        Endpoint-->>Bedrock: true or screening error
+    and Prepare sponsorship and validate fee
+        Bedrock->>Endpoint: pm_sponsorUserOperation(userOp, entryPoint)
+        Endpoint-->>Bedrock: gas + paymaster data + fee { token, estimatedCostInToken, declineReason }
+        Bedrock->>Bedrock: Verify paymaster and encoded fee token
+        Bedrock->>Endpoint: eth_call feeToken.allowance(sender, TFH paymaster)
+        Endpoint-->>Bedrock: allowance
+        Bedrock->>Bedrock: Require allowance >= fee.estimatedCostInToken
+        Bedrock->>Endpoint: eth_call feeToken.balanceOf(sender)
+        Endpoint-->>Bedrock: balance
+        Bedrock->>Bedrock: Require balance covers final fee (plus transfer if same token)
+    end
+    Note over Bedrock: Continue only if both succeed
 
     Bedrock->>User: Confirm: pay ~Y WLD in gas
     User-->>Bedrock: Approve
@@ -182,7 +196,7 @@ smart account, which performs the inner call.
 ERC-4337's UserOp hash is deterministic given the fully-assembled UserOp,
 the EntryPoint address, and the chain ID. Bedrock computes it locally.
 
-### 4. Request sponsorship
+### 4. Screen addresses and prepare sponsorship
 
 For ERC-20 transfers without a custom bundler URL, `prepare_transaction_transfer`
 uses the authenticated backend endpoint `/v3/rpc/worldchain`. Contract reads use
@@ -193,29 +207,35 @@ signature placeholder) and EntryPoint address. Sponsored responses include nonze
 `callGasLimit` and `verificationGasLimit`, zero `preVerificationGas` and fee prices,
 and no paymaster. Self-sponsored responses include gas, paymaster, and fee fields
 for payment through the TFH paymaster. Self-sponsored responses include the
-reason TFH declined sponsorship. The backend screens the sender before estimation
-and the sponsorship decision. Sanctioned senders and unavailable screening stop
-preparation. Simulation or fee-quotation failures return RPC errors.
+reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
+errors. This method handles sponsorship without screening addresses.
+
+For both default and custom-bundler routes, Bedrock calls authenticated
+`wa_screenAddresses` on `/v3/rpc/worldchain` with `[[sender, recipient]]`.
+The recipient is the ERC-20 transfer destination, not the token contract.
+The endpoint accepts 1 to 32 addresses and returns JSON `true` only when every
+supplied address clears. Bedrock runs this call in parallel with backend
+sponsorship or custom-bundler estimation. Both must succeed before returning a
+prepared transaction for signing. A restricted address, unavailable screening,
+malformed response, or network failure stops preparation without switching routes.
+All preparation routes require an initialized HTTP client.
+
+A restricted address returns RPC error `-32602` with reason `address_restricted`
+and `retryable: false`. Unavailable screening returns `-32603` with reason
+`screening_unavailable` and `retryable: true`; clients may retry preparation.
+Deploy the endpoint through the authenticated V3 gateway before enabling either
+preparation route. Bedrock owns participant selection and the pre-sign gate;
+clearance is not a server-side authorization bound to a UserOperation.
 
 When `prepare_transaction_transfer` receives a custom bundler URL, Bedrock calls
 `eth_estimateUserOperationGas` directly at that URL with the unsigned operation
-and EntryPoint, in parallel with authenticated `wa_checkUserOperationSender`
-on `/v3/rpc/worldchain` with `[sender]`. Screening must return JSON `true`;
-a sanctioned sender, unavailable screening, malformed response, or network
-failure stops preparation. Both requests must succeed before Bedrock returns a
-prepared transaction for signing. All preparation routes require an initialized
-HTTP client. The default backend route screens within `pm_sponsorUserOperation`
-and makes no separate screening request.
-
-The screening endpoint returns RPC error `-32602` for a sanctioned sender and
-`-32603` when screening is unavailable. Clients may retry preparation for the
-latter. The endpoint must be deployed before enabling custom-bundler preparation.
+and EntryPoint, alongside the shared screening request.
 
 This route requires a bundler that covers gas costs. Bedrock uses
 the returned `callGasLimit` and `verificationGasLimit`, keeps `preVerificationGas`
 and both fee prices at zero, and leaves paymaster fields absent. It does not call
 either backend sponsorship method or offer ERC-20 self-sponsorship on this route.
-The prepared transaction retains the URL for submission. Sender screening applies
+The prepared transaction retains the URL for submission. Address screening applies
 before signing; submission does not screen the signed operation. Estimation errors stop
 preparation; a successful estimate does not guarantee acceptance at submission.
 

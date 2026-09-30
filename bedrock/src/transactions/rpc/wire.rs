@@ -21,9 +21,9 @@ pub enum RpcMethod {
     /// Request sponsorship for a `UserOperation` (V3)
     #[serde(rename = "pm_sponsorUserOperation")]
     PmSponsorUserOperation,
-    /// Check a sender before preparing a signable `UserOperation` (V3)
-    #[serde(rename = "wa_checkUserOperationSender")]
-    CheckUserOperationSender,
+    /// Screen transaction participant addresses before signing (V3)
+    #[serde(rename = "wa_screenAddresses")]
+    ScreenAddresses,
     /// Queries the status of a `UserOperation`
     #[serde(rename = "wa_getUserOperationReceipt")]
     WaGetUserOperationReceipt,

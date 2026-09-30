@@ -152,24 +152,24 @@ impl RpcClient {
         Self { http_client }
     }
 
-    /// Requires a clear sanctions result before returning a signable operation.
-    pub(crate) async fn check_user_operation_sender(
+    /// Requires every supplied address to clear screening before signing.
+    pub(crate) async fn screen_addresses(
         &self,
         network: Network,
-        sender: Address,
+        addresses: &[Address],
     ) -> Result<(), RpcError> {
         let clear: bool = self
             .rpc_call(
                 network,
-                RpcMethod::CheckUserOperationSender,
-                [sender],
+                RpcMethod::ScreenAddresses,
+                [addresses],
                 RpcProviderName::Any,
             )
             .await
             .map_err(RpcError::from)?;
         if !clear {
             return Err(RpcError::InvalidResponse {
-                error_message: "Sender screening did not return clearance".to_string(),
+                error_message: "Address screening did not return clearance".to_string(),
             });
         }
         Ok(())
@@ -180,7 +180,7 @@ impl RpcClient {
         let version = match method {
             RpcMethod::PmSponsorUserOperation
             | RpcMethod::SendUserOperationV3
-            | RpcMethod::CheckUserOperationSender => "v3",
+            | RpcMethod::ScreenAddresses => "v3",
             RpcMethod::EthCall
             | RpcMethod::EthGetStorageAt
             | RpcMethod::SendUserOperationV2 => "v2",

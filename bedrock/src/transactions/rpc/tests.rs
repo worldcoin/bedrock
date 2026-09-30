@@ -382,7 +382,7 @@ fn test_pm_sponsor_response_parsing() {
 }
 
 #[tokio::test]
-async fn sender_screening_http_failure_is_not_clearance() {
+async fn address_screening_http_failure_is_not_clearance() {
     struct UnavailableClient;
     #[async_trait::async_trait]
     impl AuthenticatedHttpClient for UnavailableClient {
@@ -399,7 +399,7 @@ async fn sender_screening_http_failure_is_not_clearance() {
     let client = RpcClient::new(Arc::new(UnavailableClient));
     assert!(matches!(
         client
-            .check_user_operation_sender(Network::WorldChain, Address::ZERO)
+            .screen_addresses(Network::WorldChain, &[Address::ZERO])
             .await,
         Err(RpcError::HttpError(_))
     ));
