@@ -401,6 +401,6 @@ async fn address_screening_http_failure_is_not_clearance() {
         client
             .screen_addresses(Network::WorldChain, &[Address::ZERO])
             .await,
-        Err(RpcError::HttpError(_))
+        Err(RpcCallError::Rpc(RpcError::HttpError(_)))
     ));
 }

@@ -19,7 +19,7 @@ use crate::{
             world_gift_manager::WorldGiftManager,
             worldchain::TFH_PAYMASTER_ADDRESS,
         },
-        rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
+        rpc::{get_rpc_client, RpcCallError, WaGetUserOperationReceiptResponse},
     },
 };
 
@@ -47,6 +47,14 @@ pub enum TransactionError {
         /// Token whose balance is insufficient.
         token_address: String,
     },
+
+    /// A transfer participant is restricted; do not retry through another route.
+    #[error("Address is restricted")]
+    AddressRestricted,
+
+    /// Address screening is unavailable; preparation may be retried.
+    #[error("Address screening unavailable")]
+    ScreeningUnavailable,
 }
 
 impl From<crate::primitives::PrimitiveError> for TransactionError {
@@ -320,8 +328,29 @@ async fn prepare_transfer(
         rpc_client
             .screen_addresses(Network::WorldChain, &addresses)
             .await
-            .map_err(|error| TransactionError::Generic {
-                error_message: format!("Address screening failed: {error}"),
+            .map_err(|error| {
+                if let RpcCallError::Response(response) = &error {
+                    let reason = response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("reason"))
+                        .and_then(|reason| reason.as_str());
+                    match (response.code, reason) {
+                        (-32602, Some("address_restricted")) => {
+                            return TransactionError::AddressRestricted;
+                        }
+                        (-32603, Some("screening_unavailable")) => {
+                            return TransactionError::ScreeningUnavailable;
+                        }
+                        _ => {}
+                    }
+                }
+                TransactionError::Generic {
+                    error_message: format!(
+                        "Address screening failed: {}",
+                        RpcError::from(error)
+                    ),
+                }
             })
     };
     let preparation = async {
@@ -374,7 +403,7 @@ impl SafeSmartAccount {
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if sponsorship preparation or custom estimation fails.
     /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
-    /// - All preparation routes require an initialized global HTTP client for address screening.
+    /// - Will throw `AddressRestricted` or `ScreeningUnavailable` for screening rejections or outages.
     pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,

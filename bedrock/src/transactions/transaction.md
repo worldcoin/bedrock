@@ -223,6 +223,9 @@ All preparation routes require an initialized HTTP client.
 A restricted address returns RPC error `-32602` with reason `address_restricted`
 and `retryable: false`. Unavailable screening returns `-32603` with reason
 `screening_unavailable` and `retryable: true`; clients may retry preparation.
+Bedrock exposes these as `TransactionError::AddressRestricted` and
+`TransactionError::ScreeningUnavailable` in Swift/Kotlin. Other RPC, transport,
+and malformed-response failures produce generic preparation errors.
 Deploy the endpoint through the authenticated V3 gateway before enabling either
 preparation route. Bedrock owns participant selection and the pre-sign gate;
 clearance is not a server-side authorization bound to a UserOperation.

@@ -157,7 +157,7 @@ impl RpcClient {
         &self,
         network: Network,
         addresses: &[Address],
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), RpcCallError> {
         let clear: bool = self
             .rpc_call(
                 network,
@@ -165,12 +165,12 @@ impl RpcClient {
                 [addresses],
                 RpcProviderName::Any,
             )
-            .await
-            .map_err(RpcError::from)?;
+            .await?;
         if !clear {
             return Err(RpcError::InvalidResponse {
                 error_message: "Address screening did not return clearance".to_string(),
-            });
+            }
+            .into());
         }
         Ok(())
     }

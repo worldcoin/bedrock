@@ -1051,3 +1051,57 @@ async fn default_route_runs_requests_in_parallel_and_waits_for_both() {
         }).await.expect("screening and sponsorship must run concurrently and both finish");
     }
 }
+
+#[tokio::test]
+async fn preparation_preserves_screening_failure_classification_on_both_routes() {
+    let server = MockServer::start().await;
+    for custom_url in [None, Some(server.uri())] {
+        for (code, reason, retryable) in [
+            (-32602, "address_restricted", false),
+            (-32603, "screening_unavailable", true),
+        ] {
+            let (client, _) = rpc(vec![json!({"error": {
+                "code": code, "message": "Screening request failed",
+                "data": {"reason": reason, "retryable": retryable}
+            }})]);
+            let error = prepare_transfer(
+                &client,
+                transfer(),
+                WLD_ADDRESS,
+                TEST_RECIPIENT,
+                U256::from(7),
+                custom_url.as_deref(),
+            )
+            .await
+            .unwrap_err();
+            if retryable {
+                assert!(matches!(error, TransactionError::ScreeningUnavailable));
+            } else {
+                assert!(matches!(error, TransactionError::AddressRestricted));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn unknown_screening_errors_are_not_classified_as_restricted() {
+    for data in [
+        serde_json::Value::Null,
+        json!({"reason": "invalid_addresses"}),
+    ] {
+        let (client, _) = rpc(vec![json!({"error": {
+            "code": -32602, "message": "Address is restricted", "data": data
+        }})]);
+        let error = prepare_transfer(
+            &client,
+            transfer(),
+            WLD_ADDRESS,
+            TEST_RECIPIENT,
+            U256::from(7),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, TransactionError::Generic { .. }));
+    }
+}
