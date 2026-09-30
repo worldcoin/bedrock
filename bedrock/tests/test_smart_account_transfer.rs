@@ -1,8 +1,11 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 mod common;
 use alloy::{
-    primitives::{address, U256},
+    primitives::{address, Address, U256},
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
@@ -19,6 +22,8 @@ use bedrock::{
 
 struct TransferHttpClient {
     inner: Arc<dyn AuthenticatedHttpClient>,
+    participants: [Address; 2],
+    screening_calls: AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -33,6 +38,15 @@ impl AuthenticatedHttpClient for TransferHttpClient {
         let request: serde_json::Value =
             serde_json::from_slice(body.as_ref().unwrap()).unwrap();
         match request["method"].as_str() {
+            Some("wa_screenAddresses") => {
+                assert_eq!(url, "/v3/rpc/worldchain");
+                assert_eq!(request["params"], serde_json::json!([self.participants]));
+                self.screening_calls.fetch_add(1, Ordering::SeqCst);
+                return Ok(serde_json::to_vec(&serde_json::json!({
+                    "jsonrpc": "2.0", "id": request["id"], "result": true
+                }))
+                .unwrap());
+            }
             Some("pm_sponsorUserOperation" | "eth_sendUserOperation") => {
                 assert_eq!(url, "/v3/rpc/worldchain");
                 assert_eq!(request["params"].as_array().unwrap().len(), 2);
@@ -98,9 +112,12 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     // 7) Install mocked HTTP client that routes calls to Anvil
     let client = AnvilBackedHttpClient::new(provider.clone());
 
-    set_http_client(Arc::new(TransferHttpClient {
+    let http = Arc::new(TransferHttpClient {
         inner: Arc::new(client),
-    }));
+        participants: [safe_address, recipient],
+        screening_calls: AtomicUsize::new(0),
+    });
+    set_http_client(http.clone());
 
     // 8) Prepare the transfer without signing or executing it
     let safe_account = SafeSmartAccount::from_private_key_hex(
@@ -127,6 +144,8 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
         .submit_prepared_transaction(&prepared)
         .await
         .expect("submit_prepared_transaction failed");
+
+    assert_eq!(http.screening_calls.load(Ordering::SeqCst), 1);
 
     // 10) Verify balances updated
     let after_recipient = wld.balanceOf(recipient).call().await?;
