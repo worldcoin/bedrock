@@ -7,9 +7,9 @@ open-source, on-device SDK that powers the wallet — turns a user intent
 chain.
 
 The lifecycle is shared across transaction types. The prepared-transaction APIs
-`prepare_transaction_transfer`, `prepare_transaction_erc4626_deposit`, and
-`submit_prepared_transaction` implement it for transfers and vault deposits on
-World Chain. The diagrams use transfers as a concrete example.
+`prepare_transaction_transfer`, `prepare_transaction_erc4626_deposit`,
+`prepare_transaction_erc4626_withdraw`, and `submit_prepared_transaction` implement
+it for transfers, vault deposits, and vault withdrawals on World Chain. The diagrams use transfers as a concrete example.
 
 It is a living document. The wallet's sponsorship policy evolves over time;
 when it changes, this file changes with it. The on-device steps Bedrock performs
@@ -318,3 +318,22 @@ deposit assets, the fee-token balance must cover the fee alone. Custom bundlers
 cover gas and receive estimation and submission at the same supplied URL.
 
 The all-in-one `transaction_erc4626_deposit` API uses V1 execution.
+
+## ERC-4626 withdrawal preparation
+
+`prepare_transaction_erc4626_withdraw(vault_address, asset_amount, custom_bundler_url)`
+returns the same `PreparedVaultTransaction` contract as deposit preparation. It
+screens the wallet in parallel with preparation on both routes; that wallet owns
+the shares and receives the withdrawn assets.
+
+Construction uses `withdraw` for the requested asset amount when the wallet has
+enough shares. When share-limited, it uses `redeem` for the available shares and
+returns `previewRedeem` as `asset_amount`. This redemption amount is a snapshot,
+not a guaranteed execution output; vault exchange rates can change before
+submission. Display the returned amount and any fee before confirmation.
+
+A WLD-paid withdrawal requires the fee-token balance and allowance in the wallet
+before execution. The paymaster charges during validation, so assets released by
+the withdrawal cannot fund that charge. Custom bundlers cover gas.
+
+The all-in-one withdrawal and redeem APIs use V1 execution.

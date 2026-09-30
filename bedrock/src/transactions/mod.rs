@@ -1,4 +1,7 @@
-use alloy::primitives::{Address, U256};
+use alloy::{
+    primitives::{Address, U256},
+    sol_types::SolCall,
+};
 use bedrock_macros::bedrock_export;
 use rand::{Rng, RngCore};
 use secrecy::{ExposeSecret, SecretString};
@@ -87,7 +90,7 @@ pub struct PreparedVaultTransaction {
     pub transaction: Arc<PreparedTransaction>,
     /// Underlying ERC-20 asset address.
     pub asset_address: String,
-    /// Asset amount in base units, after applying the available-balance limit.
+    /// Asset amount in base units. Share-based withdrawals report a preparation-time estimate.
     pub asset_amount: String,
 }
 
@@ -525,6 +528,98 @@ impl SafeSmartAccount {
                 operation,
                 asset_address,
                 actual_amount,
+                custom_bundler_url,
+            )
+            .await?;
+            Ok(PreparedVaultTransaction {
+                transaction: Arc::new(transaction),
+                asset_address: asset_address.to_string(),
+                asset_amount: actual_amount.to_string(),
+            })
+        };
+        let ((), prepared) = tokio::try_join!(screening, preparation)?;
+        Ok(prepared)
+    }
+
+    /// Prepares an unsigned ERC-4626 withdrawal on World Chain.
+    ///
+    /// Uses redeem when the requested assets require more shares than the wallet holds.
+    /// In that case, `asset_amount` is the previewed redemption output and can change
+    /// before execution. User-paid gas requires fee tokens already in the wallet;
+    /// the paymaster charges before the vault releases assets.
+    /// `custom_bundler_url` selects a bundler that covers gas and handles submission.
+    ///
+    /// # Errors
+    /// Returns an error if construction, wallet screening, sponsorship, or estimation fails.
+    pub async fn prepare_transaction_erc4626_withdraw(
+        &self,
+        vault_address: &str,
+        asset_amount: &str,
+        custom_bundler_url: Option<String>,
+    ) -> Result<PreparedVaultTransaction, TransactionError> {
+        use contracts::erc4626::{Erc4626Vault, WithdrawalAmount, IERC4626};
+
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
+        let rpc_client =
+            get_rpc_client().map_err(|error| TransactionError::Generic {
+                error_message: format!("Failed to get RPC client: {error}"),
+            })?;
+        let addresses = [self.wallet_address];
+        let screening = screen_addresses(rpc_client, &addresses);
+        let preparation = async {
+            let (transaction, amount) = Erc4626Vault::withdraw_with_amount(
+                rpc_client,
+                Network::WorldChain,
+                vault_address,
+                asset_amount,
+                self.wallet_address,
+                [0u8; 10],
+            )
+            .await
+            .map_err(|error| TransactionError::Generic {
+                error_message: format!("Failed to create ERC4626 withdrawal: {error}"),
+            })?;
+            let asset = Erc4626Vault::fetch_asset_address(
+                rpc_client,
+                Network::WorldChain,
+                vault_address,
+                IERC4626::assetCall {}.abi_encode(),
+            );
+            let amount = async {
+                match amount {
+                    WithdrawalAmount::Assets(assets) => Ok(assets),
+                    WithdrawalAmount::Shares(shares) => {
+                        Erc4626Vault::fetch_balance(
+                            rpc_client,
+                            Network::WorldChain,
+                            vault_address,
+                            IERC4626::previewRedeemCall { shares }.abi_encode(),
+                            "previewRedeem",
+                        )
+                        .await
+                    }
+                }
+            };
+            let (asset_address, actual_amount) = tokio::try_join!(asset, amount)
+                .map_err(|error| TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to preview ERC4626 withdrawal: {error}"
+                    ),
+                })?;
+            if actual_amount.is_zero() {
+                return Err(TransactionError::Generic {
+                    error_message: "Withdrawal produces zero assets".to_string(),
+                });
+            }
+            let operation = transaction
+                .build_preflight_user_operation(self.wallet_address, None)?;
+            // Withdrawn assets arrive after paymaster validation and cannot fund its charge.
+            let transaction = prepare_operation(
+                rpc_client,
+                operation,
+                asset_address,
+                U256::ZERO,
                 custom_bundler_url,
             )
             .await?;
