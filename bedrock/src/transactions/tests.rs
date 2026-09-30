@@ -14,23 +14,6 @@ use wiremock::{matchers::body_partial_json, Mock, MockServer, ResponseTemplate};
 
 const TEST_RECIPIENT: Address = address!("1234567890123456789012345678901234567890");
 
-async fn prepare_custom(
-    client: &RpcClient,
-    url: &str,
-    operation: UserOperation,
-) -> Result<UserOperation, TransactionError> {
-    Ok(prepare_transfer(
-        client,
-        operation,
-        WLD_ADDRESS,
-        TEST_RECIPIENT,
-        U256::from(7),
-        Some(url),
-    )
-    .await?
-    .user_operation)
-}
-
 fn custom_bundler_account() -> SafeSmartAccount {
     SafeSmartAccount::from_private_key_hex(
         "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583".to_string(),
@@ -61,7 +44,6 @@ async fn custom_bundler_prepares_then_submits_to_the_same_url() {
     .await;
 
     let account = custom_bundler_account();
-    let (client, http) = rpc(vec![json!({"result": true})]);
     let url = format!("{}/rpc?key=private-key", server.uri());
     let operation = Erc20::new(WLD_ADDRESS, TEST_RECIPIENT, U256::from(7))
         .build_preflight_user_operation(
@@ -72,19 +54,14 @@ async fn custom_bundler_prepares_then_submits_to_the_same_url() {
         )
         .unwrap();
     let prepared = PreparedTransaction {
-        user_operation: prepare_custom(&client, &url, operation).await.unwrap(),
+        user_operation: custom_bundler::prepare_bundler_sponsored_operation(
+            &url, operation,
+        )
+        .await
+        .unwrap(),
         fee_details: None,
         custom_bundler_url: Some(url.into()),
     };
-    {
-        let screening = http.requests.lock().unwrap();
-        assert_eq!(screening.len(), 1);
-        assert_eq!(screening[0]["method"], "wa_screenAddresses");
-        assert_eq!(
-            screening[0]["params"],
-            json!([[account.wallet_address, TEST_RECIPIENT]])
-        );
-    }
     assert!(prepared.fee_details().is_none());
     assert!(!format!("{prepared:?}").contains("private-key"));
     assert_eq!(
@@ -143,110 +120,18 @@ async fn custom_bundler_preparation_surfaces_rejections_and_invalid_estimates() 
         .expect(1)
         .mount(&server)
         .await;
-        let (client, _) = rpc(vec![json!({"result": true})]);
-        let error = prepare_custom(&client, &server.uri(), transfer())
-            .await
-            .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Custom bundler preparation failed"));
+        let error = custom_bundler::prepare_bundler_sponsored_operation(
+            &server.uri(),
+            transfer(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            RpcError::RpcResponseError { .. } | RpcError::InvalidResponse { .. }
+        ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
-}
-
-#[tokio::test]
-async fn custom_bundler_requires_address_clearance() {
-    for response in [
-        json!({"error": {"code": -32602, "message": "Address is restricted"}}),
-        json!({"error": {"code": -32603, "message": "Address screening unavailable"}}),
-        json!({"result": false}),
-        json!({"result": null}),
-        json!({"result": "true"}),
-        json!({}),
-    ] {
-        let server = MockServer::start().await;
-        Mock::given(body_partial_json(
-            json!({"method": "eth_estimateUserOperationGas"}),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "result": {"callGasLimit": "0xc350", "verificationGasLimit": "0xea60"}
-        })))
-        .mount(&server)
-        .await;
-        let (client, http) = rpc(vec![response]);
-        assert!(prepare_custom(&client, &server.uri(), transfer())
-            .await
-            .is_err());
-        assert_eq!(
-            http.requests.lock().unwrap().len(),
-            1,
-            "screening must not retry through another route"
-        );
-        for request in server.received_requests().await.unwrap() {
-            let body: Value = request.body_json().unwrap();
-            assert_eq!(body["method"], "eth_estimateUserOperationGas");
-        }
-    }
-}
-
-struct PendingScreeningClient {
-    started: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
-}
-
-#[async_trait::async_trait]
-impl AuthenticatedHttpClient for PendingScreeningClient {
-    async fn fetch_from_app_backend(
-        &self,
-        _url: String,
-        _method: HttpMethod,
-        _headers: Vec<HttpHeader>,
-        _body: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, HttpError> {
-        self.started.notify_one();
-        self.release.notified().await;
-        Ok(serde_json::to_vec(&json!({"result": true})).unwrap())
-    }
-}
-
-#[tokio::test]
-async fn custom_bundler_estimates_in_parallel_and_waits_for_screening() {
-    let screening_started = Arc::new(tokio::sync::Notify::new());
-    let release_screening = Arc::new(tokio::sync::Notify::new());
-    let estimation_started = Arc::new(tokio::sync::Notify::new());
-    let client = RpcClient::new(Arc::new(PendingScreeningClient {
-        started: screening_started.clone(),
-        release: release_screening.clone(),
-    }));
-    let server = MockServer::start().await;
-    let estimated = estimation_started.clone();
-    Mock::given(body_partial_json(
-        json!({"method": "eth_estimateUserOperationGas"}),
-    ))
-    .respond_with(move |_: &wiremock::Request| {
-        estimated.notify_one();
-        ResponseTemplate::new(200).set_body_json(json!({
-            "result": {"callGasLimit": "0xc350", "verificationGasLimit": "0xea60"}
-        }))
-    })
-    .expect(1)
-    .mount(&server)
-    .await;
-    let url = server.uri();
-    let preparation = prepare_custom(&client, &url, transfer());
-    tokio::pin!(preparation);
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        tokio::select! {
-            result = &mut preparation => panic!("preparation finished before clearance: {result:?}"),
-            () = async {
-                screening_started.notified().await;
-                estimation_started.notified().await;
-            } => {}
-        }
-        assert!(futures::poll!(&mut preparation).is_pending());
-        release_screening.notify_one();
-        preparation.await.unwrap();
-    }).await.expect("screening and estimation must start concurrently");
 }
 
 #[tokio::test]
@@ -371,12 +256,12 @@ fn transfer() -> UserOperation {
 }
 
 #[tokio::test]
-async fn sponsored_preparation_preserves_unsigned_transfer_and_exposes_final_fee() {
+async fn default_preparation_preserves_unsigned_transfer_and_exposes_final_fee() {
     let original = transfer();
     let response = token_sponsorship(WLD_ADDRESS);
     let (rpc, http) = rpc(vec![response.clone(), uint_response(10), uint_response(17)]);
     let prepared =
-        prepare_sponsored_transfer(&rpc, original.clone(), WLD_ADDRESS, U256::from(7))
+        prepare_default_transfer(&rpc, original.clone(), WLD_ADDRESS, U256::from(7))
             .await
             .unwrap();
     assert_eq!(prepared.user_operation.sender, original.sender);
@@ -422,7 +307,7 @@ async fn free_preparation_has_no_fee_or_balance_reads() {
         }
     })]);
     let prepared =
-        prepare_sponsored_transfer(&rpc, original.clone(), WLD_ADDRESS, U256::from(7))
+        prepare_default_transfer(&rpc, original.clone(), WLD_ADDRESS, U256::from(7))
             .await
             .unwrap();
     assert!(prepared.fee_details().is_none());
@@ -447,7 +332,7 @@ async fn final_fee_drives_confirmation_and_coverage() {
             uint_response(balance),
         ]);
         let result =
-            prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+            prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
                 .await;
         if let Some(failure) = failure {
             assert!(result.unwrap_err().to_string().contains(failure));
@@ -479,14 +364,9 @@ async fn incomplete_fee_object_stops_preparation() {
             }
             let (rpc, http) = rpc(vec![response]);
             assert!(
-                prepare_sponsored_transfer(
-                    &rpc,
-                    transfer(),
-                    WLD_ADDRESS,
-                    U256::from(7)
-                )
-                .await
-                .is_err(),
+                prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+                    .await
+                    .is_err(),
                 "{field}"
             );
             assert_eq!(http.requests.lock().unwrap().len(), 1);
@@ -502,7 +382,7 @@ async fn insufficient_allowance_stops_preparation() {
             uint_response(allowance),
         ]);
         let error =
-            prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+            prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
                 .await
                 .unwrap_err();
         assert!(error
@@ -525,7 +405,7 @@ async fn allowance_read_failure_stops_preparation() {
     ] {
         let (rpc, http) = rpc(vec![token_sponsorship(WLD_ADDRESS), response]);
         let error =
-            prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+            prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
                 .await
                 .unwrap_err();
         assert!(error
@@ -547,10 +427,9 @@ async fn allowance_checks_fee_token_sender_and_migrated_spender() {
         uint_response(11),
         uint_response(10),
     ]);
-    let prepared =
-        prepare_sponsored_transfer(&rpc, original, WLD_ADDRESS, U256::from(7))
-            .await
-            .unwrap();
+    let prepared = prepare_default_transfer(&rpc, original, WLD_ADDRESS, U256::from(7))
+        .await
+        .unwrap();
     assert_eq!(
         prepared.fee_details().unwrap().estimated_cost_in_token,
         "10"
@@ -585,7 +464,7 @@ async fn invalid_final_fee_estimate_stops_preparation() {
         let mut response = token_sponsorship(WLD_ADDRESS);
         response["result"]["fee"]["estimatedCostInToken"] = json!(estimate);
         let (rpc, http) = rpc(vec![response]);
-        let error = prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+        let error = prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
             .await
             .unwrap_err();
         assert!(error.to_string().contains("fee estimate"));
@@ -601,10 +480,9 @@ async fn non_tfh_paymaster_stops_preparation() {
     response["result"]["paymaster"] = json!(unexpected_paymaster);
     let (rpc, http) = rpc(vec![response]);
 
-    let error =
-        prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
-            .await
-            .unwrap_err();
+    let error = prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+        .await
+        .unwrap_err();
     assert!(error
         .to_string()
         .contains("Self-sponsorship requires TFH paymaster"));
@@ -624,7 +502,7 @@ async fn missing_or_mismatched_paymaster_fields_stop_preparation() {
         response["result"].as_object_mut().unwrap().remove(field);
         let (rpc, http) = rpc(vec![response]);
         let error =
-            prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+            prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
                 .await
                 .unwrap_err();
         assert!(error.to_string().contains("paymaster fields"), "{field}");
@@ -644,14 +522,10 @@ async fn both_tfh_payload_formats_preserve_the_advertised_fee_token() {
             response["result"]["paymasterData"] = json!(data);
 
             let (rpc, _) = rpc(vec![response, uint_response(10), uint_response(17)]);
-            let prepared = prepare_sponsored_transfer(
-                &rpc,
-                transfer(),
-                WLD_ADDRESS,
-                U256::from(7),
-            )
-            .await
-            .unwrap();
+            let prepared =
+                prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+                    .await
+                    .unwrap();
             assert_eq!(
                 prepared.fee_details().unwrap().token_address,
                 token.to_string()
@@ -671,14 +545,10 @@ async fn mismatched_fee_token_in_paymaster_data_stops_preparation() {
             let mut response = token_sponsorship(WLD_ADDRESS);
             response["result"]["paymasterData"] = json!(Bytes::from(data));
             let (rpc, _) = rpc(vec![response]);
-            let error = prepare_sponsored_transfer(
-                &rpc,
-                transfer(),
-                WLD_ADDRESS,
-                U256::from(7),
-            )
-            .await
-            .unwrap_err();
+            let error =
+                prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+                    .await
+                    .unwrap_err();
             assert!(error
                 .to_string()
                 .contains("fee token does not match the fee quote"));
@@ -705,7 +575,7 @@ async fn malformed_tfh_paymaster_data_stops_preparation() {
         response["result"]["paymasterData"] = json!(Bytes::from(data));
         let (rpc, _) = rpc(vec![response]);
         let error =
-            prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+            prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
                 .await
                 .unwrap_err();
         assert!(error
@@ -726,10 +596,9 @@ async fn token_sponsorship_decline_stops_without_another_retry() {
             },
         },
     })]);
-    let error =
-        prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
-            .await
-            .unwrap_err();
+    let error = prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("sponsorship declined"));
     assert_eq!(http.requests.lock().unwrap().len(), 1);
 }
@@ -740,10 +609,9 @@ async fn token_sponsorship_error_stops_without_submission() {
         "jsonrpc": "2.0", "id": "test",
         "error": { "code": -32603, "message": "sponsorship unavailable" },
     })]);
-    let error =
-        prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
-            .await
-            .unwrap_err();
+    let error = prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("sponsorship unavailable"));
     assert_eq!(http.requests.lock().unwrap().len(), 1);
 }
@@ -767,8 +635,7 @@ async fn balance_covers_transfer_and_final_fee() {
             uint_response(balance),
         ]);
         let result =
-            prepare_sponsored_transfer(&rpc, original, WLD_ADDRESS, U256::from(7))
-                .await;
+            prepare_default_transfer(&rpc, original, WLD_ADDRESS, U256::from(7)).await;
         if insufficient {
             let error = result.unwrap_err();
             assert_eq!(
@@ -818,7 +685,7 @@ async fn balance_read_failure_stops_preparation() {
             response,
         ]);
         let error =
-            prepare_sponsored_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+            prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
                 .await
                 .unwrap_err();
         assert!(error
@@ -871,237 +738,11 @@ async fn incomplete_fee_metadata_cannot_be_treated_as_free() {
         });
         response["result"][field] = value;
         let (rpc, http) = rpc(vec![response]);
-        assert!(prepare_sponsored_transfer(
-            &rpc,
-            transfer(),
-            WLD_ADDRESS,
-            U256::from(7)
-        )
-        .await
-        .is_err());
-        assert_eq!(http.requests.lock().unwrap().len(), 1);
-    }
-}
-
-#[tokio::test]
-async fn custom_bundler_waits_for_estimation_after_clearance() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let (client, http) = rpc(vec![json!({"result": true})]);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let estimation_started = Arc::new(tokio::sync::Notify::new());
-    let release_estimation = Arc::new(tokio::sync::Notify::new());
-    let started = estimation_started.clone();
-    let release = release_estimation.clone();
-    let bundler = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buffer = [0; 8192];
-        assert!(socket.read(&mut buffer).await.unwrap() > 0);
-        started.notify_one();
-        release.notified().await;
-        let body =
-            json!({"result":{"callGasLimit":"0xc350","verificationGasLimit":"0xea60"}})
-                .to_string();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
+        assert!(
+            prepare_default_transfer(&rpc, transfer(), WLD_ADDRESS, U256::from(7))
+                .await
+                .is_err()
         );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
-    let preparation = prepare_custom(&client, &url, transfer());
-    tokio::pin!(preparation);
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        tokio::select! {
-            result = &mut preparation => panic!("preparation finished before estimation: {result:?}"),
-            () = estimation_started.notified() => {}
-        }
         assert_eq!(http.requests.lock().unwrap().len(), 1);
-        assert!(futures::poll!(&mut preparation).is_pending());
-        release_estimation.notify_one();
-        preparation.await.unwrap();
-        bundler.await.unwrap();
-    }).await.expect("preparation must await estimation after address clearance");
-}
-
-#[tokio::test]
-async fn default_route_screens_sender_and_recipient_before_returning_prepared_transfer()
-{
-    let operation = transfer();
-    let (client, http) = rpc(vec![
-        json!({"result": true}),
-        token_sponsorship(WLD_ADDRESS),
-        uint_response(10),
-        uint_response(17),
-    ]);
-    let prepared = prepare_transfer(
-        &client,
-        operation.clone(),
-        WLD_ADDRESS,
-        TEST_RECIPIENT,
-        U256::from(7),
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(prepared.user_operation.call_data, operation.call_data);
-    assert!(prepared.fee_details().is_some());
-    let requests = http.requests.lock().unwrap();
-    assert_eq!(requests[0]["method"], "wa_screenAddresses");
-    assert_eq!(
-        requests[0]["params"],
-        json!([[operation.sender, TEST_RECIPIENT]])
-    );
-    assert_eq!(requests[1]["method"], "pm_sponsorUserOperation");
-    assert_eq!(requests.len(), 4);
-}
-
-#[tokio::test]
-async fn default_route_requires_address_clearance() {
-    for response in [
-        json!({"error": {"code": -32602, "message": "Address is restricted"}}),
-        json!({"error": {"code": -32603, "message": "Address screening unavailable"}}),
-        json!({"result": false}),
-        json!({"result": null}),
-        json!({"result": "true"}),
-        json!({}),
-    ] {
-        let (client, _) = rpc(vec![response]);
-        let error = prepare_transfer(
-            &client,
-            transfer(),
-            WLD_ADDRESS,
-            TEST_RECIPIENT,
-            U256::from(7),
-            None,
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("Address screening failed"));
-    }
-}
-
-struct PendingPreparationClient {
-    started: [Arc<tokio::sync::Notify>; 2],
-    release: [Arc<tokio::sync::Notify>; 2],
-}
-
-#[async_trait::async_trait]
-impl AuthenticatedHttpClient for PendingPreparationClient {
-    async fn fetch_from_app_backend(
-        &self,
-        _url: String,
-        _method: HttpMethod,
-        _headers: Vec<HttpHeader>,
-        body: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, HttpError> {
-        let request: Value = serde_json::from_slice(&body.unwrap()).unwrap();
-        let index = match request["method"].as_str().unwrap() {
-            "wa_screenAddresses" => 0,
-            "pm_sponsorUserOperation" => 1,
-            method => panic!("unexpected RPC method: {method}"),
-        };
-        self.started[index].notify_one();
-        self.release[index].notified().await;
-        let response = if index == 0 {
-            json!({"result": true})
-        } else {
-            json!({"result": {
-                "callGasLimit": "0x10000", "verificationGasLimit": "0x10000",
-                "preVerificationGas": "0x0", "maxFeePerGas": "0x0", "maxPriorityFeePerGas": "0x0"
-            }})
-        };
-        Ok(serde_json::to_vec(&response).unwrap())
-    }
-}
-
-#[tokio::test]
-async fn default_route_runs_requests_in_parallel_and_waits_for_both() {
-    for first in 0..2 {
-        let started = [
-            Arc::new(tokio::sync::Notify::new()),
-            Arc::new(tokio::sync::Notify::new()),
-        ];
-        let release = [
-            Arc::new(tokio::sync::Notify::new()),
-            Arc::new(tokio::sync::Notify::new()),
-        ];
-        let client = RpcClient::new(Arc::new(PendingPreparationClient {
-            started: started.clone(),
-            release: release.clone(),
-        }));
-        let preparation = prepare_transfer(
-            &client,
-            transfer(),
-            WLD_ADDRESS,
-            TEST_RECIPIENT,
-            U256::from(7),
-            None,
-        );
-        tokio::pin!(preparation);
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::select! {
-                result = &mut preparation => panic!("preparation finished before responses: {result:?}"),
-                () = async { started[0].notified().await; started[1].notified().await; } => {}
-            }
-            release[first].notify_one();
-            assert!(futures::poll!(&mut preparation).is_pending());
-            release[1-first].notify_one();
-            preparation.await.unwrap();
-        }).await.expect("screening and sponsorship must run concurrently and both finish");
-    }
-}
-
-#[tokio::test]
-async fn preparation_preserves_screening_failure_classification_on_both_routes() {
-    let server = MockServer::start().await;
-    for custom_url in [None, Some(server.uri())] {
-        for (code, reason, retryable) in [
-            (-32602, "address_restricted", false),
-            (-32603, "screening_unavailable", true),
-        ] {
-            let (client, _) = rpc(vec![json!({"error": {
-                "code": code, "message": "Screening request failed",
-                "data": {"reason": reason, "retryable": retryable}
-            }})]);
-            let error = prepare_transfer(
-                &client,
-                transfer(),
-                WLD_ADDRESS,
-                TEST_RECIPIENT,
-                U256::from(7),
-                custom_url.as_deref(),
-            )
-            .await
-            .unwrap_err();
-            if retryable {
-                assert!(matches!(error, TransactionError::ScreeningUnavailable));
-            } else {
-                assert!(matches!(error, TransactionError::AddressRestricted));
-            }
-        }
-    }
-}
-
-#[tokio::test]
-async fn unknown_screening_errors_are_not_classified_as_restricted() {
-    for data in [
-        serde_json::Value::Null,
-        json!({"reason": "invalid_addresses"}),
-    ] {
-        let (client, _) = rpc(vec![json!({"error": {
-            "code": -32602, "message": "Address is restricted", "data": data
-        }})]);
-        let error = prepare_transfer(
-            &client,
-            transfer(),
-            WLD_ADDRESS,
-            TEST_RECIPIENT,
-            U256::from(7),
-            None,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, TransactionError::Generic { .. }));
     }
 }
