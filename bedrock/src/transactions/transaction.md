@@ -7,9 +7,9 @@ open-source, on-device SDK that powers the wallet — turns a user intent
 chain.
 
 The lifecycle is shared across transaction types. The prepared-transaction APIs
-`prepare_transaction_transfer` and `submit_prepared_transaction` implement it
-for ERC-20 transfers on World Chain. The V3 routing and fee checks below describe
-that implementation; the diagrams use transfers as a concrete example.
+`prepare_transaction_transfer`, `prepare_transaction_erc4626_deposit`, and
+`submit_prepared_transaction` implement it for transfers and vault deposits on
+World Chain. The diagrams use transfers as a concrete example.
 
 It is a living document. The wallet's sponsorship policy evolves over time;
 when it changes, this file changes with it. The on-device steps Bedrock performs
@@ -296,3 +296,25 @@ the UserOp reaches a terminal state or its tracking deadline is reached.
 - [Safe Smart Account documentation](https://docs.safe.global/)
 - Bedrock source: `bedrock/src/transactions/` (`rpc.rs`, `mod.rs`,
   `contracts/`)
+
+## ERC-4626 deposit preparation
+
+`prepare_transaction_erc4626_deposit(vault_address, asset_amount, custom_bundler_url)`
+builds the asset approval and vault deposit locally. It screens the wallet with
+`wa_screenAddresses` in parallel with construction and sponsorship or custom
+bundler estimation. The wallet owns the assets and receives the shares. Vault
+selection and program eligibility are the caller's responsibility.
+
+The result is a `PreparedVaultTransaction`: `asset_address` identifies the underlying
+token, `asset_amount` is the amount encoded after capping it to the available
+balance, and `transaction` holds the unsigned operation. Display that amount and
+`transaction.fee_details()` before confirmation, then pass `transaction` to
+`submit_prepared_transaction`.
+
+For a deposit spending the fee token, the balance must cover the deposit plus the
+quoted fee. Preparation does not reduce the deposit to fund gas; insufficient
+funds require the caller to choose another amount and prepare again. For other
+deposit assets, the fee-token balance must cover the fee alone. Custom bundlers
+cover gas and receive estimation and submission at the same supplied URL.
+
+The all-in-one `transaction_erc4626_deposit` API uses V1 execution.

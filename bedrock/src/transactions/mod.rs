@@ -41,14 +41,14 @@ pub enum TransactionError {
     #[error("Primitive error: {0}")]
     PrimitiveError(String),
 
-    /// The fee-token balance cannot cover the transfer and estimated network fee.
-    #[error("Not enough funds to cover the transfer and network fee.")]
+    /// The fee-token balance cannot cover the operation and estimated network fee.
+    #[error("Not enough funds to cover the operation and network fee.")]
     InsufficientFunds {
         /// Token whose balance is insufficient.
         token_address: String,
     },
 
-    /// A transfer participant is restricted; do not retry through another route.
+    /// A transaction participant is restricted; do not retry through another route.
     #[error("Address is restricted")]
     AddressRestricted,
 
@@ -78,6 +78,17 @@ pub struct PreparedTransaction {
     fee_details: Option<PreparedTransactionFee>,
     // URLs may contain credentials; Debug must not reveal them.
     custom_bundler_url: Option<SecretString>,
+}
+
+/// An unsigned vault operation and the asset amount to display before confirmation.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PreparedVaultTransaction {
+    /// Pass this operation to `submit_prepared_transaction` after confirmation.
+    pub transaction: Arc<PreparedTransaction>,
+    /// Underlying ERC-20 asset address.
+    pub asset_address: String,
+    /// Asset amount in base units, after applying the available-balance limit.
+    pub asset_amount: String,
 }
 
 /// ERC-20 fee estimate for a prepared self-sponsored operation.
@@ -175,8 +186,8 @@ async fn check_fee_balance(
     rpc_client: &RpcClient,
     sender: Address,
     fee_token: Address,
-    transfer_token: Address,
-    transfer_amount: U256,
+    spend_token: Address,
+    spend_amount: U256,
     estimated_cost: U256,
 ) -> Result<(), TransactionError> {
     let balance =
@@ -194,10 +205,10 @@ async fn check_fee_balance(
                     error_message: format!("Failed to read fee-token balance: {error}"),
                 }
             })?;
-    // If the transfer spends the fee token, its balance must cover both amounts.
+    // If the operation spends the fee token, its balance must cover both amounts.
     // Subtraction avoids overflowing when the amount and fee exceed U256::MAX.
-    let available_for_fee = if transfer_token == fee_token {
-        balance.checked_sub(transfer_amount)
+    let available_for_fee = if spend_token == fee_token {
+        balance.checked_sub(spend_amount)
     } else {
         Some(balance)
     };
@@ -207,10 +218,10 @@ async fn check_fee_balance(
             sender = sender,
             fee_token = fee_token,
             balance = balance,
-            transfer_token = transfer_token,
-            transfer_amount = transfer_amount,
+            spend_token = spend_token,
+            spend_amount = spend_amount,
             estimated_cost_in_token = estimated_cost,
-            "Insufficient balance for the transfer and estimated network fee"
+            "Insufficient balance for the operation and estimated network fee"
         );
         return Err(TransactionError::InsufficientFunds {
             token_address: fee_token.to_string(),
@@ -219,11 +230,11 @@ async fn check_fee_balance(
     Ok(())
 }
 
-async fn prepare_default_transfer(
+async fn prepare_default_operation(
     rpc_client: &RpcClient,
     operation: UserOperation,
-    transfer_token: Address,
-    transfer_amount: U256,
+    spend_token: Address,
+    spend_amount: U256,
 ) -> Result<PreparedTransaction, TransactionError> {
     let response = rpc_client
         .pm_sponsor_user_operation(Network::WorldChain, &operation, *ENTRYPOINT_4337)
@@ -232,10 +243,10 @@ async fn prepare_default_transfer(
             crate::error!(
                 sender = operation.sender,
                 error_message = error,
-                "Failed to prepare ERC-20 transfer"
+                "Failed to prepare operation"
             );
             TransactionError::Generic {
-                error_message: format!("Failed to prepare ERC-20 transfer: {error}"),
+                error_message: format!("Failed to prepare operation: {error}"),
             }
         })?;
 
@@ -279,15 +290,15 @@ async fn prepare_default_transfer(
                 rpc_client,
                 operation.sender,
                 token,
-                transfer_token,
-                transfer_amount,
+                spend_token,
+                spend_amount,
                 estimated_cost,
             )
             .await?;
             crate::info!(
                 sender = operation.sender,
                 decline_reason = reason,
-                "Prepared self-sponsored ERC-20 transfer"
+                "Prepared self-sponsored operation"
             );
             Some(PreparedTransactionFee {
                 token_address: token.to_string(),
@@ -313,6 +324,66 @@ async fn prepare_default_transfer(
         fee_details,
         custom_bundler_url: None,
     })
+}
+
+async fn screen_addresses(
+    rpc_client: &RpcClient,
+    addresses: &[Address],
+) -> Result<(), TransactionError> {
+    rpc_client
+        .screen_addresses(Network::WorldChain, addresses)
+        .await
+        .map_err(|error| {
+            if let RpcCallError::Response(response) = &error {
+                let reason = response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("reason"))
+                    .and_then(|reason| reason.as_str());
+                match (response.code, reason) {
+                    (-32602, Some("address_restricted")) => {
+                        return TransactionError::AddressRestricted;
+                    }
+                    (-32603, Some("screening_unavailable")) => {
+                        return TransactionError::ScreeningUnavailable;
+                    }
+                    _ => {}
+                }
+            }
+            TransactionError::Generic {
+                error_message: format!(
+                    "Address screening failed: {}",
+                    RpcError::from(error)
+                ),
+            }
+        })
+}
+
+async fn prepare_operation(
+    rpc_client: &RpcClient,
+    user_operation: UserOperation,
+    spend_token: Address,
+    spend_amount: U256,
+    custom_bundler_url: Option<String>,
+) -> Result<PreparedTransaction, TransactionError> {
+    if let Some(url) = custom_bundler_url {
+        let user_operation =
+            custom_bundler::prepare_bundler_sponsored_operation(&url, user_operation)
+                .await
+                .map_err(|error| TransactionError::Generic {
+                    error_message: format!(
+                        "Custom bundler preparation failed: {error}"
+                    ),
+                })?;
+        Ok(PreparedTransaction {
+            user_operation,
+            fee_details: None,
+            custom_bundler_url: Some(url.into()),
+        })
+    } else {
+        prepare_default_operation(rpc_client, user_operation, spend_token, spend_amount)
+            .await
+    }
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
@@ -353,7 +424,7 @@ impl SafeSmartAccount {
                 outcome = "error",
                 stage = stage,
                 error_message = error,
-                "Failed to prepare ERC-20 transfer"
+                "Failed to prepare operation"
             );
         };
 
@@ -389,65 +460,14 @@ impl SafeSmartAccount {
             }
         })?;
         let addresses = [user_operation.sender, to_address];
-        let screening = async {
-            rpc_client
-                .screen_addresses(Network::WorldChain, &addresses)
-                .await
-                .map_err(|error| {
-                    if let RpcCallError::Response(response) = &error {
-                        let reason = response
-                            .data
-                            .as_ref()
-                            .and_then(|data| data.get("reason"))
-                            .and_then(|reason| reason.as_str());
-                        match (response.code, reason) {
-                            (-32602, Some("address_restricted")) => {
-                                return TransactionError::AddressRestricted;
-                            }
-                            (-32603, Some("screening_unavailable")) => {
-                                return TransactionError::ScreeningUnavailable;
-                            }
-                            _ => {}
-                        }
-                    }
-                    TransactionError::Generic {
-                        error_message: format!(
-                            "Address screening failed: {}",
-                            RpcError::from(error)
-                        ),
-                    }
-                })
-        };
-        let preparation = async {
-            if let Some(url) = custom_bundler_url {
-                let user_operation =
-                    custom_bundler::prepare_bundler_sponsored_operation(
-                        &url,
-                        user_operation,
-                    )
-                    .await
-                    .map_err(|error| {
-                        TransactionError::Generic {
-                            error_message: format!(
-                                "Custom bundler preparation failed: {error}"
-                            ),
-                        }
-                    })?;
-                Ok(PreparedTransaction {
-                    user_operation,
-                    fee_details: None,
-                    custom_bundler_url: Some(url.into()),
-                })
-            } else {
-                prepare_default_transfer(
-                    rpc_client,
-                    user_operation,
-                    token_address,
-                    amount,
-                )
-                .await
-            }
-        };
+        let screening = screen_addresses(rpc_client, &addresses);
+        let preparation = prepare_operation(
+            rpc_client,
+            user_operation,
+            token_address,
+            amount,
+            custom_bundler_url,
+        );
         let ((), prepared_transaction) = tokio::try_join!(screening, preparation)?;
 
         crate::debug!(
@@ -459,6 +479,63 @@ impl SafeSmartAccount {
         );
 
         Ok(prepared_transaction)
+    }
+
+    /// Prepares an unsigned ERC-4626 deposit on World Chain.
+    ///
+    /// Returns the deposited asset amount for confirmation, capped by the wallet's balance.
+    /// User-paid gas requires a remaining fee-token balance and the paymaster allowance
+    /// maintained by wallet migration. The amount is not reduced to pay the network fee.
+    /// `custom_bundler_url` selects a bundler that covers gas and handles submission.
+    ///
+    /// # Errors
+    /// Returns an error if construction, wallet screening, sponsorship, or estimation fails.
+    pub async fn prepare_transaction_erc4626_deposit(
+        &self,
+        vault_address: &str,
+        asset_amount: &str,
+        custom_bundler_url: Option<String>,
+    ) -> Result<PreparedVaultTransaction, TransactionError> {
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
+        let rpc_client =
+            get_rpc_client().map_err(|error| TransactionError::Generic {
+                error_message: format!("Failed to get RPC client: {error}"),
+            })?;
+        let addresses = [self.wallet_address];
+        let screening = screen_addresses(rpc_client, &addresses);
+        let preparation = async {
+            let (transaction, asset_address, actual_amount) =
+                contracts::erc4626::Erc4626Vault::deposit_with_amount(
+                    rpc_client,
+                    Network::WorldChain,
+                    vault_address,
+                    asset_amount,
+                    self.wallet_address,
+                    [0u8; 10],
+                )
+                .await
+                .map_err(|error| TransactionError::Generic {
+                    error_message: format!("Failed to create ERC4626 deposit: {error}"),
+                })?;
+            let operation = transaction
+                .build_preflight_user_operation(self.wallet_address, None)?;
+            let transaction = prepare_operation(
+                rpc_client,
+                operation,
+                asset_address,
+                actual_amount,
+                custom_bundler_url,
+            )
+            .await?;
+            Ok(PreparedVaultTransaction {
+                transaction: Arc::new(transaction),
+                asset_address: asset_address.to_string(),
+                asset_amount: actual_amount.to_string(),
+            })
+        };
+        let ((), prepared) = tokio::try_join!(screening, preparation)?;
+        Ok(prepared)
     }
 
     /// Signs and submits a previously prepared transaction on World Chain.
