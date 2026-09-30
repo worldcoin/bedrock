@@ -3,8 +3,6 @@
 //! Functions in this module communicate directly with a **client-provided** bundler
 //! RPC URL (e.g. Pimlico, Alchemy, or a self-hosted bundler) using a Rust-native
 //! HTTP client (`reqwest`).
-//!
-//! Transfer preparation coordinates address screening before signing.
 
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, FixedBytes, U128};
