@@ -53,6 +53,9 @@ impl AuthenticatedHttpClient for TestHttpClient {
 struct EarnHttpClient {
     asset: Address,
     balance: u64,
+    shares: u64,
+    required_shares: u64,
+    redeemed_assets: u64,
     paid: bool,
     screening: Value,
     requests: Mutex<Vec<Value>>,
@@ -65,6 +68,9 @@ impl EarnHttpClient {
         Self {
             asset: WLD_ADDRESS,
             balance,
+            shares: 50,
+            required_shares: 20,
+            redeemed_assets: 4,
             paid,
             screening: json!({"result": true}),
             requests: Mutex::new(Vec::new()),
@@ -106,7 +112,21 @@ impl AuthenticatedHttpClient for EarnHttpClient {
                     IErc20::balanceOfCall::SELECTOR => {
                         let call = IErc20::balanceOfCall::abi_decode(&data).unwrap();
                         assert_eq!(call.account, account().wallet_address);
-                        json!({"result": Bytes::from(U256::from(self.balance).abi_encode())})
+                        let balance = if request["params"][0]["to"] == json!(VAULT) {
+                            self.shares
+                        } else {
+                            self.balance
+                        };
+                        json!({"result": Bytes::from(U256::from(balance).abi_encode())})
+                    }
+                    IERC4626::previewWithdrawCall::SELECTOR => {
+                        json!({"result": Bytes::from(U256::from(self.required_shares).abi_encode())})
+                    }
+                    IERC4626::previewRedeemCall::SELECTOR => {
+                        let call =
+                            IERC4626::previewRedeemCall::abi_decode(&data).unwrap();
+                        assert_eq!(call.shares, U256::from(self.shares));
+                        json!({"result": Bytes::from(U256::from(self.redeemed_assets).abi_encode())})
                     }
                     IErc20::allowanceCall::SELECTOR => {
                         json!({"result": Bytes::from(U256::MAX.abi_encode())})
@@ -371,6 +391,214 @@ async fn deposit_rejects_restricted_and_unavailable_screening_on_both_routes() {
                 .prepare_transaction_erc4626_deposit(
                     &VAULT.to_string(),
                     "7",
+                    custom.clone(),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                (reason, error),
+                ("address_restricted", TransactionError::AddressRestricted)
+                    | (
+                        "screening_unavailable",
+                        TransactionError::ScreeningUnavailable
+                    )
+            ));
+        }
+    }
+}
+
+fn assert_withdrawal(operation: &Value, shares: Option<u64>) {
+    let wallet = account().wallet_address;
+    let (data, action) = if let Some(shares) = shares {
+        (
+            IERC4626::redeemCall {
+                shares: U256::from(shares),
+                receiver: wallet,
+                owner: wallet,
+            }
+            .abi_encode(),
+            TransactionTypeId::ERC4626Redeem,
+        )
+    } else {
+        (
+            IERC4626::withdrawCall {
+                assets: U256::from(20),
+                receiver: wallet,
+                owner: wallet,
+            }
+            .abi_encode(),
+            TransactionTypeId::ERC4626Withdraw,
+        )
+    };
+    let expected = ISafe4337Module::executeUserOpCall {
+        to: VAULT,
+        value: U256::ZERO,
+        data: data.into(),
+        operation: 0,
+    }
+    .abi_encode();
+    assert_eq!(operation["callData"], json!(Bytes::from(expected)));
+    let nonce: U256 = serde_json::from_value(operation["nonce"].clone()).unwrap();
+    assert_eq!(nonce.to_be_bytes::<32>()[5], action.as_u8());
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn withdrawal_preserves_withdraw_or_redeem_and_exposes_preview_before_signing() {
+    for (shares, expected, paid) in [(50, "20", false), (4, "4", true)] {
+        let mut client = EarnHttpClient::new(10, paid);
+        client.shares = shares;
+        let http = install(client);
+        let prepared = account()
+            .prepare_transaction_erc4626_withdraw(&VAULT.to_string(), "20", None)
+            .await
+            .unwrap();
+        assert_eq!(prepared.asset_amount, expected);
+        assert_eq!(prepared.asset_address, WLD_ADDRESS.to_string());
+        assert_eq!(
+            prepared
+                .transaction
+                .fee_details()
+                .map(|fee| fee.estimated_cost_in_token),
+            paid.then(|| "10".to_string())
+        );
+        let original = http
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r["method"] == "pm_sponsorUserOperation")
+            .unwrap()["params"][0]
+            .clone();
+        assert_withdrawal(&original, (shares == 4).then_some(4));
+        assert!(!http
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "eth_sendUserOperation"));
+        account()
+            .submit_prepared_transaction(&prepared.transaction)
+            .await
+            .unwrap();
+        let requests = http.requests.lock().unwrap();
+        let signed = &requests
+            .iter()
+            .find(|r| r["method"] == "eth_sendUserOperation")
+            .unwrap()["params"][0];
+        for field in ["sender", "callData", "nonce"] {
+            assert_eq!(signed[field], original[field]);
+        }
+        assert_ne!(signed["signature"], original["signature"]);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r["method"] == "wa_screenAddresses")
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn withdrawal_cannot_pay_validation_fees_with_future_proceeds() {
+    install(EarnHttpClient::new(0, true));
+    let error = account()
+        .prepare_transaction_erc4626_withdraw(&VAULT.to_string(), "20", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, TransactionError::InsufficientFunds { .. }));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn withdrawal_rejects_zero_preview_and_empty_positions_before_sponsorship() {
+    for shares in [0, 4] {
+        let mut client = EarnHttpClient::new(10, false);
+        client.shares = shares;
+        client.redeemed_assets = 0;
+        let http = install(client);
+        assert!(account()
+            .prepare_transaction_erc4626_withdraw(&VAULT.to_string(), "20", None)
+            .await
+            .is_err());
+        assert!(!http
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "pm_sponsorUserOperation"));
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn withdrawal_custom_route_estimates_and_submits_at_the_same_url() {
+    let http = install(EarnHttpClient::new(0, false));
+    let server = MockServer::start().await;
+    Mock::given(body_partial_json(
+        json!({"method":"eth_estimateUserOperationGas"}),
+    ))
+    .respond_with(ResponseTemplate::new(200).set_body_json(
+        json!({"result":{"callGasLimit":"0xc350","verificationGasLimit":"0xea60"}}),
+    ))
+    .expect(1)
+    .mount(&server)
+    .await;
+    Mock::given(body_partial_json(json!({"method":"eth_sendUserOperation"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"result":format!("0x{}", "11".repeat(32))})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let prepared = account()
+        .prepare_transaction_erc4626_withdraw(
+            &VAULT.to_string(),
+            "20",
+            Some(server.uri()),
+        )
+        .await
+        .unwrap();
+    assert!(prepared.transaction.fee_details().is_none());
+    account()
+        .submit_prepared_transaction(&prepared.transaction)
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let estimated: Value = requests[0].body_json().unwrap();
+    let signed: Value = requests[1].body_json().unwrap();
+    assert_withdrawal(&estimated["params"][0], None);
+    assert_eq!(
+        estimated["params"][0]["callData"],
+        signed["params"][0]["callData"]
+    );
+    assert!(!http
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r["method"] == "pm_sponsorUserOperation"
+            || r["method"] == "eth_sendUserOperation"));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn withdrawal_cannot_prepare_without_screening_on_either_route() {
+    for custom in [None, Some("http://127.0.0.1:1".to_string())] {
+        for (code, reason) in [
+            (-32602, "address_restricted"),
+            (-32603, "screening_unavailable"),
+        ] {
+            let mut client = EarnHttpClient::new(10, false);
+            client.screening = json!({"error":{"code":code,"message":"Screening failed","data":{"reason":reason}}});
+            install(client);
+            let error = account()
+                .prepare_transaction_erc4626_withdraw(
+                    &VAULT.to_string(),
+                    "20",
                     custom.clone(),
                 )
                 .await
