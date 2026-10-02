@@ -11,6 +11,7 @@
     "cose",
     "dotenv",
     "foundryup",
+    "fsync",
     "keccak",
     "ktlint",
     "pcrs",
