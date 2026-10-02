@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4](https://github.com/worldcoin/bedrock/compare/0.7.3...0.7.4) - 2026-10-02
+
+### Added
+
+- *(transactions)* screen transfer participants before signing ([#463](https://github.com/worldcoin/bedrock/pull/463))
+
+### Other
+
+- *(deps)* bump strum from 0.27.2 to 0.28.0 ([#467](https://github.com/worldcoin/bedrock/pull/467))
+
 ## [0.7.3](https://github.com/worldcoin/bedrock/compare/0.7.2...0.7.3) - 2026-09-29
 
 ### Added
