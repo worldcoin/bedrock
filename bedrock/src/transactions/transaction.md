@@ -7,9 +7,10 @@ open-source, on-device SDK that powers the wallet — turns a user intent
 chain.
 
 The lifecycle is shared across transaction types. The prepared-transaction APIs
-`prepare_transaction_transfer` and `submit_prepared_transaction` implement it
-for ERC-20 transfers on World Chain. The V3 routing and fee checks below describe
-that implementation; the diagrams use transfers as a concrete example.
+`prepare_transaction_transfer`, `prepare_transaction_erc4626_deposit`, and
+`submit_prepared_transaction` implement it for ERC-20 transfers and ERC-4626
+deposits on World Chain. Both use V3 sponsorship and submission. The diagrams
+use transfers as a concrete example.
 
 It is a living document. The wallet's sponsorship policy evolves over time;
 when it changes, this file changes with it. The on-device steps Bedrock performs
