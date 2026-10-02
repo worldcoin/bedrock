@@ -380,3 +380,27 @@ fn test_pm_sponsor_response_parsing() {
     assert_eq!(r.paymaster_post_op_gas_limit, Some(U128::from(0x706e_u32)));
     assert!(r.paymaster_data.is_some());
 }
+
+#[tokio::test]
+async fn address_screening_http_failure_is_not_clearance() {
+    struct UnavailableClient;
+    #[async_trait::async_trait]
+    impl AuthenticatedHttpClient for UnavailableClient {
+        async fn fetch_from_app_backend(
+            &self,
+            _url: String,
+            _method: HttpMethod,
+            _headers: Vec<HttpHeader>,
+            _body: Option<Vec<u8>>,
+        ) -> Result<Vec<u8>, HttpError> {
+            Err(HttpError::Timeout)
+        }
+    }
+    let client = RpcClient::new(Arc::new(UnavailableClient));
+    assert!(matches!(
+        client
+            .screen_addresses(Network::WorldChain, &[Address::ZERO])
+            .await,
+        Err(RpcCallError::Rpc(RpcError::HttpError(_)))
+    ));
+}

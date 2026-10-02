@@ -19,7 +19,7 @@ use crate::{
             world_gift_manager::WorldGiftManager,
             worldchain::TFH_PAYMASTER_ADDRESS,
         },
-        rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
+        rpc::{get_rpc_client, RpcCallError, WaGetUserOperationReceiptResponse},
     },
 };
 
@@ -47,6 +47,14 @@ pub enum TransactionError {
         /// Token whose balance is insufficient.
         token_address: String,
     },
+
+    /// A transfer participant is restricted; do not retry through another route.
+    #[error("Address is restricted")]
+    AddressRestricted,
+
+    /// Address screening is unavailable; preparation may be retried.
+    #[error("Address screening unavailable")]
+    ScreeningUnavailable,
 }
 
 impl From<crate::primitives::PrimitiveError> for TransactionError {
@@ -211,7 +219,7 @@ async fn check_fee_balance(
     Ok(())
 }
 
-async fn prepare_transfer(
+async fn prepare_default_transfer(
     rpc_client: &RpcClient,
     operation: UserOperation,
     transfer_token: Address,
@@ -328,7 +336,7 @@ impl SafeSmartAccount {
     /// - Will throw a parsing error if any of the provided attributes are invalid.
     /// - Will throw an RPC error if sponsorship preparation or custom estimation fails.
     /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
-    /// - The backend route requires an initialized global HTTP client.
+    /// - Will throw `AddressRestricted` or `ScreeningUnavailable` for screening rejections or outages.
     pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,
@@ -372,24 +380,6 @@ impl SafeSmartAccount {
             .inspect_err(|e| {
                 log_failure("build_user_operation", e);
             })?;
-        if let Some(url) = custom_bundler_url {
-            let user_operation = custom_bundler::prepare_bundler_sponsored_operation(
-                &url,
-                user_operation,
-            )
-            .await
-            .map_err(|e| {
-                log_failure("estimate_custom_bundler", &e);
-                TransactionError::Generic {
-                    error_message: format!("Custom bundler preparation failed: {e}"),
-                }
-            })?;
-            return Ok(PreparedTransaction {
-                user_operation,
-                fee_details: None,
-                custom_bundler_url: Some(url.into()),
-            });
-        }
         let rpc_client = get_rpc_client().map_err(|e| {
             log_failure("get_rpc_client", &e);
             TransactionError::Generic {
@@ -398,8 +388,67 @@ impl SafeSmartAccount {
                 ),
             }
         })?;
-        let prepared_transaction: PreparedTransaction =
-            prepare_transfer(rpc_client, user_operation, token_address, amount).await?;
+        let addresses = [user_operation.sender, to_address];
+        let screening = async {
+            rpc_client
+                .screen_addresses(Network::WorldChain, &addresses)
+                .await
+                .map_err(|error| {
+                    if let RpcCallError::Response(response) = &error {
+                        let reason = response
+                            .data
+                            .as_ref()
+                            .and_then(|data| data.get("reason"))
+                            .and_then(|reason| reason.as_str());
+                        match (response.code, reason) {
+                            (-32602, Some("address_restricted")) => {
+                                return TransactionError::AddressRestricted;
+                            }
+                            (-32603, Some("screening_unavailable")) => {
+                                return TransactionError::ScreeningUnavailable;
+                            }
+                            _ => {}
+                        }
+                    }
+                    TransactionError::Generic {
+                        error_message: format!(
+                            "Address screening failed: {}",
+                            RpcError::from(error)
+                        ),
+                    }
+                })
+        };
+        let preparation = async {
+            if let Some(url) = custom_bundler_url {
+                let user_operation =
+                    custom_bundler::prepare_bundler_sponsored_operation(
+                        &url,
+                        user_operation,
+                    )
+                    .await
+                    .map_err(|error| {
+                        TransactionError::Generic {
+                            error_message: format!(
+                                "Custom bundler preparation failed: {error}"
+                            ),
+                        }
+                    })?;
+                Ok(PreparedTransaction {
+                    user_operation,
+                    fee_details: None,
+                    custom_bundler_url: Some(url.into()),
+                })
+            } else {
+                prepare_default_transfer(
+                    rpc_client,
+                    user_operation,
+                    token_address,
+                    amount,
+                )
+                .await
+            }
+        };
+        let ((), prepared_transaction) = tokio::try_join!(screening, preparation)?;
 
         crate::debug!(
             transaction_type = "erc20_transfer",

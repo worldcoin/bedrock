@@ -152,10 +152,35 @@ impl RpcClient {
         Self { http_client }
     }
 
+    /// Requires every supplied address to clear screening before signing.
+    pub(crate) async fn screen_addresses(
+        &self,
+        network: Network,
+        addresses: &[Address],
+    ) -> Result<(), RpcCallError> {
+        let clear: bool = self
+            .rpc_call(
+                network,
+                RpcMethod::ScreenAddresses,
+                [addresses],
+                RpcProviderName::Any,
+            )
+            .await?;
+        if !clear {
+            return Err(RpcError::InvalidResponse {
+                error_message: "Address screening did not return clearance".to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     /// Constructs the RPC endpoint URL for the specified network and method
     fn rpc_endpoint(network: Network, method: &RpcMethod) -> String {
         let version = match method {
-            RpcMethod::PmSponsorUserOperation | RpcMethod::SendUserOperationV3 => "v3",
+            RpcMethod::PmSponsorUserOperation
+            | RpcMethod::SendUserOperationV3
+            | RpcMethod::ScreenAddresses => "v3",
             RpcMethod::EthCall
             | RpcMethod::EthGetStorageAt
             | RpcMethod::SendUserOperationV2 => "v2",

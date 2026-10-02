@@ -21,6 +21,9 @@ pub enum RpcMethod {
     /// Request sponsorship for a `UserOperation` (V3)
     #[serde(rename = "pm_sponsorUserOperation")]
     PmSponsorUserOperation,
+    /// Screen addresses (V3)
+    #[serde(rename = "wa_screenAddresses")]
+    ScreenAddresses,
     /// Queries the status of a `UserOperation`
     #[serde(rename = "wa_getUserOperationReceipt")]
     WaGetUserOperationReceipt,

@@ -3,9 +3,6 @@
 //! Functions in this module communicate directly with a **client-provided** bundler
 //! RPC URL (e.g. Pimlico, Alchemy, or a self-hosted bundler) using a Rust-native
 //! HTTP client (`reqwest`).
-//!
-//! This is intentionally separate from [`super::rpc::RpcClient`], which routes
-//! requests through the World App backend.
 
 use alloy::hex::FromHex;
 use alloy::primitives::{Address, FixedBytes, U128};
@@ -189,7 +186,7 @@ struct GasEstimate {
     verification_gas_limit: U128,
 }
 
-/// Estimates execution gas at the selected bundler without authorizing an operation.
+/// Estimates execution gas for an unsigned bundler-sponsored operation.
 pub(crate) async fn prepare_bundler_sponsored_operation(
     rpc_url: &str,
     operation: UserOperation,
