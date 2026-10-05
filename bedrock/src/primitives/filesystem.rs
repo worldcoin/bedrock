@@ -145,10 +145,10 @@ fn reject_staging_directory(
     Ok(())
 }
 
-/// Flushes `directory` so the rename that linked a file into it becomes durable.
+/// Best-effort flush of the destination directory after a rename.
 ///
-/// Warns rather than fails, because the rename already happened. Not `File::sync_all`: on
-/// Apple targets that issues `F_FULLFSYNC`, which a directory descriptor does not accept.
+/// Uses plain `fsync` to avoid another `F_FULLFSYNC` on Apple after flushing the staged file;
+/// this does not guarantee persistence through power loss or sync newly created ancestors.
 fn sync_directory(directory: &Path) {
     let flushed = File::open(directory)
         .and_then(|handle| rustix::fs::fsync(&handle).map_err(io::Error::from));
@@ -180,13 +180,6 @@ fn write_atomically(
     staged
         .write_all(contents)
         .map_err(|error| io_failure("write staged file", &error))?;
-
-    if let Ok(existing) = fs::metadata(destination) {
-        staged
-            .as_file()
-            .set_permissions(existing.permissions())
-            .map_err(|error| io_failure("carry over file permissions", &error))?;
-    }
 
     staged
         .as_file()
@@ -323,6 +316,7 @@ impl ScopedFileSystem {
     /// Writes a file, creating any missing parent directories.
     ///
     /// The write is atomic: readers observe either the previous contents or the new ones.
+    /// On Unix, files are created or replaced with owner-only permissions.
     ///
     /// # Errors
     /// - [`FileSystemError::IoFailure`] if the file cannot be written
@@ -537,24 +531,29 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn test_overwriting_keeps_the_destination_permissions() {
+    fn test_writes_use_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
         let fs_handle = scoped("fs_perms");
         fs_handle.write_file("secret.bin", b"first").unwrap();
 
         let path = fs_handle.resolve_file("secret.bin").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
-
-        // The rename swaps in a new inode, so without carrying the mode across the file
-        // would come back with the staging default.
-        fs_handle.write_file("secret.bin", b"second").unwrap();
-
-        assert_eq!(fs_handle.read_file("secret.bin").unwrap(), b"second");
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o640
+            0o600
         );
+
+        for mode in [0o640, 0o644, 0o755, 0o600] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            fs_handle.write_file("secret.bin", b"second").unwrap();
+
+            assert_eq!(fs_handle.read_file("secret.bin").unwrap(), b"second");
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "overwriting mode {mode:o} must normalize it to owner-only access"
+            );
+        }
     }
 
     #[test]
