@@ -433,7 +433,7 @@ impl Erc4626Vault {
 
         // 1. Query underlying asset addresses from both vaults
         let from_asset_call_data = IERC4626::assetCall {}.abi_encode();
-        let from_asset_address = Self::fetch_asset_address(
+        let from_asset_address = Self::fetch_migration_source_asset(
             rpc_client,
             network,
             from_vault_address,
@@ -535,6 +535,31 @@ impl Erc4626Vault {
             existing_allowance,
             metadata,
         }))
+    }
+
+    /// Fetches the source vault's underlying asset for a migration.
+    ///
+    /// A revert or empty return means the contract has no `asset()`: it is neither an ERC-4626
+    /// vault nor one of the known legacy vaults, which gets a dedicated error. Transport errors
+    /// pass through unchanged.
+    async fn fetch_migration_source_asset(
+        rpc_client: &RpcClient,
+        network: Network,
+        from_vault_address: Address,
+        call_data: Vec<u8>,
+    ) -> Result<Address, RpcError> {
+        Self::fetch_asset_address(rpc_client, network, from_vault_address, call_data)
+            .await
+            .map_err(|e| match e {
+                RpcError::RpcResponseError { .. } | RpcError::InvalidResponse { .. } => {
+                    RpcError::InvalidResponse {
+                        error_message: format!(
+                            "Unsupported migration source {from_vault_address}: not an ERC-4626 vault or a known legacy vault ({e})"
+                        ),
+                    }
+                }
+                other => other,
+            })
     }
 
     /// Resolves the full redeemable share amount: `min(balanceOf, maxRedeem)`.
@@ -1600,6 +1625,38 @@ mod tests {
         assert!(error.to_string().contains(
             "Asset address mismatch between source and destination ERC-4626 vaults"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_unsupported_source_error() {
+        // No mocks: the source has no code, so `asset()` returns empty data.
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let rpc_client = RpcClient::new(Arc::new(
+            crate::test_utils::AnvilBackedHttpClient::new(provider),
+        ));
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let user_address =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+
+        let error = Erc4626Vault::migrate(
+            &rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            [0u8; 10],
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("Unsupported migration source"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]
