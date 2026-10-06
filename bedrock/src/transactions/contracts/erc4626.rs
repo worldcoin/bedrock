@@ -607,9 +607,9 @@ impl Erc4626Vault {
 
     /// Builds the `MultiSend` migrate transaction.
     ///
-    /// When `existing_allowance` is nonzero and below `deposit_assets`, inserts
+    /// When `existing_allowance` is nonzero and differs from `deposit_assets`, inserts
     /// `approve(0)` before `approve(deposit_assets)` for tokens that require a zero-first reset.
-    /// If allowance already covers `deposit_assets`, the approve step is skipped.
+    /// If allowance already equals `deposit_assets`, the approve step is skipped.
     fn build_migrate_transaction(params: MigrateBundleParams) -> Self {
         let MigrateBundleParams {
             from_vault_address,

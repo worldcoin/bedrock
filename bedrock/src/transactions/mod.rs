@@ -1116,15 +1116,18 @@ impl SafeSmartAccount {
 
     /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
     ///
-    /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits them
-    /// into a new ERC4626-compliant vault. The migration process is atomic and executed as a
-    /// single transaction bundle.
+    /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
+    /// equivalent amount into a new ERC4626-compliant vault. The migration process is
+    /// atomic and executed as a single transaction bundle.
+    ///
+    /// Note: After migration, the user may have some dust WLD tokens left due to
+    /// rounding differences in the conversion process.
     ///
     /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
     /// legacy `WLDVault` as a source.
     ///
     /// # Arguments
-    /// - `legacy_vault_address`: The address of the `WLDVault` contract to migrate from.
+    /// - `wld_vault_address`: The address of the `WLDVault` contract to migrate from.
     /// - `erc4626_vault_address`: The address of the new ERC4626 vault contract to migrate to.
     ///
     /// # Errors
@@ -1148,15 +1151,21 @@ impl SafeSmartAccount {
 
     /// Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
     ///
-    /// This method redeems the user's sDAI for USDC through the USD Vault (authorized with a
-    /// Permit2 signature) and deposits the USDC into the new ERC4626 vault, atomically using a
-    /// `MultiSend` transaction bundle.
+    /// This method performs a complex migration process that includes:
+    /// 1. Fetching the user's sDAI balance from the USD Vault
+    /// 2. Creating a Permit2 signature for secure token transfer
+    /// 3. Executing a multi-step transaction bundle:
+    ///    - Redeeming sDAI for USDC from the USD Vault
+    ///    - Approving the new vault to spend USDC
+    ///    - Depositing USDC into the new ERC4626 vault
+    ///
+    /// The entire process is executed atomically using a `MultiSend` transaction bundle.
     ///
     /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
     /// legacy `USDVault` as a source.
     ///
     /// # Arguments
-    /// - `legacy_vault_address`: The address of the USD Vault contract to migrate from.
+    /// - `usd_vault_address`: The address of the USD Vault contract to migrate from.
     /// - `erc4626_vault_address`: The address of the ERC4626 vault contract to migrate to.
     ///
     /// # Errors
