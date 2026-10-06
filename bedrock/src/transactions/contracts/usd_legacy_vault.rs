@@ -12,7 +12,7 @@
 //! The conversion rate is fetched from the `IDSROracle` contract.
 
 use alloy::{
-    primitives::{Address, Bytes, U256},
+    primitives::{address, Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -34,6 +34,15 @@ use crate::{
     transactions::contracts::erc4626::Erc4626Vault,
 };
 use crate::{smart_account::PERMIT2_ADDRESS, transactions::contracts::erc20::Erc20};
+
+/// The legacy `USDVault` deployments on World Chain.
+///
+/// Both expose the same `USDC()` / `SDAI()` / `redeemSDAI` interface, and users may hold sDAI
+/// redeemable through either one.
+pub const USD_LEGACY_VAULT_ADDRESSES: [Address; 2] = [
+    address!("0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB"),
+    address!("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC"),
+];
 
 /// Permit2 data for secure token transfers.
 #[derive(Debug, Clone)]

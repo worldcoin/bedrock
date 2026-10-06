@@ -15,7 +15,8 @@ use crate::{
     transactions::{
         contracts::{
             erc20::{Erc20, MetadataArg, TransferAssociation},
-            usd_legacy_vault::Permit2Data,
+            usd_legacy_vault::{Permit2Data, USD_LEGACY_VAULT_ADDRESSES},
+            wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS,
             world_gift_manager::WorldGiftManager,
             worldchain::TFH_PAYMASTER_ADDRESS,
         },
@@ -316,6 +317,201 @@ async fn prepare_default_transfer(
 }
 
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
+/// The kind of vault a migration starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MigrationSource {
+    /// The legacy `WLDVault`.
+    WldLegacy,
+    /// One of the legacy `USDVault` deployments.
+    UsdLegacy,
+    /// Any other address is assumed to be an ERC4626 vault.
+    Erc4626,
+}
+
+impl MigrationSource {
+    fn classify(from_vault_address: Address) -> Self {
+        if from_vault_address == WLD_LEGACY_VAULT_ADDRESS {
+            Self::WldLegacy
+        } else if USD_LEGACY_VAULT_ADDRESSES.contains(&from_vault_address) {
+            Self::UsdLegacy
+        } else {
+            Self::Erc4626
+        }
+    }
+}
+
+/// Per-source builders behind [`SafeSmartAccount::transaction_erc4626_migrate`].
+///
+/// Kept out of the `#[bedrock_export]` block: these are not part of the foreign interface.
+impl SafeSmartAccount {
+    /// Legacy `WLDVault` -> ERC4626 (`withdrawAll` + `approve` + `deposit`).
+    async fn migrate_from_wld_legacy_vault(
+        &self,
+        legacy_vault_address: Address,
+        erc4626_vault_address: Address,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                self.wallet_address,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create WLDVault migration: {e}"),
+            })?;
+
+        let user_op_hash = transaction
+            .sign_and_execute(
+                self,
+                Network::WorldChain,
+                None,
+                None,
+                RpcProviderName::Any,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute WLDVault migration: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Legacy `USDVault` -> ERC4626 (Permit2-signed `redeemSDAI` + `approve` + `deposit`).
+    async fn migrate_from_usd_legacy_vault(
+        &self,
+        legacy_vault_address: Address,
+        erc4626_vault_address: Address,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+
+        let (sdai_address, sdai_amount) =
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                self.wallet_address,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to fetch sDAI balance: {e}"),
+            })?;
+
+        if sdai_amount.is_zero() {
+            return Err(TransactionError::Generic {
+                error_message: "Cannot migrate with zero sDAI balance".to_string(),
+            });
+        }
+
+        let permitted = UnparsedTokenPermissions {
+            token: sdai_address.to_string(),
+            amount: sdai_amount.to_string(),
+        };
+
+        let nonce = {
+            let mut rng = rand::thread_rng();
+            U256::from_be_bytes(rng.gen::<[u8; 32]>())
+        };
+
+        let deadline = now_with_ntp().timestamp() + 180; // 3 minutes from now
+
+        let transfer = UnparsedPermitTransferFrom {
+            permitted,
+            spender: legacy_vault_address.to_string(),
+            nonce: nonce.to_string(),
+            deadline: deadline.to_string(),
+        };
+
+        let signature = self
+            .sign_permit2_transfer(Network::WorldChain as u32, transfer)
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to sign permit2 transfer: {e}"),
+            })?;
+
+        let permit2_data = Permit2Data {
+            signature,
+            nonce,
+            deadline: U256::from(deadline),
+        };
+
+        let transaction =
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                sdai_amount,
+                self.wallet_address,
+                permit2_data,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create USDVault migration: {e}"),
+            })?;
+
+        let user_op_hash = transaction
+            .sign_and_execute(
+                self,
+                Network::WorldChain,
+                None,
+                None,
+                RpcProviderName::Any,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute USDVault migration: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// ERC4626 -> ERC4626 (`redeem` + `approve` + `deposit`).
+    async fn migrate_from_erc4626_vault(
+        &self,
+        from_vault_address: Address,
+        to_vault_address: Address,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::erc4626::Erc4626Vault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                from_vault_address,
+                to_vault_address,
+                self.wallet_address,
+                [0u8; 10], // metadata
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create ERC4626 migrate: {e}"),
+            })?;
+
+        let user_op_hash = transaction
+            .sign_and_execute(
+                self,
+                Network::WorldChain,
+                None,
+                None,
+                RpcProviderName::Any,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute ERC4626 migrate: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+}
+
 #[bedrock_export]
 impl SafeSmartAccount {
     /// Prepares an unsigned ERC-20 transfer on World Chain.
@@ -855,9 +1051,16 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
-    /// Migrates the full redeemable share balance from one ERC4626 vault to another on World Chain.
+    /// Migrates a savings position into an ERC4626 vault on World Chain.
     ///
-    /// This builds one atomic bundle with:
+    /// This is the single entry point for vault migrations. The source kind is chosen from
+    /// `from_vault_address`:
+    /// - the legacy `WLDVault` or one of the legacy `USDVault` deployments: the full legacy
+    ///   position is withdrawn (USD goes through a Permit2-signed `redeemSDAI`) and deposited
+    ///   into the destination vault;
+    /// - any other address is treated as a source ERC4626 vault.
+    ///
+    /// For an ERC4626 source this builds one atomic bundle with:
     /// 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
     /// 2. `approve(assets)` on the underlying token for the destination vault
     /// 3. `deposit(assets)` into the destination vault
@@ -872,12 +1075,13 @@ impl SafeSmartAccount {
     /// `maxDeposit` / `maxRedeem` (often 0 by design).
     ///
     /// # Arguments
-    /// - `from_vault_address`: The source ERC4626 vault address.
+    /// - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).
     /// - `to_vault_address`: The destination ERC4626 vault address.
     ///
     /// # Errors
     /// - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
-    /// - Returns [`TransactionError::Generic`] if transaction creation or submission fails.
+    /// - Returns [`TransactionError::Generic`] if the vaults are the same, or if transaction
+    ///   creation or submission fails.
     pub async fn transaction_erc4626_migrate(
         &self,
         from_vault_address: &str,
@@ -887,48 +1091,40 @@ impl SafeSmartAccount {
             Address::parse_from_ffi(from_vault_address, "from_vault_address")?;
         let to_vault_address =
             Address::parse_from_ffi(to_vault_address, "to_vault_address")?;
-        let receiver = self.wallet_address;
 
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-        let transaction =
-            crate::transactions::contracts::erc4626::Erc4626Vault::migrate(
-                rpc_client,
-                Network::WorldChain,
-                from_vault_address,
-                to_vault_address,
-                receiver,
-                [0u8; 10], // metadata
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create ERC4626 migrate: {e}"),
-            })?;
+        if from_vault_address == to_vault_address {
+            return Err(TransactionError::Generic {
+                error_message: "Source and destination vaults must differ".to_string(),
+            });
+        }
 
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, None, provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute ERC4626 migrate: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        match MigrationSource::classify(from_vault_address) {
+            MigrationSource::WldLegacy => {
+                self.migrate_from_wld_legacy_vault(from_vault_address, to_vault_address)
+                    .await
+            }
+            MigrationSource::UsdLegacy => {
+                self.migrate_from_usd_legacy_vault(from_vault_address, to_vault_address)
+                    .await
+            }
+            MigrationSource::Erc4626 => {
+                self.migrate_from_erc4626_vault(from_vault_address, to_vault_address)
+                    .await
+            }
+        }
     }
 
     /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
     ///
-    /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
-    /// equivalent amount into a new ERC4626-compliant vault. The migration process is
-    /// atomic and executed as a single transaction bundle.
+    /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits them
+    /// into a new ERC4626-compliant vault. The migration process is atomic and executed as a
+    /// single transaction bundle.
     ///
-    /// Note: After migration, the user may have some dust WLD tokens left due to
-    /// rounding differences in the conversion process.
+    /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
+    /// legacy `WLDVault` as a source.
     ///
     /// # Arguments
-    /// - `wld_vault_address`: The address of the `WLDVault` contract to migrate from.
+    /// - `legacy_vault_address`: The address of the `WLDVault` contract to migrate from.
     /// - `erc4626_vault_address`: The address of the new ERC4626 vault contract to migrate to.
     ///
     /// # Errors
@@ -946,48 +1142,21 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-        let transaction =
-            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
-                rpc_client,
-                Network::WorldChain,
-                legacy_vault_address,
-                erc4626_vault_address,
-                self.wallet_address,
-            )
+        self.migrate_from_wld_legacy_vault(legacy_vault_address, erc4626_vault_address)
             .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create WLDVault migration: {e}"),
-            })?;
-
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, None, provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute WLDVault migration: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
     /// Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
     ///
-    /// This method performs a complex migration process that includes:
-    /// 1. Fetching the user's sDAI balance from the USD Vault
-    /// 2. Creating a Permit2 signature for secure token transfer
-    /// 3. Executing a multi-step transaction bundle:
-    ///    - Redeeming sDAI for USDC from the USD Vault
-    ///    - Approving the new vault to spend USDC
-    ///    - Depositing USDC into the new ERC4626 vault
+    /// This method redeems the user's sDAI for USDC through the USD Vault (authorized with a
+    /// Permit2 signature) and deposits the USDC into the new ERC4626 vault, atomically using a
+    /// `MultiSend` transaction bundle.
     ///
-    /// The entire process is executed atomically using a `MultiSend` transaction bundle.
+    /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
+    /// legacy `USDVault` as a source.
     ///
     /// # Arguments
-    /// - `usd_vault_address`: The address of the USD Vault contract to migrate from.
+    /// - `legacy_vault_address`: The address of the USD Vault contract to migrate from.
     /// - `erc4626_vault_address`: The address of the ERC4626 vault contract to migrate to.
     ///
     /// # Errors
@@ -1007,85 +1176,8 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
-        // Get the RPC client and create the ERC4626 deposit transaction
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-
-        let (sdai_address, sdai_amount) =
-            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
-                rpc_client,
-                Network::WorldChain,
-                legacy_vault_address,
-                self.wallet_address,
-            )
+        self.migrate_from_usd_legacy_vault(legacy_vault_address, erc4626_vault_address)
             .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to fetch sDAI balance: {e}"),
-            })?;
-
-        if sdai_amount.is_zero() {
-            return Err(TransactionError::Generic {
-                error_message: "Cannot migrate with zero sDAI balance".to_string(),
-            });
-        }
-
-        let permitted = UnparsedTokenPermissions {
-            token: sdai_address.to_string(),
-            amount: sdai_amount.to_string(),
-        };
-
-        let nonce = {
-            let mut rng = rand::thread_rng();
-            U256::from_be_bytes(rng.gen::<[u8; 32]>())
-        };
-
-        let deadline = now_with_ntp().timestamp() + 180; // 3 minutes from now
-
-        let transfer = UnparsedPermitTransferFrom {
-            permitted,
-            spender: legacy_vault_address.to_string(),
-            nonce: nonce.to_string(),
-            deadline: deadline.to_string(),
-        };
-
-        let signature = self
-            .sign_permit2_transfer(Network::WorldChain as u32, transfer)
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to sign permit2 transfer: {e}"),
-            })?;
-
-        let permit2_data = Permit2Data {
-            signature,
-            nonce,
-            deadline: U256::from(deadline),
-        };
-
-        let transaction =
-            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::migrate(
-                rpc_client,
-                Network::WorldChain,
-                legacy_vault_address,
-                erc4626_vault_address,
-                sdai_amount,
-                self.wallet_address,
-                permit2_data,
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create USDVault migration: {e}"),
-            })?;
-
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, None, provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute USDVault migration: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
     /// Gets a custom user operation receipt for a given user operation hash via the global RPC client.

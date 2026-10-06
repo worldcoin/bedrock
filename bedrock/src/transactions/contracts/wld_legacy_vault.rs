@@ -10,7 +10,7 @@
 //! increases monotonically over time as yield accrues block by block.
 
 use alloy::{
-    primitives::{Address, Bytes, U256},
+    primitives::{address, Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -29,6 +29,10 @@ use crate::{
     },
     transactions::contracts::erc4626::IERC4626,
 };
+
+/// The legacy `WLDVault` contract address on World Chain.
+pub const WLD_LEGACY_VAULT_ADDRESS: Address =
+    address!("0x14a028cC500108307947dca4a1Aa35029FB66CE0");
 
 sol! {
     /// The WLD Vault contract interface.

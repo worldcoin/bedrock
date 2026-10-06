@@ -746,3 +746,50 @@ async fn incomplete_fee_metadata_cannot_be_treated_as_free() {
         assert_eq!(http.requests.lock().unwrap().len(), 1);
     }
 }
+
+#[test]
+fn migration_source_is_chosen_from_the_source_address() {
+    use crate::transactions::contracts::usd_legacy_vault::USD_LEGACY_VAULT_ADDRESSES;
+    use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS;
+
+    assert_eq!(
+        MigrationSource::classify(WLD_LEGACY_VAULT_ADDRESS),
+        MigrationSource::WldLegacy
+    );
+    for usd_vault in USD_LEGACY_VAULT_ADDRESSES {
+        assert_eq!(
+            MigrationSource::classify(usd_vault),
+            MigrationSource::UsdLegacy
+        );
+    }
+    // Morpho WARS V1 vault is a plain ERC-4626 source.
+    assert_eq!(
+        MigrationSource::classify(address!(
+            "0x1C94c7A2c71ECF13104c31F49d5138EDb099D25D"
+        )),
+        MigrationSource::Erc4626
+    );
+}
+
+#[tokio::test]
+async fn migrate_rejects_same_source_and_destination_for_every_source_kind() {
+    use crate::transactions::contracts::usd_legacy_vault::USD_LEGACY_VAULT_ADDRESSES;
+    use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS;
+
+    let account = custom_bundler_account();
+    for vault in [
+        WLD_LEGACY_VAULT_ADDRESS,
+        USD_LEGACY_VAULT_ADDRESSES[0],
+        address!("0x1C94c7A2c71ECF13104c31F49d5138EDb099D25D"),
+    ] {
+        let err = account
+            .transaction_erc4626_migrate(&vault.to_string(), &vault.to_string())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Source and destination vaults must differ"),
+            "unexpected error: {err}"
+        );
+    }
+}

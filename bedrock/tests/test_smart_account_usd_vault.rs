@@ -129,7 +129,7 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
 
     // Test migration with bad vault address - should fail
     let result = safe_account
-        .transaction_usd_legacy_vault_migrate(
+        .transaction_erc4626_migrate(
             &usd_vault_address.to_string(),
             &bad_morpho_vault_address.to_string(),
         )
@@ -149,7 +149,7 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
 
     // Now perform successful migration
     safe_account
-        .transaction_usd_legacy_vault_migrate(
+        .transaction_erc4626_migrate(
             &usd_vault_address.to_string(),
             &morpho_vault_address.to_string(),
         )
