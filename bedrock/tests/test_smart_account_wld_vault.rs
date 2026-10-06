@@ -16,8 +16,9 @@ use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 use std::str::FromStr;
 
 use bedrock::{
-    primitives::http_client::set_http_client, smart_account::SafeSmartAccount,
-    test_utils::AnvilBackedHttpClient,
+    primitives::http_client::set_http_client, primitives::HexEncodedData,
+    smart_account::SafeSmartAccount, test_utils::AnvilBackedHttpClient,
+    transactions::TransactionError,
 };
 
 use crate::common::set_address_verified_until_for_account;
@@ -27,6 +28,25 @@ sol! {
     interface WLDVault {
         function balanceOf(address account) external view returns (uint256);
         function deposit(uint256 amount) external;
+    }
+}
+
+/// Runs the migration through either the unified `transaction_erc4626_migrate` entry point or
+/// the deprecated `transaction_wld_legacy_vault_migrate` wrapper.
+async fn migrate(
+    account: &SafeSmartAccount,
+    use_unified_entry_point: bool,
+    from_vault: &str,
+    to_vault: &str,
+) -> Result<HexEncodedData, TransactionError> {
+    if use_unified_entry_point {
+        account
+            .transaction_erc4626_migrate(from_vault, to_vault)
+            .await
+    } else {
+        account
+            .transaction_wld_legacy_vault_migrate(from_vault, to_vault)
+            .await
     }
 }
 
@@ -53,154 +73,167 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     let client = AnvilBackedHttpClient::new(provider.clone());
     set_http_client(Arc::new(client));
 
-    let wld = IERC20::new(wld_address, &provider);
-    let wld_vault = WLDVault::new(wld_vault_address, &provider);
-    let morpho_vault = IERC20::new(morpho_vault_address, &provider);
+    // Exercise the deprecated wrapper first, then the unified entry point, against the same
+    // fork (the global HTTP client can only be set once per process).
+    for use_unified_entry_point in [false, true] {
+        let wld = IERC20::new(wld_address, &provider);
+        let wld_vault = WLDVault::new(wld_vault_address, &provider);
+        let morpho_vault = IERC20::new(morpho_vault_address, &provider);
 
-    let safe_address = deploy_safe(&provider, owner, U256::ZERO).await?;
-    println!("✓ Deployed Safe at: {safe_address}");
-
-    let safe_account = SafeSmartAccount::from_private_key_hex(
-        owner_key_hex,
-        &safe_address.to_string(),
-    )?;
-
-    provider
-        .anvil_set_balance(safe_address, parse_ether("1").unwrap())
+        let safe_address = deploy_safe(
+            &provider,
+            owner,
+            U256::from(u8::from(use_unified_entry_point)),
+        )
         .await?;
-    println!("✓ Funded Safe for userOp gas");
+        println!("✓ Deployed Safe at: {safe_address}");
 
-    set_address_verified_until_for_account(
-        &provider,
-        safe_address,
-        U256::from(2_000_000_000u64),
-    )
-    .await?;
-    println!("✓ Set Safe as verified until far future");
+        let safe_account = SafeSmartAccount::from_private_key_hex(
+            owner_key_hex.clone(),
+            &safe_address.to_string(),
+        )?;
 
-    // Test migration with zero balance - should fail
-    let result = safe_account
-        .transaction_wld_legacy_vault_migrate(
+        provider
+            .anvil_set_balance(safe_address, parse_ether("1").unwrap())
+            .await?;
+        println!("✓ Funded Safe for userOp gas");
+
+        set_address_verified_until_for_account(
+            &provider,
+            safe_address,
+            U256::from(2_000_000_000u64),
+        )
+        .await?;
+        println!("✓ Set Safe as verified until far future");
+
+        // Test migration with zero balance - should fail
+        let result = migrate(
+            &safe_account,
+            use_unified_entry_point,
             &wld_vault_address.to_string(),
             &morpho_vault_address.to_string(),
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "Expected migration to fail with zero balance"
-    );
-    let error_message = result.unwrap_err().to_string();
-    assert!(
-        error_message.contains("Cannot migrate zero balance"),
-        "Expected error message to contain 'Cannot migrate zero balance', got: {}",
-        error_message
-    );
-    println!("✓ Migration correctly failed with zero balance error");
+        assert!(
+            result.is_err(),
+            "Expected migration to fail with zero balance"
+        );
+        let error_message = result.unwrap_err().to_string();
+        assert!(
+            error_message.contains("Cannot migrate zero balance"),
+            "Expected error message to contain 'Cannot migrate zero balance', got: {}",
+            error_message
+        );
+        println!("✓ Migration correctly failed with zero balance error");
 
-    // Now set up WLD balance for actual migration test
-    let amount: U256 = parse_units("1", 18).unwrap().into();
-    set_erc20_balance_for_safe(&provider, wld_address, safe_address, amount).await?;
+        // Now set up WLD balance for actual migration test
+        let amount: U256 = parse_units("1", 18).unwrap().into();
+        set_erc20_balance_for_safe(&provider, wld_address, safe_address, amount)
+            .await?;
 
-    let balance_before = wld.balanceOf(safe_address).call().await?;
-    println!("WLD balance before deposit: {balance_before}");
+        let balance_before = wld.balanceOf(safe_address).call().await?;
+        println!("WLD balance before deposit: {balance_before}");
 
-    let vault_before = wld_vault.balanceOf(safe_address).call().await?;
-    println!("WLDVault balance before deposit: {vault_before}");
+        let vault_before = wld_vault.balanceOf(safe_address).call().await?;
+        println!("WLDVault balance before deposit: {vault_before}");
 
-    provider.anvil_impersonate_account(safe_address).await?;
+        provider.anvil_impersonate_account(safe_address).await?;
 
-    // Approve WLDVault to spend WLD from Safe
-    let request = wld
-        .approve(wld_vault_address, amount)
-        .into_transaction_request()
-        .from(safe_address);
-    provider
-        .anvil_send_impersonated_transaction(request)
-        .await?;
-    provider.anvil_mine(Some(1), None).await?;
+        // Approve WLDVault to spend WLD from Safe
+        let request = wld
+            .approve(wld_vault_address, amount)
+            .into_transaction_request()
+            .from(safe_address);
+        provider
+            .anvil_send_impersonated_transaction(request)
+            .await?;
+        provider.anvil_mine(Some(1), None).await?;
 
-    // Deposit WLDVault
-    let request = wld_vault
-        .deposit(amount)
-        .into_transaction_request()
-        .from(safe_address)
-        .to(wld_vault_address);
-    provider
-        .anvil_send_impersonated_transaction(request)
-        .await?;
-    provider.anvil_mine(Some(1), None).await?;
+        // Deposit WLDVault
+        let request = wld_vault
+            .deposit(amount)
+            .into_transaction_request()
+            .from(safe_address)
+            .to(wld_vault_address);
+        provider
+            .anvil_send_impersonated_transaction(request)
+            .await?;
+        provider.anvil_mine(Some(1), None).await?;
 
-    provider
-        .anvil_stop_impersonating_account(safe_address)
-        .await?;
-    println!("✓ Deposited WLD into WLDVault");
+        provider
+            .anvil_stop_impersonating_account(safe_address)
+            .await?;
+        println!("✓ Deposited WLD into WLDVault");
 
-    let balance_after = wld.balanceOf(safe_address).call().await?;
-    println!("WLD balance after deposit: {balance_after}");
+        let balance_after = wld.balanceOf(safe_address).call().await?;
+        println!("WLD balance after deposit: {balance_after}");
 
-    let vault_after = wld_vault.balanceOf(safe_address).call().await?;
-    println!("WLDVault balance after deposit: {vault_after}");
+        let vault_after = wld_vault.balanceOf(safe_address).call().await?;
+        println!("WLDVault balance after deposit: {vault_after}");
 
-    assert!(
-        balance_after < balance_before,
-        "WLD balance did not decrease after deposit"
-    );
-    assert!(
-        vault_after > vault_before,
-        "WLDVault balance did not increase after deposit"
-    );
+        assert!(
+            balance_after < balance_before,
+            "WLD balance did not decrease after deposit"
+        );
+        assert!(
+            vault_after > vault_before,
+            "WLDVault balance did not increase after deposit"
+        );
 
-    let shares_before = morpho_vault.balanceOf(safe_address).call().await?;
-    println!("MorphoVault balance before migration: {shares_before}");
+        let shares_before = morpho_vault.balanceOf(safe_address).call().await?;
+        println!("MorphoVault balance before migration: {shares_before}");
 
-    // Test migration with bad vault address - should fail
-    let result = safe_account
-        .transaction_erc4626_migrate(
+        // Test migration with bad vault address - should fail
+        let result = migrate(
+            &safe_account,
+            use_unified_entry_point,
             &wld_vault_address.to_string(),
             &bad_morpho_vault_address.to_string(),
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "Expected migration to fail with bad vault address"
-    );
-    let error_message = result.unwrap_err().to_string();
-    assert!(
-        error_message.contains("Asset address mismatch between WLDVault and ERC-4626 Vault"),
-        "Expected error message to contain 'Asset address mismatch between WLDVault and ERC-4626 Vault', got: {}",
-        error_message
-    );
-    println!("✓ Migration correctly failed with asset address mismatch error");
+        assert!(
+            result.is_err(),
+            "Expected migration to fail with bad vault address"
+        );
+        let error_message = result.unwrap_err().to_string();
+        assert!(
+            error_message.contains("Asset address mismatch between WLDVault and ERC-4626 Vault"),
+            "Expected error message to contain 'Asset address mismatch between WLDVault and ERC-4626 Vault', got: {}",
+            error_message
+        );
+        println!("✓ Migration correctly failed with asset address mismatch error");
 
-    // Now perform successful migration
-    safe_account
-        .transaction_erc4626_migrate(
+        // Now perform successful migration
+        migrate(
+            &safe_account,
+            use_unified_entry_point,
             &wld_vault_address.to_string(),
             &morpho_vault_address.to_string(),
         )
         .await
         .expect("WLDVault migration failed");
-    println!("✓ Migrated WLDVault to MorphoVault");
+        println!("✓ Migrated WLDVault to MorphoVault");
 
-    let balance_after = wld.balanceOf(safe_address).call().await?;
-    println!("WLD balance after migration: {balance_after}");
+        let balance_after = wld.balanceOf(safe_address).call().await?;
+        println!("WLD balance after migration: {balance_after}");
 
-    let vault_after = wld_vault.balanceOf(safe_address).call().await?;
-    println!("WLDVault balance after migration: {vault_after}");
+        let vault_after = wld_vault.balanceOf(safe_address).call().await?;
+        println!("WLDVault balance after migration: {vault_after}");
 
-    let shares_after = morpho_vault.balanceOf(safe_address).call().await?;
-    println!("MorphoVault balance after migration: {shares_after}");
+        let shares_after = morpho_vault.balanceOf(safe_address).call().await?;
+        println!("MorphoVault balance after migration: {shares_after}");
 
-    assert!(
-        vault_after == U256::ZERO,
-        "WLDVault balance not zero after migration"
-    );
-    assert!(
-        shares_before < shares_after,
-        "MorphoVault shares did not increase after migration"
-    );
+        assert!(
+            vault_after == U256::ZERO,
+            "WLDVault balance not zero after migration"
+        );
+        assert!(
+            shares_before < shares_after,
+            "MorphoVault shares did not increase after migration"
+        );
+    }
 
     Ok(())
 }
