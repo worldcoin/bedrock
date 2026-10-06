@@ -61,6 +61,7 @@ where
 
 /// Runs the migration through either the unified `transaction_erc4626_migrate` entry point or
 /// the deprecated `transaction_usd_legacy_vault_migrate` wrapper.
+#[allow(deprecated)] // the wrapper is deprecated but still supported
 async fn migrate(
     account: &SafeSmartAccount,
     use_unified_entry_point: bool,

@@ -32,6 +32,115 @@ mod tfh_paymaster;
 
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
+/// Deprecated per-vault migration entry points, kept so existing clients keep working.
+///
+/// They live in their own module so the `deprecated` allowance (needed because UniFFI's
+/// generated scaffolding calls them) does not leak into the rest of `transactions`.
+mod deprecated_migrations {
+    #![allow(deprecated)]
+
+    use super::{
+        bedrock_export, Address, HexEncodedData, MigrationSource,
+        ParseFromForeignBinding, SafeSmartAccount, TransactionError,
+    };
+
+    #[bedrock_export]
+    impl SafeSmartAccount {
+        /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
+        ///
+        /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
+        /// equivalent amount into a new ERC4626-compliant vault. The migration process is
+        /// atomic and executed as a single transaction bundle.
+        ///
+        /// Note: After migration, the user may have some dust WLD tokens left due to
+        /// rounding differences in the conversion process.
+        ///
+        /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
+        /// legacy `WLDVault` as a source.
+        ///
+        /// # Arguments
+        /// - `wld_vault_address`: The address of the `WLDVault` contract to migrate from.
+        /// - `erc4626_vault_address`: The address of the new ERC4626 vault contract to migrate to.
+        ///
+        /// # Errors
+        /// - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+        /// - Returns [`TransactionError::Generic`] if the migration transaction creation fails.
+        /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+        /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
+        #[deprecated(
+            note = "use `transaction_erc4626_migrate`, which also handles WLDVault"
+        )]
+        pub async fn transaction_wld_legacy_vault_migrate(
+            &self,
+            legacy_vault_address: &str,
+            erc4626_vault_address: &str,
+        ) -> Result<HexEncodedData, TransactionError> {
+            let legacy_vault_address =
+                Address::parse_from_ffi(legacy_vault_address, "legacy_vault_address")?;
+            let erc4626_vault_address = Address::parse_from_ffi(
+                erc4626_vault_address,
+                "erc4626_vault_address",
+            )?;
+
+            self.migrate_from_source(
+                MigrationSource::WldLegacy,
+                legacy_vault_address,
+                erc4626_vault_address,
+            )
+            .await
+        }
+
+        /// Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
+        ///
+        /// This method performs a complex migration process that includes:
+        /// 1. Fetching the user's sDAI balance from the USD Vault
+        /// 2. Creating a Permit2 signature for secure token transfer
+        /// 3. Executing a multi-step transaction bundle:
+        ///    - Redeeming sDAI for USDC from the USD Vault
+        ///    - Approving the new vault to spend USDC
+        ///    - Depositing USDC into the new ERC4626 vault
+        ///
+        /// The entire process is executed atomically using a `MultiSend` transaction bundle.
+        ///
+        /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
+        /// legacy `USDVault` as a source.
+        ///
+        /// # Arguments
+        /// - `usd_vault_address`: The address of the USD Vault contract to migrate from.
+        /// - `erc4626_vault_address`: The address of the ERC4626 vault contract to migrate to.
+        ///
+        /// # Errors
+        /// - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
+        /// - Returns [`TransactionError::Generic`] if fetching the sDAI balance fails.
+        /// - Returns [`TransactionError::Generic`] if the Permit2 signature creation fails.
+        /// - Returns [`TransactionError::Generic`] if the migration transaction bundle creation fails.
+        /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
+        /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
+        #[deprecated(
+            note = "use `transaction_erc4626_migrate`, which also handles USDVault"
+        )]
+        pub async fn transaction_usd_legacy_vault_migrate(
+            &self,
+            legacy_vault_address: &str,
+            erc4626_vault_address: &str,
+        ) -> Result<HexEncodedData, TransactionError> {
+            let legacy_vault_address =
+                Address::parse_from_ffi(legacy_vault_address, "legacy_vault_address")?;
+            let erc4626_vault_address = Address::parse_from_ffi(
+                erc4626_vault_address,
+                "erc4626_vault_address",
+            )?;
+
+            self.migrate_from_source(
+                MigrationSource::UsdLegacy,
+                legacy_vault_address,
+                erc4626_vault_address,
+            )
+            .await
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -328,6 +437,15 @@ enum MigrationSource {
 }
 
 impl MigrationSource {
+    /// Stable name used as a structured log field.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::WldLegacy => "wld_legacy",
+            Self::UsdLegacy => "usd_legacy",
+            Self::Erc4626 => "erc4626",
+        }
+    }
+
     fn classify(from_vault_address: Address) -> Self {
         if from_vault_address == WLD_LEGACY_VAULT_ADDRESS {
             Self::WldLegacy
@@ -343,6 +461,53 @@ impl MigrationSource {
 ///
 /// Kept out of the `#[bedrock_export]` block: these are not part of the foreign interface.
 impl SafeSmartAccount {
+    /// Runs the migration for an already-classified source and logs failures.
+    ///
+    /// Failures are logged at warning level with the source kind and vault addresses so they can
+    /// be aggregated; the error itself is returned unchanged.
+    async fn migrate_from_source(
+        &self,
+        source: MigrationSource,
+        from_vault_address: Address,
+        to_vault_address: Address,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let result = match source {
+            // The ERC-4626 builder rejects identical vaults itself; legacy vaults have no
+            // `asset()`, so check here to fail with a clear error.
+            MigrationSource::WldLegacy | MigrationSource::UsdLegacy
+                if from_vault_address == to_vault_address =>
+            {
+                Err(TransactionError::Generic {
+                    error_message: "Source and destination vaults must differ"
+                        .to_string(),
+                })
+            }
+            MigrationSource::WldLegacy => {
+                self.migrate_from_wld_legacy_vault(from_vault_address, to_vault_address)
+                    .await
+            }
+            MigrationSource::UsdLegacy => {
+                self.migrate_from_usd_legacy_vault(from_vault_address, to_vault_address)
+                    .await
+            }
+            MigrationSource::Erc4626 => {
+                self.migrate_from_erc4626_vault(from_vault_address, to_vault_address)
+                    .await
+            }
+        };
+
+        if let Err(error) = &result {
+            crate::warn!(
+                source_kind = source.label(),
+                from_vault = from_vault_address.to_string(),
+                to_vault = to_vault_address.to_string(),
+                error_message = error.to_string(),
+                "Vault migration failed"
+            );
+        }
+        result
+    }
+
     /// Signs and submits a built migration transaction, returning the user operation hash.
     ///
     /// `label` names the operation in error messages (e.g. "ERC4626 migrate").
@@ -1047,6 +1212,13 @@ impl SafeSmartAccount {
     ///   into the destination vault;
     /// - any other address is treated as a source ERC4626 vault.
     ///
+    /// Legacy sources move the whole position and differ from the ERC4626 path: there is no
+    /// `maxRedeem` cap and no 0.03% deposit haircut. `WLDVault` withdraws, approves and deposits
+    /// the full balance; `USDVault` redeems all sDAI at the DSR conversion rate with that same
+    /// amount as `amountOutMin`, so the call reverts if the vault pays out less than the rate
+    /// implies. The USD path also needs a Permit2 signature valid for 3 minutes. Some `USDVault`
+    /// deployments only redeem up to what the account deposited through them.
+    ///
     /// For an ERC4626 source this builds one atomic bundle with:
     /// 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
     /// 2. `approve(assets)` on the underlying token for the destination vault
@@ -1079,105 +1251,12 @@ impl SafeSmartAccount {
         let to_vault_address =
             Address::parse_from_ffi(to_vault_address, "to_vault_address")?;
 
-        let source = MigrationSource::classify(from_vault_address);
-        // The ERC-4626 builder rejects identical vaults itself; legacy vaults have no `asset()`,
-        // so check here to fail with a clear error.
-        if source != MigrationSource::Erc4626 && from_vault_address == to_vault_address
-        {
-            return Err(TransactionError::Generic {
-                error_message: "Source and destination vaults must differ".to_string(),
-            });
-        }
-
-        match source {
-            MigrationSource::WldLegacy => {
-                self.migrate_from_wld_legacy_vault(from_vault_address, to_vault_address)
-                    .await
-            }
-            MigrationSource::UsdLegacy => {
-                self.migrate_from_usd_legacy_vault(from_vault_address, to_vault_address)
-                    .await
-            }
-            MigrationSource::Erc4626 => {
-                self.migrate_from_erc4626_vault(from_vault_address, to_vault_address)
-                    .await
-            }
-        }
-    }
-
-    /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
-    ///
-    /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
-    /// equivalent amount into a new ERC4626-compliant vault. The migration process is
-    /// atomic and executed as a single transaction bundle.
-    ///
-    /// Note: After migration, the user may have some dust WLD tokens left due to
-    /// rounding differences in the conversion process.
-    ///
-    /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
-    /// legacy `WLDVault` as a source.
-    ///
-    /// # Arguments
-    /// - `wld_vault_address`: The address of the `WLDVault` contract to migrate from.
-    /// - `erc4626_vault_address`: The address of the new ERC4626 vault contract to migrate to.
-    ///
-    /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
-    /// - Returns [`TransactionError::Generic`] if the migration transaction creation fails.
-    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
-    /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
-    pub async fn transaction_wld_legacy_vault_migrate(
-        &self,
-        legacy_vault_address: &str,
-        erc4626_vault_address: &str,
-    ) -> Result<HexEncodedData, TransactionError> {
-        let legacy_vault_address =
-            Address::parse_from_ffi(legacy_vault_address, "legacy_vault_address")?;
-        let erc4626_vault_address =
-            Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
-
-        self.migrate_from_wld_legacy_vault(legacy_vault_address, erc4626_vault_address)
-            .await
-    }
-
-    /// Migrates assets from a USD Vault to an ERC4626 vault on World Chain.
-    ///
-    /// This method performs a complex migration process that includes:
-    /// 1. Fetching the user's sDAI balance from the USD Vault
-    /// 2. Creating a Permit2 signature for secure token transfer
-    /// 3. Executing a multi-step transaction bundle:
-    ///    - Redeeming sDAI for USDC from the USD Vault
-    ///    - Approving the new vault to spend USDC
-    ///    - Depositing USDC into the new ERC4626 vault
-    ///
-    /// The entire process is executed atomically using a `MultiSend` transaction bundle.
-    ///
-    /// **Deprecated**: use [`SafeSmartAccount::transaction_erc4626_migrate`], which handles the
-    /// legacy `USDVault` as a source.
-    ///
-    /// # Arguments
-    /// - `usd_vault_address`: The address of the USD Vault contract to migrate from.
-    /// - `erc4626_vault_address`: The address of the ERC4626 vault contract to migrate to.
-    ///
-    /// # Errors
-    /// - Returns [`TransactionError::PrimitiveError`] if any of the vault addresses are invalid.
-    /// - Returns [`TransactionError::Generic`] if fetching the sDAI balance fails.
-    /// - Returns [`TransactionError::Generic`] if the Permit2 signature creation fails.
-    /// - Returns [`TransactionError::Generic`] if the migration transaction bundle creation fails.
-    /// - Returns [`TransactionError::Generic`] if the transaction submission fails.
-    /// - Returns [`TransactionError::Generic`] if the global HTTP client has not been initialized.
-    pub async fn transaction_usd_legacy_vault_migrate(
-        &self,
-        legacy_vault_address: &str,
-        erc4626_vault_address: &str,
-    ) -> Result<HexEncodedData, TransactionError> {
-        let legacy_vault_address =
-            Address::parse_from_ffi(legacy_vault_address, "legacy_vault_address")?;
-        let erc4626_vault_address =
-            Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
-
-        self.migrate_from_usd_legacy_vault(legacy_vault_address, erc4626_vault_address)
-            .await
+        self.migrate_from_source(
+            MigrationSource::classify(from_vault_address),
+            from_vault_address,
+            to_vault_address,
+        )
+        .await
     }
 
     /// Gets a custom user operation receipt for a given user operation hash via the global RPC client.
