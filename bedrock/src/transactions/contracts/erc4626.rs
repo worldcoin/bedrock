@@ -539,9 +539,10 @@ impl Erc4626Vault {
 
     /// Fetches the source vault's underlying asset for a migration.
     ///
-    /// A revert or empty return means the contract has no `asset()`: it is neither an ERC-4626
-    /// vault nor one of the known legacy vaults, which gets a dedicated error. Transport errors
-    /// pass through unchanged.
+    /// An `eth_call` revert or an empty/short return means the contract has no `asset()`: it is
+    /// neither an ERC-4626 vault nor one of the known legacy vaults, which gets a dedicated
+    /// error. Any other failure (HTTP errors, rate limits, other JSON-RPC errors) passes through
+    /// unchanged so transient provider problems are not reported as an unsupported source.
     async fn fetch_migration_source_asset(
         rpc_client: &RpcClient,
         network: Network,
@@ -550,15 +551,24 @@ impl Erc4626Vault {
     ) -> Result<Address, RpcError> {
         Self::fetch_asset_address(rpc_client, network, from_vault_address, call_data)
             .await
-            .map_err(|e| match e {
-                RpcError::RpcResponseError { .. } | RpcError::InvalidResponse { .. } => {
+            .map_err(|e| {
+                let missing_asset = match &e {
+                    RpcError::RpcResponseError {
+                        code,
+                        error_message,
+                    } => is_eth_call_revert(*code, error_message),
+                    RpcError::InvalidResponse { .. } => true,
+                    _ => false,
+                };
+                if missing_asset {
                     RpcError::InvalidResponse {
                         error_message: format!(
                             "Unsupported migration source {from_vault_address}: not an ERC-4626 vault or a known legacy vault ({e})"
                         ),
                     }
+                } else {
+                    e
                 }
-                other => other,
             })
     }
 
@@ -709,6 +719,14 @@ impl Erc4626Vault {
             metadata,
         }
     }
+}
+
+/// Whether a JSON-RPC error is an `eth_call` execution revert.
+///
+/// Nodes report reverts as code `3` (geth, anvil, Alchemy) or as a generic server error whose
+/// message says "execution reverted".
+fn is_eth_call_revert(code: i64, error_message: &str) -> bool {
+    code == 3 || error_message.to_lowercase().contains("execution reverted")
 }
 
 /// Inputs for [`Erc4626Vault::build_migrate_transaction`].
@@ -1625,6 +1643,16 @@ mod tests {
         assert!(error.to_string().contains(
             "Asset address mismatch between source and destination ERC-4626 vaults"
         ));
+    }
+
+    #[test]
+    fn test_is_eth_call_revert_only_matches_reverts() {
+        assert!(is_eth_call_revert(3, "execution reverted"));
+        assert!(is_eth_call_revert(-32000, "Execution reverted: no asset"));
+        // Provider-side failures must not look like a missing `asset()`.
+        assert!(!is_eth_call_revert(429, "rate limit exceeded"));
+        assert!(!is_eth_call_revert(-32005, "request timed out"));
+        assert!(!is_eth_call_revert(-32603, "internal error"));
     }
 
     #[tokio::test]
