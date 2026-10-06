@@ -1080,8 +1080,8 @@ impl SafeSmartAccount {
     ///
     /// # Errors
     /// - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
-    /// - Returns [`TransactionError::Generic`] if the vaults are the same, or if transaction
-    ///   creation or submission fails.
+    /// - Returns [`TransactionError::Generic`] if the vaults are the same, the source is not a
+    ///   supported vault, or transaction creation or submission fails.
     pub async fn transaction_erc4626_migrate(
         &self,
         from_vault_address: &str,
@@ -1092,13 +1092,17 @@ impl SafeSmartAccount {
         let to_vault_address =
             Address::parse_from_ffi(to_vault_address, "to_vault_address")?;
 
-        if from_vault_address == to_vault_address {
+        let source = MigrationSource::classify(from_vault_address);
+        // The ERC-4626 builder rejects identical vaults itself; legacy vaults have no `asset()`,
+        // so check here to fail with a clear error.
+        if source != MigrationSource::Erc4626 && from_vault_address == to_vault_address
+        {
             return Err(TransactionError::Generic {
                 error_message: "Source and destination vaults must differ".to_string(),
             });
         }
 
-        match MigrationSource::classify(from_vault_address) {
+        match source {
             MigrationSource::WldLegacy => {
                 self.migrate_from_wld_legacy_vault(from_vault_address, to_vault_address)
                     .await

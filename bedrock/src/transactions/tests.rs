@@ -772,16 +772,12 @@ fn migration_source_is_chosen_from_the_source_address() {
 }
 
 #[tokio::test]
-async fn migrate_rejects_same_source_and_destination_for_every_source_kind() {
+async fn migrate_rejects_same_source_and_destination_for_legacy_sources() {
     use crate::transactions::contracts::usd_legacy_vault::USD_LEGACY_VAULT_ADDRESSES;
     use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS;
 
     let account = custom_bundler_account();
-    for vault in [
-        WLD_LEGACY_VAULT_ADDRESS,
-        USD_LEGACY_VAULT_ADDRESSES[0],
-        address!("0x1C94c7A2c71ECF13104c31F49d5138EDb099D25D"),
-    ] {
+    for vault in [WLD_LEGACY_VAULT_ADDRESS, USD_LEGACY_VAULT_ADDRESSES[0]] {
         let err = account
             .transaction_erc4626_migrate(&vault.to_string(), &vault.to_string())
             .await
