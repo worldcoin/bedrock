@@ -32,31 +32,41 @@ sol! {
     #[sol(rpc)]
     interface UsdVaultLimits {
         function LIMIT_WITHDRAWALS_TO_DEPOSITS() external view returns (bool);
+        function sDAIBalances(address account) external view returns (uint256);
     }
 }
 
-/// Storage slot of the `sDAIBalances` mapping in the legacy USD vaults.
-const SDAI_BALANCES_SLOT: u64 = 1;
-
-/// Sets `mapping(address => uint256)` entry `account` at `mapping_slot` in `contract`.
-async fn set_mapping_balance<P>(
+/// Credits `account` with `amount` in the vault's `sDAIBalances` deposit tracking.
+///
+/// The mapping's storage slot is found by writing candidate slots and reading the value back
+/// through the getter, so the test does not depend on the vault's storage layout.
+async fn credit_sdai_deposit<P>(
     provider: &P,
-    contract: Address,
+    vault: Address,
     account: Address,
-    mapping_slot: u64,
-    value: U256,
+    amount: U256,
 ) -> anyhow::Result<()>
 where
     P: Provider + AnvilApi<Ethereum>,
 {
-    let mut padded = [0u8; 64];
-    padded[12..32].copy_from_slice(account.as_slice());
-    padded[32..64].copy_from_slice(&U256::from(mapping_slot).to_be_bytes::<32>());
-    let slot = U256::from_be_bytes(keccak256(padded).into());
-    provider
-        .anvil_set_storage_at(contract, slot, value.into())
-        .await?;
-    Ok(())
+    let vault_contract = UsdVaultLimits::new(vault, provider);
+    for mapping_slot in 0u64..32 {
+        let mut padded = [0u8; 64];
+        padded[12..32].copy_from_slice(account.as_slice());
+        padded[32..64].copy_from_slice(&U256::from(mapping_slot).to_be_bytes::<32>());
+        let slot = U256::from_be_bytes(keccak256(padded).into());
+
+        provider
+            .anvil_set_storage_at(vault, slot, amount.into())
+            .await?;
+        if vault_contract.sDAIBalances(account).call().await? == amount {
+            return Ok(());
+        }
+        provider
+            .anvil_set_storage_at(vault, slot, U256::ZERO.into())
+            .await?;
+    }
+    anyhow::bail!("could not locate the sDAIBalances mapping slot of vault {vault}")
 }
 
 /// Runs the migration through either the unified `transaction_erc4626_migrate` entry point or
@@ -110,6 +120,14 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
             .flat_map(|vault| [(vault, false), (vault, true)])
             .enumerate()
     {
+        println!(
+            "▶ USD vault {usd_vault_address} via {}",
+            if use_unified_entry_point {
+                "transaction_erc4626_migrate"
+            } else {
+                "transaction_usd_legacy_vault_migrate"
+            }
+        );
         let usdc = IERC20::new(usdc_address, &provider);
         let sdai = IERC20::new(sdai_address, &provider);
         let morpho_vault = IERC20::new(morpho_vault_address, &provider);
@@ -193,11 +211,10 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
             .call()
             .await?
         {
-            set_mapping_balance(
+            credit_sdai_deposit(
                 &provider,
                 usd_vault_address,
                 safe_address,
-                SDAI_BALANCES_SLOT,
                 sdai_amount,
             )
             .await?;

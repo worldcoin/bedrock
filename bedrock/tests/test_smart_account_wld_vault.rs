@@ -77,6 +77,14 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     // Exercise the deprecated wrapper first, then the unified entry point, against the same
     // fork (the global HTTP client can only be set once per process).
     for use_unified_entry_point in [false, true] {
+        println!(
+            "▶ WLD vault via {}",
+            if use_unified_entry_point {
+                "transaction_erc4626_migrate"
+            } else {
+                "transaction_wld_legacy_vault_migrate"
+            }
+        );
         let wld = IERC20::new(wld_address, &provider);
         let wld_vault = WLDVault::new(wld_vault_address, &provider);
         let morpho_vault = IERC20::new(morpho_vault_address, &provider);
