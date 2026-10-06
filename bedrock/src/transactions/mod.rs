@@ -343,6 +343,30 @@ impl MigrationSource {
 ///
 /// Kept out of the `#[bedrock_export]` block: these are not part of the foreign interface.
 impl SafeSmartAccount {
+    /// Signs and submits a built migration transaction, returning the user operation hash.
+    ///
+    /// `label` names the operation in error messages (e.g. "ERC4626 migrate").
+    async fn submit_migration<T: Is4337Encodable>(
+        &self,
+        transaction: T,
+        label: &str,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let user_op_hash = transaction
+            .sign_and_execute(
+                self,
+                Network::WorldChain,
+                None,
+                None,
+                RpcProviderName::Any,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to execute {label}: {e}"),
+            })?;
+
+        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
     /// Legacy `WLDVault` -> ERC4626 (`withdrawAll` + `approve` + `deposit`).
     async fn migrate_from_wld_legacy_vault(
         &self,
@@ -365,20 +389,8 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to create WLDVault migration: {e}"),
             })?;
 
-        let user_op_hash = transaction
-            .sign_and_execute(
-                self,
-                Network::WorldChain,
-                None,
-                None,
-                RpcProviderName::Any,
-            )
+        self.submit_migration(transaction, "WLDVault migration")
             .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute WLDVault migration: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
     /// Legacy `USDVault` -> ERC4626 (Permit2-signed `redeemSDAI` + `approve` + `deposit`).
@@ -455,20 +467,8 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to create USDVault migration: {e}"),
             })?;
 
-        let user_op_hash = transaction
-            .sign_and_execute(
-                self,
-                Network::WorldChain,
-                None,
-                None,
-                RpcProviderName::Any,
-            )
+        self.submit_migration(transaction, "USDVault migration")
             .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute USDVault migration: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
     /// ERC4626 -> ERC4626 (`redeem` + `approve` + `deposit`).
@@ -494,20 +494,7 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to create ERC4626 migrate: {e}"),
             })?;
 
-        let user_op_hash = transaction
-            .sign_and_execute(
-                self,
-                Network::WorldChain,
-                None,
-                None,
-                RpcProviderName::Any,
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute ERC4626 migrate: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        self.submit_migration(transaction, "ERC4626 migrate").await
     }
 }
 
