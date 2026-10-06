@@ -316,7 +316,6 @@ async fn prepare_default_transfer(
     })
 }
 
-/// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 /// The kind of vault a migration starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MigrationSource {
@@ -512,6 +511,7 @@ impl SafeSmartAccount {
     }
 }
 
+/// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
     /// Prepares an unsigned ERC-20 transfer on World Chain.
