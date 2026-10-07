@@ -367,7 +367,8 @@ fn failure_class(error_message: &str) -> &'static str {
         "user_state"
     } else if error_message.contains("sign permit2") {
         "signing"
-    } else if error_message.contains("RPC")
+    } else if error_message.contains("RPC error")
+        || error_message.contains("Failed to get RPC client")
         || error_message.contains("HTTP request failed")
     {
         "dependency"

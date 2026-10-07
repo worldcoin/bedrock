@@ -818,5 +818,10 @@ fn migration_failures_are_classified_for_logging() {
     ] {
         assert_eq!(failure_class(message), "dependency", "{message}");
     }
+    // Incidental mentions of "RPC" are not provider faults.
+    assert_eq!(
+        failure_class("Failed to create WLDVault migration: unrelated RPC wording"),
+        "unknown"
+    );
     assert_eq!(failure_class("something unexpected"), "unknown");
 }
