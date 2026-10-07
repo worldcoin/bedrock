@@ -539,37 +539,48 @@ impl Erc4626Vault {
 
     /// Fetches the source vault's underlying asset for a migration.
     ///
-    /// An `eth_call` revert or an empty/short return means the contract has no `asset()`: it is
+    /// An `eth_call` revert or a short/empty return means the contract has no `asset()`: it is
     /// neither an ERC-4626 vault nor one of the known legacy vaults, which gets a dedicated
-    /// error. Any other failure (HTTP errors, rate limits, other JSON-RPC errors) passes through
-    /// unchanged so transient provider problems are not reported as an unsupported source.
+    /// error. Every other failure (HTTP errors, rate limits, other JSON-RPC errors, malformed
+    /// provider responses) passes through unchanged so transient provider problems are not
+    /// reported as an unsupported source.
     async fn fetch_migration_source_asset(
         rpc_client: &RpcClient,
         network: Network,
         from_vault_address: Address,
         call_data: Vec<u8>,
     ) -> Result<Address, RpcError> {
-        Self::fetch_asset_address(rpc_client, network, from_vault_address, call_data)
+        let unsupported = |reason: String| {
+            RpcError::InvalidResponse {
+            error_message: format!(
+                "Unsupported migration source {from_vault_address}: not an ERC-4626 vault or a known legacy vault ({reason})"
+            ),
+        }
+        };
+
+        let result = rpc_client
+            .eth_call(network, from_vault_address, call_data.into())
             .await
-            .map_err(|e| {
-                let missing_asset = match &e {
-                    RpcError::RpcResponseError {
-                        code,
-                        error_message,
-                    } => is_eth_call_revert(*code, error_message),
-                    RpcError::InvalidResponse { .. } => true,
-                    _ => false,
-                };
-                if missing_asset {
-                    RpcError::InvalidResponse {
-                        error_message: format!(
-                            "Unsupported migration source {from_vault_address}: not an ERC-4626 vault or a known legacy vault ({e})"
-                        ),
-                    }
-                } else {
-                    e
+            .map_err(|e| match &e {
+                RpcError::RpcResponseError {
+                    code,
+                    error_message,
+                } if is_eth_call_revert(*code, error_message) => {
+                    unsupported(e.to_string())
                 }
-            })
+                _ => e,
+            })?;
+
+        // An ABI-encoded address is one 32-byte word; shorter means there is no `asset()`.
+        if result.len() < 32 {
+            return Err(unsupported(format!(
+                "asset() returned {} bytes",
+                result.len()
+            )));
+        }
+
+        // The address is in the last 20 bytes of the first word.
+        Ok(Address::from_slice(&result[12..32]))
     }
 
     /// Resolves the full redeemable share amount: `min(balanceOf, maxRedeem)`.
@@ -723,10 +734,14 @@ impl Erc4626Vault {
 
 /// Whether a JSON-RPC error is an `eth_call` execution revert.
 ///
-/// Nodes report reverts as code `3` (geth, anvil, Alchemy) or as a generic server error whose
-/// message says "execution reverted".
+/// Nodes report reverts as code `3` (geth, anvil, Alchemy) or as a generic server error
+/// (`-32000`) whose message says "execution reverted". The message is only trusted together
+/// with that generic code so a provider wrapping another failure in similar text is not
+/// mistaken for a revert.
 fn is_eth_call_revert(code: i64, error_message: &str) -> bool {
-    code == 3 || error_message.to_lowercase().contains("execution reverted")
+    code == 3
+        || (code == -32000
+            && error_message.to_lowercase().contains("execution reverted"))
 }
 
 /// Inputs for [`Erc4626Vault::build_migrate_transaction`].
@@ -1653,6 +1668,10 @@ mod tests {
         assert!(!is_eth_call_revert(429, "rate limit exceeded"));
         assert!(!is_eth_call_revert(-32005, "request timed out"));
         assert!(!is_eth_call_revert(-32603, "internal error"));
+        assert!(!is_eth_call_revert(
+            -32603,
+            "upstream error: execution reverted while proxying, request timed out"
+        ));
     }
 
     #[tokio::test]
@@ -1684,6 +1703,43 @@ mod tests {
         assert!(
             error.to_string().contains("Unsupported migration source"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_malformed_provider_response_is_not_unsupported_source(
+    ) {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let user_address =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        // A provider glitch: the `eth_call` result is not valid hex.
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(IERC4626::assetCall {}.abi_encode())),
+            "not-hex".to_string(),
+        );
+        let rpc_client = RpcClient::new(Arc::new(http_client));
+
+        let error = Erc4626Vault::migrate(
+            &rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            [0u8; 10],
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            !error.to_string().contains("Unsupported migration source"),
+            "provider glitch must not look like an unsupported source: {error}"
         );
     }
 
