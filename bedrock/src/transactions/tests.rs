@@ -789,3 +789,32 @@ async fn migrate_rejects_same_source_and_destination_for_legacy_sources() {
         );
     }
 }
+
+#[test]
+fn migration_failures_are_classified_for_logging() {
+    // Expected user-state outcomes.
+    for message in [
+        "Cannot migrate zero balance",
+        "Cannot migrate with zero sDAI balance",
+        "Failed to create ERC4626 migrate: Invalid response format: Cannot migrate - no source vault shares are currently redeemable (share_balance=0, max_redeem=0)",
+        "Failed to create WLDVault migration: Invalid response format: Asset address mismatch between WLDVault and ERC-4626 Vault",
+        "Failed to create ERC4626 migrate: Invalid response format: Unsupported migration source 0x01: not an ERC-4626 vault or a known legacy vault (asset() returned 0 bytes)",
+        "Failed to create ERC4626 migrate: Invalid response format: Source and destination ERC-4626 vaults must differ",
+        MIGRATION_SAME_VAULT_ERROR,
+    ] {
+        assert_eq!(failure_class(message), "user_state", "{message}");
+    }
+
+    assert_eq!(
+        failure_class("Failed to sign permit2 transfer: bad key"),
+        "signing"
+    );
+    for message in [
+        "Failed to get RPC client: HTTP client not initialized",
+        "Failed to create ERC4626 migrate: HTTP request failed: timed out",
+        "Failed to fetch sDAI balance: RPC error 429: rate limit exceeded",
+    ] {
+        assert_eq!(failure_class(message), "dependency", "{message}");
+    }
+    assert_eq!(failure_class("something unexpected"), "unknown");
+}

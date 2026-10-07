@@ -436,6 +436,34 @@ enum MigrationSource {
     Erc4626,
 }
 
+/// Error text for a migration whose source and destination are the same legacy vault.
+const MIGRATION_SAME_VAULT_ERROR: &str = "Source and destination vaults must differ";
+
+/// Coarse class of a migration failure, used as a log field so expected user-state errors can
+/// be told apart from dependency and signing faults.
+///
+/// Migration errors are plain strings, so this matches on their text; the unit tests pin the
+/// messages it relies on.
+fn failure_class(error_message: &str) -> &'static str {
+    const USER_STATE: [&str; 4] = [
+        "Cannot migrate",
+        "must differ",
+        "Unsupported migration source",
+        "Asset address mismatch",
+    ];
+    if USER_STATE.iter().any(|m| error_message.contains(m)) {
+        "user_state"
+    } else if error_message.contains("sign permit2") {
+        "signing"
+    } else if error_message.contains("RPC")
+        || error_message.contains("HTTP request failed")
+    {
+        "dependency"
+    } else {
+        "unknown"
+    }
+}
+
 impl MigrationSource {
     /// Stable name used as a structured log field.
     const fn label(self) -> &'static str {
@@ -463,49 +491,77 @@ impl MigrationSource {
 impl SafeSmartAccount {
     /// Runs the migration for an already-classified source and logs failures.
     ///
-    /// Failures are logged at warning level with the source kind and vault addresses so they can
-    /// be aggregated; the error itself is returned unchanged.
+    /// Failures are logged at warning level with the source kind, a coarse failure class and the
+    /// vault addresses so they can be aggregated; the error itself is returned unchanged.
     async fn migrate_from_source(
         &self,
         source: MigrationSource,
         from_vault_address: Address,
         to_vault_address: Address,
     ) -> Result<HexEncodedData, TransactionError> {
-        let result = match source {
-            // The ERC-4626 builder rejects identical vaults itself; legacy vaults have no
-            // `asset()`, so check here to fail with a clear error.
-            MigrationSource::WldLegacy | MigrationSource::UsdLegacy
-                if from_vault_address == to_vault_address =>
-            {
-                Err(TransactionError::Generic {
-                    error_message: "Source and destination vaults must differ"
-                        .to_string(),
-                })
-            }
-            MigrationSource::WldLegacy => {
-                self.migrate_from_wld_legacy_vault(from_vault_address, to_vault_address)
-                    .await
-            }
-            MigrationSource::UsdLegacy => {
-                self.migrate_from_usd_legacy_vault(from_vault_address, to_vault_address)
-                    .await
-            }
-            MigrationSource::Erc4626 => {
-                self.migrate_from_erc4626_vault(from_vault_address, to_vault_address)
-                    .await
-            }
-        };
+        let result = self
+            .run_migration(source, from_vault_address, to_vault_address)
+            .await;
 
         if let Err(error) = &result {
+            let error_message = error.to_string();
             crate::warn!(
                 source_kind = source.label(),
+                failure_class = failure_class(&error_message),
                 from_vault = from_vault_address.to_string(),
                 to_vault = to_vault_address.to_string(),
-                error_message = error.to_string(),
+                error_message = error_message,
                 "Vault migration failed"
             );
         }
         result
+    }
+
+    async fn run_migration(
+        &self,
+        source: MigrationSource,
+        from_vault_address: Address,
+        to_vault_address: Address,
+    ) -> Result<HexEncodedData, TransactionError> {
+        // The ERC-4626 builder rejects identical vaults itself; legacy vaults have no `asset()`,
+        // so check here to fail with a clear error.
+        if source != MigrationSource::Erc4626 && from_vault_address == to_vault_address
+        {
+            return Err(TransactionError::Generic {
+                error_message: MIGRATION_SAME_VAULT_ERROR.to_string(),
+            });
+        }
+
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+
+        match source {
+            MigrationSource::WldLegacy => {
+                self.migrate_from_wld_legacy_vault(
+                    rpc_client,
+                    from_vault_address,
+                    to_vault_address,
+                )
+                .await
+            }
+            MigrationSource::UsdLegacy => {
+                self.migrate_from_usd_legacy_vault(
+                    rpc_client,
+                    from_vault_address,
+                    to_vault_address,
+                )
+                .await
+            }
+            MigrationSource::Erc4626 => {
+                self.migrate_from_erc4626_vault(
+                    rpc_client,
+                    from_vault_address,
+                    to_vault_address,
+                )
+                .await
+            }
+        }
     }
 
     /// Signs and submits a built migration transaction, returning the user operation hash.
@@ -535,12 +591,10 @@ impl SafeSmartAccount {
     /// Legacy `WLDVault` -> ERC4626 (`withdrawAll` + `approve` + `deposit`).
     async fn migrate_from_wld_legacy_vault(
         &self,
+        rpc_client: &RpcClient,
         legacy_vault_address: Address,
         erc4626_vault_address: Address,
     ) -> Result<HexEncodedData, TransactionError> {
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
         let transaction =
             crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
                 rpc_client,
@@ -561,13 +615,10 @@ impl SafeSmartAccount {
     /// Legacy `USDVault` -> ERC4626 (Permit2-signed `redeemSDAI` + `approve` + `deposit`).
     async fn migrate_from_usd_legacy_vault(
         &self,
+        rpc_client: &RpcClient,
         legacy_vault_address: Address,
         erc4626_vault_address: Address,
     ) -> Result<HexEncodedData, TransactionError> {
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-
         let (sdai_address, sdai_amount) =
             crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
                 rpc_client,
@@ -639,12 +690,10 @@ impl SafeSmartAccount {
     /// ERC4626 -> ERC4626 (`redeem` + `approve` + `deposit`).
     async fn migrate_from_erc4626_vault(
         &self,
+        rpc_client: &RpcClient,
         from_vault_address: Address,
         to_vault_address: Address,
     ) -> Result<HexEncodedData, TransactionError> {
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
         let transaction =
             crate::transactions::contracts::erc4626::Erc4626Vault::migrate(
                 rpc_client,
