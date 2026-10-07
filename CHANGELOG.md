@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `transaction_erc4626_migrate(from, to)` is now the single vault-migration entry point: when `from` is the legacy `WLDVault` or a legacy `USDVault`, it migrates the legacy position directly into the destination ERC-4626 vault (same bundles and `TransactionTypeId`s as before). `transaction_wld_legacy_vault_migrate` and `transaction_usd_legacy_vault_migrate` are deprecated and will be removed in a later release.
+- `transaction_erc4626_migrate(from, to)` is now the single vault-migration entry point: when `from` is the legacy `WLDVault` or a legacy `USDVault`, it migrates the legacy position directly into the destination ERC-4626 vault (same bundles and `TransactionTypeId`s as before). `transaction_wld_legacy_vault_migrate` and `transaction_usd_legacy_vault_migrate` are deprecated and will be removed in a later release. The USD path of the new function also checks, before signing, that the vault will redeem the account's sDAI (some deployments only redeem what was deposited through them) and fails with `Cannot migrate - USDVault only redeems up to ...` otherwise.
 
 ## [0.7.3](https://github.com/worldcoin/bedrock/compare/0.7.2...0.7.3) - 2026-09-29
 

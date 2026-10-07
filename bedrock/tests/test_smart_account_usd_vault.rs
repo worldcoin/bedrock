@@ -211,6 +211,24 @@ async fn test_usd_vault_migration() -> anyhow::Result<()> {
             .call()
             .await?
         {
+            // Before the credit the unified entry point refuses up front with a clear error.
+            if use_unified_entry_point {
+                let error = migrate(
+                    &safe_account,
+                    use_unified_entry_point,
+                    &usd_vault_address.to_string(),
+                    &morpho_vault_address.to_string(),
+                )
+                .await
+                .expect_err("migration without recorded deposits must fail");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("Cannot migrate - USDVault only redeems up to"),
+                    "unexpected error: {error}"
+                );
+            }
+
             credit_sdai_deposit(
                 &provider,
                 usd_vault_address,

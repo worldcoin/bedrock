@@ -84,6 +84,7 @@ mod deprecated_migrations {
                 MigrationSource::WldLegacy,
                 legacy_vault_address,
                 erc4626_vault_address,
+                false,
             )
             .await
         }
@@ -133,6 +134,7 @@ mod deprecated_migrations {
                 MigrationSource::UsdLegacy,
                 legacy_vault_address,
                 erc4626_vault_address,
+                false,
             )
             .await
         }
@@ -486,14 +488,24 @@ impl MigrationSource {
 /// Private builders behind [`SafeSmartAccount::transaction_erc4626_migrate`].
 impl SafeSmartAccount {
     /// Runs the migration for a classified source and logs failures as a warning.
+    ///
+    /// `check_usd_limit` makes the USD path verify the vault's deposit limit before signing.
+    /// Only `transaction_erc4626_migrate` enables it; the deprecated wrappers keep their
+    /// original behavior.
     async fn migrate_from_source(
         &self,
         source: MigrationSource,
         from_vault_address: Address,
         to_vault_address: Address,
+        check_usd_limit: bool,
     ) -> Result<HexEncodedData, TransactionError> {
         let result = self
-            .run_migration(source, from_vault_address, to_vault_address)
+            .run_migration(
+                source,
+                from_vault_address,
+                to_vault_address,
+                check_usd_limit,
+            )
             .await;
 
         if let Err(error) = &result {
@@ -515,6 +527,7 @@ impl SafeSmartAccount {
         source: MigrationSource,
         from_vault_address: Address,
         to_vault_address: Address,
+        check_usd_limit: bool,
     ) -> Result<HexEncodedData, TransactionError> {
         // The ERC-4626 builder has its own same-vault check.
         if source != MigrationSource::Erc4626 && from_vault_address == to_vault_address
@@ -542,6 +555,7 @@ impl SafeSmartAccount {
                     rpc_client,
                     from_vault_address,
                     to_vault_address,
+                    check_usd_limit,
                 )
                 .await
             }
@@ -608,6 +622,7 @@ impl SafeSmartAccount {
         rpc_client: &RpcClient,
         legacy_vault_address: Address,
         erc4626_vault_address: Address,
+        check_limit: bool,
     ) -> Result<HexEncodedData, TransactionError> {
         let (sdai_address, sdai_amount) =
             crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
@@ -625,6 +640,20 @@ impl SafeSmartAccount {
             return Err(TransactionError::Generic {
                 error_message: "Cannot migrate with zero sDAI balance".to_string(),
             });
+        }
+
+        if check_limit {
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::ensure_withdrawal_allowed(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                self.wallet_address,
+                sdai_amount,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create USDVault migration: {e}"),
+            })?;
         }
 
         let permitted = UnparsedTokenPermissions {
@@ -1263,7 +1292,8 @@ impl SafeSmartAccount {
     ///
     /// Legacy sources have no `maxRedeem` cap or haircut. `USDVault` redeems all sDAI at the
     /// DSR rate (the amount is also `amountOutMin`) using a Permit2 signature valid for
-    /// 3 minutes, and some deployments only redeem what the account deposited through them.
+    /// 3 minutes. Some deployments only redeem what the account deposited through them; this
+    /// is checked up front and fails with `Cannot migrate - USDVault only redeems up to ...`.
     ///
     /// # Arguments
     /// - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).
@@ -1287,6 +1317,7 @@ impl SafeSmartAccount {
             MigrationSource::classify(from_vault_address),
             from_vault_address,
             to_vault_address,
+            true,
         )
         .await
     }

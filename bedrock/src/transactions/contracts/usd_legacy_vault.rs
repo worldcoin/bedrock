@@ -18,7 +18,7 @@ use alloy::{
 };
 
 use crate::transactions::contracts::{
-    erc4626::IERC4626,
+    erc4626::{is_eth_call_revert, IERC4626},
     multisend::{MultiSend, MultiSendTx},
 };
 use crate::transactions::rpc::{RpcClient, RpcError};
@@ -61,6 +61,9 @@ sol! {
         function SDAI() public view returns (address);
 
         function getDSRConversionRate() public view returns (uint256);
+
+        function LIMIT_WITHDRAWALS_TO_DEPOSITS() public view returns (bool);
+        function sDAIBalances(address account) public view returns (uint256);
 
         function redeemSDAI(
             address recipient,
@@ -137,6 +140,68 @@ impl UsdLegacyVault {
             Erc20::fetch_balance(rpc_client, network, sdai_address, user_address)
                 .await?;
         Ok((sdai_address, balance))
+    }
+
+    /// Checks that the vault will redeem `sdai_amount` sDAI for `user_address`.
+    ///
+    /// Some deployments only redeem up to what the account deposited through them
+    /// (`LIMIT_WITHDRAWALS_TO_DEPOSITS`, tracked in `sDAIBalances`); redeeming more reverts on
+    /// execution. A vault without that limit, or without these getters, is not restricted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `RpcError` if the deposit limit would be exceeded or an RPC call fails.
+    pub async fn ensure_withdrawal_allowed(
+        rpc_client: &RpcClient,
+        network: Network,
+        usd_vault_address: Address,
+        user_address: Address,
+        sdai_amount: U256,
+    ) -> Result<(), RpcError> {
+        let limit_call_data =
+            USDVault::LIMIT_WITHDRAWALS_TO_DEPOSITSCall {}.abi_encode();
+        let limited = match rpc_client
+            .eth_call(network, usd_vault_address, limit_call_data.into())
+            .await
+        {
+            Ok(result) if result.len() >= 32 => result[31] != 0,
+            // No such getter: this deployment has no deposit limit.
+            Ok(_) => false,
+            Err(RpcError::RpcResponseError {
+                code,
+                error_message,
+            }) if is_eth_call_revert(code, &error_message) => false,
+            Err(e) => return Err(e),
+        };
+        if !limited {
+            return Ok(());
+        }
+
+        let deposited_call_data = USDVault::sDAIBalancesCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let result = rpc_client
+            .eth_call(network, usd_vault_address, deposited_call_data.into())
+            .await?;
+        if result.len() < 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid sDAIBalances() response: expected at least 32 bytes, got {} bytes",
+                    result.len()
+                ),
+            });
+        }
+        let deposited = U256::from_be_slice(&result[..32]);
+
+        if deposited < sdai_amount {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Cannot migrate - USDVault only redeems up to the amount deposited through it (deposited={deposited}, sdai_balance={sdai_amount})"
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Calculates USDC amount from sDAI amount and conversion rate.
@@ -365,7 +430,100 @@ impl Is4337Encodable for UsdLegacyVault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::utils::parse_units;
+    use crate::transactions::rpc::RpcClient;
+    use alloy::{
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::utils::parse_units,
+        providers::ProviderBuilder,
+    };
+    use std::sync::Arc;
+
+    const VAULT: Address = address!("0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB");
+    const USER: Address = address!("0x4564420674EA68fcc61b463C0494807C759d47e6");
+
+    fn word(value: U256) -> String {
+        format!("0x{}", hex::encode(value.to_be_bytes::<32>()))
+    }
+
+    /// Mocks the vault's limit flag and the user's recorded deposits (when given). Calls without
+    /// a mock fall through to the returned anvil node, which must outlive the client.
+    fn rpc_client(
+        limited: Option<bool>,
+        deposited: Option<U256>,
+    ) -> (RpcClient, AnvilInstance) {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        if let Some(limited) = limited {
+            http_client.set_response_for_address_and_data(
+                VAULT,
+                format!(
+                    "0x{}",
+                    hex::encode(
+                        USDVault::LIMIT_WITHDRAWALS_TO_DEPOSITSCall {}.abi_encode()
+                    )
+                ),
+                word(U256::from(u8::from(limited))),
+            );
+        }
+        if let Some(deposited) = deposited {
+            http_client.set_response_for_address_and_data(
+                VAULT,
+                format!(
+                    "0x{}",
+                    hex::encode(
+                        USDVault::sDAIBalancesCall { account: USER }.abi_encode()
+                    )
+                ),
+                word(deposited),
+            );
+        }
+        (RpcClient::new(Arc::new(http_client)), anvil)
+    }
+
+    async fn check(client: &RpcClient, sdai_amount: u64) -> Result<(), RpcError> {
+        UsdLegacyVault::ensure_withdrawal_allowed(
+            client,
+            Network::WorldChain,
+            VAULT,
+            USER,
+            U256::from(sdai_amount),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn withdrawal_above_recorded_deposits_is_rejected() {
+        let (client, _anvil) = rpc_client(Some(true), Some(U256::from(5u64)));
+        let error = check(&client, 10).await.unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("Cannot migrate - USDVault only redeems up to"),
+            "{message}"
+        );
+        assert!(message.contains("deposited=5"), "{message}");
+        assert!(message.contains("sdai_balance=10"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn withdrawal_within_recorded_deposits_is_allowed() {
+        let (client, _anvil) = rpc_client(Some(true), Some(U256::from(10u64)));
+        check(&client, 10).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unlimited_vault_is_not_restricted() {
+        // No `sDAIBalances` mock: it must not even be read.
+        let (client, _anvil) = rpc_client(Some(false), None);
+        check(&client, 10).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn vault_without_the_limit_getter_is_not_restricted() {
+        // No mocks: the call goes to an address without code and returns nothing.
+        let (client, _anvil) = rpc_client(None, None);
+        check(&client, 10).await.unwrap();
+    }
 
     #[test]
     fn test_calculate_usdc_amount() {

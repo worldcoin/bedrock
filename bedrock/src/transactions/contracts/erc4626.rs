@@ -722,7 +722,7 @@ fn decode_address_word(result: &[u8]) -> Option<Address> {
 
 /// Whether a JSON-RPC error is an `eth_call` revert: code `3`, or the generic `-32000` code
 /// with an "execution reverted" message.
-fn is_eth_call_revert(code: i64, error_message: &str) -> bool {
+pub(crate) fn is_eth_call_revert(code: i64, error_message: &str) -> bool {
     code == 3
         || (code == -32000
             && error_message.to_lowercase().contains("execution reverted"))
