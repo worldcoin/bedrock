@@ -81,17 +81,12 @@ impl Erc4626Vault {
             .await?;
 
         // Ensure the response is at least 32 bytes (standard ABI encoding for address)
-        if result.len() < 32 {
-            return Err(RpcError::InvalidResponse {
-                error_message: format!(
-                    "Invalid asset() response: expected at least 32 bytes, got {} bytes",
-                    result.len()
-                ),
-            });
-        }
-
-        // Extract the address from the last 20 bytes of the 32-byte word
-        Ok(Address::from_slice(&result[12..32]))
+        decode_address_word(&result).ok_or_else(|| RpcError::InvalidResponse {
+            error_message: format!(
+                "Invalid asset() response: expected at least 32 bytes, got {} bytes",
+                result.len()
+            ),
+        })
     }
 
     /// Helper function to fetch and decode a U256 value (balance) from an RPC call.
@@ -566,14 +561,9 @@ impl Erc4626Vault {
                 _ => e,
             })?;
 
-        if result.len() < 32 {
-            return Err(unsupported(format!(
-                "asset() returned {} bytes",
-                result.len()
-            )));
-        }
-
-        Ok(Address::from_slice(&result[12..32]))
+        decode_address_word(&result).ok_or_else(|| {
+            unsupported(format!("asset() returned {} bytes", result.len()))
+        })
     }
 
     /// Resolves the full redeemable share amount: `min(balanceOf, maxRedeem)`.
@@ -723,6 +713,11 @@ impl Erc4626Vault {
             metadata,
         }
     }
+}
+
+/// Decodes an ABI-encoded address: the last 20 bytes of the first 32-byte word.
+fn decode_address_word(result: &[u8]) -> Option<Address> {
+    (result.len() >= 32).then(|| Address::from_slice(&result[12..32]))
 }
 
 /// Whether a JSON-RPC error is an `eth_call` revert: code `3`, or the generic `-32000` code

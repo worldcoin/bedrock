@@ -438,13 +438,16 @@ enum MigrationSource {
 /// strings, so this matches on their text; a unit test pins the messages it relies on.
 fn failure_class(error_message: &str) -> &'static str {
     // Reverts and short `asset()` replies from the vaults are deterministic, not provider faults.
-    const USER_STATE: [&str; 6] = [
+    const USER_STATE: [&str; 7] = [
         "Cannot migrate",
         "must differ",
         "Unsupported migration source",
         "Asset address mismatch",
         "Invalid asset() response",
-        "execution reverted",
+        // JSON-RPC revert codes only, so a provider error that merely mentions a revert is not
+        // classified as user state.
+        "RPC error 3:",
+        "RPC error -32000: execution reverted",
     ];
     if USER_STATE.iter().any(|m| error_message.contains(m)) {
         "user_state"

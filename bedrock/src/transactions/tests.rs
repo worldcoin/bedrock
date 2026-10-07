@@ -798,6 +798,7 @@ fn migration_failures_are_classified_for_logging() {
         "Failed to create WLDVault migration: Invalid response format: Asset address mismatch between WLDVault and ERC-4626 Vault",
         "Failed to create ERC4626 migrate: Invalid response format: Invalid asset() response: expected at least 32 bytes, got 0 bytes",
         "Failed to create ERC4626 migrate: RPC error 3: execution reverted",
+        "Failed to create ERC4626 migrate: RPC error -32000: execution reverted",
         "Failed to create ERC4626 migrate: Invalid response format: Unsupported migration source 0x01: not an ERC-4626 vault or a known legacy vault (asset() returned 0 bytes)",
         "Failed to create ERC4626 migrate: Invalid response format: Source and destination ERC-4626 vaults must differ",
         "Source and destination vaults must differ",
@@ -813,6 +814,7 @@ fn migration_failures_are_classified_for_logging() {
         "Failed to get RPC client: HTTP client not initialized",
         "Failed to create ERC4626 migrate: HTTP request failed: timed out",
         "Failed to fetch sDAI balance: RPC error 429: rate limit exceeded",
+        "Failed to create ERC4626 migrate: RPC error -32603: upstream error: execution reverted while proxying, request timed out",
     ] {
         assert_eq!(failure_class(message), "dependency", "{message}");
     }
