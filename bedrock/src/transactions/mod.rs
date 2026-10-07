@@ -32,10 +32,8 @@ mod tfh_paymaster;
 
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
-/// Deprecated per-vault migration entry points, kept so existing clients keep working.
-///
-/// They live in their own module so the `deprecated` allowance (needed because UniFFI's
-/// generated scaffolding calls them) does not leak into the rest of `transactions`.
+/// Deprecated per-vault migration entry points, kept for existing clients. They live in their
+/// own module so the `allow(deprecated)` that UniFFI's scaffolding needs stays contained.
 mod deprecated_migrations {
     #![allow(deprecated)]
 
@@ -436,20 +434,17 @@ enum MigrationSource {
     Erc4626,
 }
 
-/// Error text for a migration whose source and destination are the same legacy vault.
-const MIGRATION_SAME_VAULT_ERROR: &str = "Source and destination vaults must differ";
-
-/// Coarse class of a migration failure, used as a log field so expected user-state errors can
-/// be told apart from dependency and signing faults.
-///
-/// Migration errors are plain strings, so this matches on their text; the unit tests pin the
-/// messages it relies on.
+/// Coarse class of a migration failure for the log field `failure_class`. Errors are plain
+/// strings, so this matches on their text; a unit test pins the messages it relies on.
 fn failure_class(error_message: &str) -> &'static str {
-    const USER_STATE: [&str; 4] = [
+    // Reverts and short `asset()` replies from the vaults are deterministic, not provider faults.
+    const USER_STATE: [&str; 6] = [
         "Cannot migrate",
         "must differ",
         "Unsupported migration source",
         "Asset address mismatch",
+        "Invalid asset() response",
+        "execution reverted",
     ];
     if USER_STATE.iter().any(|m| error_message.contains(m)) {
         "user_state"
@@ -485,14 +480,9 @@ impl MigrationSource {
     }
 }
 
-/// Per-source builders behind [`SafeSmartAccount::transaction_erc4626_migrate`].
-///
-/// Kept out of the `#[bedrock_export]` block: these are not part of the foreign interface.
+/// Private builders behind [`SafeSmartAccount::transaction_erc4626_migrate`].
 impl SafeSmartAccount {
-    /// Runs the migration for an already-classified source and logs failures.
-    ///
-    /// Failures are logged at warning level with the source kind, a coarse failure class and the
-    /// vault addresses so they can be aggregated; the error itself is returned unchanged.
+    /// Runs the migration for a classified source and logs failures as a warning.
     async fn migrate_from_source(
         &self,
         source: MigrationSource,
@@ -523,12 +513,11 @@ impl SafeSmartAccount {
         from_vault_address: Address,
         to_vault_address: Address,
     ) -> Result<HexEncodedData, TransactionError> {
-        // The ERC-4626 builder rejects identical vaults itself; legacy vaults have no `asset()`,
-        // so check here to fail with a clear error.
+        // The ERC-4626 builder has its own same-vault check.
         if source != MigrationSource::Erc4626 && from_vault_address == to_vault_address
         {
             return Err(TransactionError::Generic {
-                error_message: MIGRATION_SAME_VAULT_ERROR.to_string(),
+                error_message: "Source and destination vaults must differ".to_string(),
             });
         }
 
@@ -564,9 +553,7 @@ impl SafeSmartAccount {
         }
     }
 
-    /// Signs and submits a built migration transaction, returning the user operation hash.
-    ///
-    /// `label` names the operation in error messages (e.g. "ERC4626 migrate").
+    /// Signs and submits a built migration; `label` names it in error messages.
     async fn submit_migration<T: Is4337Encodable>(
         &self,
         transaction: T,
@@ -1254,19 +1241,8 @@ impl SafeSmartAccount {
 
     /// Migrates a savings position into an ERC4626 vault on World Chain.
     ///
-    /// This is the single entry point for vault migrations. The source kind is chosen from
-    /// `from_vault_address`:
-    /// - the legacy `WLDVault` or one of the legacy `USDVault` deployments: the full legacy
-    ///   position is withdrawn (USD goes through a Permit2-signed `redeemSDAI`) and deposited
-    ///   into the destination vault;
-    /// - any other address is treated as a source ERC4626 vault.
-    ///
-    /// Legacy sources move the whole position and differ from the ERC4626 path: there is no
-    /// `maxRedeem` cap and no 0.03% deposit haircut. `WLDVault` withdraws, approves and deposits
-    /// the full balance; `USDVault` redeems all sDAI at the DSR conversion rate with that same
-    /// amount as `amountOutMin`, so the call reverts if the vault pays out less than the rate
-    /// implies. The USD path also needs a Permit2 signature valid for 3 minutes. Some `USDVault`
-    /// deployments only redeem up to what the account deposited through them.
+    /// The source is chosen from `from_vault_address`: the legacy `WLDVault`, a legacy
+    /// `USDVault` (both moved in full), or any other address, treated as an ERC4626 vault.
     ///
     /// For an ERC4626 source this builds one atomic bundle with:
     /// 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
@@ -1281,6 +1257,10 @@ impl SafeSmartAccount {
     /// If source `maxRedeem < balanceOf`, only the redeemable portion moves; remaining source
     /// shares can be migrated in a later call. Do not gate Morpho V2 destinations on
     /// `maxDeposit` / `maxRedeem` (often 0 by design).
+    ///
+    /// Legacy sources have no `maxRedeem` cap or haircut. `USDVault` redeems all sDAI at the
+    /// DSR rate (the amount is also `amountOutMin`) using a Permit2 signature valid for
+    /// 3 minutes, and some deployments only redeem what the account deposited through them.
     ///
     /// # Arguments
     /// - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).

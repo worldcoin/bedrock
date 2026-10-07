@@ -762,7 +762,6 @@ fn migration_source_is_chosen_from_the_source_address() {
             MigrationSource::UsdLegacy
         );
     }
-    // Morpho WARS V1 vault is a plain ERC-4626 source.
     assert_eq!(
         MigrationSource::classify(address!(
             "0x1C94c7A2c71ECF13104c31F49d5138EDb099D25D"
@@ -792,15 +791,16 @@ async fn migrate_rejects_same_source_and_destination_for_legacy_sources() {
 
 #[test]
 fn migration_failures_are_classified_for_logging() {
-    // Expected user-state outcomes.
     for message in [
         "Cannot migrate zero balance",
         "Cannot migrate with zero sDAI balance",
         "Failed to create ERC4626 migrate: Invalid response format: Cannot migrate - no source vault shares are currently redeemable (share_balance=0, max_redeem=0)",
         "Failed to create WLDVault migration: Invalid response format: Asset address mismatch between WLDVault and ERC-4626 Vault",
+        "Failed to create ERC4626 migrate: Invalid response format: Invalid asset() response: expected at least 32 bytes, got 0 bytes",
+        "Failed to create ERC4626 migrate: RPC error 3: execution reverted",
         "Failed to create ERC4626 migrate: Invalid response format: Unsupported migration source 0x01: not an ERC-4626 vault or a known legacy vault (asset() returned 0 bytes)",
         "Failed to create ERC4626 migrate: Invalid response format: Source and destination ERC-4626 vaults must differ",
-        MIGRATION_SAME_VAULT_ERROR,
+        "Source and destination vaults must differ",
     ] {
         assert_eq!(failure_class(message), "user_state", "{message}");
     }

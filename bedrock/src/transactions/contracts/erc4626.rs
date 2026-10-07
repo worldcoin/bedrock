@@ -537,13 +537,8 @@ impl Erc4626Vault {
         }))
     }
 
-    /// Fetches the source vault's underlying asset for a migration.
-    ///
-    /// An `eth_call` revert or a short/empty return means the contract has no `asset()`: it is
-    /// neither an ERC-4626 vault nor one of the known legacy vaults, which gets a dedicated
-    /// error. Every other failure (HTTP errors, rate limits, other JSON-RPC errors, malformed
-    /// provider responses) passes through unchanged so transient provider problems are not
-    /// reported as an unsupported source.
+    /// Fetches the source vault's asset. A revert or short return means the contract has no
+    /// `asset()` and gets an "unsupported source" error; any other failure passes through.
     async fn fetch_migration_source_asset(
         rpc_client: &RpcClient,
         network: Network,
@@ -571,7 +566,6 @@ impl Erc4626Vault {
                 _ => e,
             })?;
 
-        // An ABI-encoded address is one 32-byte word; shorter means there is no `asset()`.
         if result.len() < 32 {
             return Err(unsupported(format!(
                 "asset() returned {} bytes",
@@ -579,7 +573,6 @@ impl Erc4626Vault {
             )));
         }
 
-        // The address is in the last 20 bytes of the first word.
         Ok(Address::from_slice(&result[12..32]))
     }
 
@@ -732,12 +725,8 @@ impl Erc4626Vault {
     }
 }
 
-/// Whether a JSON-RPC error is an `eth_call` execution revert.
-///
-/// Nodes report reverts as code `3` (geth, anvil, Alchemy) or as a generic server error
-/// (`-32000`) whose message says "execution reverted". The message is only trusted together
-/// with that generic code so a provider wrapping another failure in similar text is not
-/// mistaken for a revert.
+/// Whether a JSON-RPC error is an `eth_call` revert: code `3`, or the generic `-32000` code
+/// with an "execution reverted" message.
 fn is_eth_call_revert(code: i64, error_message: &str) -> bool {
     code == 3
         || (code == -32000
@@ -1664,7 +1653,6 @@ mod tests {
     fn test_is_eth_call_revert_only_matches_reverts() {
         assert!(is_eth_call_revert(3, "execution reverted"));
         assert!(is_eth_call_revert(-32000, "Execution reverted: no asset"));
-        // Provider-side failures must not look like a missing `asset()`.
         assert!(!is_eth_call_revert(429, "rate limit exceeded"));
         assert!(!is_eth_call_revert(-32005, "request timed out"));
         assert!(!is_eth_call_revert(-32603, "internal error"));
@@ -1676,7 +1664,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_erc4626_migrate_unsupported_source_error() {
-        // No mocks: the source has no code, so `asset()` returns empty data.
         let anvil = Anvil::new().spawn();
         let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
         let rpc_client = RpcClient::new(Arc::new(
@@ -1718,7 +1705,6 @@ mod tests {
             Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
         let user_address =
             Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
-        // A provider glitch: the `eth_call` result is not valid hex.
         http_client.set_response_for_address_and_data(
             from_vault_address,
             format!("0x{}", hex::encode(IERC4626::assetCall {}.abi_encode())),
