@@ -81,12 +81,17 @@ impl Erc4626Vault {
             .await?;
 
         // Ensure the response is at least 32 bytes (standard ABI encoding for address)
-        decode_address_word(&result).ok_or_else(|| RpcError::InvalidResponse {
-            error_message: format!(
-                "Invalid asset() response: expected at least 32 bytes, got {} bytes",
-                result.len()
-            ),
-        })
+        if result.len() < 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid asset() response: expected at least 32 bytes, got {} bytes",
+                    result.len()
+                ),
+            });
+        }
+
+        // Extract the address from the last 20 bytes of the 32-byte word
+        Ok(Address::from_slice(&result[12..32]))
     }
 
     /// Helper function to fetch and decode a U256 value (balance) from an RPC call.

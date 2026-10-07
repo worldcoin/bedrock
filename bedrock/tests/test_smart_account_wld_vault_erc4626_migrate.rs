@@ -1,4 +1,5 @@
-//! E2E test for migrating from WLDVault to ERC4626 vault using Morpho as example.
+//! E2E test for migrating from WLDVault to an ERC4626 vault (Morpho) through
+//! `transaction_erc4626_migrate`.
 use std::sync::Arc;
 
 mod common;
@@ -31,7 +32,7 @@ sol! {
 }
 
 #[tokio::test]
-async fn test_wld_vault_migration() -> anyhow::Result<()> {
+async fn test_wld_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
     let wld_address =
         Address::from_str("0x2cFc85d8E48F8EAB294be644d9E25C3030863003").unwrap();
     let wld_vault_address =
@@ -61,7 +62,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
     println!("✓ Deployed Safe at: {safe_address}");
 
     let safe_account = SafeSmartAccount::from_private_key_hex(
-        owner_key_hex,
+        owner_key_hex.clone(),
         &safe_address.to_string(),
     )?;
 
@@ -80,7 +81,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
 
     // Test migration with zero balance - should fail
     let result = safe_account
-        .transaction_wld_legacy_vault_migrate(
+        .transaction_erc4626_migrate(
             &wld_vault_address.to_string(),
             &morpho_vault_address.to_string(),
         )
@@ -156,7 +157,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
 
     // Test migration with bad vault address - should fail
     let result = safe_account
-        .transaction_wld_legacy_vault_migrate(
+        .transaction_erc4626_migrate(
             &wld_vault_address.to_string(),
             &bad_morpho_vault_address.to_string(),
         )
@@ -176,7 +177,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
 
     // Now perform successful migration
     safe_account
-        .transaction_wld_legacy_vault_migrate(
+        .transaction_erc4626_migrate(
             &wld_vault_address.to_string(),
             &morpho_vault_address.to_string(),
         )
