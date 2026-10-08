@@ -234,8 +234,15 @@ async fn prepare_default_transfer(
                 error_message = error,
                 "Failed to prepare ERC-20 transfer"
             );
-            TransactionError::Generic {
-                error_message: format!("Failed to prepare ERC-20 transfer: {error}"),
+            match error {
+                RpcError::InsufficientFunds { token_address } => {
+                    TransactionError::InsufficientFunds { token_address }
+                }
+                error => TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to prepare ERC-20 transfer: {error}"
+                    ),
+                },
             }
         })?;
 

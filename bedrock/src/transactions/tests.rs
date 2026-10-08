@@ -617,6 +617,29 @@ async fn token_sponsorship_error_stops_without_submission() {
 }
 
 #[tokio::test]
+async fn sponsorship_fee_balance_failure_is_typed_before_a_quote_is_available() {
+    let (rpc, _) = rpc(vec![json!({
+        "jsonrpc": "2.0", "id": "test",
+        "error": {
+            "code": -32602, "message": "Insufficient funds for network fee",
+            "data": {
+                "reason": "insufficient_funds",
+                "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
+                "retryable": false,
+            },
+        },
+    })]);
+    let error =
+        prepare_default_transfer(&rpc, transfer(), USDC_ADDRESS, U256::from(10001))
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(error, TransactionError::InsufficientFunds { token_address }
+        if token_address == WLD_ADDRESS.to_string())
+    );
+}
+
+#[tokio::test]
 async fn balance_covers_transfer_and_final_fee() {
     for (fee_token, balance, insufficient) in [
         (WLD_ADDRESS, 17, false),

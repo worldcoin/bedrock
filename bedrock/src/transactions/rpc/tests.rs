@@ -126,6 +126,34 @@ async fn test_pm_sponsor_user_operation_propagates_rpc_errors() {
     assert!(error.to_string().contains("sponsorship declined"));
 }
 
+#[tokio::test]
+async fn invalid_insufficient_funds_details_remain_rpc_errors() {
+    for data in [
+        json!({"reason": "insufficient_funds"}),
+        json!({"reason": "insufficient_funds", "token": "invalid"}),
+        json!({"reason": "other", "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003"}),
+    ] {
+        let response = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "id": "test",
+            "error": {"code": -32602, "message": "request declined", "data": data},
+        }))
+        .unwrap();
+        let client = RpcClient::new(Arc::new(StaticHttpClient { response }));
+        let error = client
+            .pm_sponsor_user_operation(
+                Network::WorldChain,
+                &UserOperation::default(),
+                Address::ZERO,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, RpcError::RpcResponseError { code: -32602, error_message }
+            if error_message == "request declined")
+        );
+    }
+}
+
 #[test]
 fn test_user_operation_serialization_with_null_fields() {
     let user_op = UserOperation {
