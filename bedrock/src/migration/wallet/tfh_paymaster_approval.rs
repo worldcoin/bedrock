@@ -133,7 +133,7 @@ impl WalletMigration for TfhPaymasterApprovalMigration {
             &approvals,
             TransactionTypeId::TfhPaymasterApprove,
         )
-        .sign_and_execute_v3(&self.safe_account, Network::WorldChain, None, true)
+        .sign_and_execute_v3(&self.safe_account, true)
         .await;
 
         match submission {

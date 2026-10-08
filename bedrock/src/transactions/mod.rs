@@ -533,7 +533,7 @@ impl SafeSmartAccount {
             }
         })?;
         let user_op_hash = self
-            .sign_and_submit_v3(user_operation, Network::WorldChain, rpc_client)
+            .sign_and_submit_v3(user_operation, rpc_client)
             .await
             .map_err(|e| {
                 crate::error!(

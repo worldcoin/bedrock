@@ -70,19 +70,18 @@ impl SafeSmartAccount {
         Ok(())
     }
 
-    /// Signs and broadcasts an already priced operation through the V3 route.
+    /// Signs and broadcasts an already priced operation through World Chain V3.
     ///
     /// # Errors
     /// Returns a signing or V3 RPC error.
     pub(crate) async fn sign_and_submit_v3(
         &self,
         mut operation: UserOperation,
-        network: Network,
         rpc_client: &RpcClient,
     ) -> Result<FixedBytes<32>, RpcError> {
-        self.sign_user_operation(&mut operation, network)?;
+        self.sign_user_operation(&mut operation, Network::WorldChain)?;
         rpc_client
-            .send_user_operation_v3(network, &operation, *ENTRYPOINT_4337)
+            .send_user_operation_v3(Network::WorldChain, &operation, *ENTRYPOINT_4337)
             .await
     }
 }
@@ -171,7 +170,7 @@ pub trait Is4337Encodable {
         Ok(user_op_hash)
     }
 
-    /// Builds, sponsors, signs, and submits a 4337 operation through V3.
+    /// Builds, sponsors, signs, and submits a 4337 operation through World Chain V3.
     /// `expect_sponsored` requires a response without a user fee; `false`
     /// requires a self-sponsored response with fee metadata.
     ///
@@ -181,15 +180,17 @@ pub trait Is4337Encodable {
     async fn sign_and_execute_v3(
         &self,
         safe_account: &SafeSmartAccount,
-        network: Network,
-        metadata: Option<Self::MetadataArg>,
         expect_sponsored: bool,
     ) -> Result<FixedBytes<32>, RpcError> {
         let rpc_client = crate::transactions::rpc::get_rpc_client()?;
         let mut operation =
-            self.build_preflight_user_operation(safe_account.wallet_address, metadata)?;
+            self.build_preflight_user_operation(safe_account.wallet_address, None)?;
         let sponsorship = rpc_client
-            .pm_sponsor_user_operation(network, &operation, *ENTRYPOINT_4337)
+            .pm_sponsor_user_operation(
+                Network::WorldChain,
+                &operation,
+                *ENTRYPOINT_4337,
+            )
             .await?;
         if sponsorship.fee.is_none() != expect_sponsored {
             return Err(RpcError::InvalidResponse {
@@ -198,9 +199,7 @@ pub trait Is4337Encodable {
             });
         }
         operation = operation.with_pm_sponsorship(&sponsorship);
-        safe_account
-            .sign_and_submit_v3(operation, network, rpc_client)
-            .await
+        safe_account.sign_and_submit_v3(operation, rpc_client).await
     }
 }
 
