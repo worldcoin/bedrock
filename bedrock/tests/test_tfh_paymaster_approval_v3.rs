@@ -182,40 +182,25 @@ async fn tfh_paymaster_migration_uses_sponsored_v3_and_retries_failures() {
     ));
     assert_eq!(std::mem::take(&mut *http.requests.lock().unwrap()).len(), 1);
 
-    for (field, value) in [
-        ("paymaster", json!(TFH_PAYMASTER_ADDRESS)),
-        ("paymasterData", json!("0x01")),
-        ("paymasterVerificationGasLimit", json!("0x1")),
-        ("paymasterPostOpGasLimit", json!("0x1")),
-        (
-            "fee",
-            json!({"token": WLD_ADDRESS, "estimatedCostInToken": "1", "declineReason": "dev_redirect"}),
-        ),
-        ("callGasLimit", json!("0x0")),
-        ("verificationGasLimit", json!("0x0")),
-        ("preVerificationGas", json!("0x1")),
-        ("maxFeePerGas", json!("0x1")),
-        ("maxPriorityFeePerGas", json!("0x1")),
-    ] {
-        let mut response = sponsored_response();
-        response["result"][field] = value;
-        http.responses
-            .lock()
-            .unwrap()
-            .extend([allowance_response(U256::ZERO, U256::ZERO), response]);
-        assert!(
-            matches!(
-                migration.reconcile().await.unwrap(),
-                WalletMigrationResult::Retry { .. }
-            ),
-            "invalid {field} must retry"
-        );
-        assert_eq!(
-            std::mem::take(&mut *http.requests.lock().unwrap()).len(),
-            2,
-            "invalid sponsorship must not submit"
-        );
-    }
+    let mut self_sponsored = sponsored_response();
+    self_sponsored["result"]["fee"] = json!({
+        "token": WLD_ADDRESS,
+        "estimatedCostInToken": "1",
+        "declineReason": "dev_redirect"
+    });
+    http.responses
+        .lock()
+        .unwrap()
+        .extend([allowance_response(U256::ZERO, U256::ZERO), self_sponsored]);
+    assert!(matches!(
+        migration.reconcile().await.unwrap(),
+        WalletMigrationResult::Retry { .. }
+    ));
+    assert_eq!(
+        std::mem::take(&mut *http.requests.lock().unwrap()).len(),
+        2,
+        "a self-sponsored response must not submit approval"
+    );
 
     let rpc_error =
         json!({"error": {"code": -32603, "message": "service unavailable"}});

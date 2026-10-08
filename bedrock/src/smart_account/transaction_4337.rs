@@ -7,7 +7,7 @@ use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
-use crate::transactions::rpc::{RpcError, RpcProviderName};
+use crate::transactions::rpc::{RpcClient, RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::Duration;
@@ -68,6 +68,22 @@ impl SafeSmartAccount {
         user_operation.signature = full_signature.into();
 
         Ok(())
+    }
+
+    /// Signs and broadcasts an already priced operation through the V3 route.
+    ///
+    /// # Errors
+    /// Returns a signing or V3 RPC error.
+    pub(crate) async fn sign_and_submit_v3(
+        &self,
+        mut operation: UserOperation,
+        network: Network,
+        rpc_client: &RpcClient,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        self.sign_user_operation(&mut operation, network)?;
+        rpc_client
+            .send_user_operation_v3(network, &operation, *ENTRYPOINT_4337)
+            .await
     }
 }
 
@@ -153,6 +169,38 @@ pub trait Is4337Encodable {
             .await?;
 
         Ok(user_op_hash)
+    }
+
+    /// Builds, sponsors, signs, and submits a 4337 operation through V3.
+    /// `expect_sponsored` requires a response without a user fee; `false`
+    /// requires a self-sponsored response with fee metadata.
+    ///
+    /// # Errors
+    /// Returns an error if preparation, sponsorship, signing, or submission fails,
+    /// or if the sponsorship response does not match `expect_sponsored`.
+    async fn sign_and_execute_v3(
+        &self,
+        safe_account: &SafeSmartAccount,
+        network: Network,
+        metadata: Option<Self::MetadataArg>,
+        expect_sponsored: bool,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
+        let mut operation =
+            self.build_preflight_user_operation(safe_account.wallet_address, metadata)?;
+        let sponsorship = rpc_client
+            .pm_sponsor_user_operation(network, &operation, *ENTRYPOINT_4337)
+            .await?;
+        if sponsorship.fee.is_none() != expect_sponsored {
+            return Err(RpcError::InvalidResponse {
+                error_message: "V3 sponsorship did not match the caller's expectation"
+                    .to_string(),
+            });
+        }
+        operation = operation.with_pm_sponsorship(&sponsorship);
+        safe_account
+            .sign_and_submit_v3(operation, network, rpc_client)
+            .await
     }
 }
 

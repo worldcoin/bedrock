@@ -10,7 +10,7 @@ use alloy::primitives::{uint, Address, Bytes, U256};
 use crate::migration::wallet_migration::{WalletMigration, WalletMigrationResult};
 use crate::migration::MigrationError;
 use crate::primitives::Network;
-use crate::smart_account::{Is4337Encodable, SafeSmartAccount, ENTRYPOINT_4337};
+use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
 use crate::transactions::contracts::erc20::{BatchErc20Approval, Erc20};
 use crate::transactions::contracts::worldchain::{
     TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WLD_ADDRESS,
@@ -128,33 +128,12 @@ impl WalletMigration for TfhPaymasterApprovalMigration {
             .collect();
         let names: Vec<&str> = gap.iter().map(|(_, _, name)| *name).collect();
 
-        let submission = async {
-            let rpc_client = get_rpc_client()?;
-            let operation = BatchErc20Approval::new(
-                TFH_PAYMASTER_ADDRESS,
-                &approvals,
-                TransactionTypeId::TfhPaymasterApprove,
-            )
-            .build_preflight_user_operation(self.safe_account.wallet_address, None)?;
-            let sponsorship = rpc_client
-                .pm_sponsor_user_operation(
-                    Network::WorldChain,
-                    &operation,
-                    *ENTRYPOINT_4337,
-                )
-                .await?;
-
-            let mut operation = operation.with_pm_sponsorship(&sponsorship);
-            self.safe_account
-                .sign_user_operation(&mut operation, Network::WorldChain)?;
-            rpc_client
-                .send_user_operation_v3(
-                    Network::WorldChain,
-                    &operation,
-                    *ENTRYPOINT_4337,
-                )
-                .await
-        }
+        let submission = BatchErc20Approval::new(
+            TFH_PAYMASTER_ADDRESS,
+            &approvals,
+            TransactionTypeId::TfhPaymasterApprove,
+        )
+        .sign_and_execute_v3(&self.safe_account, Network::WorldChain, None, true)
         .await;
 
         match submission {

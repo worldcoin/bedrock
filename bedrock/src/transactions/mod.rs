@@ -501,15 +501,14 @@ impl SafeSmartAccount {
         }
 
         let mut user_operation = prepared_transaction.user_operation.clone();
-        self.sign_user_operation(&mut user_operation, Network::WorldChain)
-            .map_err(|e| {
-                log_failure("sign", &e);
-                TransactionError::Generic {
-                    error_message: format!("Failed to sign transaction: {e}"),
-                }
-            })?;
-
         if let Some(url) = &prepared_transaction.custom_bundler_url {
+            self.sign_user_operation(&mut user_operation, Network::WorldChain)
+                .map_err(|e| {
+                    log_failure("sign", &e);
+                    TransactionError::Generic {
+                        error_message: format!("Failed to sign transaction: {e}"),
+                    }
+                })?;
             let hash = custom_bundler::send_user_operation_to_url(
                 url.expose_secret(),
                 &user_operation,
@@ -533,17 +532,12 @@ impl SafeSmartAccount {
                 ),
             }
         })?;
-        let user_op_hash = rpc_client
-            .send_user_operation_v3(
-                Network::WorldChain,
-                &user_operation,
-                *ENTRYPOINT_4337,
-            )
+        let user_op_hash = self
+            .sign_and_submit_v3(user_operation, Network::WorldChain, rpc_client)
             .await
             .map_err(|e| {
                 crate::error!(
-                    user_operation = format!("{user_operation:?}"),
-                    sender = user_operation.sender,
+                    sender = prepared_transaction.user_operation.sender,
                     network = Network::WorldChain.network_name(),
                     outcome = "error",
                     error_message = e,
@@ -556,7 +550,7 @@ impl SafeSmartAccount {
 
         crate::info!(
             user_op_hash = user_op_hash,
-            sender = user_operation.sender,
+            sender = prepared_transaction.user_operation.sender,
             network = Network::WorldChain.network_name(),
             "Submitted prepared transaction"
         );
