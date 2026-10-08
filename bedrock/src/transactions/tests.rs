@@ -302,7 +302,7 @@ async fn free_preparation_has_no_fee_or_balance_reads() {
     let original = transfer();
     let (rpc, http) = rpc(vec![json!({
         "jsonrpc": "2.0", "id": "test", "result": {
-            "callGasLimit": "0x0", "verificationGasLimit": "0x0", "preVerificationGas": "0x0",
+            "callGasLimit": "0xc350", "verificationGasLimit": "0xea60", "preVerificationGas": "0x0",
             "maxFeePerGas": "0x0", "maxPriorityFeePerGas": "0x0"
         }
     })]);

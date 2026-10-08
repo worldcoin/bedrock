@@ -246,13 +246,10 @@ async fn prepare_default_transfer(
         response.paymaster_verification_gas_limit,
         response.paymaster_post_op_gas_limit,
     ) {
-        (None, None, None, None, None)
-            if response.max_fee_per_gas.is_zero()
-                && response.max_priority_fee_per_gas.is_zero() =>
+        (None, None, None, None, None) if response.is_sponsored() => None,
+        (Some(paymaster), Some(fee), Some(data), Some(_), Some(_))
+            if response.is_self_sponsored() =>
         {
-            None
-        }
-        (Some(paymaster), Some(fee), Some(data), Some(_), Some(_)) => {
             let token = fee.token;
             let reason = &fee.decline_reason;
             if paymaster != TFH_PAYMASTER_ADDRESS {

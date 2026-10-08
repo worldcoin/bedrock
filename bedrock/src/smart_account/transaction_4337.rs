@@ -193,18 +193,9 @@ pub trait Is4337Encodable {
             )
             .await?;
         let valid = if expect_sponsored {
-            sponsorship.paymaster.is_none()
-                && sponsorship.paymaster_data.is_none()
-                && sponsorship.paymaster_verification_gas_limit.is_none()
-                && sponsorship.paymaster_post_op_gas_limit.is_none()
-                && sponsorship.fee.is_none()
-                && !sponsorship.call_gas_limit.is_zero()
-                && !sponsorship.verification_gas_limit.is_zero()
-                && sponsorship.pre_verification_gas.is_zero()
-                && sponsorship.max_fee_per_gas.is_zero()
-                && sponsorship.max_priority_fee_per_gas.is_zero()
+            sponsorship.is_sponsored()
         } else {
-            sponsorship.fee.is_some()
+            sponsorship.is_self_sponsored()
         };
         if !valid {
             return Err(RpcError::InvalidResponse {
