@@ -274,7 +274,7 @@ where
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
-                        "preVerificationGas": "0x200000",
+                        "preVerificationGas": "0x0",
                         "verificationGasLimit": "0x200000",
                         "callGasLimit": "0x200000",
                         "maxPriorityFeePerGas": "0x0",

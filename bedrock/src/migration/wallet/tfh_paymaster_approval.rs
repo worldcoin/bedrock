@@ -1,6 +1,8 @@
 //! Tops up the Safe's ERC-20 allowance to the TFH multi-token paymaster.
 //!
 //! Registered in every environment by `WalletMigrationController`.
+//! Approval operations use Temporal's V3 sponsorship and submission endpoints
+//! and require sponsorship without a token fee to repair missing allowances.
 
 use std::sync::Arc;
 
@@ -9,12 +11,12 @@ use alloy::primitives::{uint, Address, Bytes, U256};
 use crate::migration::wallet_migration::{WalletMigration, WalletMigrationResult};
 use crate::migration::MigrationError;
 use crate::primitives::Network;
-use crate::smart_account::{Is4337Encodable, SafeSmartAccount};
+use crate::smart_account::{Is4337Encodable, SafeSmartAccount, ENTRYPOINT_4337};
 use crate::transactions::contracts::erc20::{BatchErc20Approval, Erc20};
 use crate::transactions::contracts::worldchain::{
     TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WLD_ADDRESS,
 };
-use crate::transactions::rpc::{get_rpc_client, RpcProviderName};
+use crate::transactions::rpc::{get_rpc_client, RpcError};
 use crate::{info, smart_account::TransactionTypeId};
 use async_trait::async_trait;
 
@@ -127,20 +129,56 @@ impl WalletMigration for TfhPaymasterApprovalMigration {
             .collect();
         let names: Vec<&str> = gap.iter().map(|(_, _, name)| *name).collect();
 
-        match BatchErc20Approval::new(
-            TFH_PAYMASTER_ADDRESS,
-            &approvals,
-            TransactionTypeId::TfhPaymasterApprove,
-        )
-        .sign_and_execute(
-            &self.safe_account,
-            Network::WorldChain,
-            None,
-            None,
-            RpcProviderName::Any,
-        )
-        .await
-        {
+        let submission = async {
+            let rpc_client = get_rpc_client()?;
+            let operation = BatchErc20Approval::new(
+                TFH_PAYMASTER_ADDRESS,
+                &approvals,
+                TransactionTypeId::TfhPaymasterApprove,
+            )
+            .build_preflight_user_operation(self.safe_account.wallet_address, None)?;
+            let sponsorship = rpc_client
+                .pm_sponsor_user_operation(
+                    Network::WorldChain,
+                    &operation,
+                    *ENTRYPOINT_4337,
+                )
+                .await?;
+
+            // Temporal always sponsors these approvals. Charging through the
+            // paymaster would require the allowance this migration is repairing.
+            if sponsorship.paymaster.is_some()
+                || sponsorship.paymaster_data.is_some()
+                || sponsorship.paymaster_verification_gas_limit.is_some()
+                || sponsorship.paymaster_post_op_gas_limit.is_some()
+                || sponsorship.fee.is_some()
+                || sponsorship.call_gas_limit.is_zero()
+                || sponsorship.verification_gas_limit.is_zero()
+                || !sponsorship.pre_verification_gas.is_zero()
+                || !sponsorship.max_fee_per_gas.is_zero()
+                || !sponsorship.max_priority_fee_per_gas.is_zero()
+            {
+                return Err(RpcError::InvalidResponse {
+                    error_message:
+                        "TFH paymaster approvals require sponsored V3 gas fields"
+                            .to_string(),
+                });
+            }
+
+            let mut operation = operation.with_pm_sponsorship(&sponsorship);
+            self.safe_account
+                .sign_user_operation(&mut operation, Network::WorldChain)?;
+            rpc_client
+                .send_user_operation_v3(
+                    Network::WorldChain,
+                    &operation,
+                    *ENTRYPOINT_4337,
+                )
+                .await
+        }
+        .await;
+
+        match submission {
             Ok(hash) => {
                 info!(
                     tokens = format!("{names:?}"),
