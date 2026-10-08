@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5](https://github.com/worldcoin/bedrock/compare/0.7.4...0.7.5) - 2026-10-08
+
+### Added
+
+- *(migrations)* submit TFH paymaster approvals through V3 ([#474](https://github.com/worldcoin/bedrock/pull/474))
+
+### Fixed
+
+- *(transactions)* preserve insufficient fee balance errors ([#475](https://github.com/worldcoin/bedrock/pull/475))
+
 ## [0.7.4](https://github.com/worldcoin/bedrock/compare/0.7.3...0.7.4) - 2026-10-02
 
 ### Added
