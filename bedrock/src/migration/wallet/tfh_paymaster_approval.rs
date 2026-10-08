@@ -1,8 +1,7 @@
 //! Tops up the Safe's ERC-20 allowance to the TFH multi-token paymaster.
 //!
 //! Registered in every environment by `WalletMigrationController`.
-//! Approval operations use Temporal's V3 sponsorship and submission endpoints
-//! and require sponsorship without a token fee to repair missing allowances.
+//! Approval operations use Temporal's V3 sponsorship and submission endpoints.
 
 use std::sync::Arc;
 
@@ -16,7 +15,7 @@ use crate::transactions::contracts::erc20::{BatchErc20Approval, Erc20};
 use crate::transactions::contracts::worldchain::{
     TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WLD_ADDRESS,
 };
-use crate::transactions::rpc::{get_rpc_client, RpcError};
+use crate::transactions::rpc::get_rpc_client;
 use crate::{info, smart_account::TransactionTypeId};
 use async_trait::async_trait;
 
@@ -144,26 +143,6 @@ impl WalletMigration for TfhPaymasterApprovalMigration {
                     *ENTRYPOINT_4337,
                 )
                 .await?;
-
-            // Temporal always sponsors these approvals. Charging through the
-            // paymaster would require the allowance this migration is repairing.
-            if sponsorship.paymaster.is_some()
-                || sponsorship.paymaster_data.is_some()
-                || sponsorship.paymaster_verification_gas_limit.is_some()
-                || sponsorship.paymaster_post_op_gas_limit.is_some()
-                || sponsorship.fee.is_some()
-                || sponsorship.call_gas_limit.is_zero()
-                || sponsorship.verification_gas_limit.is_zero()
-                || !sponsorship.pre_verification_gas.is_zero()
-                || !sponsorship.max_fee_per_gas.is_zero()
-                || !sponsorship.max_priority_fee_per_gas.is_zero()
-            {
-                return Err(RpcError::InvalidResponse {
-                    error_message:
-                        "TFH paymaster approvals require sponsored V3 gas fields"
-                            .to_string(),
-                });
-            }
 
             let mut operation = operation.with_pm_sponsorship(&sponsorship);
             self.safe_account
