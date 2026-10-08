@@ -171,8 +171,8 @@ pub trait Is4337Encodable {
     }
 
     /// Builds, sponsors, signs, and submits a 4337 operation through World Chain V3.
-    /// `expect_sponsored` requires a response without a user fee; `false`
-    /// requires a self-sponsored response with fee metadata.
+    /// `expect_sponsored` requires gas limits with no user fee or paymaster
+    /// fields; `false` requires a self-sponsored response with fee metadata.
     ///
     /// # Errors
     /// Returns an error if preparation, sponsorship, signing, or submission fails,
@@ -192,7 +192,21 @@ pub trait Is4337Encodable {
                 *ENTRYPOINT_4337,
             )
             .await?;
-        if sponsorship.fee.is_none() != expect_sponsored {
+        let valid = if expect_sponsored {
+            sponsorship.paymaster.is_none()
+                && sponsorship.paymaster_data.is_none()
+                && sponsorship.paymaster_verification_gas_limit.is_none()
+                && sponsorship.paymaster_post_op_gas_limit.is_none()
+                && sponsorship.fee.is_none()
+                && !sponsorship.call_gas_limit.is_zero()
+                && !sponsorship.verification_gas_limit.is_zero()
+                && sponsorship.pre_verification_gas.is_zero()
+                && sponsorship.max_fee_per_gas.is_zero()
+                && sponsorship.max_priority_fee_per_gas.is_zero()
+        } else {
+            sponsorship.fee.is_some()
+        };
+        if !valid {
             return Err(RpcError::InvalidResponse {
                 error_message: "V3 sponsorship did not match the caller's expectation"
                     .to_string(),
