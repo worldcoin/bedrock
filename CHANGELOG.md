@@ -8,9 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.7.5](https://github.com/worldcoin/bedrock/compare/0.7.4...0.7.5) - 2026-10-08
 
-- `transaction_erc4626_migrate(from, to)` is now the single vault-migration entry point: when `from` is the legacy `WLDVault` or a legacy `USDVault`, it migrates the legacy position directly into the destination ERC-4626 vault (same bundles and `TransactionTypeId`s as before). `transaction_wld_legacy_vault_migrate` and `transaction_usd_legacy_vault_migrate` are unchanged and are superseded by it. The USD path of the new function also checks, before signing, that the vault will redeem the account's sDAI (some deployments only redeem what was deposited through them) and fails with `Cannot migrate - USDVault only redeems up to ...` otherwise.
+### Added
+
+- *(migrations)* submit TFH paymaster approvals through V3 ([#474](https://github.com/worldcoin/bedrock/pull/474))
+
+### Fixed
+
+- *(transactions)* preserve insufficient fee balance errors ([#475](https://github.com/worldcoin/bedrock/pull/475))
+
+## [0.7.4](https://github.com/worldcoin/bedrock/compare/0.7.3...0.7.4) - 2026-10-02
+
+### Added
+
+- *(transactions)* screen transfer participants before signing ([#463](https://github.com/worldcoin/bedrock/pull/463))
+
+### Other
+
+- *(deps)* bump strum from 0.27.2 to 0.28.0 ([#467](https://github.com/worldcoin/bedrock/pull/467))
 
 ## [0.7.3](https://github.com/worldcoin/bedrock/compare/0.7.2...0.7.3) - 2026-09-29
 

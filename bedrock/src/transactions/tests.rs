@@ -794,6 +794,7 @@ fn migration_failures_are_classified_for_logging() {
     for message in [
         "Cannot migrate zero balance",
         "Cannot migrate with zero sDAI balance",
+        "Failed to create USDVault migration: Invalid response format: Cannot migrate - address verification expired (verified_until=1)",
         "Failed to create ERC4626 migrate: Invalid response format: Cannot migrate - no source vault shares are currently redeemable (share_balance=0, max_redeem=0)",
         "Failed to create WLDVault migration: Invalid response format: Asset address mismatch between WLDVault and ERC-4626 Vault",
         "Failed to create ERC4626 migrate: Invalid response format: Invalid asset() response: expected at least 32 bytes, got 0 bytes",

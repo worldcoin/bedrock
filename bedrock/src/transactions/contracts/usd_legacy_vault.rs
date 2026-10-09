@@ -16,9 +16,10 @@ use alloy::{
     sol,
     sol_types::SolCall,
 };
+use chrono::{DateTime, Utc};
 
 use crate::transactions::contracts::{
-    erc4626::{is_eth_call_revert, IERC4626},
+    erc4626::{decode_address_word, is_eth_call_revert, IERC4626},
     multisend::{MultiSend, MultiSendTx},
 };
 use crate::transactions::rpc::{RpcClient, RpcError};
@@ -62,6 +63,8 @@ sol! {
 
         function getDSRConversionRate() public view returns (uint256);
 
+        function ADDRESS_BOOK() public view returns (address);
+
         function LIMIT_WITHDRAWALS_TO_DEPOSITS() public view returns (bool);
         function sDAIBalances(address account) public view returns (uint256);
 
@@ -73,6 +76,13 @@ sol! {
             uint256 deadline,
             bytes signature
         ) external;
+    }
+}
+
+sol! {
+    /// The World ID address book the `USDVault` checks the recipient against.
+    interface IWorldIDAddressBook {
+        function addressVerifiedUntil(address account) external view returns (uint256);
     }
 }
 
@@ -140,6 +150,67 @@ impl UsdLegacyVault {
             Erc20::fetch_balance(rpc_client, network, sdai_address, user_address)
                 .await?;
         Ok((sdai_address, balance))
+    }
+
+    /// Checks that `user_address` is still verified in the vault's World ID address book.
+    ///
+    /// `redeemSDAI` reverts with `UnverifiedUser` once `block.timestamp` is past
+    /// `addressVerifiedUntil(recipient)`. A vault without an `ADDRESS_BOOK()` getter is not
+    /// restricted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `RpcError` if the verification has expired or an RPC call fails.
+    pub async fn ensure_user_verified(
+        rpc_client: &RpcClient,
+        network: Network,
+        usd_vault_address: Address,
+        user_address: Address,
+        now: DateTime<Utc>,
+    ) -> Result<(), RpcError> {
+        let address_book_call_data = USDVault::ADDRESS_BOOKCall {}.abi_encode();
+        let address_book = match rpc_client
+            .eth_call(network, usd_vault_address, address_book_call_data.into())
+            .await
+        {
+            Ok(result) => match decode_address_word(&result) {
+                Some(address_book) => address_book,
+                // No such getter: this deployment has no verification requirement.
+                None => return Ok(()),
+            },
+            Err(RpcError::RpcResponseError {
+                code,
+                error_message,
+            }) if is_eth_call_revert(code, &error_message) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+
+        let verified_until_call_data = IWorldIDAddressBook::addressVerifiedUntilCall {
+            account: user_address,
+        }
+        .abi_encode();
+        let result = rpc_client
+            .eth_call(network, address_book, verified_until_call_data.into())
+            .await?;
+        if result.len() < 32 {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid addressVerifiedUntil() response: expected at least 32 bytes, got {} bytes",
+                    result.len()
+                ),
+            });
+        }
+        let verified_until = U256::from_be_slice(&result[..32]);
+
+        // Same comparison as the vault: `block.timestamp > endTime` reverts.
+        if U256::from(now.timestamp().max(0).unsigned_abs()) > verified_until {
+            return Err(RpcError::InvalidResponse {
+                error_message: format!(
+                    "Cannot migrate - address verification expired (verified_until={verified_until})"
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Checks that the vault will redeem `sdai_amount` sDAI for `user_address`.
@@ -490,6 +561,96 @@ mod tests {
             U256::from(sdai_amount),
         )
         .await
+    }
+
+    const ADDRESS_BOOK: Address =
+        address!("0x57b930D551e677CC36e2fA036Ae2fe8FdaE0330D");
+
+    fn at(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(secs, 0).unwrap()
+    }
+
+    /// Mocks the vault's `ADDRESS_BOOK()` (when given) and the user's `addressVerifiedUntil`
+    /// (when given). Calls without a mock fall through to the returned anvil node.
+    fn verification_client(
+        address_book: Option<Address>,
+        verified_until: Option<u64>,
+    ) -> (RpcClient, AnvilInstance) {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        if let Some(address_book) = address_book {
+            http_client.set_response_for_address_and_data(
+                VAULT,
+                format!(
+                    "0x{}",
+                    hex::encode(USDVault::ADDRESS_BOOKCall {}.abi_encode())
+                ),
+                word(U256::from_be_slice(address_book.as_slice())),
+            );
+        }
+        if let Some(verified_until) = verified_until {
+            http_client.set_response_for_address_and_data(
+                ADDRESS_BOOK,
+                format!(
+                    "0x{}",
+                    hex::encode(
+                        IWorldIDAddressBook::addressVerifiedUntilCall { account: USER }
+                            .abi_encode()
+                    )
+                ),
+                word(U256::from(verified_until)),
+            );
+        }
+        (RpcClient::new(Arc::new(http_client)), anvil)
+    }
+
+    async fn verified(client: &RpcClient, now: i64) -> Result<(), RpcError> {
+        UsdLegacyVault::ensure_user_verified(
+            client,
+            Network::WorldChain,
+            VAULT,
+            USER,
+            at(now),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn expired_verification_is_rejected() {
+        let (client, _anvil) = verification_client(Some(ADDRESS_BOOK), Some(1_000));
+        let message = verified(&client, 1_001).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Cannot migrate - address verification expired"),
+            "{message}"
+        );
+        assert!(message.contains("verified_until=1000"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn verification_valid_until_now_is_allowed() {
+        // The vault reverts only when `block.timestamp > endTime`.
+        let (client, _anvil) = verification_client(Some(ADDRESS_BOOK), Some(1_000));
+        verified(&client, 1_000).await.unwrap();
+        verified(&client, 999).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn vault_without_an_address_book_is_not_restricted() {
+        // No mocks: the call goes to an address without code and returns nothing.
+        let (client, _anvil) = verification_client(None, None);
+        verified(&client, 1_001).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn short_verified_until_response_is_an_error() {
+        // The address book itself is a plain address without code, so it returns no bytes.
+        let (client, _anvil) = verification_client(Some(USER), None);
+        let message = verified(&client, 1).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Invalid addressVerifiedUntil() response"),
+            "{message}"
+        );
     }
 
     #[tokio::test]

@@ -381,9 +381,10 @@ fn failure_class(error_message: &str) -> &'static str {
 impl SafeSmartAccount {
     /// Fails early if the legacy USD vault will not redeem the account's whole sDAI balance.
     ///
-    /// Some deployments only redeem what the account deposited through them. A zero balance is
-    /// left to the migration itself, which reports it.
-    async fn check_usd_withdrawal_limit(
+    /// The vault only redeems for accounts still verified in the World ID address book, and some
+    /// deployments only redeem what the account deposited through them. A zero balance is left
+    /// to the migration itself, which reports it.
+    async fn precheck_usd_migration(
         &self,
         usd_vault_address: Address,
     ) -> Result<(), TransactionError> {
@@ -404,6 +405,18 @@ impl SafeSmartAccount {
         if sdai_amount.is_zero() {
             return Ok(());
         }
+
+        crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::ensure_user_verified(
+            rpc_client,
+            Network::WorldChain,
+            usd_vault_address,
+            self.wallet_address,
+            now_with_ntp(),
+        )
+        .await
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to create USDVault migration: {e}"),
+        })?;
 
         crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::ensure_withdrawal_allowed(
             rpc_client,
@@ -1017,8 +1030,10 @@ impl SafeSmartAccount {
     ///
     /// Legacy sources have no `maxRedeem` cap or haircut. `USDVault` redeems all sDAI at the
     /// DSR rate (the amount is also `amountOutMin`) using a Permit2 signature valid for
-    /// 3 minutes. Some deployments only redeem what the account deposited through them; this
-    /// is checked up front and fails with `Cannot migrate - USDVault only redeems up to ...`.
+    /// 3 minutes. The vault only redeems for accounts still verified in the World ID address
+    /// book (`Cannot migrate - address verification expired ...`), and some deployments only
+    /// redeem what the account deposited through them (`Cannot migrate - USDVault only redeems
+    /// up to ...`); both are checked up front.
     ///
     /// # Arguments
     /// - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).
@@ -1052,7 +1067,7 @@ impl SafeSmartAccount {
                     .await
                 }
                 MigrationSource::UsdLegacy => {
-                    match self.check_usd_withdrawal_limit(from).await {
+                    match self.precheck_usd_migration(from).await {
                         Ok(()) => {
                             self.transaction_usd_legacy_vault_migrate(
                                 from_vault_address,

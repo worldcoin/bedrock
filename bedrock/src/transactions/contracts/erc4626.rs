@@ -721,7 +721,7 @@ impl Erc4626Vault {
 }
 
 /// Decodes an ABI-encoded address: the last 20 bytes of the first 32-byte word.
-fn decode_address_word(result: &[u8]) -> Option<Address> {
+pub(crate) fn decode_address_word(result: &[u8]) -> Option<Address> {
     (result.len() >= 32).then(|| Address::from_slice(&result[12..32]))
 }
 
