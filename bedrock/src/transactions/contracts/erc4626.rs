@@ -433,7 +433,7 @@ impl Erc4626Vault {
 
         // 1. Query underlying asset addresses from both vaults
         let from_asset_call_data = IERC4626::assetCall {}.abi_encode();
-        let from_asset_address = Self::fetch_asset_address(
+        let from_asset_address = Self::fetch_migration_source_asset(
             rpc_client,
             network,
             from_vault_address,
@@ -535,6 +535,43 @@ impl Erc4626Vault {
             existing_allowance,
             metadata,
         }))
+    }
+
+    /// Fetches the source vault's asset. A revert or short return means the contract has no
+    /// `asset()` and gets an "unsupported source" error; any other failure passes through.
+    async fn fetch_migration_source_asset(
+        rpc_client: &RpcClient,
+        network: Network,
+        from_vault_address: Address,
+        call_data: Vec<u8>,
+    ) -> Result<Address, RpcError> {
+        let unsupported = |reason: String| {
+            RpcError::InvalidResponse {
+            error_message: format!(
+                "Unsupported migration source {from_vault_address}: not an ERC-4626 vault or a known legacy vault ({reason})"
+            ),
+        }
+        };
+
+        let result = rpc_client
+            .eth_call(network, from_vault_address, call_data.into())
+            .await
+            .map_err(|e| match &e {
+                RpcError::RpcResponseError {
+                    code,
+                    error_message,
+                } if is_eth_call_revert(*code, error_message) => {
+                    unsupported(e.to_string())
+                }
+                _ => e,
+            })?;
+
+        decode_address_word(&result).ok_or_else(|| {
+            unsupported(format!(
+                "asset() returned {} bytes that are not an address",
+                result.len()
+            ))
+        })
     }
 
     /// Resolves the full redeemable share amount: `min(balanceOf, maxRedeem)`.
@@ -684,6 +721,23 @@ impl Erc4626Vault {
             metadata,
         }
     }
+}
+
+/// Decodes an ABI-encoded address: the last 20 bytes of the first 32-byte word.
+///
+/// Returns `None` for a short reply or a word whose upper 12 bytes are not zero, i.e. not an
+/// address.
+pub(crate) fn decode_address_word(result: &[u8]) -> Option<Address> {
+    (result.len() >= 32 && result[..12].iter().all(|b| *b == 0))
+        .then(|| Address::from_slice(&result[12..32]))
+}
+
+/// Whether a JSON-RPC error is an `eth_call` revert: code `3`, or the generic `-32000` code
+/// with an "execution reverted" message.
+pub(crate) fn is_eth_call_revert(code: i64, error_message: &str) -> bool {
+    code == 3
+        || (code == -32000
+            && error_message.to_lowercase().contains("execution reverted"))
 }
 
 /// Inputs for [`Erc4626Vault::build_migrate_transaction`].
@@ -1600,6 +1654,105 @@ mod tests {
         assert!(error.to_string().contains(
             "Asset address mismatch between source and destination ERC-4626 vaults"
         ));
+    }
+
+    #[test]
+    fn test_decode_address_word_requires_a_clean_address_word() {
+        let address =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(address.as_slice());
+        assert_eq!(decode_address_word(&word), Some(address));
+        // Extra trailing data after the first word is ignored.
+        assert_eq!(
+            decode_address_word(&[word.as_slice(), &[1u8; 32]].concat()),
+            Some(address)
+        );
+
+        assert_eq!(decode_address_word(&[]), None);
+        assert_eq!(decode_address_word(&word[..31]), None);
+        word[0] = 1;
+        assert_eq!(decode_address_word(&word), None);
+    }
+
+    #[test]
+    fn test_is_eth_call_revert_only_matches_reverts() {
+        assert!(is_eth_call_revert(3, "execution reverted"));
+        assert!(is_eth_call_revert(-32000, "Execution reverted: no asset"));
+        assert!(!is_eth_call_revert(429, "rate limit exceeded"));
+        assert!(!is_eth_call_revert(-32005, "request timed out"));
+        assert!(!is_eth_call_revert(-32603, "internal error"));
+        assert!(!is_eth_call_revert(
+            -32603,
+            "upstream error: execution reverted while proxying, request timed out"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_unsupported_source_error() {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let rpc_client = RpcClient::new(Arc::new(
+            crate::test_utils::AnvilBackedHttpClient::new(provider),
+        ));
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let user_address =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+
+        let error = Erc4626Vault::migrate(
+            &rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            [0u8; 10],
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("Unsupported migration source"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_erc4626_migrate_malformed_provider_response_is_not_unsupported_source(
+    ) {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        let from_vault_address =
+            Address::from_str("0x348831b46876d3dF2Db98BdEc5E3B4083329Ab9f").unwrap();
+        let to_vault_address =
+            Address::from_str("0x4047db25fd6ecd07d72ca44adf3a2a44de6de084").unwrap();
+        let user_address =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        http_client.set_response_for_address_and_data(
+            from_vault_address,
+            format!("0x{}", hex::encode(IERC4626::assetCall {}.abi_encode())),
+            "not-hex".to_string(),
+        );
+        let rpc_client = RpcClient::new(Arc::new(http_client));
+
+        let error = Erc4626Vault::migrate(
+            &rpc_client,
+            Network::WorldChain,
+            from_vault_address,
+            to_vault_address,
+            user_address,
+            [0u8; 10],
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            !error.to_string().contains("Unsupported migration source"),
+            "provider glitch must not look like an unsupported source: {error}"
+        );
     }
 
     #[tokio::test]

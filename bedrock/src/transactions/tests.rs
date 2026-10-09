@@ -769,3 +769,84 @@ async fn incomplete_fee_metadata_cannot_be_treated_as_free() {
         assert_eq!(http.requests.lock().unwrap().len(), 1);
     }
 }
+
+#[test]
+fn migration_source_is_chosen_from_the_source_address() {
+    use crate::transactions::contracts::usd_legacy_vault::USD_LEGACY_VAULT_ADDRESSES;
+    use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS;
+
+    assert_eq!(
+        MigrationSource::classify(WLD_LEGACY_VAULT_ADDRESS),
+        MigrationSource::WldLegacy
+    );
+    for usd_vault in USD_LEGACY_VAULT_ADDRESSES {
+        assert_eq!(
+            MigrationSource::classify(usd_vault),
+            MigrationSource::UsdLegacy
+        );
+    }
+    assert_eq!(
+        MigrationSource::classify(address!(
+            "0x1C94c7A2c71ECF13104c31F49d5138EDb099D25D"
+        )),
+        MigrationSource::Erc4626
+    );
+}
+
+#[tokio::test]
+async fn migrate_rejects_same_source_and_destination_for_legacy_sources() {
+    use crate::transactions::contracts::usd_legacy_vault::USD_LEGACY_VAULT_ADDRESSES;
+    use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS;
+
+    let account = custom_bundler_account();
+    for vault in [WLD_LEGACY_VAULT_ADDRESS, USD_LEGACY_VAULT_ADDRESSES[0]] {
+        let err = account
+            .transaction_erc4626_migrate(&vault.to_string(), &vault.to_string())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Source and destination vaults must differ"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
+#[test]
+fn migration_failures_are_classified_for_logging() {
+    for message in [
+        "Cannot migrate zero balance",
+        "Cannot migrate with zero sDAI balance",
+        "Failed to create USDVault migration: Invalid response format: Cannot migrate - address verification expired (verified_until=1)",
+        "Failed to create ERC4626 migrate: Invalid response format: Cannot migrate - no source vault shares are currently redeemable (share_balance=0, max_redeem=0)",
+        "Failed to create WLDVault migration: Invalid response format: Asset address mismatch between WLDVault and ERC-4626 Vault",
+        "Failed to create ERC4626 migrate: Invalid response format: Invalid asset() response: expected at least 32 bytes, got 0 bytes",
+        "Failed to create ERC4626 migrate: RPC error 3: execution reverted",
+        "Failed to create ERC4626 migrate: RPC error -32000: execution reverted",
+        "Failed to create ERC4626 migrate: RPC error -32000: Execution reverted: no asset",
+        "Failed to create ERC4626 migrate: Invalid response format: Unsupported migration source 0x01: not an ERC-4626 vault or a known legacy vault (asset() returned 0 bytes)",
+        "Failed to create ERC4626 migrate: Invalid response format: Source and destination ERC-4626 vaults must differ",
+        "Source and destination vaults must differ",
+    ] {
+        assert_eq!(failure_class(message), "user_state", "{message}");
+    }
+
+    assert_eq!(
+        failure_class("Failed to sign permit2 transfer: bad key"),
+        "signing"
+    );
+    for message in [
+        "Failed to get RPC client: HTTP client not initialized",
+        "Failed to create ERC4626 migrate: HTTP request failed: timed out",
+        "Failed to fetch sDAI balance: RPC error 429: rate limit exceeded",
+        "Failed to create ERC4626 migrate: RPC error -32603: upstream error: execution reverted while proxying, request timed out",
+    ] {
+        assert_eq!(failure_class(message), "dependency", "{message}");
+    }
+    // Incidental mentions of "RPC" are not provider faults.
+    assert_eq!(
+        failure_class("Failed to create WLDVault migration: unrelated RPC wording"),
+        "unknown"
+    );
+    assert_eq!(failure_class("something unexpected"), "unknown");
+}
