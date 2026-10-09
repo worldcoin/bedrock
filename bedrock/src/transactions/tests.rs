@@ -302,7 +302,7 @@ async fn free_preparation_has_no_fee_or_balance_reads() {
     let original = transfer();
     let (rpc, http) = rpc(vec![json!({
         "jsonrpc": "2.0", "id": "test", "result": {
-            "callGasLimit": "0x0", "verificationGasLimit": "0x0", "preVerificationGas": "0x0",
+            "callGasLimit": "0xc350", "verificationGasLimit": "0xea60", "preVerificationGas": "0x0",
             "maxFeePerGas": "0x0", "maxPriorityFeePerGas": "0x0"
         }
     })]);
@@ -614,6 +614,29 @@ async fn token_sponsorship_error_stops_without_submission() {
         .unwrap_err();
     assert!(error.to_string().contains("sponsorship unavailable"));
     assert_eq!(http.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn sponsorship_fee_balance_failure_is_typed_before_a_quote_is_available() {
+    let (rpc, _) = rpc(vec![json!({
+        "jsonrpc": "2.0", "id": "test",
+        "error": {
+            "code": -32602, "message": "Insufficient funds for network fee",
+            "data": {
+                "reason": "insufficient_funds",
+                "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003",
+                "retryable": false,
+            },
+        },
+    })]);
+    let error =
+        prepare_default_transfer(&rpc, transfer(), USDC_ADDRESS, U256::from(10001))
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(error, TransactionError::InsufficientFunds { token_address }
+        if token_address == WLD_ADDRESS.to_string())
+    );
 }
 
 #[tokio::test]

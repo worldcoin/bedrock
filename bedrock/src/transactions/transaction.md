@@ -110,7 +110,9 @@ omits are left unset on the UserOp.
 
 When TFH declines sponsorship, the user pays gas in an ERC-20 token (e.g. WLD)
 through the TFH paymaster. Self-sponsorship requires sufficient fee-token
-allowance, maintained by wallet migration.
+allowance, maintained by wallet migration. An insufficient fee-token balance
+returns `TransactionError::InsufficientFunds`, including when the sponsorship
+endpoint rejects the upfront fee charge before returning a quote.
 
 ```mermaid
 sequenceDiagram
