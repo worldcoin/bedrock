@@ -235,7 +235,9 @@ impl UsdLegacyVault {
             .eth_call(network, usd_vault_address, limit_call_data.into())
             .await
         {
-            Ok(result) if result.len() >= 32 => result[31] != 0,
+            Ok(result) if result.len() >= 32 => {
+                !U256::from_be_slice(&result[..32]).is_zero()
+            }
             // No such getter: this deployment has no deposit limit.
             Ok(_) => false,
             Err(RpcError::RpcResponseError {
@@ -664,6 +666,37 @@ mod tests {
         );
         assert!(message.contains("deposited=5"), "{message}");
         assert!(message.contains("sdai_balance=10"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn limit_flag_is_read_from_the_whole_word() {
+        // A non-zero word whose last byte is zero is still `true`.
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        let limit_call = format!(
+            "0x{}",
+            hex::encode(USDVault::LIMIT_WITHDRAWALS_TO_DEPOSITSCall {}.abi_encode())
+        );
+        http_client.set_response_for_address_and_data(
+            VAULT,
+            limit_call,
+            word(U256::from(1u64) << 8),
+        );
+        http_client.set_response_for_address_and_data(
+            VAULT,
+            format!(
+                "0x{}",
+                hex::encode(USDVault::sDAIBalancesCall { account: USER }.abi_encode())
+            ),
+            word(U256::from(5u64)),
+        );
+        let client = RpcClient::new(Arc::new(http_client));
+        let message = check(&client, 10).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Cannot migrate - USDVault only redeems up to"),
+            "{message}"
+        );
     }
 
     #[tokio::test]

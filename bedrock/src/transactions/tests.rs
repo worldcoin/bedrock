@@ -823,6 +823,7 @@ fn migration_failures_are_classified_for_logging() {
         "Failed to create ERC4626 migrate: Invalid response format: Invalid asset() response: expected at least 32 bytes, got 0 bytes",
         "Failed to create ERC4626 migrate: RPC error 3: execution reverted",
         "Failed to create ERC4626 migrate: RPC error -32000: execution reverted",
+        "Failed to create ERC4626 migrate: RPC error -32000: Execution reverted: no asset",
         "Failed to create ERC4626 migrate: Invalid response format: Unsupported migration source 0x01: not an ERC-4626 vault or a known legacy vault (asset() returned 0 bytes)",
         "Failed to create ERC4626 migrate: Invalid response format: Source and destination ERC-4626 vaults must differ",
         "Source and destination vaults must differ",
