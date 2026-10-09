@@ -19,7 +19,7 @@ use alloy::{
 use chrono::{DateTime, Utc};
 
 use crate::transactions::contracts::{
-    erc4626::{decode_address_word, is_eth_call_revert, IERC4626},
+    erc4626::{decode_address_word, IERC4626},
     multisend::{MultiSend, MultiSendTx},
 };
 use crate::transactions::rpc::{RpcClient, RpcError};
@@ -41,6 +41,25 @@ pub const USD_LEGACY_VAULT_ADDRESSES: [Address; 2] = [
     address!("0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB"),
     address!("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC"),
 ];
+
+/// How long the Permit2 signature of a `USDVault` migration stays valid.
+///
+/// The migration may execute up to this long after it is checked. Mirrors the deadline set by
+/// `SafeSmartAccount::transaction_usd_legacy_vault_migrate`.
+pub const PERMIT2_DEADLINE_SECS: u64 = 180;
+
+/// Decodes the first 32-byte word of a `uint256`/`bool` getter reply.
+fn decode_u256_word(getter: &str, result: &[u8]) -> Result<U256, RpcError> {
+    if result.len() < 32 {
+        return Err(RpcError::InvalidResponse {
+            error_message: format!(
+                "Invalid {getter}() response: expected at least 32 bytes, got {} bytes",
+                result.len()
+            ),
+        });
+    }
+    Ok(U256::from_be_slice(&result[..32]))
+}
 
 /// Permit2 data for secure token transfers.
 #[derive(Debug, Clone)]
@@ -152,15 +171,18 @@ impl UsdLegacyVault {
         Ok((sdai_address, balance))
     }
 
-    /// Checks that `user_address` is still verified in the vault's World ID address book.
+    /// Checks that `user_address` will still be verified in the vault's World ID address book
+    /// when the migration executes.
     ///
     /// `redeemSDAI` reverts with `UnverifiedUser` once `block.timestamp` is past
-    /// `addressVerifiedUntil(recipient)`. A vault without an `ADDRESS_BOOK()` getter is not
-    /// restricted.
+    /// `addressVerifiedUntil(recipient)`. The migration can execute up to
+    /// [`PERMIT2_DEADLINE_SECS`] after `now`, so the verification must outlive that window.
     ///
     /// # Errors
     ///
-    /// Returns an `RpcError` if the verification has expired or an RPC call fails.
+    /// Returns an `RpcError` if the verification has expired, a getter reply is malformed, or an
+    /// RPC call fails. Both legacy vaults expose `ADDRESS_BOOK()` as an immutable, so an empty
+    /// reply or a revert means the call did not reach the vault and is reported, not skipped.
     pub async fn ensure_user_verified(
         rpc_client: &RpcClient,
         network: Network,
@@ -169,30 +191,16 @@ impl UsdLegacyVault {
         now: DateTime<Utc>,
     ) -> Result<(), RpcError> {
         let address_book_call_data = USDVault::ADDRESS_BOOKCall {}.abi_encode();
-        let address_book = match rpc_client
+        let result = rpc_client
             .eth_call(network, usd_vault_address, address_book_call_data.into())
-            .await
-        {
-            // No such getter: this deployment has no verification requirement.
-            Ok(result) if result.is_empty() => return Ok(()),
-            Ok(result) => decode_address_word(&result).ok_or_else(|| {
-                RpcError::InvalidResponse {
-                    error_message: format!(
-                        "Invalid ADDRESS_BOOK() response: expected an address, got {} bytes",
-                        result.len()
-                    ),
-                }
-            })?,
-            Err(RpcError::RpcResponseError {
-                code,
-                error_message,
-            }) if is_eth_call_revert(code, &error_message) => return Ok(()),
-            Err(e) => return Err(e),
-        };
-
-        if address_book.is_zero() {
-            return Ok(());
-        }
+            .await?;
+        let address_book =
+            decode_address_word(&result).ok_or_else(|| RpcError::InvalidResponse {
+                error_message: format!(
+                    "Invalid ADDRESS_BOOK() response: expected an address, got {} bytes",
+                    result.len()
+                ),
+            })?;
 
         let verified_until_call_data = IWorldIDAddressBook::addressVerifiedUntilCall {
             account: user_address,
@@ -201,18 +209,11 @@ impl UsdLegacyVault {
         let result = rpc_client
             .eth_call(network, address_book, verified_until_call_data.into())
             .await?;
-        if result.len() < 32 {
-            return Err(RpcError::InvalidResponse {
-                error_message: format!(
-                    "Invalid addressVerifiedUntil() response: expected at least 32 bytes, got {} bytes",
-                    result.len()
-                ),
-            });
-        }
-        let verified_until = U256::from_be_slice(&result[..32]);
+        let verified_until = decode_u256_word("addressVerifiedUntil", &result)?;
 
-        // Same comparison as the vault: `block.timestamp > endTime` reverts.
-        if U256::from(now.timestamp().max(0).unsigned_abs()) > verified_until {
+        // The vault reverts when `block.timestamp > endTime`; allow for the permit window.
+        let executes_by = now.timestamp().max(0).unsigned_abs() + PERMIT2_DEADLINE_SECS;
+        if U256::from(executes_by) > verified_until {
             return Err(RpcError::InvalidResponse {
                 error_message: format!(
                     "Cannot migrate - address verification expired (verified_until={verified_until})"
@@ -226,11 +227,13 @@ impl UsdLegacyVault {
     ///
     /// Some deployments only redeem up to what the account deposited through them
     /// (`LIMIT_WITHDRAWALS_TO_DEPOSITS`, tracked in `sDAIBalances`); redeeming more reverts on
-    /// execution. A vault without that limit, or without these getters, is not restricted.
+    /// execution.
     ///
     /// # Errors
     ///
-    /// Returns an `RpcError` if the deposit limit would be exceeded or an RPC call fails.
+    /// Returns an `RpcError` if the deposit limit would be exceeded, a getter reply is malformed,
+    /// or an RPC call fails. Both legacy vaults expose `LIMIT_WITHDRAWALS_TO_DEPOSITS()` as an
+    /// immutable, so an empty reply or a revert is reported, not treated as "unlimited".
     pub async fn ensure_withdrawal_allowed(
         rpc_client: &RpcClient,
         network: Network,
@@ -240,30 +243,10 @@ impl UsdLegacyVault {
     ) -> Result<(), RpcError> {
         let limit_call_data =
             USDVault::LIMIT_WITHDRAWALS_TO_DEPOSITSCall {}.abi_encode();
-        let limited = match rpc_client
+        let result = rpc_client
             .eth_call(network, usd_vault_address, limit_call_data.into())
-            .await
-        {
-            Ok(result) if result.len() >= 32 => {
-                !U256::from_be_slice(&result[..32]).is_zero()
-            }
-            // No such getter: this deployment has no deposit limit.
-            Ok(result) if result.is_empty() => false,
-            Ok(result) => {
-                return Err(RpcError::InvalidResponse {
-                    error_message: format!(
-                        "Invalid LIMIT_WITHDRAWALS_TO_DEPOSITS() response: expected 32 bytes, got {} bytes",
-                        result.len()
-                    ),
-                })
-            }
-            Err(RpcError::RpcResponseError {
-                code,
-                error_message,
-            }) if is_eth_call_revert(code, &error_message) => false,
-            Err(e) => return Err(e),
-        };
-        if !limited {
+            .await?;
+        if decode_u256_word("LIMIT_WITHDRAWALS_TO_DEPOSITS", &result)?.is_zero() {
             return Ok(());
         }
 
@@ -274,15 +257,7 @@ impl UsdLegacyVault {
         let result = rpc_client
             .eth_call(network, usd_vault_address, deposited_call_data.into())
             .await?;
-        if result.len() < 32 {
-            return Err(RpcError::InvalidResponse {
-                error_message: format!(
-                    "Invalid sDAIBalances() response: expected at least 32 bytes, got {} bytes",
-                    result.len()
-                ),
-            });
-        }
-        let deposited = U256::from_be_slice(&result[..32]);
+        let deposited = decode_u256_word("sDAIBalances", &result)?;
 
         if deposited < sdai_amount {
             return Err(RpcError::InvalidResponse {
@@ -680,12 +655,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zero_address_book_is_not_restricted() {
-        let (client, _anvil) = verification_client(Some(Address::ZERO), None);
-        verified(&client, 1_001).await.unwrap();
-    }
-
-    #[tokio::test]
     async fn short_limit_flag_reply_is_an_error_not_unrestricted() {
         let (client, _anvil) = raw_client(vec![(
             VAULT,
@@ -711,18 +680,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_valid_until_now_is_allowed() {
-        // The vault reverts only when `block.timestamp > endTime`.
+    async fn verification_must_outlive_the_permit_window() {
+        // The vault reverts when `block.timestamp > endTime`; the op may execute up to
+        // `PERMIT2_DEADLINE_SECS` after the check.
         let (client, _anvil) = verification_client(Some(ADDRESS_BOOK), Some(1_000));
-        verified(&client, 1_000).await.unwrap();
-        verified(&client, 999).await.unwrap();
+        let latest_ok = 1_000 - i64::try_from(PERMIT2_DEADLINE_SECS).unwrap();
+        verified(&client, latest_ok).await.unwrap();
+        verified(&client, latest_ok - 1).await.unwrap();
+        let message = verified(&client, latest_ok + 1)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("address verification expired"),
+            "{message}"
+        );
     }
 
     #[tokio::test]
-    async fn vault_without_an_address_book_is_not_restricted() {
-        // No mocks: the call goes to an address without code and returns nothing.
+    async fn missing_getters_are_errors_not_unrestricted() {
+        // No mocks: the calls hit an address without code and return nothing, which for the
+        // hardcoded vaults can only mean the RPC did not reach them.
         let (client, _anvil) = verification_client(None, None);
-        verified(&client, 1_001).await.unwrap();
+        let message = verified(&client, 1).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Invalid ADDRESS_BOOK() response"),
+            "{message}"
+        );
+        let message = check(&client, 10).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Invalid LIMIT_WITHDRAWALS_TO_DEPOSITS() response"),
+            "{message}"
+        );
     }
 
     #[tokio::test]
@@ -790,13 +779,6 @@ mod tests {
     async fn unlimited_vault_is_not_restricted() {
         // No `sDAIBalances` mock: it must not even be read.
         let (client, _anvil) = rpc_client(Some(false), None);
-        check(&client, 10).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn vault_without_the_limit_getter_is_not_restricted() {
-        // No mocks: the call goes to an address without code and returns nothing.
-        let (client, _anvil) = rpc_client(None, None);
         check(&client, 10).await.unwrap();
     }
 
