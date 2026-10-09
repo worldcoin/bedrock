@@ -48,6 +48,12 @@ pub const USD_LEGACY_VAULT_ADDRESSES: [Address; 2] = [
 /// `SafeSmartAccount::transaction_usd_legacy_vault_migrate`.
 pub const PERMIT2_DEADLINE_SECS: u64 = 180;
 
+/// Extra time the verification must outlive, on top of [`PERMIT2_DEADLINE_SECS`].
+///
+/// The migration computes its permit deadline after this check, following more RPC calls, so
+/// the actual deadline is later than the one checked.
+pub const VERIFICATION_MARGIN_SECS: u64 = 60;
+
 /// Decodes the first 32-byte word of a `uint256`/`bool` getter reply.
 fn decode_u256_word(getter: &str, result: &[u8]) -> Result<U256, RpcError> {
     if result.len() < 32 {
@@ -176,7 +182,8 @@ impl UsdLegacyVault {
     ///
     /// `redeemSDAI` reverts with `UnverifiedUser` once `block.timestamp` is past
     /// `addressVerifiedUntil(recipient)`. The migration can execute up to
-    /// [`PERMIT2_DEADLINE_SECS`] after `now`, so the verification must outlive that window.
+    /// [`PERMIT2_DEADLINE_SECS`] after it computes its deadline, which happens after `now`, so
+    /// the verification must outlive that window plus [`VERIFICATION_MARGIN_SECS`].
     ///
     /// # Errors
     ///
@@ -211,8 +218,11 @@ impl UsdLegacyVault {
             .await?;
         let verified_until = decode_u256_word("addressVerifiedUntil", &result)?;
 
-        // The vault reverts when `block.timestamp > endTime`; allow for the permit window.
-        let executes_by = now.timestamp().max(0).unsigned_abs() + PERMIT2_DEADLINE_SECS;
+        // The vault reverts when `block.timestamp > endTime`; allow for the permit window and
+        // for the time between this check and the permit deadline being computed.
+        let executes_by = now.timestamp().max(0).unsigned_abs()
+            + PERMIT2_DEADLINE_SECS
+            + VERIFICATION_MARGIN_SECS;
         if U256::from(executes_by) > verified_until {
             return Err(RpcError::InvalidResponse {
                 error_message: format!(
@@ -682,9 +692,11 @@ mod tests {
     #[tokio::test]
     async fn verification_must_outlive_the_permit_window() {
         // The vault reverts when `block.timestamp > endTime`; the op may execute up to
-        // `PERMIT2_DEADLINE_SECS` after the check.
+        // `PERMIT2_DEADLINE_SECS` after the deadline is computed, which is later than the check
+        // by up to `VERIFICATION_MARGIN_SECS`.
         let (client, _anvil) = verification_client(Some(ADDRESS_BOOK), Some(1_000));
-        let latest_ok = 1_000 - i64::try_from(PERMIT2_DEADLINE_SECS).unwrap();
+        let latest_ok = 1_000
+            - i64::try_from(PERMIT2_DEADLINE_SECS + VERIFICATION_MARGIN_SECS).unwrap();
         verified(&client, latest_ok).await.unwrap();
         verified(&client, latest_ok - 1).await.unwrap();
         let message = verified(&client, latest_ok + 1)
