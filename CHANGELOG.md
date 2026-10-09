@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6](https://github.com/worldcoin/bedrock/compare/0.7.5...0.7.6) - 2026-10-09
+
+### Added
+
+- *(transactions)* migrate legacy WLD/USD vaults via transaction_erc4626_migrate ([#472](https://github.com/worldcoin/bedrock/pull/472))
+
 ## [0.7.5](https://github.com/worldcoin/bedrock/compare/0.7.4...0.7.5) - 2026-10-08
 
 ### Added
