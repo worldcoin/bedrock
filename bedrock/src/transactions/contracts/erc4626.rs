@@ -567,7 +567,10 @@ impl Erc4626Vault {
             })?;
 
         decode_address_word(&result).ok_or_else(|| {
-            unsupported(format!("asset() returned {} bytes", result.len()))
+            unsupported(format!(
+                "asset() returned {} bytes that are not an address",
+                result.len()
+            ))
         })
     }
 
@@ -721,8 +724,12 @@ impl Erc4626Vault {
 }
 
 /// Decodes an ABI-encoded address: the last 20 bytes of the first 32-byte word.
+///
+/// Returns `None` for a short reply or a word whose upper 12 bytes are not zero, i.e. not an
+/// address.
 pub(crate) fn decode_address_word(result: &[u8]) -> Option<Address> {
-    (result.len() >= 32).then(|| Address::from_slice(&result[12..32]))
+    (result.len() >= 32 && result[..12].iter().all(|b| *b == 0))
+        .then(|| Address::from_slice(&result[12..32]))
 }
 
 /// Whether a JSON-RPC error is an `eth_call` revert: code `3`, or the generic `-32000` code
@@ -1647,6 +1654,25 @@ mod tests {
         assert!(error.to_string().contains(
             "Asset address mismatch between source and destination ERC-4626 vaults"
         ));
+    }
+
+    #[test]
+    fn test_decode_address_word_requires_a_clean_address_word() {
+        let address =
+            Address::from_str("0x4564420674EA68fcc61b463C0494807C759d47e6").unwrap();
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(address.as_slice());
+        assert_eq!(decode_address_word(&word), Some(address));
+        // Extra trailing data after the first word is ignored.
+        assert_eq!(
+            decode_address_word(&[word.as_slice(), &[1u8; 32]].concat()),
+            Some(address)
+        );
+
+        assert_eq!(decode_address_word(&[]), None);
+        assert_eq!(decode_address_word(&word[..31]), None);
+        word[0] = 1;
+        assert_eq!(decode_address_word(&word), None);
     }
 
     #[test]

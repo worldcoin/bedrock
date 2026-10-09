@@ -173,17 +173,26 @@ impl UsdLegacyVault {
             .eth_call(network, usd_vault_address, address_book_call_data.into())
             .await
         {
-            Ok(result) => match decode_address_word(&result) {
-                Some(address_book) => address_book,
-                // No such getter: this deployment has no verification requirement.
-                None => return Ok(()),
-            },
+            // No such getter: this deployment has no verification requirement.
+            Ok(result) if result.is_empty() => return Ok(()),
+            Ok(result) => decode_address_word(&result).ok_or_else(|| {
+                RpcError::InvalidResponse {
+                    error_message: format!(
+                        "Invalid ADDRESS_BOOK() response: expected an address, got {} bytes",
+                        result.len()
+                    ),
+                }
+            })?,
             Err(RpcError::RpcResponseError {
                 code,
                 error_message,
             }) if is_eth_call_revert(code, &error_message) => return Ok(()),
             Err(e) => return Err(e),
         };
+
+        if address_book.is_zero() {
+            return Ok(());
+        }
 
         let verified_until_call_data = IWorldIDAddressBook::addressVerifiedUntilCall {
             account: user_address,
@@ -239,7 +248,15 @@ impl UsdLegacyVault {
                 !U256::from_be_slice(&result[..32]).is_zero()
             }
             // No such getter: this deployment has no deposit limit.
-            Ok(_) => false,
+            Ok(result) if result.is_empty() => false,
+            Ok(result) => {
+                return Err(RpcError::InvalidResponse {
+                    error_message: format!(
+                        "Invalid LIMIT_WITHDRAWALS_TO_DEPOSITS() response: expected 32 bytes, got {} bytes",
+                        result.len()
+                    ),
+                })
+            }
             Err(RpcError::RpcResponseError {
                 code,
                 error_message,
@@ -616,6 +633,70 @@ mod tests {
             at(now),
         )
         .await
+    }
+
+    /// Client whose answers to `calldata` sent to `to` are the given raw hex replies.
+    fn raw_client(mocks: Vec<(Address, Vec<u8>, &str)>) -> (RpcClient, AnvilInstance) {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+        let mut http_client = crate::test_utils::AnvilBackedHttpClient::new(provider);
+        for (to, calldata, reply) in mocks {
+            http_client.set_response_for_address_and_data(
+                to,
+                format!("0x{}", hex::encode(calldata)),
+                reply.to_string(),
+            );
+        }
+        (RpcClient::new(Arc::new(http_client)), anvil)
+    }
+
+    #[tokio::test]
+    async fn short_address_book_reply_is_an_error_not_unrestricted() {
+        let (client, _anvil) = raw_client(vec![(
+            VAULT,
+            USDVault::ADDRESS_BOOKCall {}.abi_encode(),
+            "0x01",
+        )]);
+        let message = verified(&client, 1).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Invalid ADDRESS_BOOK() response"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn address_book_word_with_dirty_padding_is_an_error() {
+        let dirty = format!("0x{}", "ff".repeat(32));
+        let (client, _anvil) = raw_client(vec![(
+            VAULT,
+            USDVault::ADDRESS_BOOKCall {}.abi_encode(),
+            dirty.as_str(),
+        )]);
+        let message = verified(&client, 1).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Invalid ADDRESS_BOOK() response"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_address_book_is_not_restricted() {
+        let (client, _anvil) = verification_client(Some(Address::ZERO), None);
+        verified(&client, 1_001).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn short_limit_flag_reply_is_an_error_not_unrestricted() {
+        let (client, _anvil) = raw_client(vec![(
+            VAULT,
+            USDVault::LIMIT_WITHDRAWALS_TO_DEPOSITSCall {}.abi_encode(),
+            "0x01",
+        )]);
+        let message = check(&client, 10).await.unwrap_err().to_string();
+        assert!(
+            message.contains("Invalid LIMIT_WITHDRAWALS_TO_DEPOSITS() response"),
+            "{message}"
+        );
     }
 
     #[tokio::test]
