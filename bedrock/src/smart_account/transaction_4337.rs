@@ -70,6 +70,35 @@ impl SafeSmartAccount {
         Ok(())
     }
 
+    /// Sponsors, signs, and submits a preflight operation through World Chain V3.
+    pub(crate) async fn sponsor_sign_and_submit_v3(
+        &self,
+        mut operation: UserOperation,
+        expect_sponsored: bool,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
+        let sponsorship = rpc_client
+            .pm_sponsor_user_operation(
+                Network::WorldChain,
+                &operation,
+                *ENTRYPOINT_4337,
+            )
+            .await?;
+        let valid = if expect_sponsored {
+            sponsorship.is_sponsored()
+        } else {
+            sponsorship.is_self_sponsored()
+        };
+        if !valid {
+            return Err(RpcError::InvalidResponse {
+                error_message: "V3 sponsorship did not match the caller's expectation"
+                    .to_string(),
+            });
+        }
+        operation = operation.with_pm_sponsorship(&sponsorship);
+        self.sign_and_submit_v3(operation, rpc_client).await
+    }
+
     /// Signs and broadcasts an already priced operation through World Chain V3.
     ///
     /// # Errors
@@ -182,29 +211,11 @@ pub trait Is4337Encodable {
         safe_account: &SafeSmartAccount,
         expect_sponsored: bool,
     ) -> Result<FixedBytes<32>, RpcError> {
-        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
-        let mut operation =
+        let operation =
             self.build_preflight_user_operation(safe_account.wallet_address, None)?;
-        let sponsorship = rpc_client
-            .pm_sponsor_user_operation(
-                Network::WorldChain,
-                &operation,
-                *ENTRYPOINT_4337,
-            )
-            .await?;
-        let valid = if expect_sponsored {
-            sponsorship.is_sponsored()
-        } else {
-            sponsorship.is_self_sponsored()
-        };
-        if !valid {
-            return Err(RpcError::InvalidResponse {
-                error_message: "V3 sponsorship did not match the caller's expectation"
-                    .to_string(),
-            });
-        }
-        operation = operation.with_pm_sponsorship(&sponsorship);
-        safe_account.sign_and_submit_v3(operation, rpc_client).await
+        safe_account
+            .sponsor_sign_and_submit_v3(operation, expect_sponsored)
+            .await
     }
 }
 

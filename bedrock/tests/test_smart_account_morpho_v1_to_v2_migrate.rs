@@ -101,7 +101,7 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
 
     // Zero shares — migrate must fail before building the bundle.
     let zero_result = safe_account
-        .transaction_erc4626_migrate(&wars_v1.to_string(), &wars_v2.to_string())
+        .transaction_erc4626_migrate(&wars_v1.to_string(), &wars_v2.to_string(), None)
         .await;
     assert!(
         zero_result.is_err(),
@@ -198,7 +198,11 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
 
     // Asset mismatch — destination has a different underlying.
     let mismatch = safe_account
-        .transaction_erc4626_migrate(&wars_v1.to_string(), &bad_dest_vault.to_string())
+        .transaction_erc4626_migrate(
+            &wars_v1.to_string(),
+            &bad_dest_vault.to_string(),
+            None,
+        )
         .await;
     assert!(
         mismatch.is_err(),
@@ -241,7 +245,7 @@ async fn test_morpho_wars_v1_to_v2_migration() -> anyhow::Result<()> {
 
     // Happy path: migrate redeemable V1 shares into V2.
     safe_account
-        .transaction_erc4626_migrate(&wars_v1.to_string(), &wars_v2.to_string())
+        .transaction_erc4626_migrate(&wars_v1.to_string(), &wars_v2.to_string(), None)
         .await
         .expect("ERC-4626 migrate failed");
     println!("✓ Migrated V1 → V2");

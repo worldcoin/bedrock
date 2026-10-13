@@ -289,6 +289,27 @@ caller without switching to the backend or another bundler.
 `wa_getUserOperationReceipt` uses `/v1/rpc/worldchain`. The caller polls until
 the UserOp reaches a terminal state or its tracking deadline is reached.
 
+## Vault migrations
+
+`transaction_erc4626_migrate(from_vault_address, to_vault_address, custom_bundler_url)`
+executes a migration after the caller obtains user confirmation. It supports Earn
+ERC-4626 sources and the known legacy WLD and USD sources, with an ERC-4626
+destination supplied by the caller.
+
+Bedrock screens the wallet before constructing the migration or signing a USD
+Permit2 authorization. Source-specific builders produce the withdrawal or
+redemption, necessary token approvals, and a deposit back to the wallet. The
+shared execution path requests V3 sponsorship and requires a free response before
+signing the UserOperation. Paid or invalid sponsorship responses fail the call.
+
+A supplied custom bundler URL uses the bundler-sponsored route described above,
+with zero fee prices and no paymaster. Estimation and submission use that URL;
+errors do not switch to the backend. The result is a UserOperation hash for receipt
+tracking, not a guarantee of on-chain success.
+
+The direct legacy migration APIs use their existing sponsorship and submission
+routes. Their signatures do not include a custom bundler URL.
+
 ## References
 
 - [ERC-4337 — Account Abstraction Using EntryPoint](https://eips.ethereum.org/EIPS/eip-4337)

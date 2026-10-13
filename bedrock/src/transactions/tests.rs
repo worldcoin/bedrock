@@ -801,7 +801,7 @@ async fn migrate_rejects_same_source_and_destination_for_legacy_sources() {
     let account = custom_bundler_account();
     for vault in [WLD_LEGACY_VAULT_ADDRESS, USD_LEGACY_VAULT_ADDRESSES[0]] {
         let err = account
-            .transaction_erc4626_migrate(&vault.to_string(), &vault.to_string())
+            .transaction_erc4626_migrate(&vault.to_string(), &vault.to_string(), None)
             .await
             .unwrap_err();
         assert!(

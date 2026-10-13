@@ -268,6 +268,11 @@ where
             .unwrap_or(serde_json::Value::Null);
 
         match method {
+            // Fork tests isolate on-chain execution from the screening service.
+            "wa_screenAddresses" => Ok(serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0", "id": id, "result": true,
+            }))
+            .unwrap()),
             "pm_sponsorUserOperation" => {
                 // Anvil needs execution gas limits; zero fee prices model sponsorship.
                 let resp = serde_json::json!({

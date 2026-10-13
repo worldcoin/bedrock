@@ -152,6 +152,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
             .transaction_erc4626_migrate(
                 &usd_vault_address.to_string(),
                 &morpho_vault_address.to_string(),
+                None,
             )
             .await;
 
@@ -184,6 +185,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
                     .transaction_erc4626_migrate(
                         &usd_vault_address.to_string(),
                         &morpho_vault_address.to_string(),
+                        None,
                     )
                     .await
                     .expect_err("migration without recorded deposits must fail");
@@ -215,6 +217,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
             .transaction_erc4626_migrate(
                 &usd_vault_address.to_string(),
                 &bad_morpho_vault_address.to_string(),
+                None,
             )
             .await;
 
@@ -235,6 +238,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
             .transaction_erc4626_migrate(
                 &usd_vault_address.to_string(),
                 &morpho_vault_address.to_string(),
+                None,
             )
             .await
             .expect("USDVault migration failed");
