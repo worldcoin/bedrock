@@ -36,10 +36,11 @@ use crate::{
 };
 use crate::{smart_account::PERMIT2_ADDRESS, transactions::contracts::erc20::Erc20};
 
-/// The legacy `USDVault` deployments on World Chain (same interface, different limits).
-pub const USD_LEGACY_VAULT_ADDRESSES: [Address; 2] = [
+/// The production, no-limit, and staging legacy `USDVault` deployments on World Chain.
+pub const USD_LEGACY_VAULT_ADDRESSES: [Address; 3] = [
     address!("0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB"),
     address!("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC"),
+    address!("0xb093fc83afbf5c5e09ab9d8e2d91a00a1cfcc0c1"),
 ];
 
 /// How long the Permit2 signature of a `USDVault` migration stays valid.
@@ -309,40 +310,10 @@ impl UsdLegacyVault {
             })
     }
 
-    /// Fetches USDC and sDAI addresses from the USD Vault.
+    /// Bundles redeemSDAI, approve, and deposit via `MultiSend`.
     ///
-    /// # Errors
-    ///
-    /// Returns an `RpcError` if:
-    /// - The RPC call to fetch the USDC address fails
-    /// - The RPC call to fetch the sDAI address fails
-    async fn fetch_vault_addresses(
-        rpc_client: &RpcClient,
-        network: Network,
-        usd_vault_address: Address,
-    ) -> Result<(Address, Address), RpcError> {
-        let usdc_call_data = USDVault::USDCCall {}.abi_encode();
-        let usdc_address = Erc4626Vault::fetch_asset_address(
-            rpc_client,
-            network,
-            usd_vault_address,
-            usdc_call_data,
-        )
-        .await?;
-
-        let sdai_call_data = USDVault::SDAICall {}.abi_encode();
-        let sdai_address = Erc4626Vault::fetch_asset_address(
-            rpc_client,
-            network,
-            usd_vault_address,
-            sdai_call_data,
-        )
-        .await?;
-
-        Ok((usdc_address, sdai_address))
-    }
-
-    /// Creates a new migration operation (redeemSDAI + approve + deposit via `MultiSend`).
+    /// The sDAI address and amount must come from [`Self::fetch_sdai_balance`] for
+    /// `usd_vault_address` and `user_address`, and match the Permit2 signature in `permit2_data`.
     ///
     /// # Errors
     ///
@@ -358,12 +329,17 @@ impl UsdLegacyVault {
         network: Network,
         usd_vault_address: Address,
         erc4626_vault_address: Address,
-        sdai_amount: U256,
+        (sdai_address, sdai_amount): (Address, U256),
         user_address: Address,
         permit2_data: Permit2Data,
     ) -> Result<Self, RpcError> {
-        let (usdc_address, sdai_address) =
-            Self::fetch_vault_addresses(rpc_client, network, usd_vault_address).await?;
+        let usdc_address = Erc4626Vault::fetch_asset_address(
+            rpc_client,
+            network,
+            usd_vault_address,
+            USDVault::USDCCall {}.abi_encode(),
+        )
+        .await?;
 
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
         let asset_address = Erc4626Vault::fetch_asset_address(

@@ -30,9 +30,15 @@ use crate::{
     transactions::contracts::erc4626::IERC4626,
 };
 
-/// The legacy `WLDVault` contract address on World Chain.
+/// The production legacy `WLDVault` contract address on World Chain.
 pub const WLD_LEGACY_VAULT_ADDRESS: Address =
     address!("0x14a028cC500108307947dca4a1Aa35029FB66CE0");
+
+/// The production and staging legacy `WLDVault` deployments on World Chain.
+pub const WLD_LEGACY_VAULT_ADDRESSES: [Address; 2] = [
+    WLD_LEGACY_VAULT_ADDRESS,
+    address!("0x1d080cb46aedc27f24b684e3d305ec401db1b5ee"),
+];
 
 sol! {
     /// The WLD Vault contract interface.

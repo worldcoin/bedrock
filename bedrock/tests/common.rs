@@ -279,7 +279,7 @@ where
 
 /// Returns the World ID Address Book contract address for the current Bedrock environment.
 /// Reference <https://github.com/worldcoin/worldcoin-vault/blob/main/src/WorldIDAddressBook.sol>
-fn address_book_address() -> Address {
+pub fn address_book_address() -> Address {
     match current_environment_or_default() {
         BedrockEnvironment::Staging | BedrockEnvironment::Sandbox => {
             Address::from_str("0xfd5b7aefdd478f34ae61d8399a206a4879f0af0a")
@@ -307,6 +307,7 @@ fn address_book_address() -> Address {
 /// - slot 7: `addressVerifiedUntil` mapping
 pub async fn set_address_verified_until_for_account<P>(
     provider: &P,
+    address_book: Address,
     account: Address,
     verified_until: U256,
 ) -> anyhow::Result<()>
@@ -323,7 +324,7 @@ where
     let slot = U256::from_be_bytes(slot_hash.into());
 
     provider
-        .anvil_set_storage_at(address_book_address(), slot, verified_until.into())
+        .anvil_set_storage_at(address_book, slot, verified_until.into())
         .await?;
 
     Ok(())

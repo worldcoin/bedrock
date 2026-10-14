@@ -16,7 +16,7 @@ use crate::{
         contracts::{
             erc20::{Erc20, MetadataArg, TransferAssociation},
             usd_legacy_vault::{Permit2Data, USD_LEGACY_VAULT_ADDRESSES},
-            wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS,
+            wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESSES,
             world_gift_manager::WorldGiftManager,
             worldchain::TFH_PAYMASTER_ADDRESS,
         },
@@ -61,6 +61,28 @@ pub enum TransactionError {
 impl From<crate::primitives::PrimitiveError> for TransactionError {
     fn from(e: crate::primitives::PrimitiveError) -> Self {
         Self::PrimitiveError(e.to_string())
+    }
+}
+
+fn screening_error(error: RpcCallError) -> TransactionError {
+    if let RpcCallError::Response(response) = &error {
+        let reason = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(|reason| reason.as_str());
+        match (response.code, reason) {
+            (-32602, Some("address_restricted")) => {
+                return TransactionError::AddressRestricted;
+            }
+            (-32603, Some("screening_unavailable")) => {
+                return TransactionError::ScreeningUnavailable;
+            }
+            _ => {}
+        }
+    }
+    TransactionError::Generic {
+        error_message: format!("Address screening failed: {}", RpcError::from(error)),
     }
 }
 
@@ -342,7 +364,7 @@ impl MigrationSource {
     }
 
     fn classify(from_vault_address: Address) -> Self {
-        if from_vault_address == WLD_LEGACY_VAULT_ADDRESS {
+        if WLD_LEGACY_VAULT_ADDRESSES.contains(&from_vault_address) {
             Self::WldLegacy
         } else if USD_LEGACY_VAULT_ADDRESSES.contains(&from_vault_address) {
             Self::UsdLegacy
@@ -384,9 +406,9 @@ fn failure_class(error_message: &str) -> &'static str {
     }
 }
 
-/// Private helpers behind [`SafeSmartAccount::transaction_erc4626_migrate`].
+/// Migration construction and preflight checks.
 impl SafeSmartAccount {
-    /// Fails early if the legacy USD vault will not redeem the account's whole sDAI balance.
+    /// Checks withdrawal eligibility and returns the sDAI address and balance to migrate.
     ///
     /// The vault only redeems for accounts still verified in the World ID address book, and some
     /// deployments only redeem what the account deposited through them. A zero balance is left
@@ -394,11 +416,11 @@ impl SafeSmartAccount {
     async fn precheck_usd_migration(
         &self,
         usd_vault_address: Address,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(Address, U256), TransactionError> {
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
-        let (_, sdai_amount) =
+        let (sdai_address, sdai_amount) =
             crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
                 rpc_client,
                 Network::WorldChain,
@@ -410,7 +432,7 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to fetch sDAI balance: {e}"),
             })?;
         if sdai_amount.is_zero() {
-            return Ok(());
+            return Ok((sdai_address, sdai_amount));
         }
 
         crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::ensure_user_verified(
@@ -435,15 +457,104 @@ impl SafeSmartAccount {
         .await
         .map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to create USDVault migration: {e}"),
-        })
+        })?;
+        Ok((sdai_address, sdai_amount))
     }
 
-    /// ERC4626 -> ERC4626 (`redeem` + `approve` + `deposit`).
-    async fn migrate_from_erc4626_vault(
+    async fn build_wld_legacy_vault_migration(
+        &self,
+        legacy_vault_address: Address,
+        erc4626_vault_address: Address,
+    ) -> Result<contracts::wld_legacy_vault::WldLegacyVault, TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                self.wallet_address,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create WLDVault migration: {e}"),
+            })?;
+
+        Ok(transaction)
+    }
+
+    async fn build_usd_legacy_vault_migration(
+        &self,
+        legacy_vault_address: Address,
+        erc4626_vault_address: Address,
+        (sdai_address, sdai_amount): (Address, U256),
+    ) -> Result<contracts::usd_legacy_vault::UsdLegacyVault, TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+
+        if sdai_amount.is_zero() {
+            return Err(TransactionError::Generic {
+                error_message: "Cannot migrate with zero sDAI balance".to_string(),
+            });
+        }
+
+        let permitted = UnparsedTokenPermissions {
+            token: sdai_address.to_string(),
+            amount: sdai_amount.to_string(),
+        };
+
+        let nonce = {
+            let mut rng = rand::thread_rng();
+            U256::from_be_bytes(rng.gen::<[u8; 32]>())
+        };
+
+        let deadline = now_with_ntp().timestamp() + 180; // 3 minutes from now
+
+        let transfer = UnparsedPermitTransferFrom {
+            permitted,
+            spender: legacy_vault_address.to_string(),
+            nonce: nonce.to_string(),
+            deadline: deadline.to_string(),
+        };
+
+        let signature = self
+            .sign_permit2_transfer(Network::WorldChain as u32, transfer)
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to sign permit2 transfer: {e}"),
+            })?;
+
+        let permit2_data = Permit2Data {
+            signature,
+            nonce,
+            deadline: U256::from(deadline),
+        };
+
+        let transaction =
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                (sdai_address, sdai_amount),
+                self.wallet_address,
+                permit2_data,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create USDVault migration: {e}"),
+            })?;
+
+        Ok(transaction)
+    }
+
+    async fn build_erc4626_vault_migration(
         &self,
         from_vault_address: Address,
         to_vault_address: Address,
-    ) -> Result<HexEncodedData, TransactionError> {
+    ) -> Result<contracts::erc4626::Erc4626Vault, TransactionError> {
         let receiver = self.wallet_address;
 
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
@@ -463,16 +574,7 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to create ERC4626 migrate: {e}"),
             })?;
 
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, None, provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute ERC4626 migrate: {e}"),
-            })?;
-
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        Ok(transaction)
     }
 }
 
@@ -554,30 +656,7 @@ impl SafeSmartAccount {
             rpc_client
                 .screen_addresses(Network::WorldChain, &addresses)
                 .await
-                .map_err(|error| {
-                    if let RpcCallError::Response(response) = &error {
-                        let reason = response
-                            .data
-                            .as_ref()
-                            .and_then(|data| data.get("reason"))
-                            .and_then(|reason| reason.as_str());
-                        match (response.code, reason) {
-                            (-32602, Some("address_restricted")) => {
-                                return TransactionError::AddressRestricted;
-                            }
-                            (-32603, Some("screening_unavailable")) => {
-                                return TransactionError::ScreeningUnavailable;
-                            }
-                            _ => {}
-                        }
-                    }
-                    TransactionError::Generic {
-                        error_message: format!(
-                            "Address screening failed: {}",
-                            RpcError::from(error)
-                        ),
-                    }
-                })
+                .map_err(screening_error)
         };
         let preparation = async {
             if let Some(url) = custom_bundler_url {
@@ -1036,54 +1115,86 @@ impl SafeSmartAccount {
     /// redeem what the account deposited through them (`Cannot migrate - USDVault only redeems
     /// up to ...`); both are checked up front.
     ///
+    /// Screens the wallet before construction or Permit2 signing. The default route requires
+    /// free V3 sponsorship; a custom bundler estimates and submits a bundler-sponsored operation.
+    ///
     /// # Arguments
     /// - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).
     /// - `to_vault_address`: The destination ERC4626 vault address.
+    /// - `custom_bundler_url`: Optional relayer URL used for both estimation and submission.
     ///
     /// # Errors
     /// - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
+    /// - Returns `AddressRestricted` or `ScreeningUnavailable` when wallet screening fails.
     /// - Returns [`TransactionError::Generic`] if the vaults are the same, the source is not a
     ///   supported vault, or transaction creation or submission fails.
     pub async fn transaction_erc4626_migrate(
         &self,
         from_vault_address: &str,
         to_vault_address: &str,
+        custom_bundler_url: Option<String>,
     ) -> Result<HexEncodedData, TransactionError> {
         let from = Address::parse_from_ffi(from_vault_address, "from_vault_address")?;
         let to = Address::parse_from_ffi(to_vault_address, "to_vault_address")?;
         let source = MigrationSource::classify(from);
 
-        let result = if source != MigrationSource::Erc4626 && from == to {
-            // Legacy vaults have no `asset()`; the ERC-4626 builder has its own check.
-            Err(TransactionError::Generic {
-                error_message: "Source and destination vaults must differ".to_string(),
-            })
-        } else {
-            match source {
-                MigrationSource::WldLegacy => {
-                    self.transaction_wld_legacy_vault_migrate(
-                        from_vault_address,
-                        to_vault_address,
-                    )
-                    .await
-                }
-                MigrationSource::UsdLegacy => {
-                    match self.precheck_usd_migration(from).await {
-                        Ok(()) => {
-                            self.transaction_usd_legacy_vault_migrate(
-                                from_vault_address,
-                                to_vault_address,
-                            )
-                            .await
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
-                MigrationSource::Erc4626 => {
-                    self.migrate_from_erc4626_vault(from, to).await
-                }
+        let result = async {
+            if from == to {
+                return Err(TransactionError::Generic {
+                    error_message: "Source and destination vaults must differ"
+                        .to_string(),
+                });
             }
-        };
+            let rpc_client =
+                get_rpc_client().map_err(|e| TransactionError::Generic {
+                    error_message: format!("Failed to get RPC client: {e}"),
+                })?;
+            rpc_client
+                .screen_addresses(Network::WorldChain, &[self.wallet_address])
+                .await
+                .map_err(screening_error)?;
+
+            let operation = match source {
+                MigrationSource::WldLegacy => self
+                    .build_wld_legacy_vault_migration(from, to)
+                    .await?
+                    .build_preflight_user_operation(self.wallet_address, None)?,
+                MigrationSource::UsdLegacy => {
+                    let sdai_balance = self.precheck_usd_migration(from).await?;
+                    self.build_usd_legacy_vault_migration(from, to, sdai_balance)
+                        .await?
+                        .build_preflight_user_operation(self.wallet_address, None)?
+                }
+                MigrationSource::Erc4626 => self
+                    .build_erc4626_vault_migration(from, to)
+                    .await?
+                    .build_preflight_user_operation(self.wallet_address, None)?,
+            };
+            if let Some(url) = custom_bundler_url {
+                let operation = custom_bundler::prepare_bundler_sponsored_operation(
+                    &url, operation,
+                )
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!("Custom bundler preparation failed: {e}"),
+                })?;
+                return self
+                    .submit_prepared_transaction(&PreparedTransaction {
+                        user_operation: operation,
+                        fee_details: None,
+                        custom_bundler_url: Some(url.into()),
+                    })
+                    .await;
+            }
+            let hash = self
+                .sponsor_sign_and_submit_v3(operation, true)
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!("Failed to execute vault migration: {e}"),
+                })?;
+            Ok(HexEncodedData::new(&hash.to_string())?)
+        }
+        .await;
 
         if let Err(error) = &result {
             let error_message = error.to_string();
@@ -1127,21 +1238,12 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-        let transaction =
-            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
-                rpc_client,
-                Network::WorldChain,
+        let transaction = self
+            .build_wld_legacy_vault_migration(
                 legacy_vault_address,
                 erc4626_vault_address,
-                self.wallet_address,
             )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create WLDVault migration: {e}"),
-            })?;
+            .await?;
 
         let provider = RpcProviderName::Any;
 
@@ -1188,7 +1290,6 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
-        // Get the RPC client and create the ERC4626 deposit transaction
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
@@ -1205,57 +1306,13 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to fetch sDAI balance: {e}"),
             })?;
 
-        if sdai_amount.is_zero() {
-            return Err(TransactionError::Generic {
-                error_message: "Cannot migrate with zero sDAI balance".to_string(),
-            });
-        }
-
-        let permitted = UnparsedTokenPermissions {
-            token: sdai_address.to_string(),
-            amount: sdai_amount.to_string(),
-        };
-
-        let nonce = {
-            let mut rng = rand::thread_rng();
-            U256::from_be_bytes(rng.gen::<[u8; 32]>())
-        };
-
-        let deadline = now_with_ntp().timestamp() + 180; // 3 minutes from now
-
-        let transfer = UnparsedPermitTransferFrom {
-            permitted,
-            spender: legacy_vault_address.to_string(),
-            nonce: nonce.to_string(),
-            deadline: deadline.to_string(),
-        };
-
-        let signature = self
-            .sign_permit2_transfer(Network::WorldChain as u32, transfer)
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to sign permit2 transfer: {e}"),
-            })?;
-
-        let permit2_data = Permit2Data {
-            signature,
-            nonce,
-            deadline: U256::from(deadline),
-        };
-
-        let transaction =
-            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::migrate(
-                rpc_client,
-                Network::WorldChain,
+        let transaction = self
+            .build_usd_legacy_vault_migration(
                 legacy_vault_address,
                 erc4626_vault_address,
-                sdai_amount,
-                self.wallet_address,
-                permit2_data,
+                (sdai_address, sdai_amount),
             )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create USDVault migration: {e}"),
-            })?;
+            .await?;
 
         let provider = RpcProviderName::Any;
 

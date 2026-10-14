@@ -772,18 +772,18 @@ async fn incomplete_fee_metadata_cannot_be_treated_as_free() {
 
 #[test]
 fn migration_source_is_chosen_from_the_source_address() {
-    use crate::transactions::contracts::usd_legacy_vault::USD_LEGACY_VAULT_ADDRESSES;
-    use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS;
-
-    assert_eq!(
-        MigrationSource::classify(WLD_LEGACY_VAULT_ADDRESS),
-        MigrationSource::WldLegacy
-    );
-    for usd_vault in USD_LEGACY_VAULT_ADDRESSES {
-        assert_eq!(
-            MigrationSource::classify(usd_vault),
-            MigrationSource::UsdLegacy
-        );
+    for vault in [
+        address!("0x14a028cc500108307947dca4a1aa35029fb66ce0"),
+        address!("0x1d080cb46aedc27f24b684e3d305ec401db1b5ee"),
+    ] {
+        assert_eq!(MigrationSource::classify(vault), MigrationSource::WldLegacy);
+    }
+    for vault in [
+        address!("0xb0e31149c03f1300bd9ff8c165b1fa38fda2f0bb"),
+        address!("0x6f1d98034d3055684f989f3ac9832ec37b3f22ec"),
+        address!("0xb093fc83afbf5c5e09ab9d8e2d91a00a1cfcc0c1"),
+    ] {
+        assert_eq!(MigrationSource::classify(vault), MigrationSource::UsdLegacy);
     }
     assert_eq!(
         MigrationSource::classify(address!(
@@ -796,12 +796,15 @@ fn migration_source_is_chosen_from_the_source_address() {
 #[tokio::test]
 async fn migrate_rejects_same_source_and_destination_for_legacy_sources() {
     use crate::transactions::contracts::usd_legacy_vault::USD_LEGACY_VAULT_ADDRESSES;
-    use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS;
+    use crate::transactions::contracts::wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESSES;
 
     let account = custom_bundler_account();
-    for vault in [WLD_LEGACY_VAULT_ADDRESS, USD_LEGACY_VAULT_ADDRESSES[0]] {
+    for vault in WLD_LEGACY_VAULT_ADDRESSES
+        .into_iter()
+        .chain(USD_LEGACY_VAULT_ADDRESSES)
+    {
         let err = account
-            .transaction_erc4626_migrate(&vault.to_string(), &vault.to_string())
+            .transaction_erc4626_migrate(&vault.to_string(), &vault.to_string(), None)
             .await
             .unwrap_err();
         assert!(

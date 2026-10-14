@@ -31,6 +31,7 @@ use crate::common::{
 sol! {
     #[sol(rpc)]
     interface UsdVaultLimits {
+        function ADDRESS_BOOK() external view returns (address);
         function LIMIT_WITHDRAWALS_TO_DEPOSITS() external view returns (bool);
         function sDAIBalances(address account) external view returns (uint256);
     }
@@ -114,8 +115,13 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
             .await?;
         println!("✓ Funded Safe for userOp gas");
 
+        let address_book = UsdVaultLimits::new(usd_vault_address, &provider)
+            .ADDRESS_BOOK()
+            .call()
+            .await?;
         set_address_verified_until_for_account(
             &provider,
+            address_book,
             safe_address,
             U256::from(2_000_000_000u64),
         )
@@ -152,6 +158,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
             .transaction_erc4626_migrate(
                 &usd_vault_address.to_string(),
                 &morpho_vault_address.to_string(),
+                None,
             )
             .await;
 
@@ -184,6 +191,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
                     .transaction_erc4626_migrate(
                         &usd_vault_address.to_string(),
                         &morpho_vault_address.to_string(),
+                        None,
                     )
                     .await
                     .expect_err("migration without recorded deposits must fail");
@@ -215,6 +223,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
             .transaction_erc4626_migrate(
                 &usd_vault_address.to_string(),
                 &bad_morpho_vault_address.to_string(),
+                None,
             )
             .await;
 
@@ -235,6 +244,7 @@ async fn test_usd_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
             .transaction_erc4626_migrate(
                 &usd_vault_address.to_string(),
                 &morpho_vault_address.to_string(),
+                None,
             )
             .await
             .expect("USDVault migration failed");

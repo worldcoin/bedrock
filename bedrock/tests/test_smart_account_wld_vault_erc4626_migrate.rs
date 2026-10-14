@@ -73,6 +73,7 @@ async fn test_wld_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
 
     set_address_verified_until_for_account(
         &provider,
+        common::address_book_address(),
         safe_address,
         U256::from(2_000_000_000u64),
     )
@@ -84,6 +85,7 @@ async fn test_wld_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
         .transaction_erc4626_migrate(
             &wld_vault_address.to_string(),
             &morpho_vault_address.to_string(),
+            None,
         )
         .await;
 
@@ -160,6 +162,7 @@ async fn test_wld_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
         .transaction_erc4626_migrate(
             &wld_vault_address.to_string(),
             &bad_morpho_vault_address.to_string(),
+            None,
         )
         .await;
 
@@ -180,6 +183,7 @@ async fn test_wld_vault_migration_via_erc4626_migrate() -> anyhow::Result<()> {
         .transaction_erc4626_migrate(
             &wld_vault_address.to_string(),
             &morpho_vault_address.to_string(),
+            None,
         )
         .await
         .expect("WLDVault migration failed");
