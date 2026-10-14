@@ -16,7 +16,7 @@ use crate::{
         contracts::{
             erc20::{Erc20, MetadataArg, TransferAssociation},
             usd_legacy_vault::{Permit2Data, USD_LEGACY_VAULT_ADDRESSES},
-            wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESS,
+            wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESSES,
             world_gift_manager::WorldGiftManager,
             worldchain::TFH_PAYMASTER_ADDRESS,
         },
@@ -364,7 +364,7 @@ impl MigrationSource {
     }
 
     fn classify(from_vault_address: Address) -> Self {
-        if from_vault_address == WLD_LEGACY_VAULT_ADDRESS {
+        if WLD_LEGACY_VAULT_ADDRESSES.contains(&from_vault_address) {
             Self::WldLegacy
         } else if USD_LEGACY_VAULT_ADDRESSES.contains(&from_vault_address) {
             Self::UsdLegacy

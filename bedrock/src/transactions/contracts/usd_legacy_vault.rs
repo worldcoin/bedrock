@@ -36,10 +36,11 @@ use crate::{
 };
 use crate::{smart_account::PERMIT2_ADDRESS, transactions::contracts::erc20::Erc20};
 
-/// The legacy `USDVault` deployments on World Chain (same interface, different limits).
-pub const USD_LEGACY_VAULT_ADDRESSES: [Address; 2] = [
+/// The production, no-limit, and staging legacy `USDVault` deployments on World Chain.
+pub const USD_LEGACY_VAULT_ADDRESSES: [Address; 3] = [
     address!("0xB0e31149c03F1300BD9fF8C165B1fa38fDA2F0bB"),
     address!("0x6F1D98034D3055684F989f3Ac9832eC37B3F22EC"),
+    address!("0xb093fc83afbf5c5e09ab9d8e2d91a00a1cfcc0c1"),
 ];
 
 /// How long the Permit2 signature of a `USDVault` migration stays valid.

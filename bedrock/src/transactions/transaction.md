@@ -293,8 +293,9 @@ the UserOp reaches a terminal state or its tracking deadline is reached.
 
 `transaction_erc4626_migrate(from_vault_address, to_vault_address, custom_bundler_url)`
 executes a migration after the caller obtains user confirmation. It supports Earn
-ERC-4626 sources and the known legacy WLD and USD sources, with an ERC-4626
-destination supplied by the caller.
+ERC-4626 sources and the known legacy WLD and USD sources, including their
+production and staging deployments, with an ERC-4626 destination supplied by the
+caller. Source classification depends on the address, not the app environment.
 
 Bedrock screens the wallet before constructing the migration or signing a USD
 Permit2 authorization. Source-specific builders produce the withdrawal or
