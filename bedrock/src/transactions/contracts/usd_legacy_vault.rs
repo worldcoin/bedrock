@@ -310,8 +310,10 @@ impl UsdLegacyVault {
             })
     }
 
-    /// Creates a migration operation using the sDAI address and amount signed in `permit2_data`.
     /// Bundles redeemSDAI, approve, and deposit via `MultiSend`.
+    ///
+    /// The sDAI address and amount must come from [`Self::fetch_sdai_balance`] for
+    /// `usd_vault_address` and `user_address`, and match the Permit2 signature in `permit2_data`.
     ///
     /// # Errors
     ///
