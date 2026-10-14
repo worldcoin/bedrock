@@ -2,17 +2,29 @@
 
 **Status:** Proposed
 
-**Updated:** 2026-10-13
+**Updated:** 2026-10-14
 
-## Proposal
+## TLDR
 
-Keep one durable record for each restore. Pause account activity, validate the
-backup, and import each consumer's data. Each consumer saves its data and a
-completion receipt together. Finish native login, finalize through Bedrock,
-reload consumers, then resume normal account activity.
+The main idea is to treat restore as one operation we can resume, instead of
+starting over after a crash. The mobile clients save the recovery ID, the device
+signer, references to the staged backup files, and the current step.
 
-After an interruption, continue the same restore. Skip completed imports.
-Never upload a partial restore or treat unreadable storage as a new identity.
+Each component imports its data and saves a completion receipt together. If the
+app crashes after WalletKit finishes but before Oxide does, we skip WalletKit
+and continue Oxide using the same staged backup. We don't download a newer backup
+halfway through or create another device key on retry.
+
+Until every import finishes, account activity and uploads stay paused. The mobile
+client then completes login, calls Bedrock's `finalize_login`, reloads the stores,
+and opens the account. If finalization's response is lost, we retry it with the
+same recovery ID.
+
+That prevents a partial restore from becoming a usable account or overwriting
+the cloud backup. It builds on the Bedrock plan, with the same recovery contract
+for iOS and Android.
+
+## Scope
 
 This follows the [Bedrock backup migration architecture](https://github.com/worldcoin/bedrock/pull/443).
 It covers factor-based recovery (`Login`) and replacement from a remote backup
@@ -47,7 +59,7 @@ the acknowledged inventory, and its `RecoveryPending` sync gate.
 
 WalletKit, Oxide, and referral storage own their imports and receipts.
 Each platform owns a RecoveryCoordinator, its journal, secure storage, UI,
-native login, and startup integration.
+account login, and startup integration.
 
 Before retrieval, persist a bootstrap record and close the account gate.
 Stop new producers and workers. Drain existing account, storage, and backup
@@ -75,11 +87,11 @@ After an interrupted retrieval, reuse that signer and purpose.
 
 The adopted binding must preserve pending-recovery context on failed
 `login`: recovery ID, purpose, and candidate public key, alongside the original
-error. Read it through Bedrock's own persistence, not native parsing of private
-files. Match it to the bootstrap record before acting. For initialized accounts,
+error. Read it through Bedrock's own persistence. Mobile clients must not parse
+its private files. Match it to the bootstrap record before acting. For initialized accounts,
 the architecture's `init` flow returns the ID and purpose through `RecoveryPending`.
 
-This handles a crash after Bedrock stages data but before native receives its
+This handles a crash after Bedrock stages data but before the mobile client receives its
 ID. If retry reports `RemoteAhead`, use the pending ID to cancel the old attempt.
 No root or consumer data has changed yet. Only then start another retrieval.
 Unreadable pending context retains the bootstrap record and blocks safely.
@@ -92,7 +104,7 @@ After `login` returns, atomically save:
   checksum, and size. Compute checksums and sizes from the validated staged files;
   the returned descriptors do not expose those fields.
 - A digest of that descriptor set. Bedrock owns the full archive inventory.
-- Phase: `prepared`, `import_started`, `native_login_complete`, or `finalized`.
+- Phase: `prepared`, `import_started`, `client_login_complete`, or `finalized`.
 - Cancellation intent, when requested.
 
 Save this before writing the root or importing data. Retain the original staged
@@ -165,9 +177,9 @@ There is no transaction across consumers. A failed consumer retains staging and
 completed receipts. Retry every required owner; receipts identify finished work.
 The account gate hides the temporary inconsistency between stores.
 
-After all imports succeed, complete native login for `Login`.
+After all imports succeed, the mobile client completes account login for `Login`.
 Reconcile an existing session against the expected account on retry.
-Persist `native_login_complete`, then call `finalize_login`.
+Persist `client_login_complete`, then call `finalize_login`.
 
 A lost response retries finalization with the same ID and signer.
 Staging may already be deleted; do not reopen or reimport it in this phase.
@@ -208,7 +220,7 @@ These are proposed work items. No new tickets have been filed.
    Depends on the existing service migration being deployed compatibly.
 2. <a id="walletkit-work"></a>**WalletKit import.** Add transactional receipts and replacement/retry behavior.
 3. <a id="oxide-work"></a>**Oxide import.** Add safe commits and durable receipts using existing storage.
-4. <a id="referral-work"></a>**Referral import.** Add owned-data receipts. This can be a native subtask.
+4. <a id="referral-work"></a>**Referral import.** Add owned-data receipts. This can be a mobile integration subtask.
 5. <a id="mobile-work"></a>**Mobile integration.** Implement the coordinator, startup/lifecycle gates,
    secure storage, cancellation, completion, and Statsig wiring separately on
    iOS and Android. Depends on
@@ -263,7 +275,7 @@ path. Never erase state or route an unfinished attempt into legacy recovery.
 
 ## Verification
 
-Add native tests on both platforms with existing mocks and injectable storage.
+Add tests for both mobile clients with existing mocks and injectable storage.
 The new coordinator and receipt APIs are implemented alongside these tests.
 
 - Inject storage, import, and network errors. Check pending state survives,
@@ -296,13 +308,13 @@ is an existing pattern to extend.
 Follow-up coverage requires additional support:
 
 - Exact pause/kill points around persistence, imports, cancellation, and finalization.
-  Include Bedrock staging committed before native receives the ID.
+  Include Bedrock staging committed before the mobile client receives the ID.
 - Process death inside actual WalletKit/Oxide transactions.
 - Service commit followed by a dropped response; verify registration/eviction
   happens once. Also change the cloud backup during a paused import.
 - Controlled device storage-lock and exhaustion tests.
 
-Native mocks prove coordination, not disk durability or service idempotency.
+Mocks of mobile-client dependencies prove coordination, not disk durability or service idempotency.
 Manual interruption gives smoke coverage, not every crash boundary.
 Storage and service implementations retain responsibility for their guarantees.
 
