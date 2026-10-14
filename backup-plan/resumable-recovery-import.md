@@ -34,6 +34,32 @@ Normal edits and upload retries after recovery are outside this proposal.
 Both platforms use the same contract. Each app client has its own recovery ID,
 staging, and device signer. Another device or app cannot continue its attempt.
 
+## Backup compatibility
+
+This proposal changes local recovery state, not the uploaded backup format.
+The journal and consumer receipts are local-only and excluded from exports.
+Keep the V0 archive format, existing entry IDs/paths, and supported consumer
+payloads compatible with released readers, as required by the
+[migration flows](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/flows.md).
+
+Supported old backups must restore through the new flow. New backups containing
+the same supported data must also restore on supported older releases.
+Keeping the V0 schema alone does not prove this: older readers use archived paths
+as destinations. New staging and live-storage locations must not change those
+archived identifiers. New consumer formats or designators need a separate
+compatibility decision. Invalid or unsupported content still follows the stated
+validation and update rules.
+
+Verify both directions on iOS and Android before rollout, using real archives
+and supported old/new readers. Include vault, PCP, and referral payloads and
+check restored contents, not just archive decoding. This is a required
+compatibility contract; it is not yet a tested implementation guarantee.
+
+Disabling the Statsig gate stops new attempts through this flow. It does not
+downgrade Bedrock or restore callers removed during migration. Existing attempts
+finish through their saved recovery state. Old released readers are a separate
+compatibility case from switching an unfinished restore to old logic.
+
 ## Current behavior
 
 - iOS decrypts and unpacks before restoring the credential vault. Its
@@ -302,6 +328,8 @@ Existing foundations:
 
 Before rollout, consumer dependencies must pass real-store commit-failure,
 receipt-consistency, and repeated-import tests.
+Also verify [backup compatibility in both directions](#backup-compatibility)
+with actual supported old/new readers on each platform.
 [WalletKit's rollback test](https://github.com/worldcoin/walletkit/blob/main/crates/walletkit-core/src/storage/credential_vault/merge.rs)
 is an existing pattern to extend.
 
