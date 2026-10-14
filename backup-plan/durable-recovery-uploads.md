@@ -17,6 +17,14 @@ uses a fixed snapshot and acknowledges only its captured revisions. Newer edits 
 queued across crashes. Restore finishes before normal editing and uploading resume.
 Both platforms use this contract with their existing storage and job systems.
 
+This requires a change to the [backup migration design](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/design.md)
+and [upload flows](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/flows.md):
+check the backup version atomically when publishing an upload, in addition to its
+hash and encryption key. This is standard **optimistic concurrency control**. It
+prevents an old upload from overwriting a later change even when the contents have
+returned to their earlier value. Reuse an existing version or unique selected-object
+identity if it meets this contract; a new version field is not inherently required.
+
 ## Scope and foundations
 
 Follow the backup migration [design](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/design.md)
@@ -59,12 +67,17 @@ These foundations do not establish that the proposed contracts have shipped.
 
 Hash/key equality cannot distinguish an old publication from a later one with the
 same contents. If A-to-B is delayed while another client publishes A-to-C-to-A,
-the old B can pass a hash-only check and overwrite the later decision.
+the old B can pass a hash-only check and overwrite the later decision. This is the
+**ABA problem**. Use **optimistic concurrency control**, also called versioned
+compare-and-swap: publish only if the backup version still matches the one the
+client observed.
 
 Require a non-repeating **archive revision** on every archive publication, including
-recreation of a deleted backup. The immutable selected-object identifier can serve
-as the revision if old identifiers are never republished. Factor-only updates retain
-it. Creation keeps the absent-account precondition and retry protocol in the
+recreation of a deleted backup. First check whether existing service/storage versioning
+can supply this guarantee. The immutable selected-object identifier can serve as the
+revision if old identifiers are never republished and publication checks it atomically.
+A separate revision field is needed only if no existing mechanism meets this contract.
+Factor-only updates retain the archive revision. Creation keeps the absent-account precondition and retry protocol in the
 [detailed backup flows](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/flows.md), and assigns a fresh revision on publication.
 
 Read revision, manifest hash, key, and selected-object pointer as one authenticated
@@ -89,8 +102,8 @@ again before conditional publication. One previous revision authorizes at most o
 publication, although transport retries and unselected objects may repeat.
 
 The [detailed backup flows](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/flows.md)
-currently specify hash/key checks only. Add revision fields and
-client support compatibly, then require revision checks for **every admitted writer**,
+currently specify hash/key checks only. Expose and persist the chosen revision
+compatibly, then require revision checks for **every admitted writer**,
 including legacy requests. Keep rollout blocked if a supported writer can bypass the
 check. Reader compatibility and writer admission are separate requirements.
 
