@@ -408,7 +408,7 @@ fn failure_class(error_message: &str) -> &'static str {
 
 /// Migration construction and preflight checks.
 impl SafeSmartAccount {
-    /// Fails early if the legacy USD vault will not redeem the account's whole sDAI balance.
+    /// Checks withdrawal eligibility and returns the sDAI address and balance to migrate.
     ///
     /// The vault only redeems for accounts still verified in the World ID address book, and some
     /// deployments only redeem what the account deposited through them. A zero balance is left
@@ -416,11 +416,11 @@ impl SafeSmartAccount {
     async fn precheck_usd_migration(
         &self,
         usd_vault_address: Address,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(Address, U256), TransactionError> {
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
-        let (_, sdai_amount) =
+        let (sdai_address, sdai_amount) =
             crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
                 rpc_client,
                 Network::WorldChain,
@@ -432,7 +432,7 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to fetch sDAI balance: {e}"),
             })?;
         if sdai_amount.is_zero() {
-            return Ok(());
+            return Ok((sdai_address, sdai_amount));
         }
 
         crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::ensure_user_verified(
@@ -457,7 +457,8 @@ impl SafeSmartAccount {
         .await
         .map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to create USDVault migration: {e}"),
-        })
+        })?;
+        Ok((sdai_address, sdai_amount))
     }
 
     async fn build_wld_legacy_vault_migration(
@@ -488,22 +489,11 @@ impl SafeSmartAccount {
         &self,
         legacy_vault_address: Address,
         erc4626_vault_address: Address,
+        (sdai_address, sdai_amount): (Address, U256),
     ) -> Result<contracts::usd_legacy_vault::UsdLegacyVault, TransactionError> {
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
-
-        let (sdai_address, sdai_amount) =
-            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
-                rpc_client,
-                Network::WorldChain,
-                legacy_vault_address,
-                self.wallet_address,
-            )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to fetch sDAI balance: {e}"),
-            })?;
 
         if sdai_amount.is_zero() {
             return Err(TransactionError::Generic {
@@ -548,7 +538,7 @@ impl SafeSmartAccount {
                 Network::WorldChain,
                 legacy_vault_address,
                 erc4626_vault_address,
-                sdai_amount,
+                (sdai_address, sdai_amount),
                 self.wallet_address,
                 permit2_data,
             )
@@ -1170,8 +1160,8 @@ impl SafeSmartAccount {
                     .await?
                     .build_preflight_user_operation(self.wallet_address, None)?,
                 MigrationSource::UsdLegacy => {
-                    self.precheck_usd_migration(from).await?;
-                    self.build_usd_legacy_vault_migration(from, to)
+                    let sdai_balance = self.precheck_usd_migration(from).await?;
+                    self.build_usd_legacy_vault_migration(from, to, sdai_balance)
                         .await?
                         .build_preflight_user_operation(self.wallet_address, None)?
                 }
@@ -1300,10 +1290,27 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+
+        let (sdai_address, sdai_amount) =
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                self.wallet_address,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to fetch sDAI balance: {e}"),
+            })?;
+
         let transaction = self
             .build_usd_legacy_vault_migration(
                 legacy_vault_address,
                 erc4626_vault_address,
+                (sdai_address, sdai_amount),
             )
             .await?;
 

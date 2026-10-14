@@ -310,40 +310,8 @@ impl UsdLegacyVault {
             })
     }
 
-    /// Fetches USDC and sDAI addresses from the USD Vault.
-    ///
-    /// # Errors
-    ///
-    /// Returns an `RpcError` if:
-    /// - The RPC call to fetch the USDC address fails
-    /// - The RPC call to fetch the sDAI address fails
-    async fn fetch_vault_addresses(
-        rpc_client: &RpcClient,
-        network: Network,
-        usd_vault_address: Address,
-    ) -> Result<(Address, Address), RpcError> {
-        let usdc_call_data = USDVault::USDCCall {}.abi_encode();
-        let usdc_address = Erc4626Vault::fetch_asset_address(
-            rpc_client,
-            network,
-            usd_vault_address,
-            usdc_call_data,
-        )
-        .await?;
-
-        let sdai_call_data = USDVault::SDAICall {}.abi_encode();
-        let sdai_address = Erc4626Vault::fetch_asset_address(
-            rpc_client,
-            network,
-            usd_vault_address,
-            sdai_call_data,
-        )
-        .await?;
-
-        Ok((usdc_address, sdai_address))
-    }
-
-    /// Creates a new migration operation (redeemSDAI + approve + deposit via `MultiSend`).
+    /// Creates a migration operation using the sDAI address and amount signed in `permit2_data`.
+    /// Bundles redeemSDAI, approve, and deposit via `MultiSend`.
     ///
     /// # Errors
     ///
@@ -359,12 +327,17 @@ impl UsdLegacyVault {
         network: Network,
         usd_vault_address: Address,
         erc4626_vault_address: Address,
-        sdai_amount: U256,
+        (sdai_address, sdai_amount): (Address, U256),
         user_address: Address,
         permit2_data: Permit2Data,
     ) -> Result<Self, RpcError> {
-        let (usdc_address, sdai_address) =
-            Self::fetch_vault_addresses(rpc_client, network, usd_vault_address).await?;
+        let usdc_address = Erc4626Vault::fetch_asset_address(
+            rpc_client,
+            network,
+            usd_vault_address,
+            USDVault::USDCCall {}.abi_encode(),
+        )
+        .await?;
 
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
         let asset_address = Erc4626Vault::fetch_asset_address(
