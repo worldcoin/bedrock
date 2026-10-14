@@ -31,8 +31,8 @@ mobile-client manifest hashing, upload-status endpoint, or automatic merge is ne
 `finalize_login` acknowledges downloaded inventory; it does not upload. Account
 activity and uploads remain gated until recovery and local completion finish.
 
-One amendment to the shared plan is required: condition uploads on a unique archive
-revision as well as hash/key. This needs Bedrock and backup-service agreement before
+This proposal requires one change to the [Bedrock backup migration design](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/design.md)
+and its [detailed backup flows](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/flows.md): condition uploads on a unique archive revision as well as hash/key. This needs Bedrock and backup-service agreement before
 implementation. All new behavior here is proposed; the archive format and
 cryptographic construction remain unchanged.
 
@@ -50,7 +50,7 @@ Existing foundations:
   Its [worker](https://github.com/worldcoin/wld-android/blob/bdaee7d29ace9d4c1b79b76cb938b7ad88ad1ded/data/src/main/java/com/worldcoin/data/worldId/credentialPresentation/backup/ThirdPartyReferralsBackupWorker.kt)
   already retains pending intent after retry exhaustion.
 
-Sources are pinned in those links. The shared design was read at
+Sources are pinned in those links. The [Bedrock backup migration design](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/design.md) was read at
 `92709b74b0ad9583839252ce97500a393c763c72`; the restore proposal at
 `2cb68af780f1eb0e850b5e02b8124245ce320572`, checked on 2026-10-14.
 These foundations do not establish that the proposed contracts have shipped.
@@ -64,8 +64,8 @@ the old B can pass a hash-only check and overwrite the later decision.
 Require a non-repeating **archive revision** on every archive publication, including
 recreation of a deleted backup. The immutable selected-object identifier can serve
 as the revision if old identifiers are never republished. Factor-only updates retain
-it. Creation keeps the shared plan's absent-account precondition and retry protocol,
-and assigns a fresh revision on publication.
+it. Creation keeps the absent-account precondition and retry protocol in the
+[detailed backup flows](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/flows.md), and assigns a fresh revision on publication.
 
 Read revision, manifest hash, key, and selected-object pointer as one authenticated
 metadata tuple. Upload a new immutable object, then conditionally publish its pointer,
@@ -88,7 +88,8 @@ cannot silently rebase a client without a pending candidate. Each new sync check
 again before conditional publication. One previous revision authorizes at most one
 publication, although transport retries and unselected objects may repeat.
 
-The shared plan currently specifies hash/key checks only. Add revision fields and
+The [detailed backup flows](https://github.com/worldcoin/bedrock/blob/pdc/plan-backup-migration/backup-plan/flows.md)
+currently specify hash/key checks only. Add revision fields and
 client support compatibly, then require revision checks for **every admitted writer**,
 including legacy requests. Keep rollout blocked if a supported writer can bypass the
 check. Reader compatibility and writer admission are separate requirements.
