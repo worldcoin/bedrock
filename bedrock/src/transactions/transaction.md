@@ -327,7 +327,8 @@ routes. Their signatures do not include a custom bundler URL.
 builds the asset approval and vault deposit locally. It screens the wallet with
 `wa_screenAddresses` in parallel with construction and sponsorship or custom
 bundler estimation. The wallet owns the assets and receives the shares. Vault
-selection and program eligibility are the caller's responsibility.
+selection and program eligibility are the caller's responsibility. Screening
+failures take precedence over preparation failures on both routes.
 
 The result is a `PreparedVaultTransaction`: `asset_address` identifies the underlying
 token, `asset_amount` is the amount encoded after capping it to the available
@@ -348,7 +349,8 @@ The all-in-one `transaction_erc4626_deposit` API uses V1 execution.
 `prepare_transaction_erc4626_withdraw(vault_address, asset_amount, custom_bundler_url)`
 returns the same `PreparedVaultTransaction` contract as deposit preparation. It
 screens the wallet in parallel with preparation on both routes; that wallet owns
-the shares and receives the withdrawn assets.
+the shares and receives the withdrawn assets. Screening failures take precedence
+over preparation failures on both routes.
 
 Construction uses `withdraw` for the requested asset amount when the wallet has
 enough shares. When share-limited, it uses `redeem` for the available shares and
