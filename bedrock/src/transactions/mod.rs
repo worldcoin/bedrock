@@ -772,8 +772,9 @@ impl SafeSmartAccount {
                 asset_amount: actual_amount.to_string(),
             })
         };
-        let ((), prepared) = tokio::try_join!(screening, preparation)?;
-        Ok(prepared)
+        let (screening, prepared) = tokio::join!(screening, preparation);
+        screening?;
+        prepared
     }
 
     /// Signs and submits a previously prepared transaction on World Chain.

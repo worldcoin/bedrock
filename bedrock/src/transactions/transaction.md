@@ -327,7 +327,8 @@ routes. Their signatures do not include a custom bundler URL.
 builds the asset approval and vault deposit locally. It screens the wallet with
 `wa_screenAddresses` in parallel with construction and sponsorship or custom
 bundler estimation. The wallet owns the assets and receives the shares. Vault
-selection and program eligibility are the caller's responsibility.
+selection and program eligibility are the caller's responsibility. Screening
+failures take precedence over preparation failures on both routes.
 
 The result is a `PreparedVaultTransaction`: `asset_address` identifies the underlying
 token, `asset_amount` is the amount encoded after capping it to the available

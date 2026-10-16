@@ -386,3 +386,53 @@ async fn deposit_rejects_restricted_and_unavailable_screening_on_both_routes() {
         }
     }
 }
+
+#[tokio::test]
+#[serial_test::serial]
+async fn deposit_waits_for_screening_before_returning_preparation_errors() {
+    for custom in [None, Some("invalid-bundler-url".to_string())] {
+        for screening in [
+            json!({"result": true}),
+            json!({"error": {"code": -32602, "message": "Restricted", "data": {"reason": "address_restricted"}}}),
+            json!({"error": {"code": -32603, "message": "Unavailable", "data": {"reason": "screening_unavailable"}}}),
+        ] {
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let mut client = EarnHttpClient::new(7, true);
+            client.screening = screening.clone();
+            client.screening_gate = Some(gate.clone());
+            let http = install(client);
+            let wallet = account();
+            let vault = VAULT.to_string();
+            let preparation =
+                wallet.prepare_transaction_erc4626_deposit(&vault, "7", custom.clone());
+            tokio::pin!(preparation);
+            assert!(futures::poll!(&mut preparation).is_pending());
+            gate.notify_one();
+            let error =
+                tokio::time::timeout(std::time::Duration::from_secs(5), preparation)
+                    .await
+                    .unwrap()
+                    .unwrap_err();
+            match screening["error"]["data"]["reason"].as_str() {
+                Some("address_restricted") => {
+                    assert!(matches!(error, TransactionError::AddressRestricted))
+                }
+                Some("screening_unavailable") => {
+                    assert!(matches!(error, TransactionError::ScreeningUnavailable))
+                }
+                _ if custom.is_some() => {
+                    assert!(matches!(error, TransactionError::Generic { .. }))
+                }
+                _ => {
+                    assert!(matches!(error, TransactionError::InsufficientFunds { .. }))
+                }
+            }
+            assert!(!http
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r["method"] == "eth_sendUserOperation"));
+        }
+    }
+}
