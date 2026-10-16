@@ -325,6 +325,8 @@ impl Erc4626Vault {
         )
         .await?;
 
+        // Morpho V2 returns zero for maxWithdraw/maxRedeem; they cannot size withdrawals.
+        // Sponsorship or bundler estimation checks whether the encoded operation can execute.
         // 3. Use the minimum shares available (limit by user's balance)
         let actual_shares = required_shares.min(share_balance);
 

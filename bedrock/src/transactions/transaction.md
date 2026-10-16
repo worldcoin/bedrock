@@ -356,6 +356,12 @@ returns `previewRedeem` as `asset_amount`. This redemption amount is a snapshot,
 not a guaranteed execution output; vault exchange rates can change before
 submission. Display the returned amount and any fee before confirmation.
 
+Construction does not cap withdrawals using `maxWithdraw` or `maxRedeem`:
+[Morpho V2 returns zero for both views](https://docs.morpho.org/developers/contracts/morpho-vaults-v2/).
+Sponsorship or custom-bundler estimation must succeed before preparation returns;
+an operation that cannot execute fails preparation rather than automatically
+searching for a smaller withdrawal.
+
 A WLD-paid withdrawal requires the fee-token balance and allowance in the wallet
 before execution. The paymaster charges during validation, so assets released by
 the withdrawal cannot fund that charge. Custom bundlers cover gas.
