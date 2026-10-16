@@ -72,6 +72,7 @@ async fn test_wld_vault_migration() -> anyhow::Result<()> {
 
     set_address_verified_until_for_account(
         &provider,
+        common::address_book_address(),
         safe_address,
         U256::from(2_000_000_000u64),
     )

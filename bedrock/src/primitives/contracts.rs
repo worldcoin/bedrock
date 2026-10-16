@@ -279,7 +279,7 @@ impl UserOperation {
         self
     }
 
-    /// Applies prepared V2 sponsorship fields to this `UserOperation`.
+    /// Applies V3 sponsorship fields to this `UserOperation`.
     #[must_use]
     pub fn with_pm_sponsorship(
         mut self,

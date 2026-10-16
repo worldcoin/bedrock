@@ -58,6 +58,13 @@ pub enum RpcError {
         error_message: String,
     },
 
+    /// The fee-token balance cannot cover the network fee.
+    #[error("Insufficient funds for network fee")]
+    InsufficientFunds {
+        /// Token whose balance is insufficient.
+        token_address: String,
+    },
+
     /// Invalid response format
     #[error("Invalid response format: {error_message}")]
     InvalidResponse {
@@ -87,6 +94,23 @@ pub enum RpcError {
 
 impl From<JsonRpcError> for RpcError {
     fn from(error: JsonRpcError) -> Self {
+        if error.code == -32602 {
+            if let Some(data) = error.data.as_ref() {
+                if data.get("reason").and_then(Value::as_str)
+                    == Some("insufficient_funds")
+                {
+                    if let Some(token) = data
+                        .get("token")
+                        .and_then(Value::as_str)
+                        .and_then(|value| value.parse::<Address>().ok())
+                    {
+                        return Self::InsufficientFunds {
+                            token_address: token.to_string(),
+                        };
+                    }
+                }
+            }
+        }
         Self::RpcResponseError {
             code: error.code,
             error_message: error.message,
