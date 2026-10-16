@@ -7,7 +7,7 @@ use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
-use crate::transactions::rpc::{RpcError, RpcProviderName};
+use crate::transactions::rpc::{RpcClient, RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::Duration;
@@ -68,6 +68,50 @@ impl SafeSmartAccount {
         user_operation.signature = full_signature.into();
 
         Ok(())
+    }
+
+    /// Sponsors, signs, and submits a preflight operation through World Chain V3.
+    pub(crate) async fn sponsor_sign_and_submit_v3(
+        &self,
+        mut operation: UserOperation,
+        expect_sponsored: bool,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
+        let sponsorship = rpc_client
+            .pm_sponsor_user_operation(
+                Network::WorldChain,
+                &operation,
+                *ENTRYPOINT_4337,
+            )
+            .await?;
+        let valid = if expect_sponsored {
+            sponsorship.is_sponsored()
+        } else {
+            sponsorship.is_self_sponsored()
+        };
+        if !valid {
+            return Err(RpcError::InvalidResponse {
+                error_message: "V3 sponsorship did not match the caller's expectation"
+                    .to_string(),
+            });
+        }
+        operation = operation.with_pm_sponsorship(&sponsorship);
+        self.sign_and_submit_v3(operation, rpc_client).await
+    }
+
+    /// Signs and broadcasts an already priced operation through World Chain V3.
+    ///
+    /// # Errors
+    /// Returns a signing or V3 RPC error.
+    pub(crate) async fn sign_and_submit_v3(
+        &self,
+        mut operation: UserOperation,
+        rpc_client: &RpcClient,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        self.sign_user_operation(&mut operation, Network::WorldChain)?;
+        rpc_client
+            .send_user_operation_v3(Network::WorldChain, &operation, *ENTRYPOINT_4337)
+            .await
     }
 }
 
@@ -153,6 +197,25 @@ pub trait Is4337Encodable {
             .await?;
 
         Ok(user_op_hash)
+    }
+
+    /// Builds, sponsors, signs, and submits a 4337 operation through World Chain V3.
+    /// `expect_sponsored` requires gas limits with no user fee or paymaster
+    /// fields; `false` requires a self-sponsored response with fee metadata.
+    ///
+    /// # Errors
+    /// Returns an error if preparation, sponsorship, signing, or submission fails,
+    /// or if the sponsorship response does not match `expect_sponsored`.
+    async fn sign_and_execute_v3(
+        &self,
+        safe_account: &SafeSmartAccount,
+        expect_sponsored: bool,
+    ) -> Result<FixedBytes<32>, RpcError> {
+        let operation =
+            self.build_preflight_user_operation(safe_account.wallet_address, None)?;
+        safe_account
+            .sponsor_sign_and_submit_v3(operation, expect_sponsored)
+            .await
     }
 }
 

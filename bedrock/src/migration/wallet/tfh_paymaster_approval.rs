@@ -1,6 +1,7 @@
 //! Tops up the Safe's ERC-20 allowance to the TFH multi-token paymaster.
 //!
 //! Registered in every environment by `WalletMigrationController`.
+//! Approval operations use Temporal's V3 sponsorship and submission endpoints.
 
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use crate::transactions::contracts::erc20::{BatchErc20Approval, Erc20};
 use crate::transactions::contracts::worldchain::{
     TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WLD_ADDRESS,
 };
-use crate::transactions::rpc::{get_rpc_client, RpcProviderName};
+use crate::transactions::rpc::get_rpc_client;
 use crate::{info, smart_account::TransactionTypeId};
 use async_trait::async_trait;
 
@@ -127,20 +128,15 @@ impl WalletMigration for TfhPaymasterApprovalMigration {
             .collect();
         let names: Vec<&str> = gap.iter().map(|(_, _, name)| *name).collect();
 
-        match BatchErc20Approval::new(
+        let submission = BatchErc20Approval::new(
             TFH_PAYMASTER_ADDRESS,
             &approvals,
             TransactionTypeId::TfhPaymasterApprove,
         )
-        .sign_and_execute(
-            &self.safe_account,
-            Network::WorldChain,
-            None,
-            None,
-            RpcProviderName::Any,
-        )
-        .await
-        {
+        .sign_and_execute_v3(&self.safe_account, true)
+        .await;
+
+        match submission {
             Ok(hash) => {
                 info!(
                     tokens = format!("{names:?}"),

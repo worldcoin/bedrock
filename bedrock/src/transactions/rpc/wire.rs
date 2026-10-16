@@ -208,6 +208,39 @@ pub struct PmSponsorUserOperationResponse {
     pub fee: Option<PmSelfSponsorshipFee>,
 }
 
+impl PmSponsorUserOperationResponse {
+    /// Temporal's bundler-sponsored V3 response has execution gas but no user fee.
+    pub(crate) fn is_sponsored(&self) -> bool {
+        self.paymaster.is_none()
+            && self.paymaster_data.is_none()
+            && self.paymaster_verification_gas_limit.is_none()
+            && self.paymaster_post_op_gas_limit.is_none()
+            && self.fee.is_none()
+            && !self.call_gas_limit.is_zero()
+            && !self.verification_gas_limit.is_zero()
+            && self.pre_verification_gas.is_zero()
+            && self.max_fee_per_gas.is_zero()
+            && self.max_priority_fee_per_gas.is_zero()
+    }
+
+    /// Temporal's self-sponsored V3 response contains priced TFH paymaster fields.
+    pub(crate) fn is_self_sponsored(&self) -> bool {
+        self.paymaster.is_some()
+            && self.paymaster_data.is_some()
+            && self
+                .paymaster_verification_gas_limit
+                .is_some_and(|gas| !gas.is_zero())
+            && self
+                .paymaster_post_op_gas_limit
+                .is_some_and(|gas| !gas.is_zero())
+            && self.fee.is_some()
+            && !self.call_gas_limit.is_zero()
+            && !self.verification_gas_limit.is_zero()
+            && !self.pre_verification_gas.is_zero()
+            && !self.max_fee_per_gas.is_zero()
+    }
+}
+
 /// Fee metadata for an operation the user self-sponsors through the TFH paymaster.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

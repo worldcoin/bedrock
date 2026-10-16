@@ -126,6 +126,34 @@ async fn test_pm_sponsor_user_operation_propagates_rpc_errors() {
     assert!(error.to_string().contains("sponsorship declined"));
 }
 
+#[tokio::test]
+async fn invalid_insufficient_funds_details_remain_rpc_errors() {
+    for data in [
+        json!({"reason": "insufficient_funds"}),
+        json!({"reason": "insufficient_funds", "token": "invalid"}),
+        json!({"reason": "other", "token": "0x2cfc85d8e48f8eab294be644d9e25c3030863003"}),
+    ] {
+        let response = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "id": "test",
+            "error": {"code": -32602, "message": "request declined", "data": data},
+        }))
+        .unwrap();
+        let client = RpcClient::new(Arc::new(StaticHttpClient { response }));
+        let error = client
+            .pm_sponsor_user_operation(
+                Network::WorldChain,
+                &UserOperation::default(),
+                Address::ZERO,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, RpcError::RpcResponseError { code: -32602, error_message }
+            if error_message == "request declined")
+        );
+    }
+}
+
 #[test]
 fn test_user_operation_serialization_with_null_fields() {
     let user_op = UserOperation {
@@ -319,16 +347,16 @@ fn test_pm_sponsor_response_parsing() {
     // response body entirely (not present-with-zero). Modelled as
     // Option<T>, so all four deserialize to None.
     let no_paymaster = json!({
-        "callGasLimit": "0x0",
-        "verificationGasLimit": "0x0",
+        "callGasLimit": "0xc350",
+        "verificationGasLimit": "0xea60",
         "preVerificationGas": "0x0",
         "maxFeePerGas": "0x0",
         "maxPriorityFeePerGas": "0x0",
     });
     let r: PmSponsorUserOperationResponse =
         serde_json::from_value(no_paymaster).unwrap();
-    assert_eq!(r.call_gas_limit, U128::ZERO);
-    assert_eq!(r.verification_gas_limit, U128::ZERO);
+    assert_eq!(r.call_gas_limit, U128::from(50_000));
+    assert_eq!(r.verification_gas_limit, U128::from(60_000));
     assert_eq!(r.pre_verification_gas, U256::ZERO);
     assert_eq!(r.max_fee_per_gas, U128::ZERO);
     assert_eq!(r.max_priority_fee_per_gas, U128::ZERO);
@@ -337,6 +365,7 @@ fn test_pm_sponsor_response_parsing() {
     assert!(r.paymaster_post_op_gas_limit.is_none());
     assert!(r.paymaster_data.is_none());
     assert!(r.fee.is_none());
+    assert!(r.is_sponsored());
 
     // Self-sponsored shape — all four paymaster fields present with real
     // values and final fee metadata.
@@ -359,6 +388,7 @@ fn test_pm_sponsor_response_parsing() {
     });
     let r: PmSponsorUserOperationResponse =
         serde_json::from_value(with_paymaster).unwrap();
+    assert!(r.is_self_sponsored());
     let fee = r.fee.unwrap();
     assert_eq!(fee.estimated_cost_in_token, "42");
     assert_eq!(
