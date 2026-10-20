@@ -2026,9 +2026,9 @@ dependencies = [
 
 [[package]]
 name = "chacha20"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cipher 0.5.2",
@@ -2636,7 +2636,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d09fac1c1cf30622ccd33105965abb8ef17dd1c3aae34a489350dd0b8c3fae4"
 dependencies = [
  "bitflags 2.11.1",
- "chacha20 0.10.0",
+ "chacha20 0.10.2",
  "curve25519-dalek",
  "lazy_static",
  "libc",
@@ -4630,7 +4630,7 @@ version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
- "chacha20 0.10.0",
+ "chacha20 0.10.2",
  "getrandom 0.4.1",
  "rand_core 0.10.1",
 ]
