@@ -732,18 +732,48 @@ impl SafeSmartAccount {
         asset_amount: &str,
         custom_bundler_url: Option<String>,
     ) -> Result<PreparedVaultTransaction, TransactionError> {
-        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
-        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
-        let rpc_client =
-            get_rpc_client().map_err(|error| TransactionError::Generic {
-                error_message: format!("Failed to get RPC client: {error}"),
+        let route = if custom_bundler_url.is_some() {
+            "custom"
+        } else {
+            "default"
+        };
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                transaction_type = "erc4626_deposit",
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                vault_address = vault_address,
+                route = route,
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to prepare ERC-4626 deposit"
+            );
+        };
+
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")
+            .inspect_err(|error| {
+                log_failure("parse_vault_address", error);
             })?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")
+            .inspect_err(|error| {
+                log_failure("parse_amount", error);
+            })?;
+        let rpc_client = get_rpc_client().map_err(|error| {
+            log_failure("get_rpc_client", &error);
+            TransactionError::Generic {
+                error_message: format!("Failed to get RPC client: {error}"),
+            }
+        })?;
         let addresses = [self.wallet_address];
         let screening = async {
             rpc_client
                 .screen_addresses(Network::WorldChain, &addresses)
                 .await
                 .map_err(screening_error)
+                .inspect_err(|error| {
+                    log_failure("screening", error);
+                })
         };
         let preparation = async {
             let (transaction, asset_address, actual_amount) =
@@ -756,11 +786,19 @@ impl SafeSmartAccount {
                     [0u8; 10],
                 )
                 .await
-                .map_err(|error| TransactionError::Generic {
-                    error_message: format!("Failed to create ERC4626 deposit: {error}"),
+                .map_err(|error| {
+                    log_failure("build", &error);
+                    TransactionError::Generic {
+                        error_message: format!(
+                            "Failed to create ERC4626 deposit: {error}"
+                        ),
+                    }
                 })?;
             let operation = transaction
-                .build_preflight_user_operation(self.wallet_address, None)?;
+                .build_preflight_user_operation(self.wallet_address, None)
+                .inspect_err(|error| {
+                    log_failure("build_user_operation", error);
+                })?;
             let transaction = prepare_operation(
                 rpc_client,
                 operation,
@@ -768,7 +806,10 @@ impl SafeSmartAccount {
                 actual_amount,
                 custom_bundler_url,
             )
-            .await?;
+            .await
+            .inspect_err(|error| {
+                log_failure("prepare", error);
+            })?;
             Ok(PreparedVaultTransaction {
                 transaction: Arc::new(transaction),
                 asset_address: asset_address.to_string(),
@@ -777,7 +818,17 @@ impl SafeSmartAccount {
         };
         let (screening, prepared) = tokio::join!(screening, preparation);
         screening?;
-        prepared
+        prepared.inspect(|_| {
+            crate::debug!(
+                transaction_type = "erc4626_deposit",
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                vault_address = vault_address,
+                route = route,
+                outcome = "prepared",
+                "Prepared ERC-4626 deposit"
+            );
+        })
     }
 
     /// Prepares an unsigned ERC-4626 withdrawal on World Chain.
@@ -945,11 +996,17 @@ impl SafeSmartAccount {
         &self,
         prepared_transaction: &PreparedTransaction,
     ) -> Result<HexEncodedData, TransactionError> {
+        let route = if prepared_transaction.custom_bundler_url.is_some() {
+            "custom"
+        } else {
+            "default"
+        };
         let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
             crate::error!(
                 sender = prepared_transaction.user_operation.sender,
                 wallet_address = self.wallet_address,
                 network = Network::WorldChain.network_name(),
+                route = route,
                 outcome = "error",
                 stage = stage,
                 error_message = error,
@@ -960,6 +1017,7 @@ impl SafeSmartAccount {
         crate::info!(
             sender = prepared_transaction.user_operation.sender,
             network = Network::WorldChain.network_name(),
+            route = route,
             "Submitting prepared transaction"
         );
         if prepared_transaction.user_operation.sender != self.wallet_address {
@@ -974,7 +1032,7 @@ impl SafeSmartAccount {
         }
 
         let mut user_operation = prepared_transaction.user_operation.clone();
-        if let Some(url) = &prepared_transaction.custom_bundler_url {
+        let user_op_hash = if let Some(url) = &prepared_transaction.custom_bundler_url {
             self.sign_user_operation(&mut user_operation, Network::WorldChain)
                 .map_err(|e| {
                     log_failure("sign", &e);
@@ -982,7 +1040,7 @@ impl SafeSmartAccount {
                         error_message: format!("Failed to sign transaction: {e}"),
                     }
                 })?;
-            let hash = custom_bundler::send_user_operation_to_url(
+            custom_bundler::send_user_operation_to_url(
                 url.expose_secret(),
                 &user_operation,
                 *ENTRYPOINT_4337,
@@ -993,38 +1051,38 @@ impl SafeSmartAccount {
                 TransactionError::Generic {
                     error_message: format!("Custom bundler submission failed: {e}"),
                 }
-            })?;
-            return Ok(HexEncodedData::new(&hash.to_string())?);
-        }
-
-        let rpc_client = get_rpc_client().map_err(|e| {
-            log_failure("get_rpc_client", &e);
-            TransactionError::Generic {
-                error_message: format!(
-                    "Failed to get RPC client for transaction submission: {e}"
-                ),
-            }
-        })?;
-        let user_op_hash = self
-            .sign_and_submit_v3(user_operation, rpc_client)
-            .await
-            .map_err(|e| {
-                crate::error!(
-                    sender = prepared_transaction.user_operation.sender,
-                    network = Network::WorldChain.network_name(),
-                    outcome = "error",
-                    error_message = e,
-                    "Failed to submit prepared transaction"
-                );
+            })?
+        } else {
+            let rpc_client = get_rpc_client().map_err(|e| {
+                log_failure("get_rpc_client", &e);
                 TransactionError::Generic {
-                    error_message: format!("Failed to submit transaction: {e}"),
+                    error_message: format!(
+                        "Failed to get RPC client for transaction submission: {e}"
+                    ),
                 }
             })?;
+            self.sign_and_submit_v3(user_operation, rpc_client)
+                .await
+                .map_err(|e| {
+                    crate::error!(
+                        sender = prepared_transaction.user_operation.sender,
+                        network = Network::WorldChain.network_name(),
+                        route = route,
+                        outcome = "error",
+                        error_message = e,
+                        "Failed to submit prepared transaction"
+                    );
+                    TransactionError::Generic {
+                        error_message: format!("Failed to submit transaction: {e}"),
+                    }
+                })?
+        };
 
         crate::info!(
             user_op_hash = user_op_hash,
             sender = prepared_transaction.user_operation.sender,
             network = Network::WorldChain.network_name(),
+            route = route,
             "Submitted prepared transaction"
         );
 
