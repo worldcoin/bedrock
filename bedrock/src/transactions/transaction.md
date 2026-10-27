@@ -367,8 +367,8 @@ Sponsorship or custom-bundler estimation must succeed before preparation returns
 an operation that cannot execute fails preparation rather than automatically
 searching for a smaller withdrawal.
 
-A WLD-paid withdrawal requires the fee-token balance and allowance in the wallet
-before execution. The paymaster charges during validation, so assets released by
-the withdrawal cannot fund that charge. Custom bundlers cover gas.
+A self-sponsored withdrawal needs the fee-token balance and allowance described in
+[Validate the fee and review](#5-validate-the-fee-and-review) before it executes;
+withdrawn assets cannot fund the fee. Custom bundlers cover gas.
 
 The all-in-one withdrawal and redeem APIs use V1 execution.
