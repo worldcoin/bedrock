@@ -36,7 +36,8 @@ alloy = { version = "2.0.4", default-features = false, features = [
 ] }
 anyhow = "1.0"
 async-trait = "0.1.89"
-aws-nitro-enclaves-nsm-api = "0.4.0"
+# Attestation verification uses API types without the NSM device driver.
+aws-nitro-enclaves-nsm-api = { version = "0.4.0", default-features = false }
 base64 = "0.23.1"
 bedrock-macros = { path = "../bedrock-macros" }
 blake3 = "1.8.3"

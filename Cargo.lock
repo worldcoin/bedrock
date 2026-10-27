@@ -1368,7 +1368,6 @@ checksum = "d92c1f4471b33f6a7af9ea421b249ed18a11c71156564baf6293148fa6ad1b09"
 dependencies = [
  "libc",
  "log",
- "nix",
  "serde",
  "serde_bytes",
  "serde_cbor",
