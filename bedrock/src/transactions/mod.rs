@@ -724,8 +724,20 @@ impl SafeSmartAccount {
     /// maintained by wallet migration. The amount is not reduced to pay the network fee.
     /// `custom_bundler_url` selects a bundler that covers gas and handles submission.
     ///
+    /// # Arguments
+    /// - `vault_address`: The ERC-4626 vault to deposit into.
+    /// - `asset_amount`: The underlying asset amount as an integer in token base units.
+    /// - `custom_bundler_url`: Bundler that estimates and submits the operation,
+    ///   covering its gas costs. Omit to request sponsorship through the backend.
+    ///
     /// # Errors
-    /// Returns an error if construction, wallet screening, sponsorship, or estimation fails.
+    /// - `PrimitiveError` if the vault address or amount cannot be parsed.
+    /// - `InsufficientFunds` if the fee-token balance cannot cover the deposit and
+    ///   estimated network fee, or the fee alone when depositing another asset.
+    /// - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+    ///   rejections or outages.
+    /// - `Generic` if construction, sponsorship, custom estimation, or fee-token
+    ///   allowance validation fails.
     pub async fn prepare_transaction_erc4626_deposit(
         &self,
         vault_address: &str,
