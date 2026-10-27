@@ -257,6 +257,9 @@ async fn default_prepares_without_signing_then_submits_retained_swap_after_regis
             json!(expected.build_execute_user_op_call_data())
         );
     }
+    let reviewed: Value =
+        serde_json::from_str(&prepared.user_operation_json().unwrap()).unwrap();
+    assert_dummy_signature(&reviewed);
     account(WALLET)
         .submit_prepared_transaction(&prepared)
         .await
@@ -265,6 +268,12 @@ async fn default_prepares_without_signing_then_submits_retained_swap_after_regis
     assert_eq!(requests.len(), 5);
     assert_eq!(requests[3]["method"], "eth_call");
     assert_eq!(requests[4]["method"], "eth_sendUserOperation");
+    let mut signed = requests[4]["params"][0].clone();
+    signed["signature"] = reviewed["signature"].clone();
+    assert_eq!(
+        signed, reviewed,
+        "metadata must describe the operation submitted after confirmation"
+    );
     let mut sent = requests[4]["params"][0].clone();
     let mut expected = requests[2]["params"][0].clone();
     assert_ne!(sent["signature"], expected["signature"]);
@@ -297,6 +306,9 @@ async fn custom_bundler_retains_estimated_fields_and_url_without_backend_fallbac
             .unwrap();
         assert!(prepared.fee_details().is_none());
         assert!(!format!("{prepared:?}").contains("private-key"));
+        let exported = prepared.user_operation_json().unwrap();
+        assert!(!exported.contains("private-key"));
+        assert!(!exported.contains(&server.uri()));
         let before = server.received_requests().await.unwrap();
         assert_eq!(before.len(), 1);
         let estimate: Value = before[0].body_json().unwrap();

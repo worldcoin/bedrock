@@ -121,6 +121,22 @@ pub struct PreparedTransactionFee {
 
 #[bedrock_export]
 impl PreparedTransaction {
+    /// Returns the unsigned operation as ERC-4337 v0.7 JSON for metadata registration.
+    ///
+    /// Deserialize this string into a JSON object for the backend request. Submit
+    /// the retained prepared transaction after registration; editing this copy does
+    /// not change the operation that Bedrock signs. Bundler credentials are omitted.
+    ///
+    /// # Errors
+    /// Returns an error if the operation cannot be serialized.
+    pub fn user_operation_json(&self) -> Result<String, TransactionError> {
+        serde_json::to_string(&self.user_operation).map_err(|e| {
+            TransactionError::Generic {
+                error_message: format!("Failed to serialize prepared operation: {e}"),
+            }
+        })
+    }
+
     /// Returns the fee estimate for a prepared self-sponsored operation.
     #[must_use]
     pub fn fee_details(&self) -> Option<PreparedTransactionFee> {

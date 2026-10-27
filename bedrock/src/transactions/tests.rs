@@ -270,6 +270,13 @@ async fn default_preparation_preserves_unsigned_transfer_and_exposes_final_fee()
     assert_eq!(prepared.user_operation.call_data, original.call_data);
     assert_eq!(prepared.user_operation.nonce, original.nonce);
     assert_eq!(prepared.user_operation.signature, original.signature);
+    let exported: Value =
+        serde_json::from_str(&prepared.user_operation_json().unwrap()).unwrap();
+    assert_eq!(
+        exported,
+        serde_json::to_value(&prepared.user_operation).unwrap()
+    );
+
     assert_eq!(
         prepared.user_operation.paymaster,
         Some(TFH_PAYMASTER_ADDRESS)
