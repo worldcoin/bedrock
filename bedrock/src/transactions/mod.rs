@@ -798,18 +798,48 @@ impl SafeSmartAccount {
     ) -> Result<PreparedVaultTransaction, TransactionError> {
         use contracts::erc4626::{Erc4626Vault, WithdrawalAmount, IERC4626};
 
-        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")?;
-        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")?;
-        let rpc_client =
-            get_rpc_client().map_err(|error| TransactionError::Generic {
-                error_message: format!("Failed to get RPC client: {error}"),
+        let route = if custom_bundler_url.is_some() {
+            "custom"
+        } else {
+            "default"
+        };
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                transaction_type = "erc4626_withdraw",
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                vault_address = vault_address,
+                route = route,
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to prepare ERC-4626 withdrawal"
+            );
+        };
+
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")
+            .inspect_err(|error| {
+                log_failure("parse_vault_address", error);
             })?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")
+            .inspect_err(|error| {
+                log_failure("parse_amount", error);
+            })?;
+        let rpc_client = get_rpc_client().map_err(|error| {
+            log_failure("get_rpc_client", &error);
+            TransactionError::Generic {
+                error_message: format!("Failed to get RPC client: {error}"),
+            }
+        })?;
         let addresses = [self.wallet_address];
         let screening = async {
             rpc_client
                 .screen_addresses(Network::WorldChain, &addresses)
                 .await
                 .map_err(screening_error)
+                .inspect_err(|error| {
+                    log_failure("screening", error);
+                })
         };
         let preparation = async {
             let (transaction, amount) = Erc4626Vault::withdraw_with_amount(
@@ -821,8 +851,13 @@ impl SafeSmartAccount {
                 [0u8; 10],
             )
             .await
-            .map_err(|error| TransactionError::Generic {
-                error_message: format!("Failed to create ERC4626 withdrawal: {error}"),
+            .map_err(|error| {
+                log_failure("build", &error);
+                TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to create ERC4626 withdrawal: {error}"
+                    ),
+                }
             })?;
             let asset = Erc4626Vault::fetch_asset_address(
                 rpc_client,
@@ -846,18 +881,26 @@ impl SafeSmartAccount {
                 }
             };
             let (asset_address, actual_amount) = tokio::try_join!(asset, amount)
-                .map_err(|error| TransactionError::Generic {
-                    error_message: format!(
-                        "Failed to preview ERC4626 withdrawal: {error}"
-                    ),
+                .map_err(|error| {
+                    log_failure("preview", &error);
+                    TransactionError::Generic {
+                        error_message: format!(
+                            "Failed to preview ERC4626 withdrawal: {error}"
+                        ),
+                    }
                 })?;
             if actual_amount.is_zero() {
-                return Err(TransactionError::Generic {
+                let error = TransactionError::Generic {
                     error_message: "Withdrawal produces zero assets".to_string(),
-                });
+                };
+                log_failure("preview", &error);
+                return Err(error);
             }
             let operation = transaction
-                .build_preflight_user_operation(self.wallet_address, None)?;
+                .build_preflight_user_operation(self.wallet_address, None)
+                .inspect_err(|error| {
+                    log_failure("build_user_operation", error);
+                })?;
             // Withdrawn assets arrive after paymaster validation and cannot fund its charge.
             let transaction = prepare_operation(
                 rpc_client,
@@ -866,7 +909,10 @@ impl SafeSmartAccount {
                 U256::ZERO,
                 custom_bundler_url,
             )
-            .await?;
+            .await
+            .inspect_err(|error| {
+                log_failure("prepare", error);
+            })?;
             Ok(PreparedVaultTransaction {
                 transaction: Arc::new(transaction),
                 asset_address: asset_address.to_string(),
@@ -875,7 +921,17 @@ impl SafeSmartAccount {
         };
         let (screening, prepared) = tokio::join!(screening, preparation);
         screening?;
-        prepared
+        prepared.inspect(|_| {
+            crate::debug!(
+                transaction_type = "erc4626_withdraw",
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                vault_address = vault_address,
+                route = route,
+                outcome = "prepared",
+                "Prepared ERC-4626 withdrawal"
+            );
+        })
     }
 
     /// Signs and submits a previously prepared transaction on World Chain.
