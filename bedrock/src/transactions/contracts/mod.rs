@@ -9,3 +9,4 @@ pub mod usd_legacy_vault;
 pub mod wld_legacy_vault;
 pub mod world_gift_manager;
 pub mod worldchain;
+pub mod zero_ex;
