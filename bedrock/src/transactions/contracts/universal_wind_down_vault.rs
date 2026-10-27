@@ -66,6 +66,7 @@ impl UniversalWindDownVault {
                 attribute: attribute.to_string(),
                 error_message: error_message.to_string(),
             };
+        // TODO: Pin the independently verified deployed World Chain vault before production rollout.
         let vault = Address::parse_from_ffi(vault_address, "vault_address")?;
         if vault.is_zero() {
             return Err(invalid("vault_address", "Vault address must not be zero"));

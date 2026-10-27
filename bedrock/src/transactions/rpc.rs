@@ -37,10 +37,66 @@ mod tests;
 /// Global RPC client instance for Bedrock operations
 static RPC_CLIENT_INSTANCE: OnceLock<RpcClient> = OnceLock::new();
 
+/// Stage at which a V3 user operation failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum UserOperationStage {
+    /// Sponsorship failed before signing or submission.
+    Sponsorship,
+    /// Signing failed before submission.
+    Signing,
+    /// Submission failed; inclusion may be unknown after a transport failure.
+    Submission,
+}
+
+impl UserOperationStage {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sponsorship => "sponsorship",
+            Self::Signing => "signing",
+            Self::Submission => "submission",
+        }
+    }
+}
+
+/// Structured V3 failure details for native apps.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UserOperationFailure {
+    /// Operation stage that failed.
+    pub stage: UserOperationStage,
+    /// JSON-RPC error code, when the server returned one.
+    pub rpc_code: Option<i64>,
+    /// Server policy reason, such as `gas_usage` or `tx_count`.
+    pub reason: Option<String>,
+    /// Whether the native HTTP client reported a transport failure.
+    /// This does not imply that retrying submission is safe.
+    pub transport_error: bool,
+    /// Diagnostic description; use the structured fields for app behavior.
+    pub error_message: String,
+}
+
+impl std::fmt::Display for UserOperationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: ", self.stage.as_str())?;
+        if let Some(code) = self.rpc_code {
+            write!(formatter, "RPC error {code}: ")?;
+        }
+        if let Some(reason) = &self.reason {
+            write!(formatter, "{reason}: ")?;
+        }
+        formatter.write_str(&self.error_message)
+    }
+}
+
 /// Errors that can occur when interacting with RPC operations.
 #[crate::bedrock_error]
 
 pub enum RpcError {
+    /// A V3 operation failed with structured stage and policy details.
+    #[error("User operation failed: {failure}")]
+    UserOperationFailed {
+        /// Failure details preserved for the caller.
+        failure: UserOperationFailure,
+    },
     /// HTTP request failed
     #[error("HTTP request failed: {0}")]
     HttpError(String),
@@ -92,6 +148,27 @@ pub enum RpcError {
     SafeSmartAccountError(String),
 }
 
+impl RpcError {
+    pub(crate) fn at_user_operation_stage(self, stage: UserOperationStage) -> Self {
+        if matches!(&self, Self::UserOperationFailed { .. }) {
+            return self;
+        }
+        let rpc_code = match &self {
+            Self::RpcResponseError { code, .. } => Some(*code),
+            _ => None,
+        };
+        Self::UserOperationFailed {
+            failure: UserOperationFailure {
+                stage,
+                rpc_code,
+                reason: None,
+                transport_error: matches!(&self, Self::HttpError(_)),
+                error_message: self.to_string(),
+            },
+        }
+    }
+}
+
 impl From<JsonRpcError> for RpcError {
     fn from(error: JsonRpcError) -> Self {
         if error.code == -32602 {
@@ -123,6 +200,28 @@ impl From<JsonRpcError> for RpcError {
 pub(crate) enum RpcCallError {
     Rpc(RpcError),
     Response(JsonRpcError),
+}
+
+impl RpcCallError {
+    pub(crate) fn at_user_operation_stage(self, stage: UserOperationStage) -> RpcError {
+        match self {
+            Self::Rpc(error) => error.at_user_operation_stage(stage),
+            Self::Response(response) => RpcError::UserOperationFailed {
+                failure: UserOperationFailure {
+                    stage,
+                    rpc_code: Some(response.code),
+                    reason: response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("reason"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    transport_error: false,
+                    error_message: response.message,
+                },
+            },
+        }
+    }
 }
 
 impl From<RpcError> for RpcCallError {
@@ -327,6 +426,18 @@ impl RpcClient {
         user_operation: &UserOperation,
         entry_point: Address,
     ) -> Result<PmSponsorUserOperationResponse, RpcError> {
+        self.pm_sponsor_user_operation_call(network, user_operation, entry_point)
+            .await
+            .map_err(RpcError::from)
+    }
+
+    // Keep structured RPC responses until the V3 execution path adds stage context.
+    pub(crate) async fn pm_sponsor_user_operation_call(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entry_point: Address,
+    ) -> Result<PmSponsorUserOperationResponse, RpcCallError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
             serde_json::Value::String(format!("{entry_point:?}")),
@@ -338,7 +449,6 @@ impl RpcClient {
             RpcProviderName::Any,
         )
         .await
-        .map_err(RpcError::from)
     }
 
     /// Submits a signed `UserOperation` via `eth_sendUserOperation`
@@ -422,6 +532,17 @@ impl RpcClient {
         user_operation: &UserOperation,
         entrypoint: Address,
     ) -> Result<FixedBytes<32>, RpcError> {
+        self.send_user_operation_v3_call(network, user_operation, entrypoint)
+            .await
+            .map_err(RpcError::from)
+    }
+
+    pub(crate) async fn send_user_operation_v3_call(
+        &self,
+        network: Network,
+        user_operation: &UserOperation,
+        entrypoint: Address,
+    ) -> Result<FixedBytes<32>, RpcCallError> {
         let params = vec![
             serde_json::to_value(user_operation).map_err(|_| RpcError::JsonError)?,
             serde_json::Value::String(format!("{entrypoint:?}")),
@@ -436,8 +557,11 @@ impl RpcClient {
             )
             .await?;
 
-        FixedBytes::from_hex(&result).map_err(|e| RpcError::InvalidResponse {
-            error_message: format!("Invalid userOpHash format: {e}"),
+        FixedBytes::from_hex(&result).map_err(|e| {
+            RpcError::InvalidResponse {
+                error_message: format!("Invalid userOpHash format: {e}"),
+            }
+            .into()
         })
     }
 

@@ -33,7 +33,10 @@ mod tfh_paymaster;
 pub use contracts::universal_wind_down_vault::{
     build_uasset_redemption_call_data, UAssetRedemption,
 };
-pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
+pub use rpc::{
+    RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse,
+    UserOperationFailure, UserOperationStage,
+};
 
 #[cfg(test)]
 mod tests;
@@ -41,6 +44,12 @@ mod tests;
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
 pub enum TransactionError {
+    /// Sponsorship, signing, or submission failed with structured details.
+    #[error("User operation failed: {failure}")]
+    UserOperationFailed {
+        /// Stage, RPC code, policy reason, and transport status.
+        failure: UserOperationFailure,
+    },
     /// An error occurred with a primitive type. See `PrimitiveError` for more details.
     #[error("Primitive error: {0}")]
     PrimitiveError(String),
@@ -64,6 +73,19 @@ pub enum TransactionError {
 impl From<crate::primitives::PrimitiveError> for TransactionError {
     fn from(e: crate::primitives::PrimitiveError) -> Self {
         Self::PrimitiveError(e.to_string())
+    }
+}
+
+impl From<RpcError> for TransactionError {
+    fn from(error: RpcError) -> Self {
+        match error {
+            RpcError::UserOperationFailed { failure } => {
+                Self::UserOperationFailed { failure }
+            }
+            other => Self::Generic {
+                error_message: other.to_string(),
+            },
+        }
     }
 }
 
@@ -1008,34 +1030,56 @@ impl SafeSmartAccount {
     /// Wait for a successful receipt before displaying success or refreshing holdings.
     ///
     /// # Errors
-    /// Returns a parsing/validation error for invalid inputs, or a transaction error
-    /// if sponsorship, signing, or submission fails.
+    /// Returns a parsing/validation or screening error, or `UserOperationFailed`
+    /// with stage, RPC code, policy reason, and transport status. Submission
+    /// transport failures may have an unknown inclusion outcome; reconcile
+    /// transaction status before retrying.
     pub async fn transaction_uasset_redeem(
         &self,
         vault_address: &str,
         redemptions: Vec<UAssetRedemption>,
     ) -> Result<HexEncodedData, TransactionError> {
-        let transaction =
-            contracts::universal_wind_down_vault::UniversalWindDownVault::new(
-                vault_address,
-                &redemptions,
-            )?;
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-        rpc_client
-            .screen_addresses(Network::WorldChain, &[self.wallet_address])
-            .await
-            .map_err(screening_error)?;
-        let operation =
-            transaction.build_preflight_user_operation(self.wallet_address, None)?;
-        let user_op_hash = self
-            .sponsor_sign_and_submit_v3(operation, true)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute uAsset redemption: {e}"),
-            })?;
-        Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        let result = async {
+            let transaction =
+                contracts::universal_wind_down_vault::UniversalWindDownVault::new(
+                    vault_address,
+                    &redemptions,
+                )?;
+            let rpc_client =
+                get_rpc_client().map_err(|e| TransactionError::Generic {
+                    error_message: format!("Failed to get RPC client: {e}"),
+                })?;
+            rpc_client
+                .screen_addresses(Network::WorldChain, &[self.wallet_address])
+                .await
+                .map_err(screening_error)?;
+            let user_op_hash = transaction
+                .sign_and_execute_v3(self, true)
+                .await
+                .map_err(TransactionError::from)?;
+            Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        }
+        .await;
+        if let Err(error) = &result {
+            let stage = match error {
+                TransactionError::UserOperationFailed { failure } => {
+                    failure.stage.as_str()
+                }
+                TransactionError::PrimitiveError(_) => "validation",
+                TransactionError::AddressRestricted
+                | TransactionError::ScreeningUnavailable => "screening",
+                _ => "preparation",
+            };
+            crate::warn!(
+                operation = "uasset_redemption",
+                network = Network::WorldChain.network_name(),
+                stage = stage,
+                redemption_count = redemptions.len(),
+                error_message = error,
+                "Failed to redeem Universal uAssets"
+            );
+        }
+        result
     }
 
     /// Sends a gift using the `WorldGiftManager` contract.

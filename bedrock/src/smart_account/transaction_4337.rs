@@ -7,7 +7,9 @@ use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
 use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
-use crate::transactions::rpc::{RpcClient, RpcError, RpcProviderName};
+use crate::transactions::rpc::{
+    RpcClient, RpcError, RpcProviderName, UserOperationFailure, UserOperationStage,
+};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::Duration;
@@ -76,14 +78,34 @@ impl SafeSmartAccount {
         mut operation: UserOperation,
         expect_sponsored: bool,
     ) -> Result<FixedBytes<32>, RpcError> {
-        let rpc_client = crate::transactions::rpc::get_rpc_client()?;
+        let rpc_client =
+            crate::transactions::rpc::get_rpc_client().map_err(|error| {
+                error.at_user_operation_stage(UserOperationStage::Sponsorship)
+            })?;
         let sponsorship = rpc_client
-            .pm_sponsor_user_operation(
+            .pm_sponsor_user_operation_call(
                 Network::WorldChain,
                 &operation,
                 *ENTRYPOINT_4337,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                error.at_user_operation_stage(UserOperationStage::Sponsorship)
+            })?;
+        if expect_sponsored && sponsorship.is_self_sponsored() {
+            return Err(RpcError::UserOperationFailed {
+                failure: UserOperationFailure {
+                    stage: UserOperationStage::Sponsorship,
+                    rpc_code: None,
+                    reason: sponsorship
+                        .fee
+                        .as_ref()
+                        .map(|fee| fee.decline_reason.to_string()),
+                    transport_error: false,
+                    error_message: "Free sponsorship was declined".to_string(),
+                },
+            });
+        }
         let valid = if expect_sponsored {
             sponsorship.is_sponsored()
         } else {
@@ -93,7 +115,8 @@ impl SafeSmartAccount {
             return Err(RpcError::InvalidResponse {
                 error_message: "V3 sponsorship did not match the caller's expectation"
                     .to_string(),
-            });
+            }
+            .at_user_operation_stage(UserOperationStage::Sponsorship));
         }
         operation = operation.with_pm_sponsorship(&sponsorship);
         self.sign_and_submit_v3(operation, rpc_client).await
@@ -108,10 +131,20 @@ impl SafeSmartAccount {
         mut operation: UserOperation,
         rpc_client: &RpcClient,
     ) -> Result<FixedBytes<32>, RpcError> {
-        self.sign_user_operation(&mut operation, Network::WorldChain)?;
+        self.sign_user_operation(&mut operation, Network::WorldChain)
+            .map_err(|error| {
+                error.at_user_operation_stage(UserOperationStage::Signing)
+            })?;
         rpc_client
-            .send_user_operation_v3(Network::WorldChain, &operation, *ENTRYPOINT_4337)
+            .send_user_operation_v3_call(
+                Network::WorldChain,
+                &operation,
+                *ENTRYPOINT_4337,
+            )
             .await
+            .map_err(|error| {
+                error.at_user_operation_stage(UserOperationStage::Submission)
+            })
     }
 }
 

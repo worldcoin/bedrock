@@ -347,6 +347,14 @@ gas limits and daily sponsored-transaction limits still apply.
 The method returns a UserOperation hash. Wait for a successful execution receipt,
 then refresh holdings. A returned hash alone does not mean redemption succeeded.
 
+Execution failures return `TransactionError::UserOperationFailed` with a
+`UserOperationFailure` record: `stage` (sponsorship, signing, or submission),
+`rpc_code`, `reason`, `transport_error`, and a diagnostic `error_message`.
+Policy reasons such as `gas_usage` and `tx_count` are preserved from declined
+or paid sponsorship responses. A submission transport failure may have an unknown
+inclusion outcome; reconcile transaction status before retrying. Input validation
+and address-screening errors retain their existing error types.
+
 Refresh backend terms before presenting confirmation. Bedrock preserves accepted
 amounts and minimum payouts instead of fetching or silently changing them. The
 encoder does not authenticate the configured vault or check its pause state,
