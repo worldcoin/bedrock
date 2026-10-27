@@ -861,7 +861,8 @@ impl BackupManager {
 
         // Refresh the base report to reflect the unpacked manifest contents. This keeps
         // `backup_file_designators` and `backup_size_kb` in sync after a restore.
-        if let Err(e) = ClientEventsReporter::new().sync_base_report_with_manifest() {
+        let sizes = file_source::backup_file_sizes(&backup.files);
+        if let Err(e) = ClientEventsReporter::new().sync_base_report_with_sizes(sizes) {
             crate::warn!(
                 "[ClientEvents] failed to refresh backup report after unpacking backup: {e:?}"
             );

@@ -11,7 +11,9 @@ use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
-use crate::backup::file_source::{checksum_and_size_for_file, read_backup_file};
+use crate::backup::file_source::{
+    backup_file_sizes, checksum_and_size_for_file, read_backup_file,
+};
 use crate::backup::service_client::BackupServiceClient;
 use crate::backup::{
     backup_format::v0::{V0Backup, V0BackupFile},
@@ -488,6 +490,7 @@ impl ManifestManager {
 
         let BackupManifest::V0(contents) = &manifest;
         let files = self.build_unsealed_backup_files_from_manifest(contents)?;
+        let sizes = backup_file_sizes(&files);
         let unsealed_backup = V0Backup::new(root, files).to_bytes()?;
         let sealed_backup =
             BackupManager::seal_backup_with_public_key(&unsealed_backup, &pk)?;
@@ -498,7 +501,8 @@ impl ManifestManager {
         )
         .await?;
         self.write_manifest(&manifest)?;
-        if let Err(error) = ClientEventsReporter::new().sync_base_report_with_manifest()
+        if let Err(error) =
+            ClientEventsReporter::new().sync_base_report_with_sizes(sizes)
         {
             crate::warn!(
                 error_message = error,

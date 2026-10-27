@@ -163,11 +163,15 @@ async fn source_put_mixed_sync_rereads_unchanged_entries_and_refreshes_vault() {
         )
         .await
         .unwrap();
-    assert!(host
+    // The unchanged entry is read once to build the archive; the report reuses its size.
+    let orb_reads = host
         .reads
         .lock()
         .unwrap()
-        .contains(&(OrbPkg, "source_only/orb.bin".into())));
+        .iter()
+        .filter(|read| **read == (OrbPkg, "source_only/orb.bin".into()))
+        .count();
+    assert_eq!(orb_reads, 1);
     let BackupManifest::V0(manifest) = get_manifest_from_disk(prefix);
     assert_eq!(
         manifest

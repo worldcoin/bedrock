@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+use super::backup_format::v0::V0BackupFile;
 use super::{BackupError, BackupFileDesignator, ManifestManager};
 use crate::primitives::filesystem::{unscoped_filesystem, FileSystemError};
 
@@ -197,24 +198,43 @@ pub(super) fn checksum_and_size_for_file(
         .map_err(|e| disk_file_error(designator, &e))
 }
 
+/// Sizes of files already loaded for a backup, for the base report.
+pub(super) fn backup_file_sizes(
+    files: &[V0BackupFile],
+) -> Vec<(BackupFileDesignator, u64)> {
+    files
+        .iter()
+        .map(|file| (file.designator.clone(), file.data.len() as u64))
+        .collect()
+}
+
 pub(super) fn disk_file_error(
     designator: &BackupFileDesignator,
     failure: &FileSystemError,
 ) -> BackupError {
-    let failure_class = match failure {
-        FileSystemError::FileDoesNotExist => "not_found",
-        FileSystemError::IoFailure(_) => "io_failure",
-        FileSystemError::NotInitialized => "not_initialized",
-        FileSystemError::InvalidPath(_) => "invalid_path",
+    // `IoFailure` holds only the operation and the OS error, so it is kept for triage.
+    // `InvalidPath` holds the path and is reduced to its class.
+    let (failure_class, detail) = match failure {
+        FileSystemError::FileDoesNotExist => ("not_found", None),
+        FileSystemError::IoFailure(detail) => ("io_failure", Some(detail.as_str())),
+        FileSystemError::NotInitialized => ("not_initialized", None),
+        FileSystemError::InvalidPath(_) => ("invalid_path", None),
     };
     crate::error!(
         designator = designator,
         failure_class = failure_class,
+        error_message = detail.unwrap_or(failure_class),
         "Backup file disk operation failed"
     );
-    BackupError::InvalidFileForBackup(format!(
-        "disk operation for designator {designator}: {failure_class}"
-    ))
+    let message = detail.map_or_else(
+        || format!("disk operation for designator {designator}: {failure_class}"),
+        |detail| {
+            format!(
+                "disk operation for designator {designator}: {failure_class}: {detail}"
+            )
+        },
+    );
+    BackupError::InvalidFileForBackup(message)
 }
 
 #[cfg(test)]
