@@ -339,7 +339,7 @@ fn binds_preflight_sender_and_reserves_the_swap_nonce_type() {
     assert_eq!(operation.call_data, swap.build_execute_user_op_call_data());
     let nonce = operation.nonce.to_be_bytes::<32>();
     assert_eq!(&nonce[..5], b"bdrck");
-    assert_eq!(nonce[5], 143);
+    assert_eq!(nonce[5], 144);
     assert_eq!(&nonce[6..17], &[0; 11]);
     assert_eq!(&nonce[24..], &[0; 8]);
     assert!(swap.build_preflight_user_operation(OTHER, None).is_err());
