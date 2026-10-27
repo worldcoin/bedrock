@@ -48,6 +48,37 @@ val dataDirectory = File(context.filesDir, "oxide").absolutePath
 uniffi.bedrock.setConfig(BedrockEnvironment.STAGING, Os.ANDROID, dataDirectory)
 ```
 
+## Backup file storage
+
+Backup entries use disk by default. Hosts storing PCPs or credential-vault exports
+elsewhere can call `set_backup_file_handlers(designators, source, sink)` once at
+startup, before backup operations. Both callbacks are required for the same set
+of designators. Registration is process-wide: internally created manifest,
+restore, and reporting managers all use it, and it cannot be replaced. The host
+must resolve the active account in its callbacks and serialize account changes
+with backup operations.
+
+Implement the UniFFI `BackupFileSource.read` callback to return the exact stored
+bytes for a designator and path. The path remains the logical ID in the manifest,
+CBOR payload, and tar entry; leading `./` and `/` are removed. Owned paths need
+no file on disk. Missing entries and callback failures abort the operation;
+Bedrock never falls back to disk. Unregistered designators retain disk storage.
+
+Use `sync_changes` with a `Put` (or `ReplaceFiles`) for every changed entry,
+including a refreshed credential-vault export. These operations recompute the
+BLAKE3 checksum from the source. Other entries are read again during archive
+construction and must match their manifest checksum. Keep source bytes stable
+until the call returns. Neither the manifest format nor the backup format changes.
+
+Implement `BackupFileSink.restore` to persist a batch of all restored owned
+entries. Bedrock validates every path and duplicate before calling it, writes
+unowned files to disk, and saves the manifest only after both succeed. On
+failure, an existing manifest stays unchanged; no new manifest is written.
+The sink may have committed even when restore fails later: upsert by path so
+repeating restore after a failure or interruption is safe. Prefer a transaction
+for the host batch; Bedrock cannot roll back host or disk writes. Return only
+`BackupFileSourceError` failure classes, without paths or data in errors/logs.
+
 ## 🛠️ Error Handling & Logging Tooling
 
 Each module should implement its own error enum. See [tooling_tests](/bedrock/src/primitives/tooling_tests.rs) for example references.

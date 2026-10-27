@@ -9,6 +9,7 @@
 mod backup_format;
 mod backup_service;
 mod client_events;
+mod file_source;
 mod flows;
 mod manifest;
 mod service_client;
@@ -20,6 +21,10 @@ mod test;
 pub use backup_service::{
     BackupEncryptionKey, BackupFactor, BackupFactorKind, BackupMetadata,
     BackupOidcAccount,
+};
+pub use file_source::{
+    set_backup_file_handlers, BackupFileSink, BackupFileSource, BackupFileSourceError,
+    RestoredBackupFile,
 };
 pub use flows::RemoveFactorOutcome;
 
@@ -765,11 +770,11 @@ impl BackupManager {
             std::collections::HashSet::with_capacity(backup.files.len());
         for file in &backup.files {
             let destination = fs
-                .resolved_file_path(file.path.trim_start_matches('/'))
-                .map_err(|e| {
+                .resolved_file_path(ManifestManager::normalize_input_path(&file.path))
+                .map_err(|_| {
                     crate::error!(
                         designator = file.designator,
-                        error_message = e,
+                        failure_class = "invalid_path",
                         "Rejecting backup: unusable file path"
                     );
                     BackupError::InvalidFileForBackup(format!(
@@ -790,45 +795,58 @@ impl BackupManager {
             }
         }
 
+        let handlers = file_source::backup_file_handlers();
+        let mut owned_files = Vec::new();
         for file in &backup.files {
-            let rel_path = file.path.trim_start_matches('/');
+            if handlers.as_ref().is_some_and(|h| h.owns(&file.designator)) {
+                owned_files.push(RestoredBackupFile {
+                    designator: file.designator.clone(),
+                    path: ManifestManager::normalize_input_path(&file.path).to_string(),
+                    data: file.data.clone(),
+                });
+            }
+        }
+        if let Some(handlers) = &handlers {
+            handlers.restore(owned_files)?;
+        }
 
-            // If a file already exists, verify checksum and log discrepancies before replacing.
-            let path_ref = rel_path.get(..14).unwrap_or(rel_path); // don't log the full path to avoid leaking info
-            match fs.file_exists(rel_path) {
-                Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
-                    Ok((local_checksum, _)) => {
-                        if local_checksum != file.checksum {
-                            crate::error!(
-                                    "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
-                                    file.designator
+        for file in &backup.files {
+            let owned = handlers.as_ref().is_some_and(|h| h.owns(&file.designator));
+            let rel_path = if owned {
+                ManifestManager::normalize_input_path(&file.path)
+            } else {
+                file.path.trim_start_matches('/')
+            };
+            if !owned {
+                // Existing disk files are replaced even if their contents cannot be checked.
+                match fs.file_exists(rel_path) {
+                    Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
+                        Ok((local_checksum, _)) => {
+                            if local_checksum != file.checksum {
+                                crate::error!(
+                                    designator = file.designator,
+                                    failure_class = "checksum_mismatch",
+                                    "Replacing existing file with remote content"
                                 );
+                            }
                         }
-                    }
+                        Err(e) => {
+                            file_source::disk_file_error(&file.designator, &e);
+                        }
+                    },
+                    Ok(false) => {}
                     Err(e) => {
-                        crate::error!(
-                                "[BackupManager] failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
-                            );
+                        file_source::disk_file_error(&file.designator, &e);
                     }
-                },
-                Ok(false) => {}
-                Err(e) => {
-                    crate::error!(
-                        "[BackupManager] failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
-                    );
                 }
+                fs.write_file(rel_path, &file.data).map_err(|e| {
+                    let failure = file_source::disk_file_error(&file.designator, &e);
+                    BackupError::from(anyhow::Error::new(failure))
+                })?;
             }
 
-            fs.write_file(rel_path, &file.data).map_err(|e| {
-                let err = anyhow::Error::from(e)
-                    .context(format!("write unpacked file: {path_ref}"));
-                BackupError::from(err)
-            })?;
-
-            let designator = file.designator.clone();
-
             manifest_entries.push(V0BackupManifestEntry {
-                designator,
+                designator: file.designator.clone(),
                 file_path: rel_path.to_string(),
                 checksum_hex: hex::encode(file.checksum),
             });
@@ -837,11 +855,6 @@ impl BackupManager {
         let manifest = BackupManifest::V0(V0BackupManifest {
             files: manifest_entries,
         });
-
-        crate::debug!(
-            "Saving manifest file with {} files",
-            manifest.entries_length(),
-        );
 
         let manifest_manager = ManifestManager::new();
         manifest_manager.write_manifest(&manifest)?;
@@ -989,6 +1002,9 @@ pub enum BackupError {
     #[error("Client events error: {0}")]
     /// Backup not found.
     ClientEventsError(String),
+    /// Process-wide backup file handlers have already been registered.
+    #[error("Backup file handlers already registered")]
+    BackupFileHandlersAlreadyRegistered,
 }
 
 impl From<crate::primitives::http_client::HttpError> for BackupError {

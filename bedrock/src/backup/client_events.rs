@@ -11,9 +11,7 @@ use crate::backup::{
     BackupOidcAccount, BackupOperationError,
 };
 use crate::primitives::config::Os;
-use crate::primitives::filesystem::{
-    unscoped_filesystem, FileSystemError, ScopedFileSystem,
-};
+use crate::primitives::filesystem::{FileSystemError, ScopedFileSystem};
 use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader};
 use crate::HttpMethod;
 
@@ -39,6 +37,10 @@ pub enum ClientEventsError {
     /// HTTP error when sending events
     #[error(transparent)]
     HttpError(#[from] crate::primitives::http_client::HttpError),
+
+    /// A manifest entry could not be read from its configured storage.
+    #[error("backup file: {0}")]
+    BackupFile(String),
 
     /// `FileSystem` error
     #[error(transparent)]
@@ -496,7 +498,6 @@ impl ClientEventsReporter {
     /// # Errors
     /// Returns an error if manifest or base report cannot be read/written.
     pub fn sync_base_report_with_manifest(&self) -> Result<(), ClientEventsError> {
-        let fs = unscoped_filesystem();
         let mut base = self.read_base_report().unwrap_or_default();
 
         // Load manifest via manager (unchecked, no remote gate as it's not mutating the state)
@@ -517,7 +518,13 @@ impl ClientEventsReporter {
         for entry in manifest.files {
             designators.insert(entry.designator.to_string());
             let (_checksum, size_bytes) =
-                fs.calculate_checksum_and_size(&entry.file_path)?;
+                super::file_source::checksum_and_size_for_file(
+                    &entry.designator,
+                    &entry.file_path,
+                )
+                .map_err(|failure| {
+                    ClientEventsError::BackupFile(failure.to_string())
+                })?;
             total_size_bytes = total_size_bytes.saturating_add(size_bytes);
         }
 

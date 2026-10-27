@@ -1,7 +1,7 @@
 //! This module contains the logic for managing the backup manifests.
 //!
-//! The backup manifest is a local file-based system that any module can set to describe which files should
-//! be included in the backup.
+//! The backup manifest is a local file that describes which entries to include in
+//! the backup. Entry bytes come from disk or a registered host source.
 
 use anyhow::Context;
 use bedrock_macros::bedrock_export;
@@ -11,6 +11,7 @@ use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
+use crate::backup::file_source::{checksum_and_size_for_file, read_backup_file};
 use crate::backup::service_client::BackupServiceClient;
 use crate::backup::{
     backup_format::v0::{V0Backup, V0BackupFile},
@@ -19,9 +20,7 @@ use crate::backup::{
 use crate::backup::{
     BackupFileDesignator, BackupManager, BackupReportEventKind, ClientEventsReporter,
 };
-use crate::primitives::filesystem::{
-    unscoped_filesystem, FileSystemError, ScopedFileSystem,
-};
+use crate::primitives::filesystem::{FileSystemError, ScopedFileSystem};
 use crate::root_key::RootKey;
 
 static DEFAULT_DIGEST_HEX: OnceCell<String> = OnceCell::new();
@@ -199,8 +198,9 @@ impl ManifestManager {
 
     /// Applies file changes in order and syncs the backup if needed.
     ///
-    /// Include all changed files, including recreated exports. Other files must
-    /// still match their saved checksums. Keep files unchanged until this returns
+    /// Include all changed files, including recreated exports. Bytes come from the
+    /// registered source for owned designators, and disk otherwise. Other files must
+    /// still match their saved checksums. Keep contents unchanged until this returns
     /// and serialize calls with other backup writes.
     ///
     /// The local manifest is saved after upload. A lost response or failed local
@@ -292,7 +292,7 @@ impl ManifestManager {
 impl ManifestManager {
     /// Normalizes an input path by stripping any leading "./" or "/" segments.
     /// This is tolerant to multiple occurrences (e.g., "././path" or "///path").
-    fn normalize_input_path(path: &str) -> &str {
+    pub(super) fn normalize_input_path(path: &str) -> &str {
         let mut p = path;
         loop {
             if let Some(rest) = p.strip_prefix("./") {
@@ -378,20 +378,9 @@ impl ManifestManager {
         manifest: &V0BackupManifest,
     ) -> Result<Vec<V0BackupFile>, BackupError> {
         let mut files = Vec::with_capacity(manifest.files.len());
-        // Use the global filesystem (no prefixing) to read file contents.
-        let fs = unscoped_filesystem();
         for entry in &manifest.files {
             let rel = Self::normalize_input_path(&entry.file_path);
-            let data = fs.read_file(rel).map_err(|e| {
-                let msg =
-                    format!("Failed to load file from {:?}: {e}", entry.designator);
-                crate::error!(
-                    designator = entry.designator,
-                    error_message = e,
-                    "Failed to load file for backup"
-                );
-                BackupError::InvalidFileForBackup(msg)
-            })?;
+            let data = read_backup_file(&entry.designator, rel)?;
 
             // Validate checksum matches manifest
             let computed_checksum = blake3::hash(&data);
@@ -472,21 +461,6 @@ impl ManifestManager {
         }
     }
 
-    /// Computes both checksum hex and size (bytes) for a given file path using the raw filesystem.
-    fn checksum_and_size_for_file(
-        file_path: &str,
-    ) -> Result<(String, u64), BackupError> {
-        let fs = unscoped_filesystem();
-        let normalized = Self::normalize_input_path(file_path);
-        fs.calculate_checksum_and_size(normalized)
-            .map(|(checksum, size)| (hex::encode(checksum), size))
-            .map_err(|e| {
-                let msg = format!("Failed to load file: {e}");
-                crate::error!("{msg}");
-                BackupError::InvalidFileForBackup(msg)
-            })
-    }
-
     async fn mutate_manifest_and_sync(
         &self,
         root_secret: &str,
@@ -548,10 +522,9 @@ impl ManifestManager {
                     let before = manifest.files.len();
                     manifest.files.retain(|entry| entry.file_path != path);
                     if manifest.files.len() == before {
-                        return Err(BackupError::InvalidFileForBackup(format!(
-                            "File not found in manifest: {}",
-                            path.get(..14).unwrap_or(path)
-                        )));
+                        return Err(BackupError::InvalidFileForBackup(
+                            "File not found in manifest".to_string(),
+                        ));
                     }
                 }
                 BackupFileChange::RemoveIfChecksumMatches {
@@ -596,7 +569,8 @@ impl ManifestManager {
         path: &str,
     ) -> Result<(), BackupError> {
         let path = Self::normalize_input_path(path);
-        let (checksum_hex, _) = Self::checksum_and_size_for_file(path)?;
+        let (checksum, _) = checksum_and_size_for_file(&designator, path)?;
+        let checksum_hex = hex::encode(checksum);
         manifest.files.retain(|entry| entry.file_path != path);
         manifest.files.push(V0BackupManifestEntry {
             designator,
@@ -635,7 +609,7 @@ pub enum BackupFileChange {
     Put {
         /// File category.
         designator: BackupFileDesignator,
-        /// Path relative to the app filesystem.
+        /// Relative file path or logical ID for a host-owned designator.
         path: String,
     },
     /// Removes a file. Fails if it is not registered.
@@ -658,7 +632,7 @@ pub enum BackupFileChange {
     ReplaceFiles {
         /// File category to replace.
         designator: BackupFileDesignator,
-        /// Paths relative to the app filesystem. Empty removes all files for the designator.
+        /// Relative paths or host-owned logical IDs. Empty removes all files for the designator.
         paths: Vec<String>,
     },
 }
