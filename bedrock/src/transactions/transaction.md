@@ -7,9 +7,9 @@ open-source, on-device SDK that powers the wallet — turns a user intent
 chain.
 
 The lifecycle is shared across transaction types. The prepared-transaction APIs
-`prepare_transaction_transfer` and `submit_prepared_transaction` implement it
-for ERC-20 transfers on World Chain. The V3 routing and fee checks below describe
-that implementation; the diagrams use transfers as a concrete example.
+`prepare_transaction_transfer`, `prepare_transaction_erc4626_deposit`, and
+`submit_prepared_transaction` implement it for transfers and vault deposits on
+World Chain. The diagrams use transfers as a concrete example.
 
 It is a living document. The wallet's sponsorship policy evolves over time;
 when it changes, this file changes with it. The on-device steps Bedrock performs
@@ -213,8 +213,10 @@ reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
 errors. This method handles sponsorship without screening addresses.
 
 For both default and custom-bundler routes, Bedrock calls authenticated
-`wa_screenAddresses` on `/v3/rpc/worldchain` with `[[sender, recipient]]`.
-The recipient is the ERC-20 transfer destination, not the token contract.
+`wa_screenAddresses` on `/v3/rpc/worldchain`. Transfers screen
+`[[sender, recipient]]`, where the recipient is the transfer destination, not the
+token contract. Vault deposits screen `[[wallet]]`, excluding the vault and asset
+contracts.
 The endpoint accepts 1 to 32 addresses and returns JSON `true` only when every
 supplied address clears. Bedrock runs this call in parallel with backend
 sponsorship or custom-bundler estimation. Both must succeed before returning a
@@ -232,7 +234,7 @@ Deploy the endpoint through the authenticated V3 gateway before enabling either
 preparation route. Bedrock owns participant selection and the pre-sign gate;
 clearance is not a server-side authorization bound to a UserOperation.
 
-When `prepare_transaction_transfer` receives a custom bundler URL, Bedrock calls
+When either preparation API receives a custom bundler URL, Bedrock calls
 `eth_estimateUserOperationGas` directly at that URL with the unsigned operation
 and EntryPoint, alongside the shared screening request.
 
@@ -251,10 +253,10 @@ fields, and supply a `fee` object with the token, positive fee estimate, and pol
 decodes the paymaster data and verifies that its token matches the fee quote.
 The estimate is stored in `PreparedTransactionFee` for confirmation.
 
-ERC-20 transfer preparation reads the fee-token allowance and balance for
+Transfer and vault deposit preparation read the fee-token allowance and balance for
 self-sponsored operations. The allowance must cover the final fee. When the
-transfer spends the same token,
-the balance must cover the transfer amount plus that fee; otherwise it must cover
+operation spends the same token,
+the balance must cover the transfer or deposit amount plus that fee; otherwise it must cover
 the fee alone. A shortfall returns `TransactionError::InsufficientFunds`, including
 the fee-token address, with "Not enough funds to cover the transfer and network
 fee." Mobile can map this error to localized confirmation text. Failed reads or
@@ -363,3 +365,26 @@ calldata limits must be checked for large portfolios before rollout.
 - [Safe Smart Account documentation](https://docs.safe.global/)
 - Bedrock source: `bedrock/src/transactions/` (`rpc.rs`, `mod.rs`,
   `contracts/`)
+
+## ERC-4626 deposit preparation
+
+`prepare_transaction_erc4626_deposit(vault_address, asset_amount, custom_bundler_url)`
+builds the asset approval and vault deposit locally. It screens the wallet with
+`wa_screenAddresses` in parallel with construction and sponsorship or custom
+bundler estimation. The wallet owns the assets and receives the shares. Vault
+selection and program eligibility are the caller's responsibility. Screening
+failures take precedence over preparation failures on both routes.
+
+The result is a `PreparedVaultTransaction`: `asset_address` identifies the underlying
+token, `asset_amount` is the amount encoded after capping it to the available
+balance, and `transaction` holds the unsigned operation. Display that amount and
+`transaction.fee_details()` before confirmation, then pass `transaction` to
+`submit_prepared_transaction`.
+
+For a deposit spending the fee token, the balance must cover the deposit plus the
+quoted fee. Preparation does not reduce the deposit to fund gas; insufficient
+funds require the caller to choose another amount and prepare again. For other
+deposit assets, the fee-token balance must cover the fee alone. Custom bundlers
+cover gas and receive estimation and submission at the same supplied URL.
+
+The all-in-one `transaction_erc4626_deposit` API uses V1 execution.
