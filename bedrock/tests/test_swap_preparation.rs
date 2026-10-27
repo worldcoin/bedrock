@@ -239,7 +239,7 @@ async fn default_prepares_without_signing_then_submits_retained_swap_after_regis
         let operation = &requests[2]["params"][0];
         assert_dummy_signature(operation);
         let nonce: U256 = serde_json::from_value(operation["nonce"].clone()).unwrap();
-        assert_eq!(&nonce.to_be_bytes::<32>()[..6], b"bdrck\x8f");
+        assert_eq!(&nonce.to_be_bytes::<32>()[..6], b"bdrck\x90");
         let expected = ZeroExSwap::new(
             &ZeroExSwapRequest {
                 wallet_address: WALLET,
