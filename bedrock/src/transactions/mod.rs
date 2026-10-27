@@ -851,8 +851,20 @@ impl SafeSmartAccount {
     /// the paymaster charges before the vault releases assets.
     /// `custom_bundler_url` selects a bundler that covers gas and handles submission.
     ///
+    /// # Arguments
+    /// - `vault_address`: The ERC-4626 vault to withdraw from.
+    /// - `asset_amount`: The underlying asset amount as an integer in token base units.
+    /// - `custom_bundler_url`: Bundler that estimates and submits the operation,
+    ///   covering its gas costs. Omit to request sponsorship through the backend.
+    ///
     /// # Errors
-    /// Returns an error if construction, wallet screening, sponsorship, or estimation fails.
+    /// - `PrimitiveError` if the vault address or amount cannot be parsed.
+    /// - `InsufficientFunds` if the wallet's fee-token balance cannot cover the
+    ///   estimated network fee before the withdrawal executes.
+    /// - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+    ///   rejections or outages.
+    /// - `Generic` if construction, preview, RPC calls, sponsorship, custom
+    ///   estimation, or fee-token allowance validation fails.
     pub async fn prepare_transaction_erc4626_withdraw(
         &self,
         vault_address: &str,

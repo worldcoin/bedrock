@@ -253,7 +253,7 @@ impl Erc4626Vault {
 
     /// Creates a new withdraw operation (direct call to vault, no approval needed).
     ///
-    /// This function checks the user's asset balance and vault share balance before creating the transaction.
+    /// Checks the wallet's share balance and previews the shares needed for the requested assets.
     ///
     /// # Arguments
     /// * `rpc_client` - The RPC client for making blockchain queries.

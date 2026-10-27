@@ -128,9 +128,11 @@ impl AuthenticatedHttpClient for EarnHttpClient {
                         json!({"result": Bytes::from(U256::from(balance).abi_encode())})
                     }
                     IERC4626::previewWithdrawCall::SELECTOR => {
+                        assert_eq!(target, VAULT);
                         json!({"result": Bytes::from(U256::from(self.required_shares).abi_encode())})
                     }
                     IERC4626::previewRedeemCall::SELECTOR => {
+                        assert_eq!(target, VAULT);
                         let call =
                             IERC4626::previewRedeemCall::abi_decode(&data).unwrap();
                         assert_eq!(call.shares, U256::from(self.shares));
@@ -477,16 +479,26 @@ fn assert_withdrawal(operation: &Value, shares: Option<u64>) {
 #[tokio::test]
 #[serial_test::serial]
 async fn withdrawal_preserves_withdraw_or_redeem_and_exposes_preview_before_signing() {
-    for (shares, expected, paid) in [(50, "20", false), (4, "4", true)] {
+    let other_asset = address!("1111111111111111111111111111111111111111");
+    for (shares, expected, paid, asset) in [
+        (50, "20", false, WLD_ADDRESS),
+        (4, "9", true, WLD_ADDRESS),
+        (50, "20", true, other_asset),
+    ] {
         let mut client = EarnHttpClient::new(10, paid);
         client.shares = shares;
+        client.redeemed_assets = 9;
+        client.asset = asset;
+        if asset == other_asset {
+            client.balance = 0;
+        }
         let http = install(client);
         let prepared = account()
             .prepare_transaction_erc4626_withdraw(&VAULT.to_string(), "20", None)
             .await
             .unwrap();
         assert_eq!(prepared.asset_amount, expected);
-        assert_eq!(prepared.asset_address, WLD_ADDRESS.to_string());
+        assert_eq!(prepared.asset_address, asset.to_string());
         assert_eq!(
             prepared
                 .transaction
