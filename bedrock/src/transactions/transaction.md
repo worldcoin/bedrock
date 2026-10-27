@@ -315,21 +315,19 @@ routes. Their signatures do not include a custom bundler URL.
 
 ## Universal uAsset redemptions
 
-After user confirmation, call
-`transaction_uasset_redeem(vault_address, redemptions)` on `SafeSmartAccount`.
-The vault address comes from the trusted backend's
-`GET /uasset-sunset/redemption/status` response. Include only holdings marked
-`redeemable`, mapping each to a `UAssetRedemption` record:
+After confirmation, call `SafeSmartAccount.transaction_uasset_redeem` using
+`contractAddress` and only `redeemable` holdings from
+`GET /uasset-sunset/redemption/status`. Map each holding to `UAssetRedemption`:
 
-| Record field | Backend holding field | Units |
-| --- | --- | --- |
-| `token_address` | `tokenAddress` | EVM address |
-| `amount` | `amount` | 18-decimal uAsset base units, integer string |
-| `minimum_usdc_amount` | `usdcAmount` | Six-decimal USDC base units, integer string |
+| Record field | Status field |
+| --- | --- |
+| `token_address` | `tokenAddress` |
+| `amount` | `amount` |
+| `minimum_usdc_amount` | `usdcAmount` |
 
-Bedrock encodes an exact-amount ERC-20 approval followed by
-`redeem(token, amount, minimumUSDCAmount)` for each holding. A Safe delegatecall
-to MultiSend batches these calls atomically; USDC returns to the same Safe.
+Amounts are integer strings in base units: 18 decimals for uAssets, 6 for USDC.
+Safe MultiSend batches exact-amount approval/redemption pairs atomically,
+paying USDC back to the Safe.
 Single-asset redemption uses the same API. Empty batches, duplicate tokens,
 invalid addresses/uint256 values, and zero amounts or minimum payouts fail
 before requesting sponsorship or signing. Existing transaction type IDs remain
