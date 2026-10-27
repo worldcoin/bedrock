@@ -8,6 +8,46 @@ use crate::{
     smart_account::UserOperation,
 };
 
+/// Independently reviewed constraints for a World Chain ERC-20 swap.
+/// The account preparing the operation supplies the spending/receiving wallet.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct UnparsedZeroExSwapRequest {
+    /// ERC-20 input token address.
+    pub token_in: String,
+    /// ERC-20 output token address.
+    pub token_out: String,
+    /// Exact input amount in token base units, as an integer string.
+    pub amount_in: String,
+    /// Minimum output amount in token base units, as an integer string.
+    pub amount_out_min: String,
+}
+
+/// Executable quote returned by the authenticated backend's 0x integration.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct UnparsedZeroExSwapQuote {
+    /// Transaction target; must be the canonical World Chain `AllowanceHolder`.
+    pub to: String,
+    /// Native value as an integer string; must be zero.
+    pub value: String,
+    /// Hex-encoded `AllowanceHolder` `exec` calldata.
+    pub data: String,
+    /// Quoted output after provider and integrator fees, in token base units.
+    pub amount_out: String,
+}
+
+impl TryFrom<UnparsedZeroExSwapQuote> for super::contracts::zero_ex::ZeroExSwapQuote {
+    type Error = PrimitiveError;
+
+    fn try_from(quote: UnparsedZeroExSwapQuote) -> Result<Self, Self::Error> {
+        Ok(Self {
+            to: Address::parse_from_ffi(&quote.to, "to")?,
+            value: U256::parse_from_ffi(&quote.value, "value")?,
+            data: Bytes::parse_from_ffi(&quote.data, "data")?,
+            amount_out: U256::parse_from_ffi(&quote.amount_out, "amount_out")?,
+        })
+    }
+}
+
 /// A pseudo-transaction object for EIP-4337. Used to execute transactions through the Safe Smart Account.
 ///
 /// This object is expected to be initialized from foreign languages.

@@ -28,6 +28,7 @@ pub mod contracts;
 pub mod custom_bundler;
 pub mod foreign;
 pub mod rpc;
+mod swap;
 mod tfh_paymaster;
 
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
@@ -42,14 +43,14 @@ pub enum TransactionError {
     #[error("Primitive error: {0}")]
     PrimitiveError(String),
 
-    /// The fee-token balance cannot cover the transfer and estimated network fee.
-    #[error("Not enough funds to cover the transfer and network fee.")]
+    /// The fee-token balance cannot cover the token spend and estimated network fee.
+    #[error("Not enough funds to cover the token spend and network fee.")]
     InsufficientFunds {
         /// Token whose balance is insufficient.
         token_address: String,
     },
 
-    /// A transfer participant is restricted; do not retry through another route.
+    /// A transaction participant is restricted; do not retry through another route.
     #[error("Address is restricted")]
     AddressRestricted,
 
@@ -101,6 +102,8 @@ pub struct PreparedTransaction {
     fee_details: Option<PreparedTransactionFee>,
     // URLs may contain credentials; Debug must not reveal them.
     custom_bundler_url: Option<SecretString>,
+    // Authenticate retained swap calldata again before signing.
+    swap_settler: Option<Address>,
 }
 
 /// ERC-20 fee estimate for a prepared self-sponsored operation.
@@ -198,8 +201,8 @@ async fn check_fee_balance(
     rpc_client: &RpcClient,
     sender: Address,
     fee_token: Address,
-    transfer_token: Address,
-    transfer_amount: U256,
+    spend_token: Address,
+    spend_amount: U256,
     estimated_cost: U256,
 ) -> Result<(), TransactionError> {
     let balance =
@@ -217,10 +220,10 @@ async fn check_fee_balance(
                     error_message: format!("Failed to read fee-token balance: {error}"),
                 }
             })?;
-    // If the transfer spends the fee token, its balance must cover both amounts.
+    // If the operation spends the fee token, its balance must cover both amounts.
     // Subtraction avoids overflowing when the amount and fee exceed U256::MAX.
-    let available_for_fee = if transfer_token == fee_token {
-        balance.checked_sub(transfer_amount)
+    let available_for_fee = if spend_token == fee_token {
+        balance.checked_sub(spend_amount)
     } else {
         Some(balance)
     };
@@ -230,10 +233,10 @@ async fn check_fee_balance(
             sender = sender,
             fee_token = fee_token,
             balance = balance,
-            transfer_token = transfer_token,
-            transfer_amount = transfer_amount,
+            spend_token = spend_token,
+            spend_amount = spend_amount,
             estimated_cost_in_token = estimated_cost,
-            "Insufficient balance for the transfer and estimated network fee"
+            "Insufficient balance for the token spend and estimated network fee"
         );
         return Err(TransactionError::InsufficientFunds {
             token_address: fee_token.to_string(),
@@ -242,11 +245,11 @@ async fn check_fee_balance(
     Ok(())
 }
 
-async fn prepare_default_transfer(
+async fn prepare_default_operation(
     rpc_client: &RpcClient,
     operation: UserOperation,
-    transfer_token: Address,
-    transfer_amount: U256,
+    spend_token: Address,
+    spend_amount: U256,
 ) -> Result<PreparedTransaction, TransactionError> {
     let response = rpc_client
         .pm_sponsor_user_operation(Network::WorldChain, &operation, *ENTRYPOINT_4337)
@@ -255,16 +258,14 @@ async fn prepare_default_transfer(
             crate::error!(
                 sender = operation.sender,
                 error_message = error,
-                "Failed to prepare ERC-20 transfer"
+                "Failed to prepare transaction"
             );
             match error {
                 RpcError::InsufficientFunds { token_address } => {
                     TransactionError::InsufficientFunds { token_address }
                 }
                 error => TransactionError::Generic {
-                    error_message: format!(
-                        "Failed to prepare ERC-20 transfer: {error}"
-                    ),
+                    error_message: format!("Failed to prepare transaction: {error}"),
                 },
             }
         })?;
@@ -306,15 +307,15 @@ async fn prepare_default_transfer(
                 rpc_client,
                 operation.sender,
                 token,
-                transfer_token,
-                transfer_amount,
+                spend_token,
+                spend_amount,
                 estimated_cost,
             )
             .await?;
             crate::info!(
                 sender = operation.sender,
                 decline_reason = reason,
-                "Prepared self-sponsored ERC-20 transfer"
+                "Prepared self-sponsored transaction"
             );
             Some(PreparedTransactionFee {
                 token_address: token.to_string(),
@@ -339,7 +340,36 @@ async fn prepare_default_transfer(
         user_operation: operation.with_pm_sponsorship(&response),
         fee_details,
         custom_bundler_url: None,
+        swap_settler: None,
     })
+}
+
+async fn prepare_operation(
+    rpc_client: &RpcClient,
+    user_operation: UserOperation,
+    spend_token: Address,
+    spend_amount: U256,
+    custom_bundler_url: Option<String>,
+) -> Result<PreparedTransaction, TransactionError> {
+    if let Some(url) = custom_bundler_url {
+        let user_operation =
+            custom_bundler::prepare_bundler_sponsored_operation(&url, user_operation)
+                .await
+                .map_err(|error| TransactionError::Generic {
+                    error_message: format!(
+                        "Custom bundler preparation failed: {error}"
+                    ),
+                })?;
+        Ok(PreparedTransaction {
+            user_operation,
+            fee_details: None,
+            custom_bundler_url: Some(url.into()),
+            swap_settler: None,
+        })
+    } else {
+        prepare_default_operation(rpc_client, user_operation, spend_token, spend_amount)
+            .await
+    }
 }
 
 /// The kind of vault a migration starts from.
@@ -658,36 +688,13 @@ impl SafeSmartAccount {
                 .await
                 .map_err(screening_error)
         };
-        let preparation = async {
-            if let Some(url) = custom_bundler_url {
-                let user_operation =
-                    custom_bundler::prepare_bundler_sponsored_operation(
-                        &url,
-                        user_operation,
-                    )
-                    .await
-                    .map_err(|error| {
-                        TransactionError::Generic {
-                            error_message: format!(
-                                "Custom bundler preparation failed: {error}"
-                            ),
-                        }
-                    })?;
-                Ok(PreparedTransaction {
-                    user_operation,
-                    fee_details: None,
-                    custom_bundler_url: Some(url.into()),
-                })
-            } else {
-                prepare_default_transfer(
-                    rpc_client,
-                    user_operation,
-                    token_address,
-                    amount,
-                )
-                .await
-            }
-        };
+        let preparation = prepare_operation(
+            rpc_client,
+            user_operation,
+            token_address,
+            amount,
+            custom_bundler_url,
+        );
         let ((), prepared_transaction) = tokio::try_join!(screening, preparation)?;
 
         crate::debug!(
@@ -703,6 +710,7 @@ impl SafeSmartAccount {
 
     /// Signs and submits a previously prepared transaction on World Chain.
     /// Uses the custom bundler URL retained during preparation when present.
+    /// For swaps, authenticates the retained Settler against the registry before signing.
     ///
     /// # Errors
     /// - Will throw an error if the transaction was prepared for another account.
@@ -738,6 +746,23 @@ impl SafeSmartAccount {
                 error_message: "Prepared transaction belongs to another account"
                     .to_string(),
             });
+        }
+
+        if let Some(settler) = prepared_transaction.swap_settler {
+            let rpc_client =
+                get_rpc_client().map_err(|e| TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to get RPC client for swap validation: {e}"
+                    ),
+                })?;
+            contracts::zero_ex::validate_settler(rpc_client, settler)
+                .await
+                .map_err(|e| {
+                    log_failure("validate_settler", &e);
+                    TransactionError::Generic {
+                        error_message: format!("Failed to validate swap Settler: {e}"),
+                    }
+                })?;
         }
 
         let mut user_operation = prepared_transaction.user_operation.clone();
@@ -1183,6 +1208,7 @@ impl SafeSmartAccount {
                         user_operation: operation,
                         fee_details: None,
                         custom_bundler_url: Some(url.into()),
+                        swap_settler: None,
                     })
                     .await;
             }

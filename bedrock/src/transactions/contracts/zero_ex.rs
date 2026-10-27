@@ -105,10 +105,16 @@ pub struct ZeroExSwapQuote {
 #[derive(Debug)]
 pub struct ZeroExSwap {
     wallet_address: Address,
+    settler_address: Address,
     call_data: Bytes,
 }
 
 impl ZeroExSwap {
+    /// Returns the Settler retained for validation before signing.
+    pub(crate) const fn settler_address(&self) -> Address {
+        self.settler_address
+    }
+
     /// Builds a swap and authenticates its Settler against the World Chain registry.
     ///
     /// Accepts the current taker-submitted deployment or its predecessor during the
@@ -242,6 +248,7 @@ impl ZeroExSwap {
 
         Ok(Self {
             wallet_address: request.wallet_address,
+            settler_address,
             call_data: ISafe4337Module::executeUserOpCall {
                 to: bundle.to,
                 value: bundle.value,
