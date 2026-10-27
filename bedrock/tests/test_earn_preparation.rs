@@ -53,6 +53,7 @@ impl AuthenticatedHttpClient for TestHttpClient {
 struct EarnHttpClient {
     asset: Address,
     balance: u64,
+    fee_token_balance: u64,
     paid: bool,
     screening: Value,
     requests: Mutex<Vec<Value>>,
@@ -65,6 +66,7 @@ impl EarnHttpClient {
         Self {
             asset: WLD_ADDRESS,
             balance,
+            fee_token_balance: balance,
             paid,
             screening: json!({"result": true}),
             requests: Mutex::new(Vec::new()),
@@ -96,19 +98,32 @@ impl AuthenticatedHttpClient for EarnHttpClient {
             }
             "eth_call" => {
                 assert_eq!(url, "/v2/rpc/worldchain");
+                let target: Address =
+                    serde_json::from_value(request["params"][0]["to"].clone()).unwrap();
                 let data: Bytes =
                     serde_json::from_value(request["params"][0]["data"].clone())
                         .unwrap();
                 match data[..4].try_into().unwrap() {
                     IERC4626::assetCall::SELECTOR => {
+                        assert_eq!(target, VAULT);
                         json!({"result": Bytes::from(self.asset.abi_encode())})
                     }
                     IErc20::balanceOfCall::SELECTOR => {
                         let call = IErc20::balanceOfCall::abi_decode(&data).unwrap();
                         assert_eq!(call.account, account().wallet_address);
-                        json!({"result": Bytes::from(U256::from(self.balance).abi_encode())})
+                        let balance = if target == WLD_ADDRESS {
+                            self.fee_token_balance
+                        } else {
+                            assert_eq!(target, self.asset);
+                            self.balance
+                        };
+                        json!({"result": Bytes::from(U256::from(balance).abi_encode())})
                     }
                     IErc20::allowanceCall::SELECTOR => {
+                        assert_eq!(target, WLD_ADDRESS);
+                        let call = IErc20::allowanceCall::abi_decode(&data).unwrap();
+                        assert_eq!(call.owner, account().wallet_address);
+                        assert_eq!(call.spender, TFH_PAYMASTER_ADDRESS);
                         json!({"result": Bytes::from(U256::MAX.abi_encode())})
                     }
                     _ => panic!("Unexpected eth_call: {request}"),
@@ -266,20 +281,40 @@ async fn deposit_reserves_the_fee_without_reducing_the_deposit() {
 #[serial_test::serial]
 async fn deposit_with_a_different_asset_only_requires_the_fee_token_fee_balance() {
     let asset = address!("1111111111111111111111111111111111111111");
-    let mut client = EarnHttpClient::new(10, true);
-    client.asset = asset;
-    let http = install(client);
-    let prepared = account()
-        .prepare_transaction_erc4626_deposit(&VAULT.to_string(), "10", None)
-        .await
-        .unwrap();
-    assert_eq!(prepared.asset_address, asset.to_string());
-    let requests = http.requests.lock().unwrap();
-    let operation = &requests
-        .iter()
-        .find(|r| r["method"] == "pm_sponsorUserOperation")
-        .unwrap()["params"][0];
-    assert_deposit(operation, asset, 10);
+    for (asset_balance, fee_token_balance) in [(7, 10), (100, 9)] {
+        let mut client = EarnHttpClient::new(asset_balance, true);
+        client.asset = asset;
+        client.fee_token_balance = fee_token_balance;
+        let http = install(client);
+        let result = account()
+            .prepare_transaction_erc4626_deposit(&VAULT.to_string(), "7", None)
+            .await;
+        if fee_token_balance == 10 {
+            let prepared = result.unwrap();
+            assert_eq!(prepared.asset_address, asset.to_string());
+            assert_eq!(prepared.asset_amount, "7");
+            assert_eq!(
+                prepared
+                    .transaction
+                    .fee_details()
+                    .unwrap()
+                    .estimated_cost_in_token,
+                "10"
+            );
+            let requests = http.requests.lock().unwrap();
+            let operation = &requests
+                .iter()
+                .find(|r| r["method"] == "pm_sponsorUserOperation")
+                .unwrap()["params"][0];
+            assert_deposit(operation, asset, 7);
+        } else {
+            assert!(matches!(
+                result.unwrap_err(),
+                TransactionError::InsufficientFunds { token_address }
+                    if token_address == WLD_ADDRESS.to_string()
+            ));
+        }
+    }
 }
 
 #[tokio::test]

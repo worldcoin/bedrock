@@ -213,8 +213,10 @@ reason TFH declined sponsorship. Simulation or fee-quotation failures return RPC
 errors. This method handles sponsorship without screening addresses.
 
 For both default and custom-bundler routes, Bedrock calls authenticated
-`wa_screenAddresses` on `/v3/rpc/worldchain` with `[[sender, recipient]]`.
-The recipient is the ERC-20 transfer destination, not the token contract.
+`wa_screenAddresses` on `/v3/rpc/worldchain`. Transfers screen
+`[[sender, recipient]]`, where the recipient is the transfer destination, not the
+token contract. Vault deposits screen `[[wallet]]`, excluding the vault and asset
+contracts.
 The endpoint accepts 1 to 32 addresses and returns JSON `true` only when every
 supplied address clears. Bedrock runs this call in parallel with backend
 sponsorship or custom-bundler estimation. Both must succeed before returning a
@@ -232,7 +234,7 @@ Deploy the endpoint through the authenticated V3 gateway before enabling either
 preparation route. Bedrock owns participant selection and the pre-sign gate;
 clearance is not a server-side authorization bound to a UserOperation.
 
-When `prepare_transaction_transfer` receives a custom bundler URL, Bedrock calls
+When either preparation API receives a custom bundler URL, Bedrock calls
 `eth_estimateUserOperationGas` directly at that URL with the unsigned operation
 and EntryPoint, alongside the shared screening request.
 
@@ -251,10 +253,10 @@ fields, and supply a `fee` object with the token, positive fee estimate, and pol
 decodes the paymaster data and verifies that its token matches the fee quote.
 The estimate is stored in `PreparedTransactionFee` for confirmation.
 
-ERC-20 transfer preparation reads the fee-token allowance and balance for
+Transfer and vault deposit preparation read the fee-token allowance and balance for
 self-sponsored operations. The allowance must cover the final fee. When the
-transfer spends the same token,
-the balance must cover the transfer amount plus that fee; otherwise it must cover
+operation spends the same token,
+the balance must cover the transfer or deposit amount plus that fee; otherwise it must cover
 the fee alone. A shortfall returns `TransactionError::InsufficientFunds`, including
 the fee-token address, with "Not enough funds to cover the transfer and network
 fee." Mobile can map this error to localized confirmation text. Failed reads or
