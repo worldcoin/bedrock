@@ -50,6 +50,8 @@ pub enum TransactionTypeId {
     TfhPaymasterApprove = 141,
     /// ERC-4626 vault migration to another ERC-4626 vault
     ERC4626Migrate = 142,
+    /// Universal uAsset redemption into USDC
+    UAssetRedemption = 143,
 }
 
 impl TransactionTypeId {
