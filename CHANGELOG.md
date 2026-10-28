@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7](https://github.com/worldcoin/bedrock/compare/0.7.6...0.7.7) - 2026-10-28
+
+### Added
+
+- *(transactions)* redeem Universal uAssets for USDC ([#486](https://github.com/worldcoin/bedrock/pull/486))
+- *(transactions)* prepare ERC-4626 withdrawals before signing ([#466](https://github.com/worldcoin/bedrock/pull/466))
+- *(transactions)* prepare ERC-4626 deposits before signing ([#465](https://github.com/worldcoin/bedrock/pull/465))
+
+### Fixed
+
+- *(deps)* resolve cargo deny advisory failures ([#489](https://github.com/worldcoin/bedrock/pull/489))
+
 ## [0.7.6](https://github.com/worldcoin/bedrock/compare/0.7.5...0.7.6) - 2026-10-20
 
 ### Added
