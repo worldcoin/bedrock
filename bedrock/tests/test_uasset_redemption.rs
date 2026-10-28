@@ -72,6 +72,7 @@ async fn test_uasset_redemption_safe_batch_and_rollback() -> anyhow::Result<()> 
         .transaction_uasset_redeem(
             &vault.to_string(),
             vec![quote(token_a, 1_000_000), quote(token_b, 2_000_000)],
+            None,
         )
         .await?;
     assert_eq!(
@@ -91,6 +92,7 @@ async fn test_uasset_redemption_safe_batch_and_rollback() -> anyhow::Result<()> 
         .transaction_uasset_redeem(
             &vault.to_string(),
             vec![quote(token_a, 1_000_000), quote(token_b, 2_000_001)],
+            None,
         )
         .await;
     assert!(result.is_err());

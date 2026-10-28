@@ -12,6 +12,7 @@ use bedrock::{
     transactions::{TransactionError, UAssetRedemption},
 };
 use serde_json::{json, Value};
+use wiremock::{matchers::body_partial_json, Mock, MockServer, ResponseTemplate};
 
 struct ScriptedHttpClient {
     responses: Mutex<VecDeque<(&'static str, Value)>>,
@@ -42,7 +43,7 @@ impl AuthenticatedHttpClient for ScriptedHttpClient {
 }
 
 #[tokio::test]
-async fn redemption_requires_free_v3_sponsorship_and_wallet_screening() {
+async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
     let http = Arc::new(ScriptedHttpClient {
         responses: Mutex::default(),
         requests: Mutex::default(),
@@ -76,7 +77,7 @@ async fn redemption_requires_free_v3_sponsorship_and_wallet_screening() {
         ),
     ]);
     let result = account
-        .transaction_uasset_redeem(vault, quote())
+        .transaction_uasset_redeem(vault, quote(), None)
         .await
         .unwrap();
     assert_eq!(result.as_str(), hash);
@@ -106,28 +107,109 @@ async fn redemption_requires_free_v3_sponsorship_and_wallet_screening() {
             ("pm_sponsorUserOperation", sponsorship),
         ]);
         assert!(account
-            .transaction_uasset_redeem(vault, quote())
+            .transaction_uasset_redeem(vault, quote(), None)
             .await
             .is_err());
         assert_eq!(http.requests.lock().unwrap().len(), 2);
         assert!(http.responses.lock().unwrap().is_empty());
     }
 
-    http.requests.lock().unwrap().clear();
-    http.responses.lock().unwrap().push_back(("wa_screenAddresses", json!({
-        "jsonrpc": "2.0", "id": 1, "error": {
-            "code": -32602, "message": "Address is restricted", "data": {"reason": "address_restricted"}
+    // Custom estimation and submission never use backend sponsorship/submission.
+    for failure in [None, Some("estimate"), Some("submit")] {
+        http.requests.lock().unwrap().clear();
+        http.responses
+            .lock()
+            .unwrap()
+            .push_back(("wa_screenAddresses", screened.clone()));
+        let server = MockServer::start().await;
+        let rpc_error = json!({"jsonrpc": "2.0", "id": 1,
+            "error": {"code": -32603, "message": "bundler unavailable"}});
+        Mock::given(body_partial_json(
+            json!({"method": "eth_estimateUserOperationGas"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            if failure == Some("estimate") {
+                rpc_error.clone()
+            } else {
+                json!({"jsonrpc": "2.0", "id": 1, "result": {
+                    "callGasLimit": "0xc350", "verificationGasLimit": "0xea60",
+                    "preVerificationGas": "0xffff"}})
+            },
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+        Mock::given(body_partial_json(
+            json!({"method": "eth_sendUserOperation"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            if failure == Some("submit") {
+                rpc_error
+            } else {
+                json!({"jsonrpc": "2.0", "id": 1, "result": hash})
+            },
+        ))
+        .expect(if failure == Some("estimate") { 0 } else { 1 })
+        .mount(&server)
+        .await;
+        let result = account
+            .transaction_uasset_redeem(vault, quote(), Some(server.uri()))
+            .await;
+        match failure {
+            None => assert_eq!(result.unwrap().as_str(), hash),
+            Some(stage) => {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains(if stage == "estimate" {
+                        "Custom bundler preparation failed"
+                    } else {
+                        "Custom bundler submission failed"
+                    }),
+                    "{error}"
+                );
+            }
         }
-    })));
-    assert!(matches!(
-        account.transaction_uasset_redeem(vault, quote()).await,
-        Err(TransactionError::AddressRestricted)
-    ));
-    assert_eq!(http.requests.lock().unwrap().len(), 1);
-    http.requests.lock().unwrap().clear();
-    assert!(account
-        .transaction_uasset_redeem(vault, vec![])
-        .await
-        .is_err());
-    assert!(http.requests.lock().unwrap().is_empty());
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+        assert!(http.responses.lock().unwrap().is_empty());
+        let requests = server.received_requests().await.unwrap();
+        if failure != Some("estimate") {
+            let estimate: Value = requests[0].body_json().unwrap();
+            let submitted: Value = requests[1].body_json().unwrap();
+            let op = &submitted["params"][0];
+            assert_eq!(op["callData"], estimate["params"][0]["callData"]);
+            assert_eq!(op["callGasLimit"], "0xc350");
+            assert_eq!(op["verificationGasLimit"], "0xea60");
+            assert_eq!(op["preVerificationGas"], "0x0");
+            assert_eq!(op["maxFeePerGas"], "0x0");
+            assert_eq!(op["maxPriorityFeePerGas"], "0x0");
+            assert!(op["paymaster"].is_null());
+            assert_ne!(op["signature"], estimate["params"][0]["signature"]);
+        }
+        server.verify().await;
+    }
+
+    // Both routes stop before estimation or submission when screening fails.
+    let server = MockServer::start().await;
+    for custom_bundler_url in [None, Some(server.uri())] {
+        http.requests.lock().unwrap().clear();
+        http.responses.lock().unwrap().push_back(("wa_screenAddresses", json!({
+            "jsonrpc": "2.0", "id": 1, "error": {
+                "code": -32602, "message": "Address is restricted", "data": {"reason": "address_restricted"}
+            }
+        })));
+        assert!(matches!(
+            account
+                .transaction_uasset_redeem(vault, quote(), custom_bundler_url.clone())
+                .await,
+            Err(TransactionError::AddressRestricted)
+        ));
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+        http.requests.lock().unwrap().clear();
+        assert!(account
+            .transaction_uasset_redeem(vault, vec![], custom_bundler_url)
+            .await
+            .is_err());
+        assert!(http.requests.lock().unwrap().is_empty());
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
 }

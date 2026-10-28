@@ -1001,8 +1001,10 @@ impl SafeSmartAccount {
     /// Exact-amount approvals and redemptions execute together through `MultiSend`;
     /// any failed call reverts the entire batch. Balances and quotes are not refreshed
     /// or silently adjusted here. Sponsorship/gas limits may constrain batch size.
-    /// Screens the wallet and requires free V3 sponsorship before signing. A paid
-    /// sponsorship response is rejected; the wallet never pays a token fee here.
+    /// Screens the wallet before signing. With `custom_bundler_url`, the selected
+    /// bundler estimates and submits a bundler-sponsored operation. Otherwise,
+    /// requires free V3 sponsorship and rejects paid sponsorship responses.
+    /// The wallet never pays a token fee here.
     ///
     /// Returns a user-operation hash upon submission, not confirmation of execution.
     /// Wait for a successful receipt before displaying success or refreshing holdings.
@@ -1014,6 +1016,7 @@ impl SafeSmartAccount {
         &self,
         vault_address: &str,
         redemptions: Vec<UAssetRedemption>,
+        custom_bundler_url: Option<String>,
     ) -> Result<HexEncodedData, TransactionError> {
         let mut stage = "validation";
         let result: Result<HexEncodedData, TransactionError> = async {
@@ -1032,6 +1035,24 @@ impl SafeSmartAccount {
                 .await
                 .map_err(screening_error)?;
             stage = "execution";
+            if let Some(url) = custom_bundler_url {
+                let operation = transaction
+                    .build_preflight_user_operation(self.wallet_address, None)?;
+                let operation = custom_bundler::prepare_bundler_sponsored_operation(
+                    &url, operation,
+                )
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!("Custom bundler preparation failed: {e}"),
+                })?;
+                return self
+                    .submit_prepared_transaction(&PreparedTransaction {
+                        user_operation: operation,
+                        fee_details: None,
+                        custom_bundler_url: Some(url.into()),
+                    })
+                    .await;
+            }
             let user_op_hash = transaction
                 .sign_and_execute_v3(self, true)
                 .await

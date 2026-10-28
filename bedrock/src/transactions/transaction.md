@@ -337,11 +337,14 @@ unchanged; redemption uses ID 143.
 encoder without network access or signing. Its result is the Safe's full
 `executeUserOp` calldata, not a direct call to the vault.
 
-The transaction method screens the wallet and uses V3 `pm_sponsorUserOperation`
-and submission, requiring free TFH sponsorship before signing. Paid sponsorship
-responses are rejected without submission or charging a token fee. Temporal must
-recognize redemptions as an always-sponsored operation to cover gas-price spikes;
-gas limits and daily sponsored-transaction limits still apply.
+The transaction method always screens the wallet through the backend. Pass
+`custom_bundler_url: Some(url)` to estimate and submit a bundler-sponsored operation
+through the selected bundler, bypassing backend sponsorship and submission.
+Pass `None` to use V3 `pm_sponsorUserOperation` and submission, requiring free TFH
+sponsorship before signing. Paid sponsorship responses are rejected without
+submission or charging a token fee. For this default route, Temporal must recognize
+redemptions as an always-sponsored operation to cover gas-price spikes; gas limits
+and daily sponsored-transaction limits still apply.
 The method returns a UserOperation hash. Wait for a successful execution receipt,
 then refresh holdings. A returned hash alone does not mean redemption succeeded.
 
