@@ -33,6 +33,9 @@ pub mod foreign;
 pub mod rpc;
 mod tfh_paymaster;
 
+pub use contracts::universal_wind_down_vault::{
+    build_uasset_redemption_call_data, UAssetRedemption,
+};
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
 
 #[cfg(test)]
@@ -1148,6 +1151,93 @@ impl SafeSmartAccount {
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Redeems one or more Universal uAssets for USDC on World Chain atomically.
+    ///
+    /// Use the trusted `contractAddress` from the backend's redemption status and
+    /// only holdings marked redeemable. Pass their accepted `amount` and quoted
+    /// `usdcAmount` as each redemption's amount and minimum payout respectively.
+    /// Exact-amount approvals and redemptions execute together through `MultiSend`;
+    /// any failed call reverts the entire batch. Balances and quotes are not refreshed
+    /// or silently adjusted here. Sponsorship/gas limits may constrain batch size.
+    /// Screens the wallet before signing. With `custom_bundler_url`, the selected
+    /// bundler estimates and submits a bundler-sponsored operation. Otherwise,
+    /// requires free V3 sponsorship and rejects paid sponsorship responses.
+    /// The wallet never pays a token fee here.
+    ///
+    /// Returns a user-operation hash upon submission, not confirmation of execution.
+    /// Wait for a successful receipt before displaying success or refreshing holdings.
+    ///
+    /// # Errors
+    /// Returns a parsing/validation or screening error, or `Generic` if
+    /// sponsorship, signing, or submission fails.
+    pub async fn transaction_uasset_redeem(
+        &self,
+        vault_address: &str,
+        redemptions: Vec<UAssetRedemption>,
+        custom_bundler_url: Option<String>,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let mut stage = "validation";
+        let result: Result<HexEncodedData, TransactionError> = async {
+            let transaction =
+                contracts::universal_wind_down_vault::UniversalWindDownVault::new(
+                    vault_address,
+                    &redemptions,
+                )?;
+            stage = "screening";
+            let rpc_client =
+                get_rpc_client().map_err(|e| TransactionError::Generic {
+                    error_message: format!("Failed to get RPC client: {e}"),
+                })?;
+            rpc_client
+                .screen_addresses(Network::WorldChain, &[self.wallet_address])
+                .await
+                .map_err(screening_error)?;
+            stage = "execution";
+            if let Some(url) = custom_bundler_url {
+                let operation = transaction
+                    .build_preflight_user_operation(self.wallet_address, None)?;
+                let operation = custom_bundler::prepare_bundler_sponsored_operation(
+                    &url, operation,
+                )
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!("Custom bundler preparation failed: {e}"),
+                })?;
+                return self
+                    .submit_prepared_transaction(&PreparedTransaction {
+                        user_operation: operation,
+                        fee_details: None,
+                        custom_bundler_url: Some(url.into()),
+                    })
+                    .await;
+            }
+            let user_op_hash = transaction
+                .sign_and_execute_v3(self, true)
+                .await
+                .map_err(|error| TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to execute uAsset redemption: {error}"
+                    ),
+                })?;
+            Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        }
+        .await;
+        if let Err(error) = &result {
+            let error_message = error.to_string();
+            crate::warn!(
+                operation = "uasset_redemption",
+                network = Network::WorldChain.network_name(),
+                stage = stage,
+                failure_class = failure_class(&error_message),
+                vault = vault_address,
+                redemption_count = redemptions.len(),
+                error_message = error_message,
+                "Failed to redeem Universal uAssets"
+            );
+        }
+        result
     }
 
     /// Sends a gift using the `WorldGiftManager` contract.

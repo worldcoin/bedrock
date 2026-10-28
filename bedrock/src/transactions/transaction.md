@@ -314,6 +314,50 @@ tracking, not a guarantee of on-chain success.
 The direct legacy migration APIs use their existing sponsorship and submission
 routes. Their signatures do not include a custom bundler URL.
 
+## Universal uAsset redemptions
+
+After confirmation, call `SafeSmartAccount.transaction_uasset_redeem` using
+`contractAddress` and only `redeemable` holdings from
+`GET /uasset-sunset/redemption/status`. Map each holding to `UAssetRedemption`:
+
+| Record field | Status field |
+| --- | --- |
+| `token_address` | `tokenAddress` |
+| `amount` | `amount` |
+| `minimum_usdc_amount` | `usdcAmount` |
+
+Amounts are integer strings in base units: 18 decimals for uAssets, 6 for USDC.
+Safe MultiSend batches exact-amount approval/redemption pairs atomically,
+paying USDC back to the Safe.
+Single-asset redemption uses the same API. Empty batches, duplicate tokens,
+invalid addresses/uint256 values, and zero amounts or minimum payouts fail
+before requesting sponsorship or signing. Existing transaction type IDs remain
+unchanged; redemption uses ID 143.
+
+`build_uasset_redemption_call_data(vault_address, redemptions)` exposes the same
+encoder without network access or signing. Its result is the Safe's full
+`executeUserOp` calldata, not a direct call to the vault.
+
+The transaction method always screens the wallet through the backend. Pass
+`custom_bundler_url: Some(url)` to estimate and submit a bundler-sponsored operation
+through the selected bundler, bypassing backend sponsorship and submission.
+Pass `None` to use V3 `pm_sponsorUserOperation` and submission, requiring free TFH
+sponsorship before signing. Paid sponsorship responses are rejected without
+submission or charging a token fee. For this default route, Temporal must recognize
+redemptions as an always-sponsored operation to cover gas-price spikes; gas limits
+and daily sponsored-transaction limits still apply.
+The method returns a UserOperation hash. Wait for a successful execution receipt,
+then refresh holdings. A returned hash alone does not mean redemption succeeded.
+
+Refresh backend terms before presenting confirmation. Bedrock preserves accepted
+amounts and minimum payouts instead of fetching or silently changing them. The
+encoder does not authenticate the configured vault or check its pause state,
+rates, funding, or wallet balances. A later rate reduction, insufficient shared
+USDC liquidity, or stale balance can revert the entire batch, including approvals.
+Refresh terms after failure; do not automatically resubmit with a lower minimum.
+Holdings with a zero quoted payout cannot be redeemed. Sponsorship, gas, and
+calldata limits must be checked for large portfolios before rollout.
+
 ## References
 
 - [ERC-4337 — Account Abstraction Using EntryPoint](https://eips.ethereum.org/EIPS/eip-4337)
