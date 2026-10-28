@@ -1069,19 +1069,21 @@ impl SafeSmartAccount {
         }
 
         if let Some(settler) = prepared_transaction.swap_settler {
-            let rpc_client =
-                get_rpc_client().map_err(|e| TransactionError::Generic {
+            let rpc_client = get_rpc_client().map_err(|e| {
+                log_failure("get_rpc_client", &e);
+                TransactionError::Generic {
                     error_message: format!(
                         "Failed to get RPC client for swap validation: {e}"
                     ),
-                })?;
+                }
+            })?;
             contracts::zero_ex::validate_settler(rpc_client, settler)
                 .await
                 .map_err(|e| {
-                    log_failure("validate_settler", &e);
-                    TransactionError::Generic {
-                        error_message: format!("Failed to validate swap Settler: {e}"),
-                    }
+                    let error_message =
+                        format!("Failed to validate swap Settler: {e:#}");
+                    log_failure("validate_settler", &error_message);
+                    TransactionError::Generic { error_message }
                 })?;
         }
 

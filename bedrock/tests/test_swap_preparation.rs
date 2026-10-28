@@ -56,7 +56,7 @@ fn quote() -> UnparsedZeroExSwapQuote {
         slippage: AllowedSlippage {
             recipient: WALLET,
             buyToken: USDC_ADDRESS,
-            minAmountOut: U256::from(80),
+            minAmountOut: U256::from(90),
         },
         actions: vec![Bytes::from_static(&[1, 2, 3, 4])],
         affiliate: B256::ZERO,
@@ -79,7 +79,7 @@ fn quote() -> UnparsedZeroExSwapQuote {
     }
 }
 
-struct TestHttpClient(Mutex<Arc<ScriptedHttpClient>>);
+struct TestHttpClient(Mutex<Arc<dyn AuthenticatedHttpClient>>);
 
 #[async_trait::async_trait]
 impl AuthenticatedHttpClient for TestHttpClient {
@@ -137,6 +137,11 @@ fn install(responses: Vec<Value>) -> Arc<ScriptedHttpClient> {
         responses: Mutex::new(responses.into()),
         requests: Mutex::new(Vec::new()),
     });
+    install_client(client.clone());
+    client
+}
+
+fn install_client(client: Arc<dyn AuthenticatedHttpClient>) {
     // The public initializer is one-shot; serialized tests replace its delegate.
     static HTTP: OnceLock<Arc<TestHttpClient>> = OnceLock::new();
     let http = HTTP.get_or_init(|| {
@@ -144,8 +149,7 @@ fn install(responses: Vec<Value>) -> Arc<ScriptedHttpClient> {
         set_http_client(http.clone());
         http
     });
-    *http.0.lock().unwrap() = client.clone();
-    client
+    *http.0.lock().unwrap() = client;
 }
 
 fn registry(current: Address, previous: Address) -> Value {
@@ -407,12 +411,27 @@ async fn both_routes_require_wallet_screening_without_screening_router_contracts
             ),
             (json!({"result": false}), "screening failed"),
         ] {
-            let http = install(vec![registry(SETTLER, Address::ZERO), response]);
+            let mut responses = vec![registry(SETTLER, Address::ZERO), response];
+            if !custom {
+                responses.push(sponsored());
+            }
+            let http = install(responses);
             let server = bundler(json!({"result": HASH})).await;
             let error = prepare(custom.then(|| server.uri())).await.unwrap_err();
-            assert!(error.to_string().contains(expected), "{error}");
+            match expected {
+                "restricted" => {
+                    assert!(matches!(error, TransactionError::AddressRestricted))
+                }
+                "unavailable" => {
+                    assert!(matches!(error, TransactionError::ScreeningUnavailable))
+                }
+                _ => {
+                    assert!(matches!(error, TransactionError::Generic { .. }));
+                    assert!(error.to_string().contains(expected), "{error}");
+                }
+            }
             let requests = http.requests.lock().unwrap();
-            assert_eq!(requests.len(), 2);
+            assert_eq!(requests.len(), if custom { 2 } else { 3 });
             assert_eq!(requests[1]["params"], json!([[WALLET]]));
         }
     }
@@ -550,4 +569,114 @@ async fn foreign_input_and_quote_mismatches_are_rejected_before_rpc() {
         .await
         .is_err());
     assert!(http.requests.lock().unwrap().is_empty());
+}
+
+struct DelayedScreeningClient {
+    inner: Arc<ScriptedHttpClient>,
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    response: Value,
+}
+
+#[async_trait::async_trait]
+impl AuthenticatedHttpClient for DelayedScreeningClient {
+    async fn fetch_from_app_backend(
+        &self,
+        url: String,
+        method: HttpMethod,
+        headers: Vec<HttpHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError> {
+        let request: Value = serde_json::from_slice(body.as_deref().unwrap()).unwrap();
+        if request["method"] == "wa_screenAddresses" {
+            assert_eq!(url, "/v3/rpc/worldchain");
+            assert_eq!(request["params"], json!([[WALLET]]));
+            self.started.notify_one();
+            self.release.notified().await;
+            return Ok(serde_json::to_vec(&self.response).unwrap());
+        }
+        self.inner
+            .fetch_from_app_backend(url, method, headers, body)
+            .await
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn screening_outcome_takes_precedence_over_fast_preparation_failures_on_both_routes(
+) {
+    for custom in [false, true] {
+        for reason in ["address_restricted", "screening_unavailable", "clear"] {
+            let response = match reason {
+                "address_restricted" => {
+                    json!({"error": {"code": -32602, "message": "restricted", "data": {"reason": reason}}})
+                }
+                "screening_unavailable" => {
+                    json!({"error": {"code": -32603, "message": "unavailable", "data": {"reason": reason}}})
+                }
+                _ => json!({"result": true}),
+            };
+            let mut responses = vec![registry(SETTLER, Address::ZERO)];
+            if !custom {
+                responses.push(json!({"error": {"code": -32000, "message": "sponsor unavailable"}}));
+            }
+            let http = install(responses);
+            let started = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            install_client(Arc::new(DelayedScreeningClient {
+                inner: http.clone(),
+                started: started.clone(),
+                release: release.clone(),
+                response,
+            }));
+            // URL validation fails before networking on the custom route.
+            let preparation = prepare(custom.then(|| "http://example.com".to_string()));
+            tokio::pin!(preparation);
+            assert!(
+                futures::poll!(&mut preparation).is_pending(),
+                "preparation must wait for screening"
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+                .await
+                .unwrap();
+            release.notify_one();
+            let error = preparation.await.unwrap_err();
+            match reason {
+                "address_restricted" => {
+                    assert!(matches!(error, TransactionError::AddressRestricted))
+                }
+                "screening_unavailable" => {
+                    assert!(matches!(error, TransactionError::ScreeningUnavailable))
+                }
+                _ => assert!(matches!(error, TransactionError::Generic { .. })),
+            }
+            assert!(http
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request["method"] != "eth_sendUserOperation"));
+        }
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn registry_failure_preserves_the_rpc_cause_during_preparation_and_submission() {
+    let unavailable = json!({"error": {"code": -32000, "message": "registry offline"}});
+    install(vec![unavailable.clone()]);
+    let error = prepare(None).await.unwrap_err();
+    assert!(error.to_string().contains("registry offline"), "{error}");
+    install(vec![
+        registry(SETTLER, Address::ZERO),
+        json!({"result": true}),
+        sponsored(),
+        unavailable,
+    ]);
+    let prepared = prepare(None).await.unwrap();
+    let error = account(WALLET)
+        .submit_prepared_transaction(&prepared)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("registry offline"), "{error}");
 }
