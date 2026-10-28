@@ -31,6 +31,7 @@ pub mod contracts;
 pub mod custom_bundler;
 pub mod foreign;
 pub mod rpc;
+mod swap;
 mod tfh_paymaster;
 
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
@@ -104,6 +105,8 @@ pub struct PreparedTransaction {
     fee_details: Option<PreparedTransactionFee>,
     // URLs may contain credentials; Debug must not reveal them.
     custom_bundler_url: Option<SecretString>,
+    // Authenticate retained swap calldata again before signing.
+    swap_settler: Option<Address>,
 }
 
 /// An unsigned vault operation and the asset amount to display before confirmation.
@@ -132,6 +135,22 @@ pub struct PreparedTransactionFee {
 
 #[bedrock_export]
 impl PreparedTransaction {
+    /// Returns the unsigned operation as ERC-4337 v0.7 JSON for metadata registration.
+    ///
+    /// Deserialize this string into a JSON object for the backend request. Submit
+    /// the retained prepared transaction after registration; editing this copy does
+    /// not change the operation that Bedrock signs. Bundler credentials are omitted.
+    ///
+    /// # Errors
+    /// Returns an error if the operation cannot be serialized.
+    pub fn user_operation_json(&self) -> Result<String, TransactionError> {
+        serde_json::to_string(&self.user_operation).map_err(|e| {
+            TransactionError::Generic {
+                error_message: format!("Failed to serialize prepared operation: {e}"),
+            }
+        })
+    }
+
     /// Returns the fee estimate for a prepared self-sponsored operation.
     #[must_use]
     pub fn fee_details(&self) -> Option<PreparedTransactionFee> {
@@ -351,6 +370,7 @@ async fn prepare_default_operation(
         user_operation: operation.with_pm_sponsorship(&response),
         fee_details,
         custom_bundler_url: None,
+        swap_settler: None,
     })
 }
 
@@ -374,6 +394,7 @@ async fn prepare_operation(
             user_operation,
             fee_details: None,
             custom_bundler_url: Some(url.into()),
+            swap_settler: None,
         })
     } else {
         prepare_default_operation(rpc_client, user_operation, spend_token, spend_amount)
@@ -1002,6 +1023,7 @@ impl SafeSmartAccount {
 
     /// Signs and submits a previously prepared transaction on World Chain.
     /// Uses the custom bundler URL retained during preparation when present.
+    /// For swaps, authenticates the retained Settler against the registry before signing.
     ///
     /// # Errors
     /// - Will throw an error if the transaction was prepared for another account.
@@ -1044,6 +1066,25 @@ impl SafeSmartAccount {
                 error_message: "Prepared transaction belongs to another account"
                     .to_string(),
             });
+        }
+
+        if let Some(settler) = prepared_transaction.swap_settler {
+            let rpc_client = get_rpc_client().map_err(|e| {
+                log_failure("get_rpc_client", &e);
+                TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to get RPC client for swap validation: {e}"
+                    ),
+                }
+            })?;
+            contracts::zero_ex::validate_settler(rpc_client, settler)
+                .await
+                .map_err(|e| {
+                    let error_message =
+                        format!("Failed to validate swap Settler: {e:#}");
+                    log_failure("validate_settler", &error_message);
+                    TransactionError::Generic { error_message }
+                })?;
         }
 
         let mut user_operation = prepared_transaction.user_operation.clone();
@@ -1489,6 +1530,7 @@ impl SafeSmartAccount {
                         user_operation: operation,
                         fee_details: None,
                         custom_bundler_url: Some(url.into()),
+                        swap_settler: None,
                     })
                     .await;
             }

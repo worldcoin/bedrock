@@ -61,6 +61,7 @@ async fn custom_bundler_prepares_then_submits_to_the_same_url() {
         .unwrap(),
         fee_details: None,
         custom_bundler_url: Some(url.into()),
+        swap_settler: None,
     };
     assert!(prepared.fee_details().is_none());
     assert!(!format!("{prepared:?}").contains("private-key"));
@@ -150,6 +151,7 @@ async fn custom_bundler_submission_rejects_wrong_account_and_surfaces_rpc_error(
         user_operation: transfer().as_bundler_sponsored(),
         fee_details: None,
         custom_bundler_url: Some(server.uri().into()),
+        swap_settler: None,
     };
     let account = custom_bundler_account();
     prepared.user_operation.sender = USDC_ADDRESS;
@@ -268,6 +270,13 @@ async fn default_preparation_preserves_unsigned_transfer_and_exposes_final_fee()
     assert_eq!(prepared.user_operation.call_data, original.call_data);
     assert_eq!(prepared.user_operation.nonce, original.nonce);
     assert_eq!(prepared.user_operation.signature, original.signature);
+    let exported: Value =
+        serde_json::from_str(&prepared.user_operation_json().unwrap()).unwrap();
+    assert_eq!(
+        exported,
+        serde_json::to_value(&prepared.user_operation).unwrap()
+    );
+
     assert_eq!(
         prepared.user_operation.paymaster,
         Some(TFH_PAYMASTER_ADDRESS)
