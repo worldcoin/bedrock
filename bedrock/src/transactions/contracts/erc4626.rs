@@ -65,6 +65,11 @@ pub struct Erc4626Vault {
     metadata: [u8; 10],
 }
 
+pub(crate) enum WithdrawalAmount {
+    Assets(U256),
+    Shares(U256),
+}
+
 impl Erc4626Vault {
     /// Helper function to fetch and decode an asset address from an RPC call.
     /// Validates that the response is at least 32 bytes before extracting the address.
@@ -96,7 +101,7 @@ impl Erc4626Vault {
 
     /// Helper function to fetch and decode a U256 value (balance) from an RPC call.
     /// Validates that the response is at least 32 bytes before decoding.
-    async fn fetch_balance(
+    pub(crate) async fn fetch_balance(
         rpc_client: &RpcClient,
         network: Network,
         contract_address: Address,
@@ -151,6 +156,26 @@ impl Erc4626Vault {
         receiver: Address,
         metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
+        Self::deposit_with_amount(
+            rpc_client,
+            network,
+            vault_address,
+            asset_amount,
+            receiver,
+            metadata,
+        )
+        .await
+        .map(|(transaction, _, _)| transaction)
+    }
+
+    pub(crate) async fn deposit_with_amount(
+        rpc_client: &RpcClient,
+        network: Network,
+        vault_address: Address,
+        asset_amount: U256,
+        receiver: Address,
+        metadata: [u8; 10],
+    ) -> Result<(Self, Address, U256), RpcError> {
         // 1. Query the asset address from the vault contract
         let asset_call_data = IERC4626::assetCall {}.abi_encode();
         let asset_address = Self::fetch_asset_address(
@@ -213,18 +238,22 @@ impl Erc4626Vault {
 
         let bundle = MultiSend::build_bundle(&entries);
 
-        Ok(Self {
-            call_data: bundle.data.into(),
-            action: TransactionTypeId::ERC4626Deposit,
-            to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
-            operation: SafeOperation::DelegateCall,
-            metadata,
-        })
+        Ok((
+            Self {
+                call_data: bundle.data.into(),
+                action: TransactionTypeId::ERC4626Deposit,
+                to: crate::transactions::contracts::multisend::MULTISEND_ADDRESS,
+                operation: SafeOperation::DelegateCall,
+                metadata,
+            },
+            asset_address,
+            actual_amount,
+        ))
     }
 
     /// Creates a new withdraw operation (direct call to vault, no approval needed).
     ///
-    /// This function checks the user's asset balance and vault share balance before creating the transaction.
+    /// Checks the wallet's share balance and previews the shares needed for the requested assets.
     ///
     /// # Arguments
     /// * `rpc_client` - The RPC client for making blockchain queries.
@@ -248,6 +277,26 @@ impl Erc4626Vault {
         user_address: Address,
         metadata: [u8; 10],
     ) -> Result<Self, RpcError> {
+        Self::withdraw_with_amount(
+            rpc_client,
+            network,
+            vault_address,
+            asset_amount,
+            user_address,
+            metadata,
+        )
+        .await
+        .map(|(transaction, _)| transaction)
+    }
+
+    pub(crate) async fn withdraw_with_amount(
+        rpc_client: &RpcClient,
+        network: Network,
+        vault_address: Address,
+        asset_amount: U256,
+        user_address: Address,
+        metadata: [u8; 10],
+    ) -> Result<(Self, WithdrawalAmount), RpcError> {
         // 1. Query the user's vault share balance
         let share_balance_call_data = IErc20::balanceOfCall {
             account: user_address,
@@ -276,6 +325,8 @@ impl Erc4626Vault {
         )
         .await?;
 
+        // Morpho V2 returns zero for maxWithdraw/maxRedeem; they cannot size withdrawals.
+        // Sponsorship or bundler estimation checks whether the encoded operation can execute.
         // 3. Use the minimum shares available (limit by user's balance)
         let actual_shares = required_shares.min(share_balance);
 
@@ -300,13 +351,16 @@ impl Erc4626Vault {
             }
             .abi_encode();
 
-            return Ok(Self {
-                call_data: redeem_data.into(),
-                action: TransactionTypeId::ERC4626Redeem,
-                to: vault_address,
-                operation: SafeOperation::Call,
-                metadata,
-            });
+            return Ok((
+                Self {
+                    call_data: redeem_data.into(),
+                    action: TransactionTypeId::ERC4626Redeem,
+                    to: vault_address,
+                    operation: SafeOperation::Call,
+                    metadata,
+                },
+                WithdrawalAmount::Shares(actual_shares),
+            ));
         }
 
         // 6. User has enough shares: proceed with withdraw
@@ -317,13 +371,16 @@ impl Erc4626Vault {
         }
         .abi_encode();
 
-        Ok(Self {
-            call_data: withdraw_data.into(),
-            action: TransactionTypeId::ERC4626Withdraw,
-            to: vault_address,
-            operation: SafeOperation::Call,
-            metadata,
-        })
+        Ok((
+            Self {
+                call_data: withdraw_data.into(),
+                action: TransactionTypeId::ERC4626Withdraw,
+                to: vault_address,
+                operation: SafeOperation::Call,
+                metadata,
+            },
+            WithdrawalAmount::Assets(asset_amount),
+        ))
     }
 
     /// Creates a new redeem operation (direct call to vault, no approval needed).
