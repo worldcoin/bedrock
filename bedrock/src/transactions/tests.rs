@@ -673,7 +673,7 @@ async fn balance_covers_transfer_and_final_fee() {
             let error = result.unwrap_err();
             assert_eq!(
                 error.to_string(),
-                "Not enough funds to cover the token spend and network fee."
+                "Not enough funds to cover the transfer and network fee."
             );
             assert!(
                 matches!(error, TransactionError::InsufficientFunds { token_address }
