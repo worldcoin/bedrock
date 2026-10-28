@@ -1225,12 +1225,15 @@ impl SafeSmartAccount {
         }
         .await;
         if let Err(error) = &result {
+            let error_message = error.to_string();
             crate::warn!(
                 operation = "uasset_redemption",
                 network = Network::WorldChain.network_name(),
                 stage = stage,
+                failure_class = failure_class(&error_message),
+                vault = vault_address,
                 redemption_count = redemptions.len(),
-                error_message = error,
+                error_message = error_message,
                 "Failed to redeem Universal uAssets"
             );
         }
