@@ -344,3 +344,247 @@ fn binds_preflight_sender_and_reserves_the_swap_nonce_type() {
     assert_eq!(&nonce[24..], &[0; 8]);
     assert!(swap.build_preflight_user_operation(OTHER, None).is_err());
 }
+
+mod registry {
+    use super::*;
+    use bedrock::{
+        primitives::{
+            http_client::HttpHeader, AuthenticatedHttpClient, HttpError, HttpMethod,
+        },
+        transactions::{
+            contracts::zero_ex::{
+                validate_settler, ISettlerRegistry, SETTLER_REGISTRY_ADDRESS,
+            },
+            rpc::IMulticall3,
+            RpcClient,
+        },
+    };
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+
+    struct RegistryHttpClient {
+        response: Value,
+        requests: Mutex<Vec<Value>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AuthenticatedHttpClient for RegistryHttpClient {
+        async fn fetch_from_app_backend(
+            &self,
+            url: String,
+            _method: HttpMethod,
+            _headers: Vec<HttpHeader>,
+            body: Option<Vec<u8>>,
+        ) -> Result<Vec<u8>, HttpError> {
+            assert_eq!(url, "/v2/rpc/worldchain");
+            let request: Value = serde_json::from_slice(&body.unwrap()).unwrap();
+            assert_eq!(request["method"], "eth_call");
+            self.requests.lock().unwrap().push(request);
+            Ok(serde_json::to_vec(&self.response).unwrap())
+        }
+    }
+
+    fn client(response: Value) -> (RpcClient, Arc<RegistryHttpClient>) {
+        let http = Arc::new(RegistryHttpClient {
+            response,
+            requests: Mutex::new(Vec::new()),
+        });
+        (RpcClient::new(http.clone()), http)
+    }
+
+    fn address_result(address: Address) -> IMulticall3::Result {
+        IMulticall3::Result {
+            success: true,
+            returnData: ISettlerRegistry::ownerOfCall::abi_encode_returns(&address)
+                .into(),
+        }
+    }
+
+    fn batch(results: Vec<IMulticall3::Result>) -> Value {
+        json!({
+            "jsonrpc": "2.0", "id": "test",
+            "result": Bytes::from(IMulticall3::aggregate3Call::abi_encode_returns(&results)),
+        })
+    }
+
+    fn missing_result() -> IMulticall3::Result {
+        IMulticall3::Result {
+            success: false,
+            returnData: Bytes::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_current_or_previous_taker_deployment_in_one_registry_snapshot() {
+        for (current, previous) in [(SETTLER, OTHER), (OTHER, SETTLER)] {
+            let (rpc, http) = client(batch(vec![
+                address_result(current),
+                address_result(previous),
+            ]));
+            let swap = ZeroExSwap::from_quote(&rpc, &request(), &quote())
+                .await
+                .unwrap();
+            assert_eq!(swap_settlement(&swap).slippage.minAmountOut, U256::from(90));
+            let requests = http.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(
+                requests[0]["params"][0]["to"],
+                json!(alloy::providers::MULTICALL3_ADDRESS)
+            );
+            assert_eq!(requests[0]["params"][1], "latest");
+            let data: Bytes =
+                serde_json::from_value(requests[0]["params"][0]["data"].clone())
+                    .unwrap();
+            let batch =
+                IMulticall3::aggregate3Call::abi_decode_validate(&data).unwrap();
+            assert_eq!(batch.calls.len(), 2);
+            assert!(batch
+                .calls
+                .iter()
+                .all(|call| call.target == SETTLER_REGISTRY_ADDRESS));
+            assert!(!batch.calls[0].allowFailure);
+            assert!(batch.calls[1].allowFailure);
+            assert_eq!(
+                ISettlerRegistry::ownerOfCall::abi_decode_validate(
+                    &batch.calls[0].callData
+                )
+                .unwrap()
+                .tokenId,
+                U256::from(2)
+            );
+            assert_eq!(
+                ISettlerRegistry::prevCall::abi_decode_validate(
+                    &batch.calls[1].callData
+                )
+                .unwrap()
+                .featureId,
+                2
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn current_match_does_not_require_a_previous_deployment() {
+        let (rpc, _) = client(batch(vec![address_result(SETTLER), missing_result()]));
+        ZeroExSwap::from_quote(&rpc, &request(), &quote())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn paused_registry_or_rpc_failure_never_falls_back() {
+        let (rpc, http) = client(json!({
+            "jsonrpc": "2.0", "id": "test",
+            "error": {"code": 3, "message": "execution reverted"},
+        }));
+        let error = ZeroExSwap::from_quote(&rpc, &request(), &quote())
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Failed to query 0x Settler registry"));
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_current_deployment_cannot_be_rescued_by_a_previous_match() {
+        let mut dirty_address = address_result(SETTLER).returnData.to_vec();
+        dirty_address[0] = 1;
+        for current in [
+            missing_result(),
+            address_result(Address::ZERO),
+            IMulticall3::Result {
+                success: true,
+                returnData: Bytes::from(vec![0; 31]),
+            },
+            IMulticall3::Result {
+                success: true,
+                returnData: Bytes::from(vec![0; 33]),
+            },
+            IMulticall3::Result {
+                success: true,
+                returnData: dirty_address.into(),
+            },
+        ] {
+            let (rpc, _) = client(batch(vec![current, address_result(SETTLER)]));
+            assert!(ZeroExSwap::from_quote(&rpc, &request(), &quote())
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn previous_match_is_required_when_current_differs() {
+        let mut dirty_address = address_result(SETTLER).returnData.to_vec();
+        dirty_address[0] = 1;
+        for previous in [
+            missing_result(),
+            address_result(Address::ZERO),
+            address_result(WALLET),
+            IMulticall3::Result {
+                success: true,
+                returnData: Bytes::from(vec![0; 31]),
+            },
+            IMulticall3::Result {
+                success: true,
+                returnData: Bytes::from(vec![0; 33]),
+            },
+            IMulticall3::Result {
+                success: true,
+                returnData: dirty_address.into(),
+            },
+        ] {
+            let (rpc, _) = client(batch(vec![address_result(OTHER), previous]));
+            assert!(ZeroExSwap::from_quote(&rpc, &request(), &quote())
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_batches_and_unexpected_result_counts() {
+        for response in [
+            json!({"result": "0x"}),
+            batch(vec![]),
+            batch(vec![address_result(SETTLER)]),
+            batch(vec![
+                address_result(SETTLER),
+                address_result(OTHER),
+                address_result(WALLET),
+            ]),
+        ] {
+            let (rpc, _) = client(response);
+            assert!(ZeroExSwap::from_quote(&rpc, &request(), &quote())
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_intent_before_querying_the_registry() {
+        let (rpc, http) =
+            client(batch(vec![address_result(SETTLER), missing_result()]));
+        let request = ZeroExSwapRequest {
+            amount_in: U256::from(101),
+            ..request()
+        };
+        let error = ZeroExSwap::from_quote(&rpc, &request, &quote())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Input amount mismatch"));
+        assert!(http.requests.lock().unwrap().is_empty());
+        assert!(validate_settler(&rpc, Address::ZERO).await.is_err());
+        assert!(http.requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn revalidation_does_not_reuse_an_earlier_registry_result() {
+        let (valid_rpc, _) =
+            client(batch(vec![address_result(SETTLER), missing_result()]));
+        validate_settler(&valid_rpc, SETTLER).await.unwrap();
+        let (changed_rpc, http) =
+            client(batch(vec![address_result(OTHER), address_result(WALLET)]));
+        assert!(validate_settler(&changed_rpc, SETTLER).await.is_err());
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+    }
+}

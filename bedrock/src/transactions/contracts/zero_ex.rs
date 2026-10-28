@@ -1,8 +1,9 @@
 //! World Chain ERC-20 swaps through the 0x `AllowanceHolder`.
 //!
-//! The caller supplies a backend-authenticated executable quote and an independently
-//! trusted Settler address. Route actions remain opaque: this module validates the
-//! outer spending and settlement constraints, not each liquidity source or fee action.
+//! Executable quotes come from the authenticated backend. [`ZeroExSwap::from_quote`]
+//! authenticates their Settler against the World Chain registry. Route actions remain
+//! opaque: this module validates outer spending and settlement constraints, not each
+//! liquidity source or fee action.
 
 use alloy::{
     primitives::{address, Address, Bytes, U256},
@@ -12,11 +13,12 @@ use alloy::{
 use anyhow::{ensure, Context, Result};
 
 use crate::{
-    primitives::PrimitiveError,
+    primitives::{Network, PrimitiveError},
     smart_account::{
         ISafe4337Module, InstructionFlag, Is4337Encodable, NonceKeyV1, SafeOperation,
         TransactionTypeId, UserOperation,
     },
+    transactions::{rpc::IMulticall3, RpcClient},
 };
 
 use super::{
@@ -29,10 +31,24 @@ use super::{
 pub const ALLOWANCE_HOLDER_ADDRESS: Address =
     address!("0000000000001ff3684f28c67538d4d072c22734");
 
+/// The 0x deployment registry on World Chain.
+/// Reference: <https://github.com/0xProject/0x-settler/blob/9a5f9f9ee9f5f056cb9846048b36fa18562b1983/README.md#how-do-i-find-the-most-recent-deployment>
+pub const SETTLER_REGISTRY_ADDRESS: Address =
+    address!("00000000000004533fe15556b1e086bb1a72ceae");
+
+const TAKER_SUBMITTED_FEATURE: u128 = 2;
+
 const NATIVE_TOKEN_ADDRESS: Address =
     address!("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
 
 sol! {
+    /// Registry reads used by 0x's recommended deployment authentication procedure.
+    /// Reference: <https://github.com/0xProject/0x-settler/blob/9a5f9f9ee9f5f056cb9846048b36fa18562b1983/README.md#0x-api-dwell-time>
+    interface ISettlerRegistry {
+        function ownerOf(uint256 tokenId) external view returns (address);
+        function prev(uint128 featureId) external view returns (address);
+    }
+
     /// Reference: <https://github.com/0xProject/0x-settler/blob/9a5f9f9ee9f5f056cb9846048b36fa18562b1983/src/allowanceholder/IAllowanceHolder.sol>
     interface IAllowanceHolder {
         function exec(address operator, address token, uint256 amount, address target, bytes data)
@@ -93,12 +109,38 @@ pub struct ZeroExSwap {
 }
 
 impl ZeroExSwap {
+    /// Builds a swap and authenticates its Settler against the World Chain registry.
+    ///
+    /// Accepts the current taker-submitted deployment or its predecessor during the
+    /// 0x API rollout window. A paused registry or unavailable/invalid RPC response
+    /// blocks construction. The quote and reviewed request must come from the same
+    /// authenticated backend quote flow; route and company-fee policy belong there.
+    ///
+    /// This is a point-in-time check. Call [`validate_settler`] again before signing
+    /// if the operation is retained for confirmation.
+    ///
+    /// # Errors
+    /// Returns an error if the quote is invalid or its Settler cannot be authenticated.
+    pub async fn from_quote(
+        rpc_client: &RpcClient,
+        request: &ZeroExSwapRequest,
+        quote: &ZeroExSwapQuote,
+    ) -> Result<Self> {
+        let allowance = IAllowanceHolder::execCall::abi_decode_validate(&quote.data)
+            .context("Invalid AllowanceHolder exec calldata")?;
+        let transaction = Self::new(request, quote, allowance.target)?;
+        validate_settler(rpc_client, allowance.target).await?;
+        Ok(transaction)
+    }
+
     /// Validates a quote against the reviewed request and builds approval + swap calls.
     ///
     /// `settler_address` must be authenticated independently of `quote.data`, for
     /// example against the 0x deployment registry. Copying the quote's operator or
     /// target into this argument does not authenticate the contract. Both must match
     /// this address; approvals are granted only to the canonical `AllowanceHolder`.
+    /// [`Self::from_quote`] performs the registry check for callers without an
+    /// independently authenticated address.
     ///
     /// The quote's stronger minimum output is preserved. Backend policy owns asset
     /// eligibility, quote freshness, route selection, and company-fee reconciliation.
@@ -210,6 +252,79 @@ impl ZeroExSwap {
             .into(),
         })
     }
+}
+
+/// Authenticates a taker-submitted Settler on World Chain without caching the result.
+///
+/// The current and previous deployments are read in one EVM call so they describe
+/// the same registry state. Failure of `ownerOf(2)` blocks the entire call, including
+/// when 0x pauses the feature. A missing previous deployment is tolerated only when
+/// the current deployment matches. No next or historical deployment is accepted.
+///
+/// # Errors
+/// Returns an error for a paused registry, RPC failure, malformed response, or an
+/// address outside the registry's current/previous taker-submitted deployments.
+pub async fn validate_settler(rpc_client: &RpcClient, settler: Address) -> Result<()> {
+    ensure!(settler != Address::ZERO, "Settler must be nonzero");
+    let call = IMulticall3::aggregate3Call {
+        calls: vec![
+            IMulticall3::Call3 {
+                target: SETTLER_REGISTRY_ADDRESS,
+                allowFailure: false,
+                callData: ISettlerRegistry::ownerOfCall {
+                    tokenId: U256::from(TAKER_SUBMITTED_FEATURE),
+                }
+                .abi_encode()
+                .into(),
+            },
+            IMulticall3::Call3 {
+                target: SETTLER_REGISTRY_ADDRESS,
+                allowFailure: true,
+                callData: ISettlerRegistry::prevCall {
+                    featureId: TAKER_SUBMITTED_FEATURE,
+                }
+                .abi_encode()
+                .into(),
+            },
+        ],
+    };
+    let response = rpc_client
+        .eth_call(
+            Network::WorldChain,
+            alloy::providers::MULTICALL3_ADDRESS,
+            call.abi_encode().into(),
+        )
+        .await
+        .context("Failed to query 0x Settler registry")?;
+    let results = IMulticall3::aggregate3Call::abi_decode_returns_validate(&response)
+        .context("Invalid 0x Settler registry batch response")?;
+    ensure!(results.len() == 2, "Expected two Settler registry results");
+    ensure!(results[0].success, "Current Settler registry lookup failed");
+    ensure!(
+        results[0].returnData.len() == 32,
+        "Invalid current Settler response length"
+    );
+    let current = ISettlerRegistry::ownerOfCall::abi_decode_returns_validate(
+        &results[0].returnData,
+    )
+    .context("Invalid current Settler response")?;
+    ensure!(current != Address::ZERO, "Current Settler is unavailable");
+    if current == settler {
+        return Ok(());
+    }
+    ensure!(
+        results[1].success,
+        "Previous Settler registry lookup failed"
+    );
+    ensure!(
+        results[1].returnData.len() == 32,
+        "Invalid previous Settler response length"
+    );
+    let previous =
+        ISettlerRegistry::prevCall::abi_decode_returns_validate(&results[1].returnData)
+            .context("Invalid previous Settler response")?;
+    ensure!(previous == settler, "Unrecognized 0x Settler deployment");
+    Ok(())
 }
 
 impl Is4337Encodable for ZeroExSwap {
