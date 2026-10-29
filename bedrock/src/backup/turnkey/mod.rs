@@ -13,6 +13,7 @@ use serde_json::json;
 use siegel_uniffi::SiegelSession;
 use turnkey_enclave_encrypt::client::EnclaveEncryptClient;
 use turnkey_enclave_encrypt::QuorumPublicKey;
+use zeroize::Zeroizing;
 
 use crate::backup::{MainFactor, SyncFactor};
 use crate::root_key::RootKey;
@@ -222,26 +223,22 @@ impl Turnkey {
     /// of the P256 public key. This is the same implementation as Turnkey SDK.
     ///
     /// # Arguments
-    /// - `api_private_key`: A P256 private key encoded in hex. 32 random bytes.
+    /// - `api_private_key`: Siegel session with a P256 private key encoded in hex. 32 random bytes.
     ///
     /// # Errors
     /// - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
     /// - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
+    /// - `SiegelSession`: The Siegel session cannot be read.
     #[allow(clippy::unused_self)] // Uniffi doesn't support associated functions
     pub fn derive_public_key(
         &self,
-        api_private_key: String,
+        api_private_key: Arc<SiegelSession>,
     ) -> Result<String, TurnkeyError> {
-        let private_key = hex::decode(api_private_key)
-            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
-        if private_key.len() != 32 {
-            return Err(TurnkeyError::InvalidApiPrivateKeyLength);
-        }
-        let private_key = p256::SecretKey::from_slice(&private_key)
-            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
-        Ok(hex::encode(
-            private_key.public_key().to_encoded_point(true).as_bytes(),
-        ))
+        let public_key = api_private_key.read_once(|hex_bytes| {
+            p256_secret_key_from_hex(hex_bytes).map(|key| key.public_key())
+        })??;
+        drop(api_private_key);
+        Ok(hex::encode(public_key.to_encoded_point(true).as_bytes()))
     }
 
     /// Generate "a stamp" that should be passed in a header to Turnkey
@@ -253,15 +250,16 @@ impl Turnkey {
     ///
     /// # Arguments
     /// - `body`: The request body to be signed. Must be formatted in JSON.
-    /// - `api_private_key`: A P256 private key encoded in hex. The public key of this key should be
-    ///   a Turnkey API key, e.g. as a long-lived token (for iCloud Keychain) or short-lived
-    ///   token (for temporary update sessions).
+    /// - `api_private_key`: Siegel session with a P256 private key encoded in hex. The public key
+    ///   of this key should be a Turnkey API key, e.g. as a long-lived token (for iCloud Keychain)
+    ///   or short-lived token (for temporary update sessions).
     ///
     /// # Errors
     /// - `DecodeApiPrivateKeyError`: Failed to decode the API private key as hex.
     /// - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
     /// - `DecodeBodyError`: Failed to parse the request body as JSON.
     /// - `SignBodyError`: Failed to sign the request body with the private key.
+    /// - `SiegelSession`: The Siegel session cannot be read.
     ///
     /// # Returns
     /// Base64url-encoded string that contains the signature of the request body. Should be passed in
@@ -270,29 +268,25 @@ impl Turnkey {
     pub fn stamp(
         &self,
         body: &str,
-        api_private_key: &str,
+        api_private_key: Arc<SiegelSession>,
     ) -> Result<String, TurnkeyError> {
-        // Decode the private key as a P256 private scalar
-        let private_key = hex::decode(api_private_key)
-            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
-        if private_key.len() != 32 {
-            return Err(TurnkeyError::InvalidApiPrivateKeyLength);
-        }
-        let private_key = p256::SecretKey::from_slice(&private_key)
-            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
-        let signing_key = p256::ecdsa::SigningKey::from(private_key.clone());
-
         // Validate that the body is valid JSON, but discard the result of parsing. We should sign
         // the raw body to prevent issues with JSON formatting.
         let _json: serde_json::Value =
             serde_json::from_str(body).map_err(|_| TurnkeyError::DecodeBodyError)?;
 
-        // Sign the body with the private key
-        let signature: p256::ecdsa::Signature = signing_key.sign(body.as_bytes());
+        // Sign the body with the private key (a P256 private scalar)
+        let (signature, public_key) = api_private_key.read_once(|hex_bytes| {
+            let private_key = p256_secret_key_from_hex(hex_bytes)?;
+            let signing_key = p256::ecdsa::SigningKey::from(&private_key);
+            let signature: p256::ecdsa::Signature = signing_key.sign(body.as_bytes());
+            Ok::<_, TurnkeyError>((signature, private_key.public_key()))
+        })??;
+        drop(api_private_key);
 
         // Convert the signature to the expected header format
         let json_stamp = json!({
-            "publicKey": hex::encode(private_key.public_key().to_encoded_point(true).as_bytes()),
+            "publicKey": hex::encode(public_key.to_encoded_point(true).as_bytes()),
             "signature": hex::encode(signature.to_der()),
             "scheme": "SIGNATURE_SCHEME_TK_API_P256",
         });
@@ -381,7 +375,8 @@ impl Turnkey {
     /// Reference: <https://docs.turnkey.com/wallets/import-wallets>
     ///
     /// # Arguments
-    /// - `factor_secret`: The factor secret to be encrypted. Must be a hex-encoded 32-byte string.
+    /// - `factor_secret`: Siegel session with the factor secret to be encrypted. Must be a
+    ///   hex-encoded 32-byte string.
     /// - `import_bundle`: The import bundle received from the Turnkey enclave. Must be a valid JSON string.
     /// - `turnkey_organization_id`: The organization ID of the Turnkey account.
     /// - `turnkey_user_id`: The user ID of the Turnkey account.
@@ -392,13 +387,14 @@ impl Turnkey {
     /// - `InvalidFactorSecret`: The factor secret is not a valid hex-encoded 32-byte string.
     /// - `EncryptFactorSecretError`: Failed to encrypt the factor secret using the import bundle.
     /// - `SerializeEncryptedBundleError`: Failed to serialize the encrypted bundle to a JSON string.
+    /// - `SiegelSession`: The Siegel session cannot be read.
     #[expect(
         clippy::unused_self,
         reason = "uniffi doesn't support associated functions"
     )]
     pub fn generate_import_bundle_for_factor_secret(
         &self,
-        factor_secret: &str,
+        factor_secret: Arc<SiegelSession>,
         import_bundle: &str,
         turnkey_organization_id: &str,
         turnkey_user_id: &str,
@@ -407,11 +403,16 @@ impl Turnkey {
         let _value: serde_json::Value = serde_json::from_str(import_bundle)
             .map_err(|_| TurnkeyError::DeserializeImportBundleError)?;
         // Check that factor secret is a hex-encoded 32-byte string
-        let factor_secret = hex::decode(factor_secret)
-            .map_err(|_| TurnkeyError::InvalidFactorSecret)?;
-        if factor_secret.len() != 32 {
-            return Err(TurnkeyError::InvalidFactorSecret);
-        }
+        let factor_secret_bytes = factor_secret.read_once(|hex_bytes| {
+            let bytes = Zeroizing::new(
+                hex::decode(hex_bytes).map_err(|_| TurnkeyError::InvalidFactorSecret)?,
+            );
+            if bytes.len() != 32 {
+                return Err(TurnkeyError::InvalidFactorSecret);
+            }
+            Ok(bytes)
+        })??;
+        drop(factor_secret);
 
         // Create the encryption client using Turnkey's library
         let client = EnclaveEncryptClient::from_enclave_auth_key(
@@ -426,7 +427,7 @@ impl Turnkey {
         // signed by Turnkey's enclave
         let encrypted_bundle = client
             .encrypt(
-                &factor_secret,
+                &factor_secret_bytes,
                 import_bundle.as_bytes(),
                 turnkey_organization_id,
                 turnkey_user_id,
@@ -454,9 +455,9 @@ impl Turnkey {
     /// Reference: <https://docs.turnkey.com/wallets/export-wallets>
     ///
     /// # Arguments
-    /// - `session_secret_key`: The API private key to which the factor secret is encrypted. Corresponding
-    ///   P256 SEC1 non-compressed public key should've been passed in the `targetPublicKey`
-    ///   parameter of the "export private key" operation.
+    /// - `session_secret_key`: Siegel session with the hex-encoded API private key to which the
+    ///   factor secret is encrypted. Corresponding P256 SEC1 non-compressed public key should've been
+    ///   passed in the `targetPublicKey` parameter of the "export private key" operation.
     /// - `turnkey_organization_id`: The organization ID of the Turnkey account. During recovery,
     ///   it can be retrieved from backup metadata in the backup service.
     /// - `export_bundle`: The export bundle received from the Turnkey enclave.
@@ -468,14 +469,17 @@ impl Turnkey {
     /// - `InvalidApiPrivateKeyLength`: The API private key is not 32 bytes long.
     /// - `ConvertP256KeypairToHpkeKeypairError`: Failed to convert the P256 keypair to HPKE keypair.
     /// - `DecryptFactorSecretError`: Failed to decrypt the factor secret using the Turnkey enclave.
+    /// - `SiegelSession`: The Siegel session cannot be read.
     #[allow(clippy::unused_self)] // Uniffi doesn't support associated functions
     pub fn decrypt_factor_secret(
         &self,
-        session_secret_key: &str,
+        session_secret_key: Arc<SiegelSession>,
         turnkey_organization_id: &str,
         export_bundle: &str,
     ) -> Result<String, TurnkeyError> {
-        let session_key_pair = SessionKeyPair::from_hex(session_secret_key)?;
+        let session_key_pair =
+            session_secret_key.read_once(SessionKeyPair::from_hex)??;
+        drop(session_secret_key);
         let _value: serde_json::Value = serde_json::from_str(export_bundle)
             .map_err(|_| TurnkeyError::DeserializeExportBundleError)?;
 
@@ -501,10 +505,24 @@ struct SessionKeyPair {
     public_key: <DhP256HkdfSha256 as KemTrait>::PublicKey,
 }
 
+/// Parses a hex-encoded 32-byte P256 private key.
+fn p256_secret_key_from_hex(hex_bytes: &[u8]) -> Result<p256::SecretKey, TurnkeyError> {
+    let private_key = Zeroizing::new(
+        hex::decode(hex_bytes).map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?,
+    );
+    if private_key.len() != 32 {
+        return Err(TurnkeyError::InvalidApiPrivateKeyLength);
+    }
+    p256::SecretKey::from_slice(&private_key)
+        .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)
+}
+
 impl SessionKeyPair {
-    fn from_hex(secret_key: &str) -> Result<Self, TurnkeyError> {
-        let private_key = hex::decode(secret_key)
-            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
+    fn from_hex(hex_bytes: &[u8]) -> Result<Self, TurnkeyError> {
+        let private_key = Zeroizing::new(
+            hex::decode(hex_bytes)
+                .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?,
+        );
 
         if private_key.len() != 32 {
             return Err(TurnkeyError::InvalidApiPrivateKeyLength);
@@ -585,6 +603,7 @@ impl From<k256::ecdsa::Error> for TurnkeyError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::siegel_from_str;
     use base64::prelude::BASE64_URL_SAFE_NO_PAD;
     use base64::Engine;
     use p256::ecdsa::signature::Verifier;
@@ -612,7 +631,7 @@ mod tests {
             "8b380767b1947c1c67da42dbc6929a9137202bab770bca2ddcdeaa1dbdd505b8";
 
         let public_key = client
-            .derive_public_key(api_private_key.to_string())
+            .derive_public_key(siegel_from_str(api_private_key))
             .unwrap();
         // Expected public key has been calculated using Turnkey SDK library, see test_stamp() for details.
         assert_eq!(
@@ -623,7 +642,7 @@ mod tests {
         // Test with invalid API private key
         let api_private_key =
             "8b380767b1947c1c67da42dbc6929a9137202bab770bca2ddcdeaa1dbdd505b";
-        let result = client.derive_public_key(api_private_key.to_string());
+        let result = client.derive_public_key(siegel_from_str(api_private_key));
         assert_eq!(
             result.unwrap_err().to_string(),
             "Failed to decode API private key as hex"
@@ -631,7 +650,7 @@ mod tests {
 
         // Test with API private key of incorrect size
         let api_private_key = hex::encode([0u8; 31]);
-        let result = client.derive_public_key(api_private_key);
+        let result = client.derive_public_key(siegel_from_str(&api_private_key));
         assert_eq!(
             result.unwrap_err().to_string(),
             "Invalid length of API private key"
@@ -646,7 +665,10 @@ mod tests {
             "8b380767b1947c1c67da42dbc6929a9137202bab770bca2ddcdeaa1dbdd505b8";
 
         let stamp = client
-            .stamp(&json!({"example": 123}).to_string(), api_private_key)
+            .stamp(
+                &json!({"example": 123}).to_string(),
+                siegel_from_str(api_private_key),
+            )
             .unwrap();
 
         // decode and inspect the stamp
@@ -690,7 +712,7 @@ mod tests {
         let api_private_key =
             "8b380767b1947c1c67da42dbc6929a9137202bab770bca2ddcdeaa1dbdd505b8";
 
-        let result = client.stamp("invalid_json", api_private_key);
+        let result = client.stamp("invalid_json", siegel_from_str(api_private_key));
         assert_eq!(
             result.unwrap_err().to_string(),
             "Failed to decode request body as JSON"
@@ -703,8 +725,10 @@ mod tests {
         let api_private_key =
             "8b380767b1947c1c67da42dbc6929a9137202bab770bca2ddcdeaa1dbdd505b";
 
-        let result =
-            client.stamp(&json!({"example": 123}).to_string(), api_private_key);
+        let result = client.stamp(
+            &json!({"example": 123}).to_string(),
+            siegel_from_str(api_private_key),
+        );
         assert_eq!(
             result.unwrap_err().to_string(),
             "Failed to decode API private key as hex"
@@ -716,8 +740,10 @@ mod tests {
         let client = Turnkey::new();
         let api_private_key = hex::encode([0u8; 31]);
 
-        let result =
-            client.stamp(&json!({"example": 123}).to_string(), &api_private_key);
+        let result = client.stamp(
+            &json!({"example": 123}).to_string(),
+            siegel_from_str(&api_private_key),
+        );
         assert_eq!(
             result.unwrap_err().to_string(),
             "Invalid length of API private key"
@@ -737,7 +763,7 @@ mod tests {
         let user_id = "4de601ed-832e-4c9f-875d-fd79cd21f5a3";
         let encrypted_bundle = client
             .generate_import_bundle_for_factor_secret(
-                factor_secret,
+                siegel_from_str(factor_secret),
                 import_bundle,
                 organization_id,
                 user_id,
@@ -764,7 +790,7 @@ mod tests {
         let organization_id = "e9e7e466-f687-48a2-9e95-b9097a475f36";
         let user_id = "4de601ed-832e-4c9f-875d-fd79cd21f5a3";
         let result = client.generate_import_bundle_for_factor_secret(
-            factor_secret,
+            siegel_from_str(factor_secret),
             import_bundle,
             organization_id,
             user_id,
@@ -785,7 +811,7 @@ mod tests {
         let organization_id = "4de601ed-832e-4c9f-875d-fd79cd21f5a3";
         let user_id = "e9e7e466-f687-48a2-9e95-b9097a475f36";
         let result = client.generate_import_bundle_for_factor_secret(
-            factor_secret,
+            siegel_from_str(factor_secret),
             import_bundle,
             organization_id,
             user_id,
@@ -809,7 +835,11 @@ mod tests {
 
         // Decrypt the factor secret using the API private key and export bundle
         let result = client
-            .decrypt_factor_secret(api_private_key, organization_id, export_bundle)
+            .decrypt_factor_secret(
+                siegel_from_str(api_private_key),
+                organization_id,
+                export_bundle,
+            )
             .unwrap();
 
         // Expected factor secret has been cross-checked with the private key that was imported to Turnkey
@@ -823,7 +853,7 @@ mod tests {
         api_private_key_bytes[10] ^= 1;
 
         let result = client.decrypt_factor_secret(
-            &hex::encode(api_private_key_bytes),
+            siegel_from_str(&hex::encode(api_private_key_bytes)),
             organization_id,
             export_bundle,
         );

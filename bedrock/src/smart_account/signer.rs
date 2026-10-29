@@ -7,6 +7,7 @@ use alloy::{
 };
 use k256::ecdsa::SigningKey;
 use ruint::aliases::U256;
+use siegel_uniffi::SiegelSession;
 
 use crate::{
     primitives::{address::BedrockAddress, HexEncodedData},
@@ -246,17 +247,17 @@ pub struct EoaSigner {
 
 #[uniffi::export]
 impl EoaSigner {
-    /// Creates a new EOA signer from a hex-encoded private key.
+    /// Creates a new EOA signer from a Siegel session holding the private key as 64 ASCII hex
+    /// characters (no `0x` prefix), the same format as
+    /// [`SmartAccountKeyManager`](super::SmartAccountKeyManager).
     ///
     /// # Errors
     /// - `SafeSmartAccountError::KeyDecoding` if the key is invalid.
+    /// - `SafeSmartAccountError::SiegelSession` if the session cannot be read.
     #[uniffi::constructor]
-    pub fn new(private_key: String) -> Result<Self, SafeSmartAccountError> {
-        let signer = LocalSigner::from_slice(
-            &hex::decode(private_key)
-                .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
-        )
-        .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
+    pub fn new(private_key: Arc<SiegelSession>) -> Result<Self, SafeSmartAccountError> {
+        let signer = private_key.read_once(signer_from_siegel_bytes)??;
+        drop(private_key);
         Ok(Self { signer })
     }
 

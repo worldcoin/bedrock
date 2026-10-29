@@ -12,29 +12,16 @@ use crate::primitives::filesystem::{
     init_test_filesystem, unscoped_filesystem, ScopedFileSystem,
 };
 use crate::root_key::RootKey;
+use crate::test_utils::siegel_from_str;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use crypto_box::{PublicKey, SecretKey};
 use k256::ecdsa::signature::Verifier;
 use k256::ecdsa::{Signature, VerifyingKey};
 use serial_test::serial;
-use siegel_uniffi::{siegel_fill, SiegelSession, FILL_OK};
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
-
-/// Wraps a string in a one-shot [`SiegelSession`], mirroring how the foreign key store
-/// delivers the root secret to `BackupManager` at runtime.
-fn siegel_from_str(secret: &str) -> Arc<SiegelSession> {
-    let bytes = secret.as_bytes();
-    let len = u32::try_from(bytes.len()).expect("secret len must fit in u32");
-    let session = SiegelSession::new(len).expect("failed to create siegel session");
-    // SAFETY: `session` was just allocated with capacity `len == bytes.len()`, `bytes`
-    // is owned by the caller and valid for `len` reads for the duration of this call.
-    let rc = unsafe { siegel_fill(session.handle_id(), bytes.as_ptr(), bytes.len()) };
-    assert_eq!(rc, FILL_OK, "siegel_fill failed with code {rc}");
-    session
-}
 
 /// Points Bedrock at the shared per-process test root.
 ///
@@ -93,7 +80,11 @@ async fn test_batch_conditional_removal_preserves_other_identity_and_retries() {
             },
         ];
         manager
-            .sync_changes(&root, hex::encode(key.public_key().as_bytes()), changes)
+            .sync_changes(
+                siegel_from_str(&root),
+                hex::encode(key.public_key().as_bytes()),
+                changes,
+            )
             .await
             .unwrap();
     }
@@ -134,7 +125,7 @@ async fn test_batch_conditional_removal_rejects_changed_owner_without_committing
         let key = SecretKey::generate(&mut rand::thread_rng());
         let result = ManifestManager::new_with_prefix(prefix)
             .sync_changes(
-                &RootKey::new_random().danger_to_json().unwrap(),
+                siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
                 hex::encode(key.public_key().as_bytes()),
                 vec![
                     BackupFileChange::Put {
@@ -354,7 +345,7 @@ async fn test_batch_refreshes_vault_with_document_changes_in_one_sync() {
                 .store_file(
                     BackupFileDesignator::DocumentPkg,
                     "batch/new.bin".into(),
-                    &RootKey::new_random().danger_to_json().unwrap(),
+                    siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
                     hex::encode(key.public_key().as_bytes()),
                 )
                 .await
@@ -366,7 +357,7 @@ async fn test_batch_refreshes_vault_with_document_changes_in_one_sync() {
         }
         manager
             .sync_changes(
-                &RootKey::new_random().danger_to_json().unwrap(),
+                siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
                 hex::encode(key.public_key().as_bytes()),
                 vec![
                     BackupFileChange::ReplaceFiles {
@@ -470,7 +461,7 @@ async fn test_batch_refreshes_document_with_vault_and_referrals_preserving_sibli
     let key = SecretKey::generate(&mut rand::thread_rng());
     ManifestManager::new_with_prefix(prefix)
         .sync_changes(
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             hex::encode(key.public_key().as_bytes()),
             vec![
                 BackupFileChange::ReplaceFiles {
@@ -573,7 +564,7 @@ async fn test_batch_preserves_manifest_on_corruption_stale_remote_or_upload_fail
         let key = SecretKey::generate(&mut rand::thread_rng());
         let error = ManifestManager::new_with_prefix(prefix)
             .sync_changes(
-                &RootKey::new_random().danger_to_json().unwrap(),
+                siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
                 hex::encode(key.public_key().as_bytes()),
                 mutations,
             )
@@ -689,7 +680,7 @@ async fn test_store_file_no_remote_backup_creates_backup() {
     mgr.store_file(
         BackupFileDesignator::OrbPkg,
         "pcp/source.bin".to_string(),
-        &RootKey::new_random().danger_to_json().unwrap(),
+        siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
         backup_pk_hex,
     )
     .await
@@ -731,7 +722,7 @@ async fn test_store_file_no_remote_backup_with_nonempty_local_manifest() {
     mgr.store_file(
         BackupFileDesignator::OrbPkg,
         "pcp/source.bin".to_string(),
-        &RootKey::new_random().danger_to_json().unwrap(),
+        siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
         backup_pk_hex,
     )
     .await
@@ -833,7 +824,7 @@ async fn test_store_file_happy_path_and_commit() {
     mgr.store_file(
         BackupFileDesignator::OrbPkg,
         "pcp/source.bin".to_string(),
-        &RootKey::new_random().danger_to_json().unwrap(),
+        siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
         backup_pk_hex,
     )
     .await
@@ -864,7 +855,7 @@ async fn test_store_file_refreshes_changed_contents_without_removing_entry() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             path.into(),
-            &root,
+            siegel_from_str(&root),
             public_key.clone(),
         )
         .await
@@ -874,7 +865,7 @@ async fn test_store_file_refreshes_changed_contents_without_removing_entry() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             path.into(),
-            &root,
+            siegel_from_str(&root),
             public_key.clone(),
         )
         .await
@@ -892,7 +883,12 @@ async fn test_store_file_refreshes_changed_contents_without_removing_entry() {
     assert_eq!(backup.files[0].data, b"after");
 
     manager
-        .store_file(BackupFileDesignator::OrbPkg, path.into(), &root, public_key)
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            path.into(),
+            siegel_from_str(&root),
+            public_key,
+        )
         .await
         .unwrap();
     assert_eq!(api.state.lock().unwrap().sync_count, 2);
@@ -924,7 +920,7 @@ async fn test_store_file_accepts_dot_slash_path() {
     mgr.store_file(
         BackupFileDesignator::OrbPkg,
         "./pcp/source.bin".to_string(),
-        &RootKey::new_random().danger_to_json().unwrap(),
+        siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
         backup_pk_hex,
     )
     .await
@@ -966,7 +962,7 @@ async fn test_store_file_with_unicode_paths() {
     mgr.store_file(
         BackupFileDesignator::OrbPkg,
         "pcp/résumé.bin".to_string(),
-        &RootKey::new_random().danger_to_json().unwrap(),
+        siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
         backup_pk_hex.clone(),
     )
     .await
@@ -975,7 +971,7 @@ async fn test_store_file_with_unicode_paths() {
     mgr.store_file(
         BackupFileDesignator::DocumentPkg,
         "docs/İstanbul-ŞĞÜ.bin".to_string(),
-        &RootKey::new_random().danger_to_json().unwrap(),
+        siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
         backup_pk_hex.clone(),
     )
     .await
@@ -984,7 +980,7 @@ async fn test_store_file_with_unicode_paths() {
     mgr.store_file(
         BackupFileDesignator::DocumentPkg,
         "ไทย/บีน.bin".to_string(),
-        &RootKey::new_random().danger_to_json().unwrap(),
+        siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
         backup_pk_hex,
     )
     .await
@@ -1035,7 +1031,7 @@ async fn test_store_file_propagates_sync_failure() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             "pcp/source.bin".to_string(),
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             backup_pk_hex,
         )
         .await
@@ -1070,7 +1066,7 @@ async fn test_store_file_fails_when_remote_ahead() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             "pcp/source.bin".to_string(),
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             backup_pk_hex,
         )
         .await
@@ -1098,7 +1094,7 @@ async fn test_store_file_invalid_source_path() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             "pcp/missing.bin".to_string(),
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             backup_pk_hex,
         )
         .await
@@ -1134,7 +1130,7 @@ async fn test_store_file_checksum_mismatch_existing_entry() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             "pcp/new.bin".to_string(),
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             backup_pk_hex,
         )
         .await
@@ -1177,7 +1173,7 @@ async fn test_store_file_checksum_mismatch_when_file_modified() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             "pcp/new.bin".to_string(),
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             backup_pk_hex,
         )
         .await
@@ -1218,7 +1214,7 @@ async fn test_store_file_fails_when_manifest_references_missing_file() {
         .store_file(
             BackupFileDesignator::OrbPkg,
             "pcp/new.bin".to_string(),
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             backup_pk_hex,
         )
         .await
@@ -1275,7 +1271,7 @@ async fn test_replace_all_files_for_designator_happy_path() {
     mgr.replace_all_files_for_designator(
         BackupFileDesignator::OrbPkg,
         "pcp/new.bin".to_string(),
-        &root_json,
+        siegel_from_str(&root_json),
         backup_pk_hex,
     )
     .await
@@ -1343,7 +1339,7 @@ async fn test_remove_file_happy_and_not_found() {
     // Remove existing file
     mgr.remove_file(
         "pcp/target.bin".to_string(),
-        &root_json,
+        siegel_from_str(&root_json),
         backup_pk_hex.clone(),
     )
     .await
@@ -1359,7 +1355,11 @@ async fn test_remove_file_happy_and_not_found() {
 
     // Second removal of the same file should error and not sync again
     let err = mgr
-        .remove_file("pcp/target.bin".to_string(), &root_json, backup_pk_hex)
+        .remove_file(
+            "pcp/target.bin".to_string(),
+            siegel_from_str(&root_json),
+            backup_pk_hex,
+        )
         .await
         .expect_err("expected file-not-found error");
     assert!(err.to_string().contains("File not found in manifest"));
@@ -1404,7 +1404,7 @@ async fn test_sync_changes_uploads_one_complete_backup() {
     let key = SecretKey::generate(&mut rand::thread_rng());
     ManifestManager::new_with_prefix(prefix)
         .sync_changes(
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             hex::encode(key.public_key().as_bytes()),
             vec![
                 BackupFileChange::Put {
@@ -1471,7 +1471,7 @@ async fn test_sync_changes_failure_preserves_manifest() {
         let before = read_manifest_bytes(prefix);
         manager
             .sync_changes(
-                &root,
+                siegel_from_str(&root),
                 public_key.clone(),
                 vec![
                     BackupFileChange::Put {
@@ -1510,7 +1510,7 @@ async fn test_sync_changes_recreates_missing_remote_without_local_changes() {
         .replace_all_files_for_designator(
             BackupFileDesignator::OrbPkg,
             path.into(),
-            &RootKey::new_random().danger_to_json().unwrap(),
+            siegel_from_str(&RootKey::new_random().danger_to_json().unwrap()),
             hex::encode(key.public_key().as_bytes()),
         )
         .await
@@ -1530,7 +1530,7 @@ async fn test_sync_changes_empty_batch_needs_no_credentials_or_manifest() {
     let api = init_test_globals();
     api.reset();
     ManifestManager::new_with_prefix("backup_test_empty_batch")
-        .sync_changes("", String::new(), vec![])
+        .sync_changes(siegel_from_str("{}"), String::new(), vec![])
         .await
         .unwrap();
     assert_eq!(api.state.lock().unwrap().sync_count, 0);
@@ -1604,8 +1604,8 @@ fn test_create_sealed_backup_with_prf_for_new_user() {
 
     let result = manager
         .create_sealed_backup_for_new_user(
-            &root_secret,
-            prf_result.clone(),
+            siegel_from_str(&root_secret),
+            siegel_from_str(&prf_result),
             FactorType::Prf,
         )
         .expect("Failed to create sealed backup with PRF for new user");
@@ -1688,8 +1688,8 @@ fn test_decrypt_sealed_backup_with_prf() {
 
     let create_result = manager
         .create_sealed_backup_for_new_user(
-            &root_secret,
-            prf_result.clone(),
+            siegel_from_str(&root_secret),
+            siegel_from_str(&prf_result),
             FactorType::Prf,
         )
         .expect("Failed to create sealed backup with PRF for new user");
@@ -1699,7 +1699,7 @@ fn test_decrypt_sealed_backup_with_prf() {
         .decrypt_and_unpack_sealed_backup(
             &create_result.sealed_backup_data,
             create_result.encrypted_backup_keypair.clone(),
-            prf_result.clone(),
+            siegel_from_str(&prf_result),
             FactorType::Prf,
         )
         .unwrap();
@@ -1725,7 +1725,7 @@ fn test_decrypt_sealed_backup_with_prf() {
         .decrypt_and_unpack_sealed_backup(
             &create_result.sealed_backup_data,
             create_result.encrypted_backup_keypair.clone(),
-            incorrect_factor_secret,
+            siegel_from_str(&incorrect_factor_secret),
             FactorType::Prf,
         )
         .expect_err("Expected decryption to fail with incorrect factor secret");
@@ -1745,7 +1745,7 @@ fn test_decrypt_sealed_backup_with_prf() {
         .decrypt_and_unpack_sealed_backup(
             &create_result.sealed_backup_data,
             incorrect_encrypted_backup_keypair,
-            prf_result,
+            siegel_from_str(&prf_result),
             FactorType::Prf,
         )
         .expect_err(
@@ -1774,8 +1774,8 @@ async fn test_decrypt_and_unpack_default_manifest_hash() {
 
     let create_result = manager
         .create_sealed_backup_for_new_user(
-            &root_secret,
-            prf_result.clone(),
+            siegel_from_str(&root_secret),
+            siegel_from_str(&prf_result),
             FactorType::Prf,
         )
         .expect("Failed to create sealed backup with PRF for new user");
@@ -1784,7 +1784,7 @@ async fn test_decrypt_and_unpack_default_manifest_hash() {
         .decrypt_and_unpack_sealed_backup(
             &create_result.sealed_backup_data,
             create_result.encrypted_backup_keypair.clone(),
-            prf_result,
+            siegel_from_str(&prf_result),
             FactorType::Prf,
         )
         .unwrap();
@@ -1845,7 +1845,7 @@ fn test_unpack_writes_files_and_manifest() {
         .decrypt_and_unpack_sealed_backup(
             &sealed,
             hex::encode(encrypted_backup_keypair),
-            hex::encode(factor_sk.to_bytes()),
+            siegel_from_str(&hex::encode(factor_sk.to_bytes())),
             FactorType::Prf,
         )
         .unwrap();
@@ -1933,7 +1933,7 @@ fn test_unpack_rejects_the_whole_payload_on_an_unusable_path() {
         let result = manager.decrypt_and_unpack_sealed_backup(
             &sealed,
             keypair,
-            factor,
+            siegel_from_str(&factor),
             FactorType::Prf,
         );
         let Err(err) = result else {
@@ -1978,7 +1978,7 @@ fn test_unpack_rejects_two_entries_resolving_to_one_file() {
         let result = manager.decrypt_and_unpack_sealed_backup(
             &sealed,
             keypair,
-            factor,
+            siegel_from_str(&factor),
             FactorType::Prf,
         );
         let Err(err) = result else {
@@ -2041,7 +2041,7 @@ fn test_unpack_writes_files_and_manifest_unicode() {
         .decrypt_and_unpack_sealed_backup(
             &sealed,
             hex::encode(encrypted_backup_keypair),
-            hex::encode(factor_sk.to_bytes()),
+            siegel_from_str(&hex::encode(factor_sk.to_bytes())),
             FactorType::Prf,
         )
         .unwrap();
@@ -2087,8 +2087,8 @@ fn test_re_encrypt_backup() {
 
     let create_result = manager
         .create_sealed_backup_for_new_user(
-            &root_secret,
-            prf_result.clone(),
+            siegel_from_str(&root_secret),
+            siegel_from_str(&prf_result),
             FactorType::Prf,
         )
         .expect("Failed to create sealed backup with PRF for new user");
@@ -2097,8 +2097,8 @@ fn test_re_encrypt_backup() {
     let re_encrypted_backup = manager
         .add_new_factor(
             create_result.encrypted_backup_keypair.clone(),
-            prf_result.clone(),
-            hex::encode(new_factor_secret.to_bytes()),
+            siegel_from_str(&prf_result),
+            siegel_from_str(&hex::encode(new_factor_secret.to_bytes())),
             FactorType::Prf,
             FactorType::IcloudKeychain,
         )
@@ -2132,8 +2132,8 @@ fn test_re_encrypt_backup() {
     let decryption_error = manager
         .add_new_factor(
             create_result.encrypted_backup_keypair,
-            hex::encode(incorrect_existing_factor_secret),
-            hex::encode(new_factor_secret.to_bytes()),
+            siegel_from_str(&hex::encode(incorrect_existing_factor_secret)),
+            siegel_from_str(&hex::encode(new_factor_secret.to_bytes())),
             FactorType::Prf,
             FactorType::IcloudKeychain,
         )
@@ -2153,7 +2153,7 @@ fn test_sign_with_backup_account_key_returns_valid_signature() {
     let challenge = b"test challenge";
 
     let sig_b64 = manager
-        .sign_with_backup_account_key(&root_secret, challenge)
+        .sign_with_backup_account_key(siegel_from_str(&root_secret), challenge)
         .expect("signing should succeed");
 
     // Decode the base64 DER signature and parse it
@@ -2178,10 +2178,10 @@ fn test_sign_with_backup_account_key_is_deterministic() {
     let challenge = b"deterministic check";
 
     let sig1 = manager
-        .sign_with_backup_account_key(&root_secret, challenge)
+        .sign_with_backup_account_key(siegel_from_str(&root_secret), challenge)
         .expect("first sign");
     let sig2 = manager
-        .sign_with_backup_account_key(&root_secret, challenge)
+        .sign_with_backup_account_key(siegel_from_str(&root_secret), challenge)
         .expect("second sign");
 
     assert_eq!(sig1, sig2);
@@ -2191,7 +2191,7 @@ fn test_sign_with_backup_account_key_is_deterministic() {
 fn test_sign_with_backup_account_key_invalid_root_secret() {
     let manager = BackupManager::new();
     let err = manager
-        .sign_with_backup_account_key("not json", b"challenge")
+        .sign_with_backup_account_key(siegel_from_str("not json"), b"challenge")
         .expect_err("should fail with invalid root secret");
 
     assert!(err.to_string().contains("Invalid root secret"));

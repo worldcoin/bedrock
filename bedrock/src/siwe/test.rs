@@ -11,6 +11,7 @@ use ruint::aliases::U256;
 
 use super::*;
 use crate::smart_account::SafeSmartAccount;
+use crate::test_utils::siegel_from_str;
 
 fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
@@ -285,7 +286,7 @@ fn version_display_and_parse() {
 #[test]
 fn world_app_auth_message_creation() {
     let before = Utc::now();
-    let signer = EoaSigner::new(hex::encode([1u8; 32])).unwrap();
+    let signer = EoaSigner::new(siegel_from_str(&hex::encode([1u8; 32]))).unwrap();
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::SignUp,
         "https://app-backend.toolsforhumanity.com",
@@ -656,7 +657,7 @@ fn parse_rejects_typo_tag_after_iat() {
 
 #[test]
 fn world_app_auth_trailing_slash_base_url() {
-    let signer = EoaSigner::new(hex::encode([2u8; 32])).unwrap();
+    let signer = EoaSigner::new(siegel_from_str(&hex::encode([2u8; 32]))).unwrap();
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::Refresh,
         "https://app-backend.example.com/",
@@ -956,7 +957,7 @@ fn rejects_querying_url_with_different_port() {
 fn world_app_auth_eoa_signature_is_verifiable() {
     let signer = PrivateKeySigner::from_str(TEST_KEY).unwrap();
     let eoa_address = signer.address();
-    let eoa_signer = EoaSigner::new(TEST_KEY.into()).unwrap();
+    let eoa_signer = EoaSigner::new(siegel_from_str(TEST_KEY)).unwrap();
 
     let msg = SiweMessage::from_world_app_auth_request(
         WorldAppAuthFlow::SignUp,

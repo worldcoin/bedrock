@@ -9,6 +9,8 @@ use chrono::Utc;
 use crypto_box::PublicKey;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
+use siegel_uniffi::SiegelSession;
+use std::sync::Arc;
 
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::service_client::BackupServiceClient;
@@ -22,7 +24,6 @@ use crate::backup::{
 use crate::primitives::filesystem::{
     unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
-use crate::root_key::RootKey;
 
 static DEFAULT_DIGEST_HEX: OnceCell<String> = OnceCell::new();
 
@@ -206,11 +207,13 @@ impl ManifestManager {
     /// The local manifest is saved after upload. A lost response or failed local
     /// save can leave the server ahead; resolve that state before retrying.
     ///
+    /// `root_secret` is a one-shot Siegel session with the JSON-encoded root key.
+    ///
     /// # Errors
     /// See [`BackupError`].
     pub async fn sync_changes(
         &self,
-        root_secret: &str,
+        root_secret: Arc<SiegelSession>,
         backup_keypair_public_key: String,
         changes: Vec<BackupFileChange>,
     ) -> Result<(), BackupError> {
@@ -232,7 +235,7 @@ impl ManifestManager {
         &self,
         designator: BackupFileDesignator,
         file_path: String,
-        root_secret: &str,
+        root_secret: Arc<SiegelSession>,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         self.sync_changes(
@@ -254,7 +257,7 @@ impl ManifestManager {
         &self,
         designator: BackupFileDesignator,
         new_file_path: String,
-        root_secret: &str,
+        root_secret: Arc<SiegelSession>,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         self.sync_changes(
@@ -276,7 +279,7 @@ impl ManifestManager {
     pub async fn remove_file(
         &self,
         file_path: String,
-        root_secret: &str,
+        root_secret: Arc<SiegelSession>,
         backup_keypair_public_key: String,
     ) -> Result<(), BackupError> {
         self.sync_changes(
@@ -489,15 +492,11 @@ impl ManifestManager {
 
     async fn mutate_manifest_and_sync(
         &self,
-        root_secret: &str,
+        root_secret: Arc<SiegelSession>,
         backup_keypair_public_key: String,
         changes: Vec<BackupFileChange>,
     ) -> Result<(), BackupError> {
-        let root = RootKey::from_json(root_secret).map_err(|_| {
-            BackupError::InvalidRootSecretError(
-                "invalid root secret for backup sync".to_string(),
-            )
-        })?;
+        let root = BackupManager::root_key_from_session(root_secret)?;
         let pk_bytes = hex::decode(backup_keypair_public_key)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
         let pk = PublicKey::from_slice(&pk_bytes)

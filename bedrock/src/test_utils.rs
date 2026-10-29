@@ -29,7 +29,7 @@ use crate::{
 /// (e.g. iOS Keychain) would deliver the secret one use at a time.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct InMemoryKeyManager {
-    hex_bytes: Vec<u8>,
+    private_key_hex: String,
 }
 
 impl InMemoryKeyManager {
@@ -38,36 +38,33 @@ impl InMemoryKeyManager {
     pub const fn new(private_key_hex: String) -> Self {
         // Normally we'd verify the sk length here, but because we have tests that require
         // passing invalid secrets, we don't enforce it.
-        Self {
-            hex_bytes: private_key_hex.into_bytes(),
-        }
+        Self { private_key_hex }
     }
 }
 
 impl SmartAccountKeyManager for InMemoryKeyManager {
     fn get_eoa_private_key(&self) -> Arc<SiegelSession> {
-        let len =
-            u32::try_from(self.hex_bytes.len()).expect("secret len must fit in u32");
-        let session = SiegelSession::new(len).expect("failed to create siegel session");
-        // SAFETY:
-        // - `session.handle()` was just returned by `SiegelSession::new` and the
-        //   session is still alive (held by `session` until the end of this fn).
-        // - `self.hex_bytes` is owned by `&self` and lives until the function
-        //   returns, so the pointer is valid for `self.hex_bytes.len()` reads.
-        // - the session was allocated with capacity `len == self.hex_bytes.len()`,
-        //   matching what `siegel_fill` expects.
-        let rc = unsafe {
-            siegel_fill(
-                session.handle_id(),
-                self.hex_bytes.as_ptr(),
-                self.hex_bytes.len(),
-            )
-        };
-        // Test-only: a non-OK return code indicates broken test setup, not a
-        // user-actionable error, so we panic with the raw status.
-        assert!(rc == FILL_OK, "siegel_fill failed with code {rc}");
-        session
+        siegel_from_str(&self.private_key_hex)
     }
+}
+
+/// Wraps a secret in a one-shot [`SiegelSession`], mirroring how foreign code fills one from
+/// its secure store before handing it to Bedrock.
+///
+/// # Panics
+/// Panics if the session cannot be allocated or filled, which means broken test setup.
+#[must_use]
+pub fn siegel_from_str(secret: &str) -> Arc<SiegelSession> {
+    let bytes = secret.as_bytes();
+    let len = u32::try_from(bytes.len()).expect("secret len must fit in u32");
+    let session = SiegelSession::new(len).expect("failed to create siegel session");
+    // SAFETY: `session` was just allocated with capacity `len == bytes.len()`, `bytes`
+    // is owned by the caller and valid for `len` reads for the duration of this call.
+    let rc = unsafe { siegel_fill(session.handle_id(), bytes.as_ptr(), bytes.len()) };
+    // Test-only: a non-OK return code indicates broken test setup, not a
+    // user-actionable error, so we panic with the raw status.
+    assert!(rc == FILL_OK, "siegel_fill failed with code {rc}");
+    session
 }
 
 /// Represents a response from '`wa_sponsorUserOperation`' rpc method
