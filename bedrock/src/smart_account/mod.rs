@@ -258,7 +258,7 @@ impl SafeSmartAccount {
     /// - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
     /// - Will throw an error if the signature process unexpectedly fails.
     /// - Will throw an error if the placeholder signature's `validUntil` is 0 or more than
-    ///   30 minutes away.
+    ///   35 minutes (30 plus clock skew) past NTP time.
     ///
     /// # Examples
     /// ```no_run
@@ -715,9 +715,11 @@ mod tests {
 
         for valid_until in [0, now + 60 * 60, 0xffff_ffff_ffff] {
             let result = safe.sign_4337_op(chain_id, user_op_valid_until(valid_until));
-            assert_eq!(
-                result.unwrap_err().to_string(),
-                "invalid input on signature: validUntil must be set and at most 30 minutes from now",
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("invalid input on signature: validUntil"),
                 "validUntil {valid_until} must be rejected"
             );
         }
