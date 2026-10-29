@@ -7,6 +7,7 @@ use ruint::aliases::{U128, U256};
 use crate::bedrock_export;
 use std::fmt::Display;
 use std::str::FromStr;
+use zeroize::Zeroizing;
 
 // Re-export HTTP client types for external use
 pub use attestation::{
@@ -47,6 +48,22 @@ pub const fn is_zero_u128(value: &u128) -> bool {
 #[must_use]
 pub fn is_zero_u256(value: &U256) -> bool {
     value.is_zero()
+}
+
+/// Decodes a hex-encoded 32-byte secret straight into a buffer that is wiped on drop.
+///
+/// `hex::decode` grows its `Vec` while decoding and leaves the smaller copies in freed memory,
+/// so secrets must not go through it.
+///
+/// # Errors
+/// `FromHexError::InvalidStringLength` if the input does not decode to 32 bytes, or another
+/// `FromHexError` if it is not hex.
+pub(crate) fn decode_hex_secret(
+    hex_bytes: &[u8],
+) -> Result<Zeroizing<[u8; 32]>, hex::FromHexError> {
+    let mut secret = Zeroizing::new([0u8; 32]);
+    hex::decode_to_slice(hex_bytes, secret.as_mut_slice())?;
+    Ok(secret)
 }
 
 /// Provides an interface for interacting with Ethereum addresses for foreign code.

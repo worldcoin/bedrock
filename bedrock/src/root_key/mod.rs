@@ -5,6 +5,8 @@ use rand::{rngs::OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
+use siegel_uniffi::SiegelSession;
+use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -102,28 +104,20 @@ impl RootKey {
         Self { inner }
     }
 
-    /// Initialize an existing `RootKey` from a JSON string
+    /// Initialize an existing `RootKey` from a one-shot Siegel session holding its JSON encoding.
+    ///
+    /// # Errors
+    /// - `RootKeyError::KeyParseError` if the session does not hold a valid key.
+    /// - `RootKeyError::Generic` if the session cannot be read.
     #[uniffi::constructor]
-    pub fn from_json(json_str: &str) -> Result<Self, RootKeyError> {
-        // no need to zeroize `key` because it's moved into the `SecretBox`
-        let key: VersionedKey =
-            serde_json::from_str(json_str).map_err(|_| RootKeyError::KeyParseError)?;
-
-        Ok(Self {
-            inner: SecretBox::new(Box::new(key)),
-        })
-    }
-
-    /// Initialize an existing `RootKey` from JSON bytes
-    #[uniffi::constructor]
-    pub fn from_slice(json_bytes: &[u8]) -> Result<Self, RootKeyError> {
-        // no need to zeroize `key` because it's moved into the `SecretBox`
-        let key: VersionedKey = serde_json::from_slice(json_bytes)
-            .map_err(|_| RootKeyError::KeyParseError)?;
-
-        Ok(Self {
-            inner: SecretBox::new(Box::new(key)),
-        })
+    pub fn from_session(root_secret: Arc<SiegelSession>) -> Result<Self, RootKeyError> {
+        let root_key = root_secret.read_once(Self::from_slice).map_err(|e| {
+            RootKeyError::Generic {
+                error_message: format!("siegel session read failed: {e}"),
+            }
+        })?;
+        drop(root_secret);
+        root_key
     }
 
     /// Returns `true` if the `RootKey` is a version 0 key.
@@ -157,6 +151,34 @@ impl PartialEq for RootKey {
 /// Internal implementation for `RootKey` (methods not exposed to foreign bindings)
 impl RootKey {
     const CONTEXT: [u8; 8] = *b"OXIDEKEY";
+
+    /// Initialize an existing `RootKey` from a JSON string
+    ///
+    /// # Errors
+    /// `RootKeyError::KeyParseError` if the input is not a valid key.
+    pub fn from_json(json_str: &str) -> Result<Self, RootKeyError> {
+        // no need to zeroize `key` because it's moved into the `SecretBox`
+        let key: VersionedKey =
+            serde_json::from_str(json_str).map_err(|_| RootKeyError::KeyParseError)?;
+
+        Ok(Self {
+            inner: SecretBox::new(Box::new(key)),
+        })
+    }
+
+    /// Initialize an existing `RootKey` from JSON bytes
+    ///
+    /// # Errors
+    /// `RootKeyError::KeyParseError` if the input is not a valid key.
+    pub fn from_slice(json_bytes: &[u8]) -> Result<Self, RootKeyError> {
+        // no need to zeroize `key` because it's moved into the `SecretBox`
+        let key: VersionedKey = serde_json::from_slice(json_bytes)
+            .map_err(|_| RootKeyError::KeyParseError)?;
+
+        Ok(Self {
+            inner: SecretBox::new(Box::new(key)),
+        })
+    }
 
     /// Serializes a `RootKey` to a JSON string.
     ///

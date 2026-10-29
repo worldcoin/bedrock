@@ -5,6 +5,7 @@ use std::sync::Arc;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use bedrock_macros::{bedrock_error, bedrock_export};
+use hex::FromHexError;
 use hpke::kem::DhP256HkdfSha256;
 use hpke::{Deserializable, Kem as KemTrait};
 use p256::ecdsa::signature::Signer;
@@ -31,7 +32,7 @@ pub use error::{TurnkeyApiError, TurnkeyMigrationError};
 use migrations::{run_migration_list, TurnkeyMigrationOutcome, MIGRATIONS};
 
 use crate::primitives::config::get_config;
-use crate::primitives::P256Signer;
+use crate::primitives::{decode_hex_secret, P256Signer};
 
 /// Only one migration running at a time.
 static TURNKEY_MIGRATION_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
@@ -270,19 +271,18 @@ impl Turnkey {
         body: &str,
         api_private_key: Arc<SiegelSession>,
     ) -> Result<String, TurnkeyError> {
+        let private_key = api_private_key.read_once(p256_secret_key_from_hex)??;
+        drop(api_private_key);
+        let signing_key = p256::ecdsa::SigningKey::from(&private_key);
+
         // Validate that the body is valid JSON, but discard the result of parsing. We should sign
         // the raw body to prevent issues with JSON formatting.
         let _json: serde_json::Value =
             serde_json::from_str(body).map_err(|_| TurnkeyError::DecodeBodyError)?;
 
-        // Sign the body with the private key (a P256 private scalar)
-        let (signature, public_key) = api_private_key.read_once(|hex_bytes| {
-            let private_key = p256_secret_key_from_hex(hex_bytes)?;
-            let signing_key = p256::ecdsa::SigningKey::from(&private_key);
-            let signature: p256::ecdsa::Signature = signing_key.sign(body.as_bytes());
-            Ok::<_, TurnkeyError>((signature, private_key.public_key()))
-        })??;
-        drop(api_private_key);
+        // Sign the body with the private key
+        let signature: p256::ecdsa::Signature = signing_key.sign(body.as_bytes());
+        let public_key = private_key.public_key();
 
         // Convert the signature to the expected header format
         let json_stamp = json!({
@@ -399,20 +399,14 @@ impl Turnkey {
         turnkey_organization_id: &str,
         turnkey_user_id: &str,
     ) -> Result<String, TurnkeyError> {
+        // Check that factor secret is a hex-encoded 32-byte string
+        let factor_secret_bytes = factor_secret.read_once(|hex_bytes| {
+            decode_hex_secret(hex_bytes).map_err(|_| TurnkeyError::InvalidFactorSecret)
+        })??;
+        drop(factor_secret);
         // Check that import bundle is valid JSON
         let _value: serde_json::Value = serde_json::from_str(import_bundle)
             .map_err(|_| TurnkeyError::DeserializeImportBundleError)?;
-        // Check that factor secret is a hex-encoded 32-byte string
-        let factor_secret_bytes = factor_secret.read_once(|hex_bytes| {
-            let bytes = Zeroizing::new(
-                hex::decode(hex_bytes).map_err(|_| TurnkeyError::InvalidFactorSecret)?,
-            );
-            if bytes.len() != 32 {
-                return Err(TurnkeyError::InvalidFactorSecret);
-            }
-            Ok(bytes)
-        })??;
-        drop(factor_secret);
 
         // Create the encryption client using Turnkey's library
         let client = EnclaveEncryptClient::from_enclave_auth_key(
@@ -427,7 +421,7 @@ impl Turnkey {
         // signed by Turnkey's enclave
         let encrypted_bundle = client
             .encrypt(
-                &factor_secret_bytes,
+                factor_secret_bytes.as_slice(),
                 import_bundle.as_bytes(),
                 turnkey_organization_id,
                 turnkey_user_id,
@@ -507,33 +501,23 @@ struct SessionKeyPair {
 
 /// Parses a hex-encoded 32-byte P256 private key.
 fn p256_secret_key_from_hex(hex_bytes: &[u8]) -> Result<p256::SecretKey, TurnkeyError> {
-    let private_key = Zeroizing::new(
-        hex::decode(hex_bytes).map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?,
-    );
-    if private_key.len() != 32 {
-        return Err(TurnkeyError::InvalidApiPrivateKeyLength);
-    }
-    p256::SecretKey::from_slice(&private_key)
+    let private_key = decode_hex_secret(hex_bytes).map_err(|e| match e {
+        FromHexError::InvalidStringLength => TurnkeyError::InvalidApiPrivateKeyLength,
+        FromHexError::InvalidHexCharacter { .. } | FromHexError::OddLength => {
+            TurnkeyError::DecodeApiPrivateKeyError
+        }
+    })?;
+    p256::SecretKey::from_slice(private_key.as_slice())
         .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)
 }
 
 impl SessionKeyPair {
     fn from_hex(hex_bytes: &[u8]) -> Result<Self, TurnkeyError> {
-        let private_key = Zeroizing::new(
-            hex::decode(hex_bytes)
-                .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?,
-        );
-
-        if private_key.len() != 32 {
-            return Err(TurnkeyError::InvalidApiPrivateKeyLength);
-        }
-
-        let secret_key = p256::SecretKey::from_slice(&private_key)
-            .map_err(|_| TurnkeyError::DecodeApiPrivateKeyError)?;
+        let secret_key = p256_secret_key_from_hex(hex_bytes)?;
         let public_key = secret_key.public_key();
 
         let secret_key = <DhP256HkdfSha256 as KemTrait>::PrivateKey::from_bytes(
-            private_key.as_slice(),
+            Zeroizing::new(secret_key.to_bytes()).as_slice(),
         )
         .map_err(|_| TurnkeyError::ConvertP256KeypairToHpkeKeypairError)?;
 
@@ -733,6 +717,34 @@ mod tests {
             result.unwrap_err().to_string(),
             "Failed to decode API private key as hex"
         );
+    }
+
+    #[test]
+    fn test_api_private_key_session_is_single_use() {
+        let client = Turnkey::new();
+        let api_private_key = siegel_from_str(&hex::encode([1u8; 32]));
+
+        client.derive_public_key(api_private_key.clone()).unwrap();
+        assert!(api_private_key.is_consumed());
+
+        let result =
+            client.stamp(&json!({"example": 123}).to_string(), api_private_key);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "siegel session error: session has been consumed"
+        );
+    }
+
+    #[test]
+    fn test_import_bundle_rejects_malformed_factor_secret() {
+        let client = Turnkey::new();
+        let result = client.generate_import_bundle_for_factor_secret(
+            siegel_from_str(&hex::encode([1u8; 31])),
+            "{}",
+            "organization",
+            "user",
+        );
+        assert_eq!(result.unwrap_err().to_string(), "Invalid factor secret");
     }
 
     #[test]

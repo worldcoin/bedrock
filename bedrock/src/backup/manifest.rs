@@ -218,6 +218,7 @@ impl ManifestManager {
         changes: Vec<BackupFileChange>,
     ) -> Result<(), BackupError> {
         if changes.is_empty() {
+            root_secret.obliviate();
             return Ok(());
         }
         let result = self

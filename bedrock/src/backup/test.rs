@@ -1529,11 +1529,16 @@ async fn test_sync_changes_recreates_missing_remote_without_local_changes() {
 async fn test_sync_changes_empty_batch_needs_no_credentials_or_manifest() {
     let api = init_test_globals();
     api.reset();
+    let root_secret = siegel_from_str("{}");
     ManifestManager::new_with_prefix("backup_test_empty_batch")
-        .sync_changes(siegel_from_str("{}"), String::new(), vec![])
+        .sync_changes(root_secret.clone(), String::new(), vec![])
         .await
         .unwrap();
     assert_eq!(api.state.lock().unwrap().sync_count, 0);
+    assert!(
+        root_secret.is_consumed(),
+        "the unused root secret must be wiped"
+    );
 }
 
 // =========================
@@ -2308,4 +2313,49 @@ fn test_stamp_with_backup_account_key_rejects_invalid_root_secret() {
         )
         .expect_err("should fail with invalid root secret");
     assert!(err.to_string().contains("Invalid root secret"));
+}
+
+#[test]
+fn test_root_secret_session_is_single_use() {
+    let manager = BackupManager::new();
+    let root_secret = siegel_from_str(&RootKey::new_random().danger_to_json().unwrap());
+
+    manager
+        .sign_with_backup_account_key(root_secret.clone(), b"challenge")
+        .expect("first use succeeds");
+    assert!(root_secret.is_consumed());
+
+    let err = manager
+        .sign_with_backup_account_key(root_secret, b"challenge")
+        .expect_err("a consumed session must be rejected");
+    assert!(
+        err.to_string().contains("siegel session read failed"),
+        "{err}"
+    );
+}
+
+#[test]
+fn test_add_new_factor_rejects_malformed_factor_secret_and_wipes_both() {
+    let manager = BackupManager::new();
+    let cases = [
+        ("zz".repeat(32), "Failed to decode factor secret as hex"),
+        (hex::encode([7u8; 31]), "Invalid factor secret length"),
+    ];
+    for (malformed, expected) in cases {
+        let existing = siegel_from_str(&malformed);
+        let new = siegel_from_str(&hex::encode([7u8; 32]));
+
+        let err = manager
+            .add_new_factor(
+                "00".to_string(),
+                existing.clone(),
+                new.clone(),
+                FactorType::Prf,
+                FactorType::IcloudKeychain,
+            )
+            .expect_err("malformed factor secret must be rejected");
+
+        assert!(err.to_string().contains(expected), "{err}");
+        assert!(existing.is_consumed() && new.is_consumed());
+    }
 }

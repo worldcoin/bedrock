@@ -2,6 +2,7 @@ use k256::ecdsa::signature::Verifier;
 use k256::ecdsa::VerifyingKey;
 
 use super::*;
+use crate::test_utils::siegel_from_str;
 
 #[test]
 fn test_decode_from_json() {
@@ -117,4 +118,22 @@ fn test_ensure_backup_account_public_key_can_be_used_to_sign() {
     let recovered_key =
         VerifyingKey::recover_from_msg(message.as_bytes(), &signature, rec_id).unwrap();
     assert_eq!(recovered_key, public_key);
+}
+
+#[test]
+fn test_from_session_reads_once() {
+    let json = r#"{"key":"1111111111111111111111111111111111111111111111111111111111111111","version":"V1"}"#;
+    let session = siegel_from_str(json);
+
+    let key = RootKey::from_session(session.clone()).unwrap();
+    assert!(key.is_equal_to(&RootKey::from_json(json).unwrap()));
+    assert!(session.is_consumed());
+    assert!(RootKey::from_session(session).is_err());
+
+    assert_eq!(
+        RootKey::from_session(siegel_from_str("not json"))
+            .unwrap_err()
+            .to_string(),
+        "failed to parse key"
+    );
 }

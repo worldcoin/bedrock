@@ -29,6 +29,7 @@ pub use client_events::{
     BackupReportEncryptionKeyKind, BackupReportEventKind, BackupReportMainFactor,
     BaseReport, ClientEventsError, ClientEventsReporter,
 };
+use hex::FromHexError;
 use k256::ecdsa::{signature::Signer, Signature, SigningKey};
 pub use manifest::{BackupFileChange, ManifestManager};
 use siegel_uniffi::SiegelSession;
@@ -57,7 +58,7 @@ use crate::backup::backup_service::BackupServiceClient;
 use crate::backup::flows::{BackupFlow, DeleteBackup, FlowContext, RemoveFactor};
 use crate::backup::turnkey::{TurnkeyApiClient, TurnkeyApiError};
 use crate::primitives::config::get_config;
-use crate::primitives::{KeypairSignerError, P256Signer};
+use crate::primitives::{decode_hex_secret, KeypairSignerError, P256Signer};
 
 /// Tools for storing, retrieving, encrypting and decrypting backup data.
 ///
@@ -119,13 +120,15 @@ impl BackupManager {
             "Creating sealed backup for new user with factor: {factor_type:?}"
         );
 
-        // 1: Read the root secret
-        let root_key = Self::root_key_from_session(root_secret)?;
-        let backup_account_id = Self::backup_account(&root_key)?.id;
-
-        // 2: Read the factor secret
+        // 1: Read both secrets before failing on either, so no session is left loaded
+        let root_key = Self::root_key_from_session(root_secret);
         // NOTE: SecretKey will get zeroized on drop.
-        let factor_secret_key = Self::factor_secret_key_from_session(factor_secret)?;
+        let factor_secret_key = Self::factor_secret_key_from_session(factor_secret);
+        let root_key = root_key?;
+        let factor_secret_key = factor_secret_key?;
+
+        // 2: Derive the backup account
+        let backup_account_id = Self::backup_account(&root_key)?.id;
 
         // 3: Build the unsealed backup
         let unsealed_backup = BackupFormat::new_v0(V0Backup::new(root_key, vec![]));
@@ -215,18 +218,20 @@ impl BackupManager {
     ) -> Result<DecryptedBackup, BackupError> {
         crate::info!("Decrypting sealed backup with factor: {factor_type:?}");
 
+        let factor_secret_key = Self::factor_secret_key_from_session(factor_secret)?;
+
         if sealed_backup_data.is_empty() {
             return Err(BackupError::InvalidSealedBackupError);
         }
 
-        let factor_secret_key = Self::factor_secret_key_from_session(factor_secret)?;
-
         // Decrypt `EncryptedBackupKeypair` (from Factor Secret)
         let encrypted_backup_keypair_bytes = hex::decode(encrypted_backup_keypair)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        let backup_keypair_bytes = factor_secret_key
-            .unseal(&encrypted_backup_keypair_bytes)
-            .map_err(|_| BackupError::DecryptBackupKeypairError)?;
+        let backup_keypair_bytes = Zeroizing::new(
+            factor_secret_key
+                .unseal(&encrypted_backup_keypair_bytes)
+                .map_err(|_| BackupError::DecryptBackupKeypairError)?,
+        );
         let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
             .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
@@ -291,12 +296,14 @@ impl BackupManager {
     ) -> Result<AddNewFactorResult, BackupError> {
         crate::info!("Creating new encrypted backup key: existing - {existing_factor_type:?}, new - {new_factor_type:?}");
 
-        // 1: Read the existing and new factor secrets
+        // 1: Read both factor secrets before failing on either, so no session is left loaded
         // NOTE: SecretKey will get zeroized on drop.
         let existing_factor_secret_key =
-            Self::factor_secret_key_from_session(existing_factor_secret)?;
+            Self::factor_secret_key_from_session(existing_factor_secret);
         let new_factor_secret_key =
-            Self::factor_secret_key_from_session(new_factor_secret)?;
+            Self::factor_secret_key_from_session(new_factor_secret);
+        let existing_factor_secret_key = existing_factor_secret_key?;
+        let new_factor_secret_key = new_factor_secret_key?;
 
         // 2: Decode the backup keypair that was encrypted with the existing factor secret
         let encrypted_backup_keypair_bytes =
@@ -304,9 +311,11 @@ impl BackupManager {
                 .map_err(|_| BackupError::DecodeBackupKeypairError)?;
 
         // 3: Decrypt the backup keypair with the existing factor secret
-        let backup_keypair_bytes = existing_factor_secret_key
-            .unseal(&encrypted_backup_keypair_bytes)
-            .map_err(|_| BackupError::DecryptBackupKeypairError)?;
+        let backup_keypair_bytes = Zeroizing::new(
+            existing_factor_secret_key
+                .unseal(&encrypted_backup_keypair_bytes)
+                .map_err(|_| BackupError::DecryptBackupKeypairError)?,
+        );
 
         // 4: Re-encrypt the backup keypair with the new factor secret
         let encrypted_backup_keypair_with_new_factor = new_factor_secret_key
@@ -697,14 +706,15 @@ impl BackupManager {
         factor_secret: Arc<SiegelSession>,
     ) -> Result<SecretKey, BackupError> {
         Self::read_session(factor_secret, |hex_bytes| {
-            let bytes = Zeroizing::new(
-                hex::decode(hex_bytes)
-                    .map_err(|_| BackupError::DecodeFactorSecretError)?,
-            );
-            if bytes.len() != 32 {
-                return Err(BackupError::InvalidFactorSecretLengthError);
-            }
-            SecretKey::from_slice(&bytes)
+            let bytes = decode_hex_secret(hex_bytes).map_err(|e| match e {
+                FromHexError::InvalidStringLength => {
+                    BackupError::InvalidFactorSecretLengthError
+                }
+                FromHexError::InvalidHexCharacter { .. } | FromHexError::OddLength => {
+                    BackupError::DecodeFactorSecretError
+                }
+            })?;
+            SecretKey::from_slice(bytes.as_slice())
                 .map_err(|_| BackupError::DecodeFactorSecretError)
         })
     }

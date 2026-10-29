@@ -293,8 +293,26 @@ mod tests {
 
     use super::*;
     use crate::primitives::Network;
+    use crate::test_utils::siegel_from_str;
     use alloy::{hex::FromHex, signers::local::PrivateKeySigner};
     use ruint::uint;
+
+    #[test]
+    fn test_eoa_signer_reads_its_session_once() {
+        let private_key = hex::encode([1u8; 32]);
+        let session = siegel_from_str(&private_key);
+
+        EoaSigner::new(session.clone()).unwrap();
+        assert!(session.is_consumed());
+        assert!(EoaSigner::new(session)
+            .unwrap_err()
+            .to_string()
+            .starts_with("siegel session error (consumed)"));
+        assert!(EoaSigner::new(siegel_from_str(&private_key[2..]))
+            .unwrap_err()
+            .to_string()
+            .starts_with("failed to decode hex-encoded secret into k256 signer"));
+    }
 
     #[test]
     fn test_get_domain_separator() {

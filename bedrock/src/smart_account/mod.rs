@@ -5,12 +5,12 @@ use k256::ecdsa::SigningKey;
 use siegel_uniffi::{SessionError, SiegelSession};
 pub use signer::{Eip191Signer, EoaSigner, SafeSmartAccountSigner};
 pub use transaction_4337::Is4337Encodable;
-use zeroize::Zeroizing;
 
 #[cfg(any(test, doc))]
 use crate::primitives::Network;
 use crate::{
-    bedrock_export, debug, primitives::HexEncodedData,
+    bedrock_export, debug,
+    primitives::{decode_hex_secret, HexEncodedData},
     transactions::foreign::UnparsedUserOperation,
 };
 
@@ -496,13 +496,9 @@ fn signer_from_siegel_bytes(
         ));
     }
 
-    // The key is passed by foreign code as hex bytes. These hex bytes need to be
-    // parsed. We do this in a Zeroizing closure to ensure the result gets zeroized.
-    let raw_key: Zeroizing<Vec<u8>> = Zeroizing::new(
-        hex::decode(bytes)
-            .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?,
-    );
-    LocalSigner::from_slice(&raw_key)
+    let raw_key = decode_hex_secret(bytes)
+        .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))?;
+    LocalSigner::from_slice(raw_key.as_slice())
         .map_err(|e| SafeSmartAccountError::KeyDecoding(e.to_string()))
 }
 
