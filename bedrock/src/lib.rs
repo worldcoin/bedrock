@@ -32,9 +32,6 @@ pub mod primitives;
 
 pub mod backup;
 
-/// Introduces low level operations for interacting with a Nitro Enclave.
-pub mod nitro_enclave;
-
 // Re-export commonly used primitives at the crate root for convenience
 pub use primitives::{
     AuthenticatedHttpClient, HttpError, HttpMethod, KeypairSigner, KeypairSignerError,
