@@ -256,6 +256,7 @@ impl SafeSmartAccount {
     ///
     /// # Errors
     /// - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
+    /// - Will throw an error if the user operation's `sender` is not this Safe.
     /// - Will throw an error if the signature process unexpectedly fails.
     ///
     /// # Examples
@@ -277,7 +278,7 @@ impl SafeSmartAccount {
     ///
     ///     // Crafted by the user, or requested by Mini Apps.
     ///     let user_op = UnparsedUserOperation {
-    ///         sender: "0xf1390a26bd60d83a4e38c7be7be1003c616296ad".to_string(),
+    ///         sender: "0x4564420674EA68fcc61b463C0494807C759d47e6".to_string(),
     ///         nonce: "0x0".to_string(),
     ///         call_data: "0x".to_string(),
     ///         signature: "0x".to_string(),
@@ -311,6 +312,15 @@ impl SafeSmartAccount {
             valid_after,
             valid_until,
         )?;
+
+        // The Safe4337Module domain is shared by every Safe on a chain, so a signature over a
+        // foreign sender would authorize any other Safe this EOA owns.
+        if user_op.sender != self.wallet_address {
+            return Err(SafeSmartAccountError::InvalidInput {
+                attribute: "sender".to_string(),
+                error_message: "user operation sender is not this Safe".to_string(),
+            });
+        }
 
         let signature = self.sign_digest(
             encoded_safe_op_struct.into_transaction_hash(),
@@ -856,5 +866,39 @@ mod tests {
                 format!("the contract {address} is restricted from TypedData signing.")
             );
         }
+    }
+
+    #[test]
+    fn test_cannot_sign_4337_op_for_another_sender() {
+        let safe = SafeSmartAccount::from_private_key_hex(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let user_op = UnparsedUserOperation {
+            sender: "0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6".to_string(),
+            nonce: "0x0".to_string(),
+            call_data: "0x".to_string(),
+            signature: format!("0x{}01{}", "00".repeat(11), "ff".repeat(65)),
+            call_gas_limit: "0x0".to_string(),
+            verification_gas_limit: "0x0".to_string(),
+            pre_verification_gas: "0x0".to_string(),
+            max_fee_per_gas: "0x0".to_string(),
+            max_priority_fee_per_gas: "0x0".to_string(),
+            paymaster: None,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_data: None,
+            factory: None,
+            factory_data: None,
+        };
+
+        let result = safe.sign_4337_op(Network::WorldChain as u32, user_op);
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "invalid input on sender: user operation sender is not this Safe"
+        );
     }
 }
