@@ -6,7 +6,9 @@
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
+use crate::smart_account::{
+    SafeSmartAccount, SafeSmartAccountError, SafeSmartAccountSigner,
+};
 use crate::transactions::rpc::{RpcClient, RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
@@ -18,6 +20,40 @@ use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 ///
 /// Operations are valid for this duration from the time they are signed.
 pub const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
+
+/// Slack on top of [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] for a caller whose clock runs
+/// ahead of NTP when it picks `validUntil`.
+const FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES: i64 = 5;
+
+/// Reads the caller-chosen validity window from a placeholder signature, rejecting one that
+/// never expires (`validUntil == 0`) or ends more than
+/// [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] (plus clock skew) from now.
+///
+/// # Errors
+/// Returns `InvalidInput` if the signature is malformed or the window is not bounded.
+pub(super) fn bounded_validity_timestamps(
+    user_op: &UserOperation,
+) -> Result<(U48, U48), SafeSmartAccountError> {
+    let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
+    let max_valid_until: u64 = (now_with_ntp()
+        + Duration::minutes(
+            USER_OPERATION_VALIDITY_DURATION_MINUTES
+                + FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES,
+        ))
+    .timestamp()
+    .try_into()
+    .unwrap_or(0);
+    let valid_until_seconds: u64 = valid_until.to();
+    if valid_until_seconds == 0 || valid_until_seconds > max_valid_until {
+        return Err(SafeSmartAccountError::InvalidInput {
+            attribute: "signature".to_string(),
+            error_message: format!(
+                "validUntil must be set and at most {USER_OPERATION_VALIDITY_DURATION_MINUTES} minutes from now"
+            ),
+        });
+    }
+    Ok((valid_after, valid_until))
+}
 
 impl SafeSmartAccount {
     /// Signs a `UserOperation` with fresh validity timestamps and sets the composed

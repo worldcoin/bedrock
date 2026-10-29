@@ -257,6 +257,8 @@ impl SafeSmartAccount {
     /// # Errors
     /// - Will throw an error if the user operation is invalid, particularly if any attribute is not valid.
     /// - Will throw an error if the signature process unexpectedly fails.
+    /// - Will throw an error if the placeholder signature's `validUntil` is 0 or more than
+    ///   30 minutes away.
     ///
     /// # Examples
     /// ```no_run
@@ -305,7 +307,8 @@ impl SafeSmartAccount {
         user_operation: UnparsedUserOperation,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let user_op: UserOperation = user_operation.try_into()?;
-        let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
+        let (valid_after, valid_until) =
+            transaction_4337::bounded_validity_timestamps(&user_op)?;
         let encoded_safe_op_struct = EncodedSafeOpStruct::from_user_op_with_validity(
             &user_op,
             valid_after,
@@ -653,7 +656,7 @@ mod tests {
           sender:safe_address,
           nonce: "0xb14292cd79fae7d79284d4e6304fb58e21d579c13a75eed80000000000000000".to_string(),
           call_data:  "0x7bb3742800000000000000000000000079a02482a880bce3f13e09da970dc34db4cd24d10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044a9059cbb000000000000000000000000ce2111f9ab8909b71ebadc9b6458daefe069eda4000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000".to_string(),
-          signature:  "0x000012cea6000000967a7600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+          signature:  "0x000012cea60000006553f100ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
           call_gas_limit: "0xabb8".to_string(),
           verification_gas_limit: "0xfa07".to_string(),
           pre_verification_gas: "0x8e4d78".to_string(),
@@ -667,7 +670,57 @@ mod tests {
           factory_data: None,
       };
 
-        assert_eq!(safe.sign_4337_op(chain_id, user_op).unwrap().to_hex_string(), "0x20c0b7ee783b39fa09b5fd967e250cc793556489ee351694cec43341efa0af9304c96e0167319d01b174d76d4420bf0345221740282d70e6f48eb7775a01de381c");
+        assert_eq!(safe.sign_4337_op(chain_id, user_op).unwrap().to_hex_string(), "0xe97b725e82d8d6610084345156c1dc31f091574c3a11218d7ccc36c115b9a843059ecfa7dafba65974e06a33f71d11bf021734a8bbcbba46ff45aa63ccdbdd2b1b");
+    }
+
+    fn user_op_valid_until(valid_until: u64) -> UnparsedUserOperation {
+        UnparsedUserOperation {
+            sender: "0x4564420674EA68fcc61b463C0494807C759d47e6".to_string(),
+            nonce: "0x0".to_string(),
+            call_data: "0x".to_string(),
+            signature: format!(
+                "0x{}{}{}",
+                "00".repeat(6),
+                hex::encode(&valid_until.to_be_bytes()[2..]),
+                "ff".repeat(65)
+            ),
+            call_gas_limit: "0x0".to_string(),
+            verification_gas_limit: "0x0".to_string(),
+            pre_verification_gas: "0x0".to_string(),
+            max_fee_per_gas: "0x0".to_string(),
+            max_priority_fee_per_gas: "0x0".to_string(),
+            paymaster: None,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
+            paymaster_data: None,
+            factory: None,
+            factory_data: None,
+        }
+    }
+
+    #[test]
+    fn test_sign_4337_op_validity_window_is_bounded() {
+        let safe = SafeSmartAccount::from_private_key_hex(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let now: u64 = chrono::Utc::now().timestamp().try_into().unwrap();
+        let chain_id = Network::WorldChain as u32;
+
+        assert!(safe
+            .sign_4337_op(chain_id, user_op_valid_until(now + 30 * 60))
+            .is_ok());
+
+        for valid_until in [0, now + 60 * 60, 0xffff_ffff_ffff] {
+            let result = safe.sign_4337_op(chain_id, user_op_valid_until(valid_until));
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "invalid input on signature: validUntil must be set and at most 30 minutes from now",
+                "validUntil {valid_until} must be rejected"
+            );
+        }
     }
 
     #[test]
