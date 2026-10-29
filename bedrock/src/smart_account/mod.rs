@@ -313,14 +313,7 @@ impl SafeSmartAccount {
             valid_until,
         )?;
 
-        // The Safe4337Module domain is shared by every Safe on a chain, so a signature over a
-        // foreign sender would authorize any other Safe this EOA owns.
-        if user_op.sender != self.wallet_address {
-            return Err(SafeSmartAccountError::InvalidInput {
-                attribute: "sender".to_string(),
-                error_message: "user operation sender is not this Safe".to_string(),
-            });
-        }
+        self.ensure_own_sender(user_op.sender)?;
 
         let signature = self.sign_digest(
             encoded_safe_op_struct.into_transaction_hash(),
@@ -413,6 +406,24 @@ impl SafeSmartAccount {
     #[must_use]
     pub const fn eoa_address(&self) -> Address {
         self.eoa_address
+    }
+
+    /// Rejects a user operation for another Safe. The `Safe4337Module` domain is shared by every
+    /// Safe on a chain, so a signature over a foreign `sender` would authorize any other Safe
+    /// this EOA owns.
+    fn ensure_own_sender(&self, sender: Address) -> Result<(), SafeSmartAccountError> {
+        if sender == self.wallet_address {
+            return Ok(());
+        }
+        crate::warn!(
+            sender = sender,
+            wallet_address = self.wallet_address,
+            "Refused to sign a user operation for another Safe"
+        );
+        Err(SafeSmartAccountError::InvalidInput {
+            attribute: "sender".to_string(),
+            error_message: "user operation sender is not this Safe".to_string(),
+        })
     }
 }
 

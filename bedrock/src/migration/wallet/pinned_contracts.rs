@@ -1,14 +1,16 @@
-//! Pins every contract address the wallet migrations sign against without user consent.
+//! Pins every contract address the wallet migrations sign against without user consent,
+//! imported through the same paths the migrations use.
 //!
 //! A change to any of these constants must also change this file, which has its own code owners.
 
 use alloy::primitives::address;
 
-use crate::smart_account::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
+use crate::primitives::contracts::ENTRYPOINT_4337;
+use crate::smart_account::GNOSIS_SAFE_4337_MODULE;
 use crate::transactions::contracts::multisend::MULTISEND_ADDRESS;
+use crate::transactions::contracts::permit2::PERMIT2_ADDRESS;
 use crate::transactions::contracts::worldchain::{
-    PERMIT2_ADDRESS, TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WBTC_ADDRESS, WETH_ADDRESS,
-    WLD_ADDRESS,
+    TFH_PAYMASTER_ADDRESS, USDC_ADDRESS, WBTC_ADDRESS, WETH_ADDRESS, WLD_ADDRESS,
 };
 
 #[test]

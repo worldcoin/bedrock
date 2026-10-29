@@ -1,4 +1,5 @@
 * @paolodamico @sideround @Dzejkop @Guardiola31337 @aurel-fr @murph @karankurbur @crystalt
 .github/CODEOWNERS @paolodamico @murph
 bedrock/src/smart_account/nonce.rs @aurel-fr @crystalt
-bedrock/src/migration/wallet/pinned_contracts.rs @paolodamico @murph
+bedrock/src/migration/wallet/ @paolodamico @murph
+bedrock/src/transactions/contracts/worldchain.rs @paolodamico @murph

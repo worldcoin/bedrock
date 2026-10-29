@@ -27,6 +27,7 @@ impl SafeSmartAccount {
     /// [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] from now.
     ///
     /// # Errors
+    /// * Returns `RpcError` if the operation's `sender` is not this Safe
     /// * Returns `RpcError` if the `EncodedSafeOpStruct` cannot be built from the operation
     /// * Returns `RpcError` if the signing process fails
     pub(crate) fn sign_user_operation(
@@ -34,6 +35,8 @@ impl SafeSmartAccount {
         user_operation: &mut UserOperation,
         network: Network,
     ) -> Result<(), RpcError> {
+        self.ensure_own_sender(user_operation.sender)?;
+
         // validAfter = 0 (immediately valid)
         let valid_after_u48 = U48::from(0u64);
         let valid_after_bytes: [u8; 6] = [0u8; 6];
@@ -575,5 +578,29 @@ mod tests {
         let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
         assert_eq!(valid_after, U48::from(0u64));
         assert!(valid_until > U48::from(0u64));
+    }
+
+    #[test]
+    fn test_sign_user_operation_rejects_another_sender() {
+        let safe = SafeSmartAccount::from_private_key_hex(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let mut user_op = UserOperation::new_with_defaults(
+            address!("0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+        let placeholder = user_op.signature.clone();
+
+        let result = safe.sign_user_operation(&mut user_op, Network::WorldChain);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("user operation sender is not this Safe"));
+        assert_eq!(user_op.signature, placeholder);
     }
 }
