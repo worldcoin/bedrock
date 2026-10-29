@@ -1,7 +1,7 @@
 //! Pins every contract address the wallet migrations sign against without user consent,
 //! imported through the same paths the migrations use.
 //!
-//! A change to any of these constants must also change this file, which has its own code owners.
+//! A change to any of these constants must also change this file.
 
 use alloy::primitives::address;
 
