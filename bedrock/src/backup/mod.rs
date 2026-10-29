@@ -211,6 +211,7 @@ impl BackupManager {
     /// * `BackupError::DecryptBackupError` - if the sealed backup cannot be decrypted.
     /// * `BackupError::InvalidRootSecretError` - if the root secret in the backup is invalid.
     /// * `BackupError::VersionNotDetectedError` - if the backup version cannot be detected.
+    /// * `BackupError::BackupTooLargeError` - if the backup decompresses past the size cap.
     /// * `BackupError::IoError` - if the backup cannot be read.
     ///
     /// Decrypts the sealed backup and unpacks it to the file system.

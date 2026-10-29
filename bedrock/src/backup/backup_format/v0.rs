@@ -146,13 +146,18 @@ impl V0Backup {
     /// * If the archive would decompress to more than [`MAX_DECOMPRESSED_BYTES`],
     ///   `BackupError::BackupTooLargeError` is returned.
     pub fn to_bytes(&self) -> Result<Vec<u8>, BackupError> {
-        // Encoding never shrinks a file, so an oversized backup fails before paying for it.
-        let mut data_bytes: u64 = 0;
+        // Encoding never shrinks a file, so raw data over the cap is refused before encoding.
+        let mut file_data_bytes: u64 = 0;
         for file in &self.files {
-            data_bytes += file.data.len() as u64;
+            file_data_bytes += file.data.len() as u64;
         }
-        if data_bytes > MAX_DECOMPRESSED_BYTES {
-            return Err(self.too_large(data_bytes));
+        if file_data_bytes > MAX_DECOMPRESSED_BYTES {
+            crate::critical!(
+                file_data_bytes = file_data_bytes,
+                file_count = self.files.len(),
+                "Backup exceeds the maximum size and was not created"
+            );
+            return Err(BackupError::BackupTooLargeError);
         }
 
         let mut result = Vec::new();
@@ -188,21 +193,18 @@ impl V0Backup {
 
         // Never produce a backup that `from_bytes` would then refuse to restore.
         if counting_writer.written > MAX_DECOMPRESSED_BYTES {
-            return Err(self.too_large(counting_writer.written));
+            crate::critical!(
+                archive_bytes = counting_writer.written,
+                file_data_bytes = file_data_bytes,
+                file_count = self.files.len(),
+                "Backup exceeds the maximum size and was not created"
+            );
+            return Err(BackupError::BackupTooLargeError);
         }
 
         counting_writer.into_inner().finish()?;
 
         Ok(result)
-    }
-
-    fn too_large(&self, uncompressed_size: u64) -> BackupError {
-        crate::critical!(
-            uncompressed_size = uncompressed_size,
-            file_count = self.files.len(),
-            "Backup exceeds the maximum size and could not be restored"
-        );
-        BackupError::BackupTooLargeError
     }
 }
 
@@ -236,11 +238,22 @@ fn read_entries<R: Read>(
 ) -> Result<(String, Vec<V0BackupFile>), BackupError> {
     let mut root_secret = String::new();
     let mut files = Vec::new();
-    let mut budget = EntryBudget::new();
+    let mut remaining_bytes = MAX_DECOMPRESSED_BYTES;
 
     for entry in archive.entries()? {
         let mut file = entry?;
-        budget.charge(file.size())?;
+        // Charged on the logical size: sparse holes never pass through `BoundedReader`,
+        // and `tar` never yields more than `size()` from an entry.
+        remaining_bytes =
+            remaining_bytes.checked_sub(file.size()).ok_or_else(|| {
+                crate::critical!(
+                    entry_bytes = file.size(),
+                    remaining_bytes = remaining_bytes,
+                    max_decompressed_bytes = MAX_DECOMPRESSED_BYTES,
+                    "Backup archive entries exceed the maximum decompressed size"
+                );
+                BackupError::BackupTooLargeError
+            })?;
         let path = file
             .path()?
             .to_str()
@@ -270,36 +283,6 @@ fn read_entries<R: Read>(
     }
 
     Ok((root_secret, files))
-}
-
-/// Cumulative cap on the bytes materialized from archive entries.
-///
-/// Charged on `Entry::size()`, not on the gzip stream: a GNU sparse entry synthesizes its
-/// holes from `io::repeat`, which [`BoundedReader`] never sees, and `tar` never yields
-/// more than that size.
-struct EntryBudget {
-    remaining: u64,
-}
-
-impl EntryBudget {
-    const fn new() -> Self {
-        Self {
-            remaining: MAX_DECOMPRESSED_BYTES,
-        }
-    }
-
-    /// Charges one entry before anything is read from it.
-    fn charge(&mut self, entry_size: u64) -> Result<(), BackupError> {
-        self.remaining = self.remaining.checked_sub(entry_size).ok_or_else(|| {
-            crate::critical!(
-                entry_bytes = entry_size,
-                max_decompressed_bytes = MAX_DECOMPRESSED_BYTES,
-                "Backup archive entry exceeds the maximum decompressed size"
-            );
-            BackupError::BackupTooLargeError
-        })?;
-        Ok(())
-    }
 }
 
 /// Reader that fails once the inner reader has produced more than [`MAX_DECOMPRESSED_BYTES`].
@@ -545,13 +528,7 @@ mod tests {
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
         let mut archive = Builder::new(gz_builder);
 
-        write_to_archive(
-            &mut archive,
-            ROOT_SECRET_FILE,
-            "{\"version\":\"V0\",\"key\":\"2111111111111111111111111111111111111111111111111111111111111111\"}"
-                .as_bytes(),
-        )
-        .unwrap();
+        write_to_archive(&mut archive, "file.txt", b"Hello").unwrap();
 
         archive.finish().unwrap();
         let encoder = archive.into_inner().unwrap();
@@ -831,37 +808,37 @@ mod tests {
         );
     }
 
-    /// Builds an archive holding one GNU sparse entry: ~1 KiB of physical data declaring a
-    /// 1 GiB logical size. `tar` synthesizes the hole from `io::repeat`, so the expansion
-    /// never passes through the gzip stream.
-    fn sparse_bomb(name: &str) -> Vec<u8> {
-        const HOLE: u64 = 1024 * 1024 * 1024;
+    /// Builds an archive holding one GNU sparse entry per name: ~1 KiB of physical data
+    /// declaring a `hole`-sized logical gap. `tar` synthesizes the hole from `io::repeat`, so
+    /// the expansion never passes through the gzip stream.
+    fn sparse_bomb(names: &[&str], hole: u64) -> Vec<u8> {
         const DATA_BLOCK: u64 = 512;
-
-        let mut header = Header::new_gnu();
-        header.set_mode(0o600);
-        header.set_entry_type(tar::EntryType::GNUSparse);
-        header.set_size(DATA_BLOCK * 2);
-        {
-            let gnu = header.as_gnu_mut().unwrap();
-            gnu.sparse[0].set_offset(0);
-            gnu.sparse[0].set_length(DATA_BLOCK);
-            gnu.sparse[1].set_offset(HOLE);
-            gnu.sparse[1].set_length(DATA_BLOCK);
-            gnu.set_real_size(HOLE + DATA_BLOCK);
-        }
-        header.set_path(name).unwrap();
-        header.set_cksum();
 
         let mut result = Vec::new();
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
         let mut archive = Builder::new(gz_builder);
-        archive
-            .append(
-                &header,
-                Cursor::new(vec![0u8; usize::try_from(DATA_BLOCK * 2).unwrap()]),
-            )
-            .unwrap();
+        for name in names {
+            let mut header = Header::new_gnu();
+            header.set_mode(0o600);
+            header.set_entry_type(tar::EntryType::GNUSparse);
+            header.set_size(DATA_BLOCK * 2);
+            {
+                let gnu = header.as_gnu_mut().unwrap();
+                gnu.sparse[0].set_offset(0);
+                gnu.sparse[0].set_length(DATA_BLOCK);
+                gnu.sparse[1].set_offset(hole);
+                gnu.sparse[1].set_length(DATA_BLOCK);
+                gnu.set_real_size(hole + DATA_BLOCK);
+            }
+            header.set_path(name).unwrap();
+            header.set_cksum();
+            archive
+                .append(
+                    &header,
+                    Cursor::new(vec![0u8; usize::try_from(DATA_BLOCK * 2).unwrap()]),
+                )
+                .unwrap();
+        }
         write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap().finish().unwrap();
@@ -871,7 +848,7 @@ mod tests {
 
     #[test]
     fn test_from_bytes_rejects_sparse_bomb() {
-        let bomb = sparse_bomb("personal_custody/bomb.bin");
+        let bomb = sparse_bomb(&["personal_custody/bomb.bin"], 1024 * 1024 * 1024);
         assert!(bomb.len() < 1024 * 1024);
 
         assert_eq!(
@@ -882,8 +859,18 @@ mod tests {
 
     #[test]
     fn test_from_bytes_rejects_sparse_version_tag() {
-        let bomb = sparse_bomb(VERSION_TAG);
+        let bomb = sparse_bomb(&[VERSION_TAG], 1024 * 1024 * 1024);
         assert!(!V0Backup::peek_version(&bomb).unwrap());
+        assert_eq!(
+            V0Backup::from_bytes(&bomb).unwrap_err().to_string(),
+            "Backup archive exceeds the maximum size"
+        );
+    }
+
+    /// The budget is cumulative: two entries that each fit cannot add up past the cap.
+    #[test]
+    fn test_from_bytes_rejects_sparse_entries_over_the_cap_together() {
+        let bomb = sparse_bomb(&[ROOT_SECRET_FILE, ROOT_SECRET_FILE], 40 * 1024 * 1024);
         assert_eq!(
             V0Backup::from_bytes(&bomb).unwrap_err().to_string(),
             "Backup archive exceeds the maximum size"
