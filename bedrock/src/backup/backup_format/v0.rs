@@ -12,7 +12,9 @@ const ROOT_SECRET_FILE: &str = "root_secret.json";
 
 /// Maximum number of bytes a backup archive may decompress to.
 ///
-/// Defense-in-depth in case an attacker is able to provide a malicious backup.
+/// Defense-in-depth in case an attacker is able to provide a malicious backup. Peak memory
+/// while restoring can still reach about three times this, as `tar` expands GNU long names
+/// and sparse maps before an entry's size can be checked.
 const MAX_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 
 /// V0 version of the backup manifest. See `BackupManifest` for more details.
@@ -144,6 +146,15 @@ impl V0Backup {
     /// * If the archive would decompress to more than [`MAX_DECOMPRESSED_BYTES`],
     ///   `BackupError::BackupTooLargeError` is returned.
     pub fn to_bytes(&self) -> Result<Vec<u8>, BackupError> {
+        // Encoding never shrinks a file, so an oversized backup fails before paying for it.
+        let mut data_bytes: u64 = 0;
+        for file in &self.files {
+            data_bytes += file.data.len() as u64;
+        }
+        if data_bytes > MAX_DECOMPRESSED_BYTES {
+            return Err(self.too_large(data_bytes));
+        }
+
         let mut result = Vec::new();
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
         let mut archive = Builder::new(CountingWriter::new(gz_builder));
@@ -177,17 +188,21 @@ impl V0Backup {
 
         // Never produce a backup that `from_bytes` would then refuse to restore.
         if counting_writer.written > MAX_DECOMPRESSED_BYTES {
-            crate::critical!(
-                uncompressed_size = counting_writer.written,
-                file_count = self.files.len(),
-                "Backup exceeds the maximum size and could not be restored"
-            );
-            return Err(BackupError::BackupTooLargeError);
+            return Err(self.too_large(counting_writer.written));
         }
 
         counting_writer.into_inner().finish()?;
 
         Ok(result)
+    }
+
+    fn too_large(&self, uncompressed_size: u64) -> BackupError {
+        crate::critical!(
+            uncompressed_size = uncompressed_size,
+            file_count = self.files.len(),
+            "Backup exceeds the maximum size and could not be restored"
+        );
+        BackupError::BackupTooLargeError
     }
 }
 
@@ -198,7 +213,6 @@ fn bounded_archive(bytes: &[u8]) -> Archive<BoundedReader<GzDecoder<Cursor<&[u8]
 
 /// Reads the version tag, skipping every entry before it.
 fn read_version_tag<R: Read>(archive: &mut Archive<R>) -> Result<bool, BackupError> {
-    // Iterate through the files in the backup and check if the version tag is present
     for entry in archive.entries()? {
         let file = entry?;
         let path = file
@@ -206,7 +220,6 @@ fn read_version_tag<R: Read>(archive: &mut Archive<R>) -> Result<bool, BackupErr
             .to_str()
             .ok_or(BackupError::ReadFileNameError)?
             .to_string();
-        // If the version tag is present, check if it has the correct value
         if path == VERSION_TAG {
             // The archive sets the entry's size; one byte past the tag is enough to compare.
             let mut version_data = Vec::new();
@@ -746,6 +759,74 @@ mod tests {
         let backup = V0Backup::new(RootKey::new_random(), files);
         assert_eq!(
             backup.to_bytes().unwrap_err().to_string(),
+            "Backup archive exceeds the maximum size"
+        );
+    }
+
+    /// A V0 backup whose single file CBOR-encodes to about `encoded_size` bytes.
+    fn backup_with_encoded_file_size(encoded_size: u64) -> V0Backup {
+        let file = |data: Vec<u8>| V0BackupFile {
+            checksum: blake3::hash(&data).as_bytes().to_owned(),
+            data,
+            path: "personal_custody/at_cap.bin".to_string(),
+            designator: BackupFileDesignator::OrbPkg,
+        };
+        // Zeros encode to one byte each; only the checksum shifts the overhead, by < 32 bytes.
+        let probe_len = 1 << 20;
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&file(vec![0; probe_len]), &mut encoded).unwrap();
+        let overhead = (encoded.len() - probe_len) as u64;
+        let data_len = usize::try_from(encoded_size - overhead).unwrap();
+
+        V0Backup::new(RootKey::new_random(), vec![file(vec![0; data_len])])
+    }
+
+    #[test]
+    fn test_backup_at_the_cap_round_trips() {
+        // Headers and padded blocks of the version tag and root secret, the file's header,
+        // and the two end-of-archive blocks; the file's padded payload fills the rest. The
+        // 64-byte margins absorb the checksum's effect on the encoded size.
+        const FRAMING: u64 = 7 * 512;
+
+        let at_cap =
+            backup_with_encoded_file_size(MAX_DECOMPRESSED_BYTES - FRAMING - 64);
+        let BackupFormat::V0(restored) =
+            BackupFormat::from_bytes(&at_cap.to_bytes().unwrap()).unwrap();
+        assert_eq!(restored.files, at_cap.files);
+
+        let one_block_over =
+            backup_with_encoded_file_size(MAX_DECOMPRESSED_BYTES - FRAMING + 64);
+        assert_eq!(
+            one_block_over.to_bytes().unwrap_err().to_string(),
+            "Backup archive exceeds the maximum size"
+        );
+    }
+
+    /// Long names are read by `tar` itself, so only the decoder cap sees them; here it trips
+    /// partway through decoding a file that is within the entry budget on its own.
+    #[test]
+    fn test_from_bytes_rejects_long_name_overflow_mid_decode() {
+        let data = vec![0u8; 30 * 1024 * 1024];
+        let file = V0BackupFile {
+            checksum: blake3::hash(&data).as_bytes().to_owned(),
+            data,
+            path: "personal_custody/file.bin".to_string(),
+            designator: BackupFileDesignator::OrbPkg,
+        };
+        let mut encoded_file = Vec::new();
+        ciborium::into_writer(&file, &mut encoded_file).unwrap();
+        let long_name = "a".repeat(35 * 1024 * 1024);
+
+        let mut result = Vec::new();
+        let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
+        let mut archive = Builder::new(gz_builder);
+        write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
+        write_to_archive(&mut archive, &long_name, &encoded_file).unwrap();
+        archive.finish().unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+
+        assert_eq!(
+            V0Backup::from_bytes(&result).unwrap_err().to_string(),
             "Backup archive exceeds the maximum size"
         );
     }

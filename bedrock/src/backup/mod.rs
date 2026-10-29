@@ -942,7 +942,7 @@ pub enum BackupError {
     /// Backup version cannot be detected.
     VersionNotDetectedError,
     #[error("Backup archive exceeds the maximum size")]
-    /// The files collected for a backup exceed the maximum size
+    /// The backup archive exceeds the maximum size, when it is created or restored.
     BackupTooLargeError,
     #[error("Failed to read file name from archive")]
     /// Failed to read file name from archive entry.
