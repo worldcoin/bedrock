@@ -59,6 +59,13 @@ jobs:
       - name: Build the Swift project
         run: cargo xtask swift build
 
+      - name: Check the tooling testers are not shipped
+        run: |
+          if grep -rq FileSystemTester swift/Sources/Bedrock; then
+            echo "::error::tooling_tests is compiled into the Swift release build"
+            exit 1
+          fi
+
       - name: Compress XCFramework binaries
         run: |
           zip -r Bedrock.xcframework.zip swift/Bedrock.xcframework
@@ -204,6 +211,14 @@ jobs:
       - name: Generate bindings
         working-directory: kotlin
         run: cargo run -p uniffi-bindgen generate ./bedrock-android/src/main/jniLibs/arm64-v8a/libbedrock.so --library --language kotlin --no-format --out-dir bedrock-android/src/main/java
+
+      - name: Check the tooling testers are not shipped
+        working-directory: kotlin
+        run: |
+          if grep -rq FileSystemTester bedrock-android/src/main/java; then
+            echo "::error::tooling_tests is compiled into the Kotlin release build"
+            exit 1
+          fi
 
       - name: Set up Gradle
         working-directory: kotlin

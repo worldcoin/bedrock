@@ -48,7 +48,8 @@ enum SwiftCmd {
     Local,
     /// Build bindings and run the foreign Swift test suite on a simulator.
     Test,
-    /// Run the foreign Swift test suite against an already-built `Bedrock.xcframework`.
+    /// Run the foreign Swift test suite against a `Bedrock.xcframework` built with
+    /// `build --tooling-tests`.
     RunTests,
     /// Emit `Package.swift` referencing a hosted xcframework asset.
     Archive {
