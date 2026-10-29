@@ -58,7 +58,6 @@ pub mod logger;
 /// Introduces global configuration for Bedrock operations.
 pub mod config;
 
-/// Introduces filesystem functionality with automatic path prefixing for each exported struct.
 pub mod filesystem;
 
 /// Introduces authenticated HTTP client functionality that native applications must implement for bedrock.
@@ -157,7 +156,7 @@ impl HexEncodedData {
     /// - `PrimitiveError::InvalidHexString` if the provided string is not validly encoded hex data.
     #[uniffi::constructor]
     pub fn new(s: &str) -> Result<Self, PrimitiveError> {
-        let s = s.trim_start_matches("0x");
+        let s = s.strip_prefix("0x").unwrap_or(s);
         hex::decode(s).map_err(|_| PrimitiveError::InvalidHexString(s.to_string()))?;
         Ok(Self(format!("0x{s}")))
     }
@@ -355,6 +354,19 @@ mod tests {
         assert_eq!(
             hex_string.err().unwrap().to_string(),
             "invalid hex string: g1234".to_string()
+        );
+    }
+
+    #[test]
+    fn test_hex_encoded_string_rejects_doubled_prefix() {
+        // Only one leading "0x" is a valid prefix; a second one is not a hex digit
+        // and must be rejected rather than silently stripped away.
+        let hex_string = HexEncodedData::new("0x0xabcd");
+
+        assert!(hex_string.is_err());
+        assert_eq!(
+            hex_string.err().unwrap().to_string(),
+            "invalid hex string: 0xabcd".to_string()
         );
     }
 }

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::backup::TurnkeyMeta;
+
 /// Backup metadata as returned by the backup service
 #[derive(Debug, Clone, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
@@ -137,23 +139,33 @@ impl BackupMetadata {
             .count()
     }
 
-    /// The Turnkey encryption key, or `None` unless there is exactly one.
-    ///
-    /// More than one means the metadata cannot say which sub-organization a removal
-    /// targets, so callers must refuse rather than pick.
-    pub(in crate::backup) fn turnkey_key(&self) -> Option<&BackupEncryptionKey> {
-        let mut turnkey_keys = self
-            .keys
-            .iter()
-            .filter(|key| matches!(key, BackupEncryptionKey::Turnkey { .. }));
-        let key = turnkey_keys.next()?;
+    /// The Turnkey or `None` unless there is exactly one.
+    pub(in crate::backup) fn turnkey_account(
+        &self,
+    ) -> Option<(TurnkeyMeta, &BackupEncryptionKey)> {
+        let mut turnkey_keys = self.keys.iter().filter_map(|key| match key {
+            BackupEncryptionKey::Turnkey {
+                turnkey_account_id,
+                turnkey_user_id,
+                ..
+            } => Some((
+                key,
+                TurnkeyMeta {
+                    id: turnkey_account_id.clone(),
+                    auth_user_main_id: turnkey_user_id.clone(),
+                },
+            )),
+            _ => None,
+        });
+
+        let (key, meta) = turnkey_keys.next()?;
+
         if turnkey_keys.next().is_some() {
-            crate::critical!(
-                "backup_metadata.multiple_turnkey_keys (cannot resolve which sub-organization a removal targets)"
-            );
+            crate::critical!("backup_metadata.multiple_turnkey_keys");
             return None;
         }
-        Some(key)
+
+        Some((meta, key))
     }
 
     /// The single PRF encryption key, or `None` unless there is exactly one. A
@@ -165,21 +177,6 @@ impl BackupMetadata {
             .filter(|key| matches!(key, BackupEncryptionKey::Prf { .. }));
         let key = prf_keys.next()?;
         prf_keys.next().is_none().then_some(key)
-    }
-}
-
-impl BackupFactor {
-    /// The Turnkey OAuth provider id, if this factor is an OIDC account.
-    pub(in crate::backup) fn turnkey_provider_id(&self) -> Option<&str> {
-        match &self.kind {
-            BackupFactorKind::OidcAccount {
-                turnkey_provider_id,
-                ..
-            } => Some(turnkey_provider_id),
-            BackupFactorKind::Passkey { .. } | BackupFactorKind::EcKeypair { .. } => {
-                None
-            }
-        }
     }
 }
 
@@ -225,6 +222,16 @@ pub(super) struct DeleteFactorRequest {
     pub scope: FactorScope,
 }
 
+/// Request body for `POST /v1/delete-backup`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DeleteBackupRequest {
+    /// Sync-factor authorization over the delete-backup challenge.
+    pub authorization: Authorization,
+    /// The delete-backup challenge token.
+    pub challenge_token: String,
+}
+
 /// Request body for `POST /v1/retrieve-metadata`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -233,6 +240,8 @@ pub(super) struct RetrieveMetadataRequest {
     pub authorization: Authorization,
     /// The retrieve-metadata challenge token.
     pub challenge_token: String,
+    /// The backup id (derived from the root key).
+    pub backup_id: String,
 }
 
 /// Response body for the keypair challenge endpoints.

@@ -23,3 +23,10 @@ pub static WBTC_ADDRESS: Address =
 /// WLD token address on `WorldChain`.
 pub static WLD_ADDRESS: Address =
     address!("0x2cFc85d8E48F8EAB294be644d9E25C3030863003");
+
+/// The Tools for Humanity multi-token ERC-20 paymaster (WLD and USDC).
+///
+/// Shared by staging and production. Sponsors user operations and takes
+/// payment in tokens, so it needs an ERC-20 allowance from the Safe.
+pub static TFH_PAYMASTER_ADDRESS: Address =
+    address!("0x48BB71Ac56CAd233012a8Afb35Ab6684e9233756");

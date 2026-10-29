@@ -29,11 +29,8 @@ impl From<serde_json::Error> for MigrationError {
     }
 }
 
-/// Converts unexpected UniFFI callback errors to `FileSystemError`.
-///
-/// This implementation is required for foreign trait support.
-///
-/// Without this implementation, unexpected foreign errors would panic the Rust code.
+/// Required for foreign trait support: without it an unexpected foreign error
+/// would panic the Rust side.
 impl From<uniffi::UnexpectedUniFFICallbackError> for MigrationError {
     fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
         Self::UnexpectedUniFFICallbackError(error.reason)

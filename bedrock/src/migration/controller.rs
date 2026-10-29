@@ -1,57 +1,26 @@
 use crate::bedrock_export;
 use crate::migration::error::MigrationError;
 use crate::migration::processor::{MigrationProcessor, ProcessorResult};
-use crate::migration::processors::permit2_approval_processor::Permit2ApprovalProcessor;
-use crate::migration::processors::safe_4337_module_processor::Safe4337ModuleProcessor;
-use crate::migration::state::{MigrationRecord, MigrationStatus};
-use crate::primitives::key_value_store::{DeviceKeyValueStore, KeyValueStoreError};
+use crate::migration::record_store::RecordStore;
+use crate::migration::record_store::{
+    MigrationRecord, MigrationRecordEntry, MigrationStatus,
+};
+use crate::migration::wallet_controller::WalletMigrationController;
+use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
-use crate::warn;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-const MIGRATION_KEY_PREFIX: &str = "migration:";
+/// Namespace for native migration records.
+const NATIVE_KEY_PREFIX: &str = "migration:";
 const MIGRATION_SUCCESS_TTL_DAYS: i64 = 30; // Re-check succeeded migrations after 30 days
 
-/// Global lock to prevent concurrent migration runs across all controller instances.
-/// This is a process-wide coordination mechanism that ensures only one migration
-/// can execute at a time, regardless of how many [`MigrationController`] instances exist.
-///
-/// **Application-level Requirements:**
-/// The calling application should ensure only one [`MigrationController`] instance is
-/// instantiated at a time. While this process-wide lock provides thread-safety within
-/// a single process, applications should use app-level constructs (singletons, dependency
-/// injection, etc.) to prevent multiple controller instances as an additional safeguard.
+/// Process-wide: only one migration run at a time, however many
+/// [`MigrationController`]s exist. Callers should still keep to one instance.
 static MIGRATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-/// A single migration record entry returned by [`MigrationController::list_all_records`].
-///
-/// FFI-facing view of a migration's persisted execution state, combining the
-/// processor's migration ID with the fields from [`MigrationRecord`] that are
-/// relevant to external consumers.
-///
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct MigrationRecordEntry {
-    /// The migration identifier (e.g. `"worldId.credentials.nfc.refresh.v2"`).
-    pub migration_id: String,
-    /// Current execution status.
-    pub status: MigrationStatus,
-    /// Number of execution attempts so far.
-    pub attempts: i32,
-    /// ISO 8601 timestamp when the migration was first started, if any.
-    pub started_at: Option<String>,
-    /// ISO 8601 timestamp of the most recent attempt, if any.
-    pub last_attempted_at: Option<String>,
-    /// Error code from the most recent failed attempt, if any.
-    pub last_error_code: Option<String>,
-    /// Error message from the most recent failed attempt, if any.
-    pub last_error_message: Option<String>,
-    /// ISO 8601 timestamp when the migration completed successfully, if any.
-    pub completed_at: Option<String>,
-}
 
 /// Summary of a migration run
 #[derive(Debug, Default, uniffi::Record)]
@@ -66,70 +35,105 @@ pub struct MigrationRunSummary {
     pub failed_terminal: i32,
     /// Number of migrations that were skipped (already completed or not applicable)
     pub skipped: i32,
+    /// Number of migrations that submitted fire-and-forget work and remain in
+    /// progress; completion is proven on a later run by re-reading on-chain state
+    pub pending: i32,
 }
 
-/// Controller that orchestrates migration execution
+impl MigrationRunSummary {
+    /// Add another summary's per-outcome counts into this one. `total` is not
+    /// merged — the caller sets it from the number of registered migrations.
+    pub(crate) const fn merge_counts(&mut self, other: &Self) {
+        self.succeeded += other.succeeded;
+        self.failed_retryable += other.failed_retryable;
+        self.failed_terminal += other.failed_terminal;
+        self.skipped += other.skipped;
+        self.pending += other.pending;
+    }
+
+    /// Merge another controller's whole summary in, `total` included.
+    pub(crate) const fn merge(&mut self, other: &Self) {
+        self.total += other.total;
+        self.merge_counts(other);
+    }
+
+    pub(crate) fn skipped() -> Self {
+        Self {
+            skipped: 1,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn succeeded() -> Self {
+        Self {
+            succeeded: 1,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn pending() -> Self {
+        Self {
+            pending: 1,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn failed_retryable() -> Self {
+        Self {
+            failed_retryable: 1,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn failed_terminal() -> Self {
+        Self {
+            failed_terminal: 1,
+            ..Self::default()
+        }
+    }
+}
+
+/// Orchestrates migration execution, one `RecordStore` key per migration.
 ///
-/// ## Storage Architecture
-///
-/// Each migration's state is stored independently in the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore) using
-/// a namespaced key pattern: `migration:{migration_id}`.
-///
-/// For example:
-/// - `migration:worldId.credentials.poh.refresh.v1`
-/// - `migration:worldId.credentials.nfc.refresh.v1`
-///
-/// This approach ensures:
-/// - **Scalability**: No size limits on the total number of migrations
-/// - **Isolation**: Each migration's state is independent and can be managed separately
-/// - **Platform compatibility**: Avoids hitting single-key size limits in `SharedPreferences` (Android) and `UserDefaults` (iOS)
-///
-/// Each key stores a JSON-serialized `MigrationRecord` containing execution state,
-/// timestamps, and error information.
+/// See `record_store.rs` for the storage layout, `README.md` for the model.
 #[derive(uniffi::Object)]
 pub struct MigrationController {
-    kv_store: Arc<dyn DeviceKeyValueStore>,
+    records: RecordStore,
+    /// Foreign (Swift/Kotlin) processors, plus any injected in tests.
     processors: Vec<Arc<dyn MigrationProcessor>>,
+    /// Bedrock's own wallet migrations. Runs alongside `processors` under the
+    /// same lock; see [`crate::migration::wallet`] for why it is a separate
+    /// framework rather than more processors.
+    wallet: WalletMigrationController,
 }
 
 #[bedrock_export]
 impl MigrationController {
-    /// Create a new [`MigrationController`] with default processors and optional additional ones.
+    /// Create a new [`MigrationController`].
     ///
-    /// Default processors (loaded automatically):
-    /// - [`Permit2ApprovalProcessor`]: Ensures max ERC20 approval to Permit2 on `WorldChain`
-    ///
-    /// Additional processors passed via `additional_processors` are appended after the defaults.
+    /// Runs the `additional_processors` passed in plus Bedrock's own
+    /// [wallet migrations](crate::migration::wallet), which need `safe_account`.
     #[uniffi::constructor]
     pub fn new(
         kv_store: Arc<dyn DeviceKeyValueStore>,
         safe_account: Option<Arc<SafeSmartAccount>>,
         additional_processors: Vec<Arc<dyn MigrationProcessor>>,
     ) -> Arc<Self> {
-        let mut processors = Self::default_processors(safe_account);
-        processors.extend(additional_processors);
-        Self::with_processors(kv_store, processors)
+        Arc::new(Self {
+            wallet: WalletMigrationController::new(Arc::clone(&kv_store), safe_account),
+            records: RecordStore::new(kv_store, NATIVE_KEY_PREFIX),
+            processors: additional_processors,
+        })
     }
 
-    /// Run all registered migrations
+    /// Run all registered migrations. May take seconds; network-bound.
     ///
-    /// This is an async call that may take several seconds depending on network
-    /// conditions and the number of migrations to process.
-    ///
-    /// UniFFI handles the async runtime automatically via the `async_runtime = "tokio"` attribute.
-    ///
-    /// # Concurrency
-    ///
-    /// This method is **thread-safe** with fail-fast behavior. A global lock ensures only one
-    /// migration run can execute at a time across all `MigrationController` instances in the process.
-    ///
-    /// If another migration is already in progress when this method is called, it will return
-    /// immediately with an `InvalidOperation` error rather than waiting.
+    /// Thread-safe and fail-fast: a concurrent run errors immediately rather
+    /// than waiting on the process-wide lock.
     ///
     /// # Errors
     ///
-    /// Returns `MigrationError::InvalidOperation` if another migration run is already in progress.
-    /// Returns other errors for migration execution failures (see `MigrationRunSummary` for details).
+    /// `InvalidOperation` if another run is already in progress.
     pub async fn run_migrations(&self) -> Result<MigrationRunSummary, MigrationError> {
         // Try to acquire the global lock. If another migration is running, fail immediately.
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
@@ -143,22 +147,14 @@ impl MigrationController {
         // Lock automatically released when _guard is dropped
     }
 
-    /// Delete all migration records from the key-value store.
+    /// Delete all migration records, so everything runs again from scratch.
     ///
-    /// **Developer/testing use only.** This resets all migration state so that
-    /// migrations will run again from scratch on the next `run_migrations` call.
-    ///
-    /// Records that don't exist yet are silently skipped.
+    /// **Developer/testing use only.** Takes the lock; absent records are
+    /// skipped.
     ///
     /// # Errors
     ///
-    /// Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-    /// Returns `MigrationError::DeviceKeyValueStoreError` if the underlying store fails.
-    ///
-    /// # Concurrency
-    ///
-    /// Acquires the global migration lock to prevent deleting records while
-    /// migrations are in progress.
+    /// `InvalidOperation` if a run is in progress, or the store failed.
     pub fn delete_all_records(&self) -> Result<i32, MigrationError> {
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
             MigrationError::InvalidOperation(
@@ -168,41 +164,29 @@ impl MigrationController {
 
         let mut deleted = 0;
         for processor in &self.processors {
-            let key = format!("{MIGRATION_KEY_PREFIX}{}", processor.migration_id());
-            match self.kv_store.delete(key) {
-                Ok(()) => deleted += 1,
-                Err(KeyValueStoreError::KeyNotFound) => {} // No record to delete
-                Err(e) => return Err(e.into()),
+            if self.records.delete(&processor.migration_id())? {
+                deleted += 1;
             }
         }
+
+        deleted += self.wallet.delete_records()?;
 
         crate::info!(
             "migration_records.deleted count={} total_processors={} timestamp={}",
             deleted,
-            self.processors.len(),
+            self.processors.len() + self.wallet.len(),
             Utc::now().to_rfc3339()
         );
 
         Ok(deleted)
     }
 
-    /// List the current record for every registered processor.
-    ///
-    /// Returns one [`MigrationRecordEntry`] per registered processor. Processors
-    /// that have never been attempted are included with status
-    /// [`MigrationStatus::NotStarted`] and zero attempts. Corrupted or missing
-    /// store entries are treated as a reset rather than an error.
+    /// One [`MigrationRecordEntry`] per registered migration, under the lock so
+    /// the snapshot is consistent. Never-attempted ones read as `NotStarted`.
     ///
     /// # Errors
     ///
-    /// Returns `MigrationError::InvalidOperation` if a migration run is currently in progress.
-    /// Returns `MigrationError::DeviceKeyValueStoreError` only for unexpected store failures;
-    /// missing keys and parse errors are treated as resets and do not propagate.
-    ///
-    /// # Concurrency
-    ///
-    /// Acquires the global migration lock to ensure a consistent snapshot is
-    /// returned while no migration is actively modifying the records.
+    /// `InvalidOperation` if a run is in progress, or the store failed.
     pub fn list_all_records(
         &self,
     ) -> Result<Vec<MigrationRecordEntry>, MigrationError> {
@@ -216,46 +200,27 @@ impl MigrationController {
         for processor in &self.processors {
             let migration_id = processor.migration_id();
             let record = self.load_record(&migration_id)?;
-            entries.push(MigrationRecordEntry {
-                migration_id,
-                status: record.status,
-                attempts: record.attempts,
-                started_at: record.started_at.map(|t| t.to_rfc3339()),
-                last_attempted_at: record.last_attempted_at.map(|t| t.to_rfc3339()),
-                last_error_code: record.last_error_code,
-                last_error_message: record.last_error_message,
-                completed_at: record.completed_at.map(|t| t.to_rfc3339()),
-            });
+            entries.push(record.into_entry(migration_id));
         }
+        entries.extend(self.wallet.list_records()?);
 
         Ok(entries)
     }
 }
 
 impl MigrationController {
-    /// Returns the default set of migration processors.
-    ///
-    /// When `safe_account` is `None`, processors that depend on it
-    /// (e.g. [`Permit2ApprovalProcessor`], [`Safe4337ModuleProcessor`]) are omitted.
-    fn default_processors(
-        safe_account: Option<Arc<SafeSmartAccount>>,
-    ) -> Vec<Arc<dyn MigrationProcessor>> {
-        let mut processors: Vec<Arc<dyn MigrationProcessor>> = Vec::new();
-        if let Some(account) = safe_account {
-            processors.push(Arc::new(Permit2ApprovalProcessor::new(account.clone())));
-            processors
-                .push(Safe4337ModuleProcessor::new(account).as_migration_processor());
-        }
-        processors
-    }
-
-    /// Create a controller with processors injected in
+    /// Create a controller with foreign processors injected and no on-chain
+    /// migrations. Test helper.
     pub fn with_processors(
         kv_store: Arc<dyn DeviceKeyValueStore>,
         processors: Vec<Arc<dyn MigrationProcessor>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            kv_store,
+            wallet: WalletMigrationController::with_migrations(
+                Arc::clone(&kv_store),
+                vec![],
+            ),
+            records: RecordStore::new(kv_store, NATIVE_KEY_PREFIX),
             processors,
         })
     }
@@ -269,45 +234,45 @@ impl MigrationController {
 
         crate::info!(
             "migration_run.started total_processors={} timestamp={}",
-            self.processors.len(),
+            self.processors.len() + self.wallet.len(),
             run_start_time.to_rfc3339()
         );
 
-        // Run all processors in parallel
-        let futures: Vec<_> = self
-            .processors
-            .iter()
-            .map(|processor| self.run_single_processor(processor.as_ref()))
-            .collect();
+        // Foreign processors and wallet migrations run concurrently. They
+        // share nothing but this lock and the summary.
+        let foreign = async {
+            let results = join_all(
+                self.processors
+                    .iter()
+                    .map(|processor| self.run_single_processor(processor.as_ref())),
+            )
+            .await;
 
-        let results = join_all(futures).await;
-
-        // Aggregate per-processor summaries
-        let mut summary = MigrationRunSummary {
-            total: i32::try_from(self.processors.len()).unwrap_or(i32::MAX),
-            succeeded: 0,
-            failed_retryable: 0,
-            failed_terminal: 0,
-            skipped: 0,
+            let mut summary = MigrationRunSummary {
+                total: i32::try_from(self.processors.len()).unwrap_or(i32::MAX),
+                ..MigrationRunSummary::default()
+            };
+            for s in results {
+                summary.merge_counts(&s);
+            }
+            summary
         };
-        for s in results {
-            summary.succeeded += s.succeeded;
-            summary.failed_retryable += s.failed_retryable;
-            summary.failed_terminal += s.failed_terminal;
-            summary.skipped += s.skipped;
-        }
+
+        let (mut summary, wallet) = futures::join!(foreign, self.wallet.run());
+        summary.merge(&wallet);
 
         let run_duration_ms = (Utc::now() - run_start_time).num_milliseconds();
 
         crate::info!(
-            "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={}",
+            "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={} pending={}",
             summary.total,
             summary.succeeded,
             summary.failed_retryable,
             summary.failed_terminal,
             summary.skipped,
             run_duration_ms,
-            Utc::now().to_rfc3339()
+            Utc::now().to_rfc3339(),
+            summary.pending
         );
 
         Ok(summary)
@@ -540,41 +505,13 @@ impl MigrationController {
         outcome
     }
 
-    /// Load a single migration record from the [`DeviceKeyValueStore`](crate::device::DeviceKeyValueStore)
-    /// Each migration is stored under its own key: `"migration:{migration_id}"`
-    ///
-    /// # Corruption Handling
-    ///
-    /// If the stored JSON is corrupted or invalid, this method treats it as a reset
-    /// and returns a new `MigrationRecord`. This prevents one corrupted record from
-    /// blocking all migrations permanently.
+    /// Load one record; corrupt or missing data reads as a reset, so a single
+    /// bad record cannot block every migration.
     fn load_record(
         &self,
         migration_id: &str,
     ) -> Result<MigrationRecord, MigrationError> {
-        let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
-        match self.kv_store.get(key) {
-            Ok(json) => {
-                match serde_json::from_str(&json) {
-                    Ok(record) => Ok(record),
-                    Err(e) => {
-                        // JSON is corrupted - treat as reset and let migration re-run
-                        warn!("Migration {migration_id} has corrupted JSON data, resetting: {e:?}");
-                        Ok(MigrationRecord::default())
-                    }
-                }
-            }
-            Err(KeyValueStoreError::KeyNotFound) => {
-                // First time running this migration, return new record
-                Ok(MigrationRecord::default())
-            }
-            Err(KeyValueStoreError::ParsingFailure) => {
-                // Storage layer couldn't parse the value - treat as reset
-                warn!("Migration {migration_id} has corrupted storage data, resetting");
-                Ok(MigrationRecord::default())
-            }
-            Err(e) => Err(e.into()),
-        }
+        self.records.load(migration_id)
     }
 
     /// Save a single migration record to persistent storage
@@ -584,10 +521,7 @@ impl MigrationController {
         migration_id: &str,
         record: &MigrationRecord,
     ) -> Result<(), MigrationError> {
-        let key = format!("{MIGRATION_KEY_PREFIX}{migration_id}");
-        let json = serde_json::to_string(record)?;
-        self.kv_store.set(key, json)?;
-        Ok(())
+        self.records.save(migration_id, record)
     }
 }
 
@@ -599,7 +533,9 @@ mod tests {
     //! The `#[serial]` attribute ensures they don't interfere with each other.
 
     use super::*;
-    use crate::primitives::key_value_store::InMemoryDeviceKeyValueStore;
+    use crate::primitives::key_value_store::{
+        InMemoryDeviceKeyValueStore, KeyValueStoreError,
+    };
     use async_trait::async_trait;
     use serial_test::serial;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -887,8 +823,8 @@ mod tests {
         assert_eq!(result.unwrap().succeeded, 2);
 
         // Verify individual keys are stored correctly
-        let key1 = format!("{MIGRATION_KEY_PREFIX}test.migration1.v1");
-        let key2 = format!("{MIGRATION_KEY_PREFIX}test.migration2.v1");
+        let key1 = format!("{NATIVE_KEY_PREFIX}test.migration1.v1");
+        let key2 = format!("{NATIVE_KEY_PREFIX}test.migration2.v1");
 
         // Both keys should exist in the KV store
         let record1_json = kv_store.get(key1).expect("Migration 1 record should exist");
@@ -912,7 +848,7 @@ mod tests {
         let processor = Arc::new(TestProcessor::new("test.migration.v1"));
 
         // Manually insert corrupted JSON for this migration
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         kv_store
             .set(key.clone(), "{invalid json!!!".to_string())
             .expect("Should store corrupted data");
@@ -1025,7 +961,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1064,7 +1000,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1106,7 +1042,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1161,7 +1097,7 @@ mod tests {
         assert_eq!(processor.execution_count(), 1);
 
         // Verify status transitioned to Succeeded
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let record_json = kv_store.get(key).expect("Record should exist");
         let record: MigrationRecord =
             serde_json::from_str(&record_json).expect("Should deserialize");
@@ -1183,7 +1119,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1224,7 +1160,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         let json = serde_json::to_string(&record).unwrap();
         kv_store.set(key.clone(), json).unwrap();
 
@@ -1263,7 +1199,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.succeeded.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.succeeded.v1"),
                 serde_json::to_string(&succeeded).unwrap(),
             )
             .unwrap();
@@ -1274,7 +1210,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.terminal.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.terminal.v1"),
                 serde_json::to_string(&terminal).unwrap(),
             )
             .unwrap();
@@ -1286,7 +1222,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.retryable.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.retryable.v1"),
                 serde_json::to_string(&retryable).unwrap(),
             )
             .unwrap();
@@ -1298,7 +1234,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.in_progress.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.in_progress.v1"),
                 serde_json::to_string(&in_progress).unwrap(),
             )
             .unwrap();
@@ -1350,7 +1286,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.migration.v1"),
                 serde_json::to_string(&record).unwrap(),
             )
             .unwrap();
@@ -1380,7 +1316,7 @@ mod tests {
         };
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.migration.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.migration.v1"),
                 serde_json::to_string(&record).unwrap(),
             )
             .unwrap();
@@ -1408,12 +1344,12 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         kv_store
             .set(
-                format!("{MIGRATION_KEY_PREFIX}test.migration1.v1"),
+                format!("{NATIVE_KEY_PREFIX}test.migration1.v1"),
                 json.clone(),
             )
             .unwrap();
         kv_store
-            .set(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1"), json)
+            .set(format!("{NATIVE_KEY_PREFIX}test.migration2.v1"), json)
             .unwrap();
 
         let controller = MigrationController::with_processors(
@@ -1426,11 +1362,11 @@ mod tests {
 
         // Verify records are gone
         assert!(matches!(
-            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration1.v1")),
+            kv_store.get(format!("{NATIVE_KEY_PREFIX}test.migration1.v1")),
             Err(KeyValueStoreError::KeyNotFound)
         ));
         assert!(matches!(
-            kv_store.get(format!("{MIGRATION_KEY_PREFIX}test.migration2.v1")),
+            kv_store.get(format!("{NATIVE_KEY_PREFIX}test.migration2.v1")),
             Err(KeyValueStoreError::KeyNotFound)
         ));
     }
@@ -1546,7 +1482,7 @@ mod tests {
             ..MigrationRecord::default()
         };
 
-        let key = format!("{MIGRATION_KEY_PREFIX}test.migration.v1");
+        let key = format!("{NATIVE_KEY_PREFIX}test.migration.v1");
         kv_store
             .set(key.clone(), serde_json::to_string(&record).unwrap())
             .unwrap();

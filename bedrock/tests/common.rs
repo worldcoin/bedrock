@@ -71,6 +71,7 @@ sol! {
     #[sol(rpc)]
     interface IERC20 {
         function transfer(address to, uint256 amount) external returns (bool);
+        function transferFrom(address from, address to, uint256 amount) external returns (bool);
         function balanceOf(address account) external view returns (uint256);
         function approve(address spender, uint256 amount) external returns (bool);
         function allowance(address owner, address spender) external view returns (uint256);
@@ -102,10 +103,22 @@ pub fn setup_anvil() -> AnvilInstance {
     dotenvy::dotenv().ok();
     let rpc_url = std::env::var("WORLDCHAIN_RPC_URL").unwrap_or_else(|_| {
         // Fallback to a public, no-key RPC if available.
-        "https://worldchain-mainnet.g.alchemy.com/public".to_string()
+        "https://rpc.worldchain.worldcoin.org".to_string()
     });
 
     alloy::node_bindings::Anvil::new().fork(rpc_url).spawn()
+}
+
+/// Like [`setup_anvil`], but pins the fork to a specific block for reproducible e2e.
+pub fn setup_anvil_at_block(block_number: u64) -> AnvilInstance {
+    dotenvy::dotenv().ok();
+    let rpc_url = std::env::var("WORLDCHAIN_RPC_URL")
+        .unwrap_or_else(|_| "https://rpc.worldchain.worldcoin.org".to_string());
+
+    alloy::node_bindings::Anvil::new()
+        .fork(rpc_url)
+        .fork_block_number(block_number)
+        .spawn()
 }
 
 /// Deploys a Safe proxy with the given (already-encoded) `setup` calldata and
@@ -266,7 +279,7 @@ where
 
 /// Returns the World ID Address Book contract address for the current Bedrock environment.
 /// Reference <https://github.com/worldcoin/worldcoin-vault/blob/main/src/WorldIDAddressBook.sol>
-fn address_book_address() -> Address {
+pub fn address_book_address() -> Address {
     match current_environment_or_default() {
         BedrockEnvironment::Staging | BedrockEnvironment::Sandbox => {
             Address::from_str("0xfd5b7aefdd478f34ae61d8399a206a4879f0af0a")
@@ -294,6 +307,7 @@ fn address_book_address() -> Address {
 /// - slot 7: `addressVerifiedUntil` mapping
 pub async fn set_address_verified_until_for_account<P>(
     provider: &P,
+    address_book: Address,
     account: Address,
     verified_until: U256,
 ) -> anyhow::Result<()>
@@ -310,7 +324,7 @@ where
     let slot = U256::from_be_bytes(slot_hash.into());
 
     provider
-        .anvil_set_storage_at(address_book_address(), slot, verified_until.into())
+        .anvil_set_storage_at(address_book, slot, verified_until.into())
         .await?;
 
     Ok(())

@@ -1,24 +1,29 @@
-use alloy::primitives::{Address, U256};
+use alloy::{
+    primitives::{Address, U256},
+    sol_types::SolCall,
+};
 use bedrock_macros::bedrock_export;
-use chrono::Utc;
 use rand::{Rng, RngCore};
+use secrecy::{ExposeSecret, SecretString};
 use std::sync::Arc;
 
 use alloy::primitives::aliases::{U160, U48};
 
 use crate::{
-    primitives::{HexEncodedData, Network, ParseFromForeignBinding},
+    primitives::{ntp::now_with_ntp, HexEncodedData, Network, ParseFromForeignBinding},
     smart_account::{
         Is4337Encodable, Permit2Approve, SafeSmartAccount, UnparsedPermitTransferFrom,
-        UnparsedTokenPermissions,
+        UnparsedTokenPermissions, UserOperation, ENTRYPOINT_4337,
     },
     transactions::{
         contracts::{
             erc20::{Erc20, MetadataArg, TransferAssociation},
-            usd_legacy_vault::Permit2Data,
+            usd_legacy_vault::{Permit2Data, USD_LEGACY_VAULT_ADDRESSES},
+            wld_legacy_vault::WLD_LEGACY_VAULT_ADDRESSES,
             world_gift_manager::WorldGiftManager,
+            worldchain::TFH_PAYMASTER_ADDRESS,
         },
-        rpc::{get_rpc_client, WaGetUserOperationReceiptResponse},
+        rpc::{get_rpc_client, RpcCallError, WaGetUserOperationReceiptResponse},
     },
 };
 
@@ -26,8 +31,15 @@ pub mod contracts;
 pub mod custom_bundler;
 pub mod foreign;
 pub mod rpc;
+mod tfh_paymaster;
 
+pub use contracts::universal_wind_down_vault::{
+    build_uasset_redemption_call_data, UAssetRedemption,
+};
 pub use rpc::{RpcClient, RpcError, RpcProviderName, SponsorUserOperationResponse};
+
+#[cfg(test)]
+mod tests;
 
 /// Errors that can occur when interacting with transaction operations.
 #[crate::bedrock_error]
@@ -35,11 +47,48 @@ pub enum TransactionError {
     /// An error occurred with a primitive type. See `PrimitiveError` for more details.
     #[error("Primitive error: {0}")]
     PrimitiveError(String),
+
+    /// The fee-token balance cannot cover the operation and estimated network fee.
+    #[error("Not enough funds to cover the transfer and network fee.")]
+    InsufficientFunds {
+        /// Token whose balance is insufficient.
+        token_address: String,
+    },
+
+    /// A transaction participant is restricted; do not retry through another route.
+    #[error("Address is restricted")]
+    AddressRestricted,
+
+    /// Address screening is unavailable; preparation may be retried.
+    #[error("Address screening unavailable")]
+    ScreeningUnavailable,
 }
 
 impl From<crate::primitives::PrimitiveError> for TransactionError {
     fn from(e: crate::primitives::PrimitiveError) -> Self {
         Self::PrimitiveError(e.to_string())
+    }
+}
+
+fn screening_error(error: RpcCallError) -> TransactionError {
+    if let RpcCallError::Response(response) = &error {
+        let reason = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(|reason| reason.as_str());
+        match (response.code, reason) {
+            (-32602, Some("address_restricted")) => {
+                return TransactionError::AddressRestricted;
+            }
+            (-32603, Some("screening_unavailable")) => {
+                return TransactionError::ScreeningUnavailable;
+            }
+            _ => {}
+        }
+    }
+    TransactionError::Generic {
+        error_message: format!("Address screening failed: {}", RpcError::from(error)),
     }
 }
 
@@ -51,58 +100,789 @@ pub struct WorldGiftManagerResult {
     pub gift_id: Arc<HexEncodedData>,
 }
 
+/// An unsigned World Chain `UserOperation` prepared for review before signing.
+#[derive(Debug, uniffi::Object)]
+pub struct PreparedTransaction {
+    user_operation: UserOperation,
+    fee_details: Option<PreparedTransactionFee>,
+    // URLs may contain credentials; Debug must not reveal them.
+    custom_bundler_url: Option<SecretString>,
+}
+
+/// An unsigned vault operation and the asset amount to display before confirmation.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PreparedVaultTransaction {
+    /// Pass this operation to `submit_prepared_transaction` after confirmation.
+    pub transaction: Arc<PreparedTransaction>,
+    /// Underlying ERC-20 asset address.
+    pub asset_address: String,
+    /// Asset amount in base units. Share-based withdrawals report a preparation-time estimate.
+    pub asset_amount: String,
+}
+
+/// ERC-20 fee estimate for a prepared self-sponsored operation.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PreparedTransactionFee {
+    /// Fee token address.
+    pub token_address: String,
+    /// Paymaster that charges the fee token.
+    pub paymaster_address: String,
+    /// Final fee estimate in token base units, as a decimal integer.
+    pub estimated_cost_in_token: String,
+    /// Policy reason the user pays the fee.
+    pub decline_reason: String,
+}
+
+#[bedrock_export]
+impl PreparedTransaction {
+    /// Returns the fee estimate for a prepared self-sponsored operation.
+    #[must_use]
+    pub fn fee_details(&self) -> Option<PreparedTransactionFee> {
+        self.fee_details.clone()
+    }
+}
+
+fn parse_fee_estimate(value: &str) -> Result<U256, TransactionError> {
+    let estimate = U256::from_str_radix(value, 10).map_err(|error| {
+        crate::error!(
+            estimated_cost_in_token = value,
+            error_message = error,
+            "Invalid self-sponsorship fee estimate"
+        );
+        TransactionError::Generic {
+            error_message: format!("Invalid self-sponsorship fee estimate: {error}"),
+        }
+    })?;
+    if estimate == U256::ZERO {
+        crate::error!("Self-sponsorship fee estimate must be positive");
+        return Err(TransactionError::Generic {
+            error_message: "Self-sponsorship fee estimate must be positive".to_string(),
+        });
+    }
+    Ok(estimate)
+}
+
+async fn check_fee_allowance(
+    rpc_client: &RpcClient,
+    sender: Address,
+    fee_token: Address,
+    paymaster: Address,
+    estimated_cost: U256,
+) -> Result<(), TransactionError> {
+    // The fee-token allowance maintained by migration must cover the estimated fee.
+    let allowance = Erc20::fetch_allowance(
+        rpc_client,
+        Network::WorldChain,
+        fee_token,
+        sender,
+        paymaster,
+    )
+    .await
+    .map_err(|e| {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            paymaster = paymaster,
+            error_message = e,
+            "Failed to read self-sponsorship fee-token allowance"
+        );
+        TransactionError::Generic {
+            error_message: format!("Failed to read fee-token allowance: {e}"),
+        }
+    })?;
+    if allowance < estimated_cost {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            paymaster = paymaster,
+            allowance = allowance,
+            estimated_cost_in_token = estimated_cost,
+            "Insufficient fee-token allowance for self-sponsorship"
+        );
+        return Err(TransactionError::Generic {
+            error_message: format!(
+                "Insufficient fee-token allowance: {allowance}, estimated fee: {estimated_cost}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+async fn check_fee_balance(
+    rpc_client: &RpcClient,
+    sender: Address,
+    fee_token: Address,
+    spend_token: Address,
+    spend_amount: U256,
+    estimated_cost: U256,
+) -> Result<(), TransactionError> {
+    let balance =
+        Erc20::fetch_balance(rpc_client, Network::WorldChain, fee_token, sender)
+            .await
+            .map_err(|error| {
+                crate::error!(
+                    network = Network::WorldChain.network_name(),
+                    sender = sender,
+                    fee_token = fee_token,
+                    error_message = error,
+                    "Failed to read self-sponsorship fee-token balance"
+                );
+                TransactionError::Generic {
+                    error_message: format!("Failed to read fee-token balance: {error}"),
+                }
+            })?;
+    // If the operation spends the fee token, its balance must cover both amounts.
+    // Subtraction avoids overflowing when the amount and fee exceed U256::MAX.
+    let available_for_fee = if spend_token == fee_token {
+        balance.checked_sub(spend_amount)
+    } else {
+        Some(balance)
+    };
+    if available_for_fee.is_none_or(|available| available < estimated_cost) {
+        crate::error!(
+            network = Network::WorldChain.network_name(),
+            sender = sender,
+            fee_token = fee_token,
+            balance = balance,
+            spend_token = spend_token,
+            spend_amount = spend_amount,
+            estimated_cost_in_token = estimated_cost,
+            "Insufficient balance for the operation and estimated network fee"
+        );
+        return Err(TransactionError::InsufficientFunds {
+            token_address: fee_token.to_string(),
+        });
+    }
+    Ok(())
+}
+
+async fn prepare_default_operation(
+    rpc_client: &RpcClient,
+    operation: UserOperation,
+    spend_token: Address,
+    spend_amount: U256,
+) -> Result<PreparedTransaction, TransactionError> {
+    let response = rpc_client
+        .pm_sponsor_user_operation(Network::WorldChain, &operation, *ENTRYPOINT_4337)
+        .await
+        .map_err(|error| {
+            crate::error!(
+                sender = operation.sender,
+                error_message = error,
+                "Failed to prepare operation"
+            );
+            match error {
+                RpcError::InsufficientFunds { token_address } => {
+                    TransactionError::InsufficientFunds { token_address }
+                }
+                error => TransactionError::Generic {
+                    error_message: format!("Failed to prepare operation: {error}"),
+                },
+            }
+        })?;
+
+    let fee_details = match (
+        response.paymaster,
+        response.fee.as_ref(),
+        response.paymaster_data.as_ref(),
+        response.paymaster_verification_gas_limit,
+        response.paymaster_post_op_gas_limit,
+    ) {
+        (None, None, None, None, None) if response.is_sponsored() => None,
+        (Some(paymaster), Some(fee), Some(data), Some(_), Some(_))
+            if response.is_self_sponsored() =>
+        {
+            let token = fee.token;
+            let reason = &fee.decline_reason;
+            if paymaster != TFH_PAYMASTER_ADDRESS {
+                crate::error!(
+                    paymaster = paymaster,
+                    "Self-sponsorship requires TFH paymaster"
+                );
+                return Err(TransactionError::Generic {
+                    error_message: "Self-sponsorship requires TFH paymaster"
+                        .to_string(),
+                });
+            }
+            let estimated_cost = parse_fee_estimate(&fee.estimated_cost_in_token)?;
+            tfh_paymaster::validate_fee_token(data, token)?;
+            check_fee_allowance(
+                rpc_client,
+                operation.sender,
+                token,
+                paymaster,
+                estimated_cost,
+            )
+            .await?;
+            check_fee_balance(
+                rpc_client,
+                operation.sender,
+                token,
+                spend_token,
+                spend_amount,
+                estimated_cost,
+            )
+            .await?;
+            crate::info!(
+                sender = operation.sender,
+                decline_reason = reason,
+                "Prepared self-sponsored operation"
+            );
+            Some(PreparedTransactionFee {
+                token_address: token.to_string(),
+                paymaster_address: paymaster.to_string(),
+                estimated_cost_in_token: estimated_cost.to_string(),
+                decline_reason: reason.to_string(),
+            })
+        }
+        _ => {
+            crate::error!(
+                sender = operation.sender,
+                "Incomplete paymaster fields or fee metadata"
+            );
+            return Err(TransactionError::Generic {
+                error_message: "Incomplete paymaster fields or fee metadata"
+                    .to_string(),
+            });
+        }
+    };
+
+    Ok(PreparedTransaction {
+        user_operation: operation.with_pm_sponsorship(&response),
+        fee_details,
+        custom_bundler_url: None,
+    })
+}
+
+async fn prepare_operation(
+    rpc_client: &RpcClient,
+    user_operation: UserOperation,
+    spend_token: Address,
+    spend_amount: U256,
+    custom_bundler_url: Option<String>,
+) -> Result<PreparedTransaction, TransactionError> {
+    if let Some(url) = custom_bundler_url {
+        let user_operation =
+            custom_bundler::prepare_bundler_sponsored_operation(&url, user_operation)
+                .await
+                .map_err(|error| TransactionError::Generic {
+                    error_message: format!(
+                        "Custom bundler preparation failed: {error}"
+                    ),
+                })?;
+        Ok(PreparedTransaction {
+            user_operation,
+            fee_details: None,
+            custom_bundler_url: Some(url.into()),
+        })
+    } else {
+        prepare_default_operation(rpc_client, user_operation, spend_token, spend_amount)
+            .await
+    }
+}
+
+enum Erc4626Operation {
+    Deposit,
+    Withdraw,
+}
+
+impl Erc4626Operation {
+    async fn build(
+        &self,
+        wallet: &SafeSmartAccount,
+        rpc_client: &RpcClient,
+        vault_address: Address,
+        asset_amount: U256,
+        log_failure: &(impl Fn(&str, &dyn std::fmt::Display) + Sync),
+    ) -> Result<(contracts::erc4626::Erc4626Vault, Address, U256), TransactionError>
+    {
+        use contracts::erc4626::{Erc4626Vault, WithdrawalAmount, IERC4626};
+
+        match self {
+            Self::Deposit => Erc4626Vault::deposit_with_amount(
+                rpc_client,
+                Network::WorldChain,
+                vault_address,
+                asset_amount,
+                wallet.wallet_address,
+                [0u8; 10],
+            )
+            .await
+            .map_err(|error| {
+                log_failure("build", &error);
+                TransactionError::Generic {
+                    error_message: format!("Failed to create ERC4626 deposit: {error}"),
+                }
+            }),
+            Self::Withdraw => {
+                let withdrawal = async {
+                    let (transaction, amount) = Erc4626Vault::withdraw_with_amount(
+                        rpc_client,
+                        Network::WorldChain,
+                        vault_address,
+                        asset_amount,
+                        wallet.wallet_address,
+                        [0u8; 10],
+                    )
+                    .await
+                    .map_err(|error| {
+                        log_failure("build", &error);
+                        TransactionError::Generic {
+                            error_message: format!(
+                                "Failed to create ERC4626 withdrawal: {error}"
+                            ),
+                        }
+                    })?;
+                    let actual_amount = match amount {
+                        WithdrawalAmount::Assets(assets) => assets,
+                        WithdrawalAmount::Shares(shares) => {
+                            Erc4626Vault::fetch_balance(
+                                rpc_client,
+                                Network::WorldChain,
+                                vault_address,
+                                IERC4626::previewRedeemCall { shares }.abi_encode(),
+                                "previewRedeem",
+                            )
+                            .await
+                            .map_err(|error| {
+                                log_failure("preview", &error);
+                                TransactionError::Generic {
+                                    error_message: format!(
+                                        "Failed to preview ERC4626 withdrawal: {error}"
+                                    ),
+                                }
+                            })?
+                        }
+                    };
+                    if actual_amount.is_zero() {
+                        let error = TransactionError::Generic {
+                            error_message: "Withdrawal produces zero assets"
+                                .to_string(),
+                        };
+                        log_failure("preview", &error);
+                        return Err(error);
+                    }
+                    Ok((transaction, actual_amount))
+                };
+                let asset = async {
+                    Erc4626Vault::fetch_asset_address(
+                        rpc_client,
+                        Network::WorldChain,
+                        vault_address,
+                        IERC4626::assetCall {}.abi_encode(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        log_failure("asset", &error);
+                        TransactionError::Generic {
+                            error_message: format!(
+                                "Failed to fetch ERC4626 withdrawal asset: {error}"
+                            ),
+                        }
+                    })
+                };
+                let ((transaction, actual_amount), asset_address) =
+                    tokio::try_join!(withdrawal, asset)?;
+                Ok((transaction, asset_address, actual_amount))
+            }
+        }
+    }
+}
+
+impl SafeSmartAccount {
+    async fn prepare_erc4626_transaction(
+        &self,
+        kind: Erc4626Operation,
+        vault_address: &str,
+        asset_amount: &str,
+        custom_bundler_url: Option<String>,
+    ) -> Result<PreparedVaultTransaction, TransactionError> {
+        let (transaction_type, action) = match kind {
+            Erc4626Operation::Deposit => ("erc4626_deposit", "deposit"),
+            Erc4626Operation::Withdraw => ("erc4626_withdraw", "withdrawal"),
+        };
+        let route = if custom_bundler_url.is_some() {
+            "custom"
+        } else {
+            "default"
+        };
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                transaction_type = transaction_type,
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                vault_address = vault_address,
+                route = route,
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to prepare ERC-4626 {action}"
+            );
+        };
+
+        let vault_address = Address::parse_from_ffi(vault_address, "vault_address")
+            .inspect_err(|error| {
+                log_failure("parse_vault_address", error);
+            })?;
+        let asset_amount = U256::parse_from_ffi(asset_amount, "asset_amount")
+            .inspect_err(|error| {
+                log_failure("parse_amount", error);
+            })?;
+        let rpc_client = get_rpc_client().map_err(|error| {
+            log_failure("get_rpc_client", &error);
+            TransactionError::Generic {
+                error_message: format!("Failed to get RPC client: {error}"),
+            }
+        })?;
+        let addresses = [self.wallet_address];
+        let screening = async {
+            rpc_client
+                .screen_addresses(Network::WorldChain, &addresses)
+                .await
+                .map_err(screening_error)
+                .inspect_err(|error| {
+                    log_failure("screening", error);
+                })
+        };
+        let preparation = async {
+            let (transaction, asset_address, actual_amount) = kind
+                .build(self, rpc_client, vault_address, asset_amount, &log_failure)
+                .await?;
+            let operation = transaction
+                .build_preflight_user_operation(self.wallet_address, None)
+                .inspect_err(|error| {
+                    log_failure("build_user_operation", error);
+                })?;
+            let spend_amount = match kind {
+                Erc4626Operation::Deposit => actual_amount,
+                // Withdrawn assets arrive after paymaster validation and cannot fund its charge.
+                Erc4626Operation::Withdraw => U256::ZERO,
+            };
+            let transaction = prepare_operation(
+                rpc_client,
+                operation,
+                asset_address,
+                spend_amount,
+                custom_bundler_url,
+            )
+            .await
+            .inspect_err(|error| {
+                log_failure("prepare", error);
+            })?;
+            Ok(PreparedVaultTransaction {
+                transaction: Arc::new(transaction),
+                asset_address: asset_address.to_string(),
+                asset_amount: actual_amount.to_string(),
+            })
+        };
+        let (screening, prepared) = tokio::join!(screening, preparation);
+        screening?;
+        prepared.inspect(|_| {
+            crate::debug!(
+                transaction_type = transaction_type,
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                vault_address = vault_address,
+                route = route,
+                outcome = "prepared",
+                "Prepared ERC-4626 {action}"
+            );
+        })
+    }
+}
+
+/// The kind of vault a migration starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MigrationSource {
+    /// The legacy `WLDVault`.
+    WldLegacy,
+    /// One of the legacy `USDVault` deployments.
+    UsdLegacy,
+    /// Any other address is assumed to be an ERC4626 vault.
+    Erc4626,
+}
+
+impl MigrationSource {
+    /// Stable name used as a structured log field.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::WldLegacy => "wld_legacy",
+            Self::UsdLegacy => "usd_legacy",
+            Self::Erc4626 => "erc4626",
+        }
+    }
+
+    fn classify(from_vault_address: Address) -> Self {
+        if WLD_LEGACY_VAULT_ADDRESSES.contains(&from_vault_address) {
+            Self::WldLegacy
+        } else if USD_LEGACY_VAULT_ADDRESSES.contains(&from_vault_address) {
+            Self::UsdLegacy
+        } else {
+            Self::Erc4626
+        }
+    }
+}
+
+/// Coarse class of a migration failure for the log field `failure_class`. Errors are plain
+/// strings, so this matches on their text; a unit test pins the messages it relies on.
+fn failure_class(error_message: &str) -> &'static str {
+    // Reverts and short `asset()` replies from the vaults are deterministic, not provider faults.
+    const USER_STATE: [&str; 6] = [
+        "Cannot migrate",
+        "must differ",
+        "Unsupported migration source",
+        "Asset address mismatch",
+        "Invalid asset() response",
+        // JSON-RPC revert code only, so a provider error that merely mentions a revert is not
+        // classified as user state.
+        "RPC error 3:",
+    ];
+    // Nodes differ in the casing of the generic revert message; `is_eth_call_revert` ignores it.
+    let generic_revert = error_message
+        .to_lowercase()
+        .contains("rpc error -32000: execution reverted");
+    if generic_revert || USER_STATE.iter().any(|m| error_message.contains(m)) {
+        "user_state"
+    } else if error_message.contains("sign permit2") {
+        "signing"
+    } else if error_message.contains("RPC error")
+        || error_message.contains("Failed to get RPC client")
+        || error_message.contains("HTTP request failed")
+    {
+        "dependency"
+    } else {
+        "unknown"
+    }
+}
+
+/// Migration construction and preflight checks.
+impl SafeSmartAccount {
+    /// Checks withdrawal eligibility and returns the sDAI address and balance to migrate.
+    ///
+    /// The vault only redeems for accounts still verified in the World ID address book, and some
+    /// deployments only redeem what the account deposited through them. A zero balance is left
+    /// to the migration itself, which reports it.
+    async fn precheck_usd_migration(
+        &self,
+        usd_vault_address: Address,
+    ) -> Result<(Address, U256), TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let (sdai_address, sdai_amount) =
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::fetch_sdai_balance(
+                rpc_client,
+                Network::WorldChain,
+                usd_vault_address,
+                self.wallet_address,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to fetch sDAI balance: {e}"),
+            })?;
+        if sdai_amount.is_zero() {
+            return Ok((sdai_address, sdai_amount));
+        }
+
+        crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::ensure_user_verified(
+            rpc_client,
+            Network::WorldChain,
+            usd_vault_address,
+            self.wallet_address,
+            now_with_ntp(),
+        )
+        .await
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to create USDVault migration: {e}"),
+        })?;
+
+        crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::ensure_withdrawal_allowed(
+            rpc_client,
+            Network::WorldChain,
+            usd_vault_address,
+            self.wallet_address,
+            sdai_amount,
+        )
+        .await
+        .map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to create USDVault migration: {e}"),
+        })?;
+        Ok((sdai_address, sdai_amount))
+    }
+
+    async fn build_wld_legacy_vault_migration(
+        &self,
+        legacy_vault_address: Address,
+        erc4626_vault_address: Address,
+    ) -> Result<contracts::wld_legacy_vault::WldLegacyVault, TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                self.wallet_address,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create WLDVault migration: {e}"),
+            })?;
+
+        Ok(transaction)
+    }
+
+    async fn build_usd_legacy_vault_migration(
+        &self,
+        legacy_vault_address: Address,
+        erc4626_vault_address: Address,
+        (sdai_address, sdai_amount): (Address, U256),
+    ) -> Result<contracts::usd_legacy_vault::UsdLegacyVault, TransactionError> {
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+
+        if sdai_amount.is_zero() {
+            return Err(TransactionError::Generic {
+                error_message: "Cannot migrate with zero sDAI balance".to_string(),
+            });
+        }
+
+        let permitted = UnparsedTokenPermissions {
+            token: sdai_address.to_string(),
+            amount: sdai_amount.to_string(),
+        };
+
+        let nonce = {
+            let mut rng = rand::thread_rng();
+            U256::from_be_bytes(rng.gen::<[u8; 32]>())
+        };
+
+        let deadline = now_with_ntp().timestamp() + 180; // 3 minutes from now
+
+        let transfer = UnparsedPermitTransferFrom {
+            permitted,
+            spender: legacy_vault_address.to_string(),
+            nonce: nonce.to_string(),
+            deadline: deadline.to_string(),
+        };
+
+        let signature = self
+            .sign_permit2_transfer(Network::WorldChain as u32, transfer)
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to sign permit2 transfer: {e}"),
+            })?;
+
+        let permit2_data = Permit2Data {
+            signature,
+            nonce,
+            deadline: U256::from(deadline),
+        };
+
+        let transaction =
+            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                legacy_vault_address,
+                erc4626_vault_address,
+                (sdai_address, sdai_amount),
+                self.wallet_address,
+                permit2_data,
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create USDVault migration: {e}"),
+            })?;
+
+        Ok(transaction)
+    }
+
+    async fn build_erc4626_vault_migration(
+        &self,
+        from_vault_address: Address,
+        to_vault_address: Address,
+    ) -> Result<contracts::erc4626::Erc4626Vault, TransactionError> {
+        let receiver = self.wallet_address;
+
+        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
+            error_message: format!("Failed to get RPC client: {e}"),
+        })?;
+        let transaction =
+            crate::transactions::contracts::erc4626::Erc4626Vault::migrate(
+                rpc_client,
+                Network::WorldChain,
+                from_vault_address,
+                to_vault_address,
+                receiver,
+                [0u8; 10], // metadata
+            )
+            .await
+            .map_err(|e| TransactionError::Generic {
+                error_message: format!("Failed to create ERC4626 migrate: {e}"),
+            })?;
+
+        Ok(transaction)
+    }
+}
+
 /// Extensions to `SafeSmartAccount` to enable high-level APIs for transactions.
 #[bedrock_export]
 impl SafeSmartAccount {
-    /// Allows executing an ERC-20 token transfer **on World Chain**.
+    /// Prepares an unsigned ERC-20 transfer on World Chain.
+    ///
+    /// Self-sponsorship verifies that the TFH paymaster's fee-token allowance
+    /// established by the wallet migration covers the final fee estimate, and checks
+    /// that the fee-token balance covers the transfer and estimated fee.
     ///
     /// # Arguments
     /// - `token_address`: The address of the ERC-20 token to transfer.
     /// - `to_address`: The address of the recipient.
     /// - `amount`: The amount of tokens to transfer as a stringified integer with the decimals of the token (e.g. 18 for USDC or WLD)
     /// - `transfer_association`: Metadata value. The association of the transfer.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::sync::Arc;
-    /// use bedrock::smart_account::{SafeSmartAccount, SmartAccountKeyManager};
-    /// use bedrock::transactions::TransactionError;
-    /// use bedrock::primitives::Network;
-    ///
-    /// # async fn example(
-    /// #     key_manager: Arc<dyn SmartAccountKeyManager>,
-    /// # ) -> Result<(), TransactionError> {
-    /// // Assume we have a configured SafeSmartAccount
-    /// # let safe_account = SafeSmartAccount::new(key_manager, "0x1234567890123456789012345678901234567890").unwrap();
-    ///
-    /// // Transfer USDC on World Chain
-    /// let tx_hash = safe_account.transaction_transfer(
-    ///     "0x79A02482A880BCE3F13E09Da970dC34DB4cD24d1", // USDC on World Chain
-    ///     "0x1234567890123456789012345678901234567890",
-    ///     "1000000", // 1 USDC (6 decimals)
-    ///     None,
-    /// ).await?;
-    ///
-    /// println!("Transaction hash: {}", tx_hash.to_hex_string());
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// - `custom_bundler_url`: Bundler that estimates and submits the operation,
+    ///   covering its gas costs. Omit to request sponsorship through the backend.
     ///
     /// # Errors
     /// - Will throw a parsing error if any of the provided attributes are invalid.
-    /// - Will throw an RPC error if the transaction submission fails.
-    /// - Will throw an error if the global HTTP client has not been initialized.
-    pub async fn transaction_transfer(
+    /// - Will throw an RPC error if sponsorship preparation or custom estimation fails.
+    /// - Will throw `InsufficientFunds` if the fee-token balance is too low.
+    /// - Will throw `AddressRestricted` or `ScreeningUnavailable` for screening rejections or outages.
+    pub async fn prepare_transaction_transfer(
         &self,
         token_address: &str,
         to_address: &str,
         amount: &str,
         transfer_association: Option<TransferAssociation>,
-    ) -> Result<HexEncodedData, TransactionError> {
-        let token_address = Address::parse_from_ffi(token_address, "token_address")?;
-        let to_address = Address::parse_from_ffi(to_address, "address")?;
-        let amount = U256::parse_from_ffi(amount, "amount")?;
+        custom_bundler_url: Option<String>,
+    ) -> Result<PreparedTransaction, TransactionError> {
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                transaction_type = "erc20_transfer",
+                network = Network::WorldChain.network_name(),
+                sender = self.wallet_address,
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to prepare ERC-20 transfer"
+            );
+        };
+
+        let token_address = Address::parse_from_ffi(token_address, "token_address")
+            .inspect_err(|e| {
+                log_failure("parse_token_address", e);
+            })?;
+        let to_address =
+            Address::parse_from_ffi(to_address, "address").inspect_err(|e| {
+                log_failure("parse_to_address", e);
+            })?;
+        let amount = U256::parse_from_ffi(amount, "amount").inspect_err(|e| {
+            log_failure("parse_amount", e);
+        })?;
 
         let transaction = Erc20::new(token_address, to_address, amount);
 
@@ -110,14 +890,219 @@ impl SafeSmartAccount {
             association: transfer_association,
         };
 
-        let provider = RpcProviderName::Any;
-
-        let user_op_hash = transaction
-            .sign_and_execute(self, Network::WorldChain, None, Some(metadata), provider)
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to execute transaction: {e}"),
+        let user_operation = transaction
+            .build_preflight_user_operation(self.wallet_address, Some(metadata))
+            .inspect_err(|e| {
+                log_failure("build_user_operation", e);
             })?;
+        let rpc_client = get_rpc_client().map_err(|e| {
+            log_failure("get_rpc_client", &e);
+            TransactionError::Generic {
+                error_message: format!(
+                    "Failed to get RPC client for ERC-20 transfer preparation: {e}"
+                ),
+            }
+        })?;
+        let addresses = [user_operation.sender, to_address];
+        let screening = async {
+            rpc_client
+                .screen_addresses(Network::WorldChain, &addresses)
+                .await
+                .map_err(screening_error)
+        };
+        let preparation = prepare_operation(
+            rpc_client,
+            user_operation,
+            token_address,
+            amount,
+            custom_bundler_url,
+        );
+        let ((), prepared_transaction) = tokio::try_join!(screening, preparation)?;
+
+        crate::debug!(
+            transaction_type = "erc20_transfer",
+            network = Network::WorldChain.network_name(),
+            sender = self.wallet_address,
+            outcome = "prepared",
+            "Prepared ERC-20 transfer"
+        );
+
+        Ok(prepared_transaction)
+    }
+
+    /// Prepares an unsigned ERC-4626 deposit on World Chain.
+    ///
+    /// Returns the deposited asset amount for confirmation, capped by the wallet's balance.
+    /// User-paid gas requires a remaining fee-token balance and the paymaster allowance
+    /// maintained by wallet migration. The amount is not reduced to pay the network fee.
+    /// `custom_bundler_url` selects a bundler that covers gas and handles submission.
+    ///
+    /// # Arguments
+    /// - `vault_address`: The ERC-4626 vault to deposit into.
+    /// - `asset_amount`: The underlying asset amount as an integer in token base units.
+    /// - `custom_bundler_url`: Bundler that estimates and submits the operation,
+    ///   covering its gas costs. Omit to request sponsorship through the backend.
+    ///
+    /// # Errors
+    /// - `PrimitiveError` if the vault address or amount cannot be parsed.
+    /// - `InsufficientFunds` if the fee-token balance cannot cover the deposit and
+    ///   estimated network fee, or the fee alone when depositing another asset.
+    /// - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+    ///   rejections or outages.
+    /// - `Generic` if construction, sponsorship, custom estimation, or fee-token
+    ///   allowance validation fails.
+    pub async fn prepare_transaction_erc4626_deposit(
+        &self,
+        vault_address: &str,
+        asset_amount: &str,
+        custom_bundler_url: Option<String>,
+    ) -> Result<PreparedVaultTransaction, TransactionError> {
+        self.prepare_erc4626_transaction(
+            Erc4626Operation::Deposit,
+            vault_address,
+            asset_amount,
+            custom_bundler_url,
+        )
+        .await
+    }
+
+    /// Prepares an unsigned ERC-4626 withdrawal on World Chain.
+    ///
+    /// Uses redeem when the requested assets require more shares than the wallet holds.
+    /// In that case, `asset_amount` is the previewed redemption output and can change
+    /// before execution. User-paid gas requires fee tokens already in the wallet;
+    /// the paymaster charges before the vault releases assets.
+    /// `custom_bundler_url` selects a bundler that covers gas and handles submission.
+    ///
+    /// # Arguments
+    /// - `vault_address`: The ERC-4626 vault to withdraw from.
+    /// - `asset_amount`: The underlying asset amount as an integer in token base units.
+    /// - `custom_bundler_url`: Bundler that estimates and submits the operation,
+    ///   covering its gas costs. Omit to request sponsorship through the backend.
+    ///
+    /// # Errors
+    /// - `PrimitiveError` if the vault address or amount cannot be parsed.
+    /// - `InsufficientFunds` if the wallet's fee-token balance cannot cover the
+    ///   estimated network fee before the withdrawal executes.
+    /// - `AddressRestricted` or `ScreeningUnavailable` for wallet screening
+    ///   rejections or outages.
+    /// - `Generic` if construction, preview, RPC calls, sponsorship, custom
+    ///   estimation, or fee-token allowance validation fails.
+    pub async fn prepare_transaction_erc4626_withdraw(
+        &self,
+        vault_address: &str,
+        asset_amount: &str,
+        custom_bundler_url: Option<String>,
+    ) -> Result<PreparedVaultTransaction, TransactionError> {
+        self.prepare_erc4626_transaction(
+            Erc4626Operation::Withdraw,
+            vault_address,
+            asset_amount,
+            custom_bundler_url,
+        )
+        .await
+    }
+
+    /// Signs and submits a previously prepared transaction on World Chain.
+    /// Uses the custom bundler URL retained during preparation when present.
+    ///
+    /// # Errors
+    /// - Will throw an error if the transaction was prepared for another account.
+    /// - Will throw an RPC error if signing or submission fails.
+    /// - The backend route requires an initialized global HTTP client.
+    pub async fn submit_prepared_transaction(
+        &self,
+        prepared_transaction: &PreparedTransaction,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let route = if prepared_transaction.custom_bundler_url.is_some() {
+            "custom"
+        } else {
+            "default"
+        };
+        let log_failure = |stage: &str, error: &dyn std::fmt::Display| {
+            crate::error!(
+                sender = prepared_transaction.user_operation.sender,
+                wallet_address = self.wallet_address,
+                network = Network::WorldChain.network_name(),
+                route = route,
+                outcome = "error",
+                stage = stage,
+                error_message = error,
+                "Failed to submit prepared transaction"
+            );
+        };
+
+        crate::info!(
+            sender = prepared_transaction.user_operation.sender,
+            network = Network::WorldChain.network_name(),
+            route = route,
+            "Submitting prepared transaction"
+        );
+        if prepared_transaction.user_operation.sender != self.wallet_address {
+            log_failure(
+                "validate_account",
+                &"Prepared transaction belongs to another account",
+            );
+            return Err(TransactionError::Generic {
+                error_message: "Prepared transaction belongs to another account"
+                    .to_string(),
+            });
+        }
+
+        let mut user_operation = prepared_transaction.user_operation.clone();
+        let user_op_hash = if let Some(url) = &prepared_transaction.custom_bundler_url {
+            self.sign_user_operation(&mut user_operation, Network::WorldChain)
+                .map_err(|e| {
+                    log_failure("sign", &e);
+                    TransactionError::Generic {
+                        error_message: format!("Failed to sign transaction: {e}"),
+                    }
+                })?;
+            custom_bundler::send_user_operation_to_url(
+                url.expose_secret(),
+                &user_operation,
+                *ENTRYPOINT_4337,
+            )
+            .await
+            .map_err(|e| {
+                log_failure("submit_custom_bundler", &e);
+                TransactionError::Generic {
+                    error_message: format!("Custom bundler submission failed: {e}"),
+                }
+            })?
+        } else {
+            let rpc_client = get_rpc_client().map_err(|e| {
+                log_failure("get_rpc_client", &e);
+                TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to get RPC client for transaction submission: {e}"
+                    ),
+                }
+            })?;
+            self.sign_and_submit_v3(user_operation, rpc_client)
+                .await
+                .map_err(|e| {
+                    crate::error!(
+                        sender = prepared_transaction.user_operation.sender,
+                        network = Network::WorldChain.network_name(),
+                        route = route,
+                        outcome = "error",
+                        error_message = e,
+                        "Failed to submit prepared transaction"
+                    );
+                    TransactionError::Generic {
+                        error_message: format!("Failed to submit transaction: {e}"),
+                    }
+                })?
+        };
+
+        crate::info!(
+            user_op_hash = user_op_hash,
+            sender = prepared_transaction.user_operation.sender,
+            network = Network::WorldChain.network_name(),
+            route = route,
+            "Submitted prepared transaction"
+        );
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
@@ -166,6 +1151,93 @@ impl SafeSmartAccount {
             })?;
 
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+    }
+
+    /// Redeems one or more Universal uAssets for USDC on World Chain atomically.
+    ///
+    /// Use the trusted `contractAddress` from the backend's redemption status and
+    /// only holdings marked redeemable. Pass their accepted `amount` and quoted
+    /// `usdcAmount` as each redemption's amount and minimum payout respectively.
+    /// Exact-amount approvals and redemptions execute together through `MultiSend`;
+    /// any failed call reverts the entire batch. Balances and quotes are not refreshed
+    /// or silently adjusted here. Sponsorship/gas limits may constrain batch size.
+    /// Screens the wallet before signing. With `custom_bundler_url`, the selected
+    /// bundler estimates and submits a bundler-sponsored operation. Otherwise,
+    /// requires free V3 sponsorship and rejects paid sponsorship responses.
+    /// The wallet never pays a token fee here.
+    ///
+    /// Returns a user-operation hash upon submission, not confirmation of execution.
+    /// Wait for a successful receipt before displaying success or refreshing holdings.
+    ///
+    /// # Errors
+    /// Returns a parsing/validation or screening error, or `Generic` if
+    /// sponsorship, signing, or submission fails.
+    pub async fn transaction_uasset_redeem(
+        &self,
+        vault_address: &str,
+        redemptions: Vec<UAssetRedemption>,
+        custom_bundler_url: Option<String>,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let mut stage = "validation";
+        let result: Result<HexEncodedData, TransactionError> = async {
+            let transaction =
+                contracts::universal_wind_down_vault::UniversalWindDownVault::new(
+                    vault_address,
+                    &redemptions,
+                )?;
+            stage = "screening";
+            let rpc_client =
+                get_rpc_client().map_err(|e| TransactionError::Generic {
+                    error_message: format!("Failed to get RPC client: {e}"),
+                })?;
+            rpc_client
+                .screen_addresses(Network::WorldChain, &[self.wallet_address])
+                .await
+                .map_err(screening_error)?;
+            stage = "execution";
+            if let Some(url) = custom_bundler_url {
+                let operation = transaction
+                    .build_preflight_user_operation(self.wallet_address, None)?;
+                let operation = custom_bundler::prepare_bundler_sponsored_operation(
+                    &url, operation,
+                )
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!("Custom bundler preparation failed: {e}"),
+                })?;
+                return self
+                    .submit_prepared_transaction(&PreparedTransaction {
+                        user_operation: operation,
+                        fee_details: None,
+                        custom_bundler_url: Some(url.into()),
+                    })
+                    .await;
+            }
+            let user_op_hash = transaction
+                .sign_and_execute_v3(self, true)
+                .await
+                .map_err(|error| TransactionError::Generic {
+                    error_message: format!(
+                        "Failed to execute uAsset redemption: {error}"
+                    ),
+                })?;
+            Ok(HexEncodedData::new(&user_op_hash.to_string())?)
+        }
+        .await;
+        if let Err(error) = &result {
+            let error_message = error.to_string();
+            crate::warn!(
+                operation = "uasset_redemption",
+                network = Network::WorldChain.network_name(),
+                stage = stage,
+                failure_class = failure_class(&error_message),
+                vault = vault_address,
+                redemption_count = redemptions.len(),
+                error_message = error_message,
+                "Failed to redeem Universal uAssets"
+            );
+        }
+        result
     }
 
     /// Sends a gift using the `WorldGiftManager` contract.
@@ -413,6 +1485,127 @@ impl SafeSmartAccount {
         Ok(HexEncodedData::new(&user_op_hash.to_string())?)
     }
 
+    /// Migrates a savings position into an ERC4626 vault on World Chain.
+    ///
+    /// The source is chosen from `from_vault_address`: the legacy `WLDVault`, a legacy
+    /// `USDVault` (both moved in full), or any other address, treated as an ERC4626 vault.
+    ///
+    /// For an ERC4626 source this builds one atomic bundle with:
+    /// 1. `redeem(shares)` on the source vault (`shares = min(balanceOf, maxRedeem)`)
+    /// 2. `approve(assets)` on the underlying token for the destination vault
+    /// 3. `deposit(assets)` into the destination vault
+    ///
+    /// The `assets` amount is snapshotted with `previewRedeem` when building the transaction,
+    /// then reduced by a 0.03% haircut (Morpho SDK default slippage) for approve + deposit.
+    /// If more assets are redeemed at execution time, the remainder stays as dust in the Safe.
+    /// Destination `previewDeposit` must return a non-zero share amount or building fails.
+    ///
+    /// If source `maxRedeem < balanceOf`, only the redeemable portion moves; remaining source
+    /// shares can be migrated in a later call. Do not gate Morpho V2 destinations on
+    /// `maxDeposit` / `maxRedeem` (often 0 by design).
+    ///
+    /// Legacy sources have no `maxRedeem` cap or haircut. `USDVault` redeems all sDAI at the
+    /// DSR rate (the amount is also `amountOutMin`) using a Permit2 signature valid for
+    /// 3 minutes. The vault only redeems for accounts still verified in the World ID address
+    /// book (`Cannot migrate - address verification expired ...`), and some deployments only
+    /// redeem what the account deposited through them (`Cannot migrate - USDVault only redeems
+    /// up to ...`); both are checked up front.
+    ///
+    /// Screens the wallet before construction or Permit2 signing. The default route requires
+    /// free V3 sponsorship; a custom bundler estimates and submits a bundler-sponsored operation.
+    ///
+    /// # Arguments
+    /// - `from_vault_address`: The source vault address (legacy `WLDVault` / `USDVault` or ERC4626).
+    /// - `to_vault_address`: The destination ERC4626 vault address.
+    /// - `custom_bundler_url`: Optional relayer URL used for both estimation and submission.
+    ///
+    /// # Errors
+    /// - Returns [`TransactionError::PrimitiveError`] if any argument is invalid.
+    /// - Returns `AddressRestricted` or `ScreeningUnavailable` when wallet screening fails.
+    /// - Returns [`TransactionError::Generic`] if the vaults are the same, the source is not a
+    ///   supported vault, or transaction creation or submission fails.
+    pub async fn transaction_erc4626_migrate(
+        &self,
+        from_vault_address: &str,
+        to_vault_address: &str,
+        custom_bundler_url: Option<String>,
+    ) -> Result<HexEncodedData, TransactionError> {
+        let from = Address::parse_from_ffi(from_vault_address, "from_vault_address")?;
+        let to = Address::parse_from_ffi(to_vault_address, "to_vault_address")?;
+        let source = MigrationSource::classify(from);
+
+        let result = async {
+            if from == to {
+                return Err(TransactionError::Generic {
+                    error_message: "Source and destination vaults must differ"
+                        .to_string(),
+                });
+            }
+            let rpc_client =
+                get_rpc_client().map_err(|e| TransactionError::Generic {
+                    error_message: format!("Failed to get RPC client: {e}"),
+                })?;
+            rpc_client
+                .screen_addresses(Network::WorldChain, &[self.wallet_address])
+                .await
+                .map_err(screening_error)?;
+
+            let operation = match source {
+                MigrationSource::WldLegacy => self
+                    .build_wld_legacy_vault_migration(from, to)
+                    .await?
+                    .build_preflight_user_operation(self.wallet_address, None)?,
+                MigrationSource::UsdLegacy => {
+                    let sdai_balance = self.precheck_usd_migration(from).await?;
+                    self.build_usd_legacy_vault_migration(from, to, sdai_balance)
+                        .await?
+                        .build_preflight_user_operation(self.wallet_address, None)?
+                }
+                MigrationSource::Erc4626 => self
+                    .build_erc4626_vault_migration(from, to)
+                    .await?
+                    .build_preflight_user_operation(self.wallet_address, None)?,
+            };
+            if let Some(url) = custom_bundler_url {
+                let operation = custom_bundler::prepare_bundler_sponsored_operation(
+                    &url, operation,
+                )
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!("Custom bundler preparation failed: {e}"),
+                })?;
+                return self
+                    .submit_prepared_transaction(&PreparedTransaction {
+                        user_operation: operation,
+                        fee_details: None,
+                        custom_bundler_url: Some(url.into()),
+                    })
+                    .await;
+            }
+            let hash = self
+                .sponsor_sign_and_submit_v3(operation, true)
+                .await
+                .map_err(|e| TransactionError::Generic {
+                    error_message: format!("Failed to execute vault migration: {e}"),
+                })?;
+            Ok(HexEncodedData::new(&hash.to_string())?)
+        }
+        .await;
+
+        if let Err(error) = &result {
+            let error_message = error.to_string();
+            crate::warn!(
+                source_kind = source.label(),
+                failure_class = failure_class(&error_message),
+                from_vault = from.to_string(),
+                to_vault = to.to_string(),
+                error_message = error_message,
+                "Vault migration failed"
+            );
+        }
+        result
+    }
+
     /// Migrates assets from a `WLDVault` to an ERC4626 vault on World Chain.
     ///
     /// This method withdraws all WLD tokens from the legacy `WLDVault` and deposits the
@@ -441,21 +1634,12 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
-        let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
-            error_message: format!("Failed to get RPC client: {e}"),
-        })?;
-        let transaction =
-            crate::transactions::contracts::wld_legacy_vault::WldLegacyVault::migrate(
-                rpc_client,
-                Network::WorldChain,
+        let transaction = self
+            .build_wld_legacy_vault_migration(
                 legacy_vault_address,
                 erc4626_vault_address,
-                self.wallet_address,
             )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create WLDVault migration: {e}"),
-            })?;
+            .await?;
 
         let provider = RpcProviderName::Any;
 
@@ -502,7 +1686,6 @@ impl SafeSmartAccount {
         let erc4626_vault_address =
             Address::parse_from_ffi(erc4626_vault_address, "erc4626_vault_address")?;
 
-        // Get the RPC client and create the ERC4626 deposit transaction
         let rpc_client = get_rpc_client().map_err(|e| TransactionError::Generic {
             error_message: format!("Failed to get RPC client: {e}"),
         })?;
@@ -519,57 +1702,13 @@ impl SafeSmartAccount {
                 error_message: format!("Failed to fetch sDAI balance: {e}"),
             })?;
 
-        if sdai_amount.is_zero() {
-            return Err(TransactionError::Generic {
-                error_message: "Cannot migrate with zero sDAI balance".to_string(),
-            });
-        }
-
-        let permitted = UnparsedTokenPermissions {
-            token: sdai_address.to_string(),
-            amount: sdai_amount.to_string(),
-        };
-
-        let nonce = {
-            let mut rng = rand::thread_rng();
-            U256::from_be_bytes(rng.gen::<[u8; 32]>())
-        };
-
-        let deadline = Utc::now().timestamp() + 180; // 3 minutes from now
-
-        let transfer = UnparsedPermitTransferFrom {
-            permitted,
-            spender: legacy_vault_address.to_string(),
-            nonce: nonce.to_string(),
-            deadline: deadline.to_string(),
-        };
-
-        let signature = self
-            .sign_permit2_transfer(Network::WorldChain as u32, transfer)
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to sign permit2 transfer: {e}"),
-            })?;
-
-        let permit2_data = Permit2Data {
-            signature,
-            nonce,
-            deadline: U256::from(deadline),
-        };
-
-        let transaction =
-            crate::transactions::contracts::usd_legacy_vault::UsdLegacyVault::migrate(
-                rpc_client,
-                Network::WorldChain,
+        let transaction = self
+            .build_usd_legacy_vault_migration(
                 legacy_vault_address,
                 erc4626_vault_address,
-                sdai_amount,
-                self.wallet_address,
-                permit2_data,
+                (sdai_address, sdai_amount),
             )
-            .await
-            .map_err(|e| TransactionError::Generic {
-                error_message: format!("Failed to create USDVault migration: {e}"),
-            })?;
+            .await?;
 
         let provider = RpcProviderName::Any;
 

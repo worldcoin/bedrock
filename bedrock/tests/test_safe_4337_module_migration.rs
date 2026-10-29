@@ -11,7 +11,10 @@ use common::{
 };
 
 use bedrock::{
-    migration::{MigrationProcessor, ProcessorResult, Safe4337ModuleProcessor},
+    migration::{
+        wallet::safe_4337_module::Safe4337ModuleMigration, WalletMigration,
+        WalletMigrationResult,
+    },
     primitives::http_client::set_http_client,
     smart_account::SafeSmartAccount,
     test_utils::AnvilBackedHttpClient,
@@ -32,7 +35,7 @@ where
 /// migration, repaired via a relayed `execTransaction`, and ends up with the
 /// module enabled AND set as the fallback handler.
 #[tokio::test]
-async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
+async fn test_safe_4337_module_migration_full_flow() -> anyhow::Result<()> {
     // 1) Anvil fork of WorldChain + funded owner signer.
     let anvil = setup_anvil();
     let owner_signer = PrivateKeySigner::random();
@@ -68,28 +71,28 @@ async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
     let client = AnvilBackedHttpClient::new(provider.clone());
     set_http_client(Arc::new(client));
 
-    // 4) Build the processor for this Safe.
+    // 4) Build the migration for this Safe.
     let safe_account = Arc::new(SafeSmartAccount::from_private_key_hex(
         owner_key_hex,
         &safe_address.to_string(),
     )?);
-    let processor = Safe4337ModuleProcessor::new(safe_account);
+    let migration = Safe4337ModuleMigration::new(safe_account);
 
     assert_eq!(
-        processor.migration_id(),
+        migration.migration_id(),
         "wallet.safe.enable_4337_module.v1"
     );
 
-    // 5) Always applicable — the on-chain check lives in `execute`.
-    assert!(processor.is_applicable().await?);
-
-    // 6) Run 1: relays the repair, not yet confirmed (stays retryable).
+    // 5) Pass 1: the end state does not hold, so the repair is relayed and
+    //    reported as Submitted with the relayed transaction id. Nothing is
+    //    confirmed yet — a later observation is what proves it landed.
+    assert!(!migration.end_state_holds().await?);
     assert!(
         matches!(
-            processor.execute().await?,
-            ProcessorResult::Retryable { .. }
+            migration.reconcile().await?,
+            WalletMigrationResult::Submitted { reference: Some(_) }
         ),
-        "first run should relay and report retryable"
+        "first pass should relay and report submitted with a transaction id"
     );
 
     // The relayed execTransaction has landed: module enabled AND handler set.
@@ -105,10 +108,11 @@ async fn test_safe_4337_module_processor_full_flow() -> anyhow::Result<()> {
         "fallback handler should be the module after the relayed repair"
     );
 
-    // 7) Run 2: sees the repair in place and marks the migration done.
+    // 6) Pass 2: the end state now holds. This observation — not the relay's
+    //    own return value — is what marks the migration complete.
     assert!(
-        matches!(processor.execute().await?, ProcessorResult::Success),
-        "second run should confirm the repair and report success"
+        migration.end_state_holds().await?,
+        "the end state should hold once the repair is in place"
     );
 
     Ok(())

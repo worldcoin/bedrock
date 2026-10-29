@@ -1,20 +1,64 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 mod common;
 use alloy::{
-    primitives::{address, U256},
+    primitives::{address, Address, U256},
     providers::{ext::AnvilApi, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
 use common::{deploy_safe, set_erc20_balance_for_safe, setup_anvil, IERC20};
 
 use bedrock::{
-    primitives::http_client::set_http_client,
+    primitives::{
+        http_client::{set_http_client, HttpHeader},
+        AuthenticatedHttpClient, HttpError, HttpMethod,
+    },
     smart_account::{SafeSmartAccount, ENTRYPOINT_4337},
     test_utils::{AnvilBackedHttpClient, IEntryPoint},
 };
 
-// ------------------ The test for the full transaction_transfer flow ------------------
+struct TransferHttpClient {
+    inner: Arc<dyn AuthenticatedHttpClient>,
+    participants: [Address; 2],
+    screening_calls: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl AuthenticatedHttpClient for TransferHttpClient {
+    async fn fetch_from_app_backend(
+        &self,
+        url: String,
+        method: HttpMethod,
+        headers: Vec<HttpHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, HttpError> {
+        let request: serde_json::Value =
+            serde_json::from_slice(body.as_ref().unwrap()).unwrap();
+        match request["method"].as_str() {
+            Some("wa_screenAddresses") => {
+                assert_eq!(url, "/v3/rpc/worldchain");
+                assert_eq!(request["params"], serde_json::json!([self.participants]));
+                self.screening_calls.fetch_add(1, Ordering::SeqCst);
+                return Ok(serde_json::to_vec(&serde_json::json!({
+                    "jsonrpc": "2.0", "id": request["id"], "result": true
+                }))
+                .unwrap());
+            }
+            Some("pm_sponsorUserOperation" | "eth_sendUserOperation") => {
+                assert_eq!(url, "/v3/rpc/worldchain");
+                assert_eq!(request["params"].as_array().unwrap().len(), 2);
+            }
+            Some("eth_call") => assert_eq!(url, "/v2/rpc/worldchain"),
+            method => panic!("unexpected RPC method: {method:?}"),
+        }
+        self.inner
+            .fetch_from_app_backend(url, method, headers, body)
+            .await
+    }
+}
 
 #[tokio::test]
 async fn test_transaction_transfer_full_flow_executes_user_operation(
@@ -68,25 +112,42 @@ async fn test_transaction_transfer_full_flow_executes_user_operation(
     // 7) Install mocked HTTP client that routes calls to Anvil
     let client = AnvilBackedHttpClient::new(provider.clone());
 
-    set_http_client(Arc::new(client));
+    let http = Arc::new(TransferHttpClient {
+        inner: Arc::new(client),
+        participants: [safe_address, recipient],
+        screening_calls: AtomicUsize::new(0),
+    });
+    set_http_client(http.clone());
 
-    // 8) Execute high-level transfer via transaction_transfer
+    // 8) Prepare the transfer without signing or executing it
     let safe_account = SafeSmartAccount::from_private_key_hex(
         owner_key_hex,
         &safe_address.to_string(),
     )?;
     let amount = "1000000000000000000"; // 1 WLD
-    let _user_op_hash = safe_account
-        .transaction_transfer(
+    let prepared = safe_account
+        .prepare_transaction_transfer(
             &wld_token_address.to_string(),
             &recipient.to_string(),
             amount,
             None,
+            None,
         )
         .await
-        .expect("transaction_transfer failed");
+        .expect("prepare_transaction_transfer failed");
 
-    // 9) Verify balances updated
+    assert_eq!(wld.balanceOf(recipient).call().await?, before_recipient);
+    assert_eq!(wld.balanceOf(safe_address).call().await?, before_safe);
+
+    // 9) Sign and submit the exact operation that was prepared
+    let _user_op_hash = safe_account
+        .submit_prepared_transaction(&prepared)
+        .await
+        .expect("submit_prepared_transaction failed");
+
+    assert_eq!(http.screening_calls.load(Ordering::SeqCst), 1);
+
+    // 10) Verify balances updated
     let after_recipient = wld.balanceOf(recipient).call().await?;
     let after_safe = wld.balanceOf(safe_address).call().await?;
 

@@ -5,16 +5,14 @@ use std::str::FromStr;
 use std::time::Duration;
 use strum::Display;
 
-use super::manifest::ManifestManager;
-use crate::backup::manifest::BackupManifest;
+use crate::backup::manifest::{BackupManifest, ManifestManager};
 use crate::backup::{
     BackupEncryptionKey, BackupFactorKind, BackupFileDesignator, BackupMetadata,
-    BackupOidcAccount, BackupOperationError, RemoveFactorOutcome,
+    BackupOidcAccount, BackupOperationError,
 };
 use crate::primitives::config::Os;
 use crate::primitives::filesystem::{
-    create_middleware, get_filesystem_raw, FileSystemError, FileSystemExt,
-    FileSystemMiddleware,
+    unscoped_filesystem, FileSystemError, ScopedFileSystem,
 };
 use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader};
 use crate::HttpMethod;
@@ -62,6 +60,8 @@ pub enum BackupReportEventKind {
     LogIn,
     /// Triggered after verification of a login method (eensures user still has full access to their account)
     MethodVerification,
+    /// Delete the entire backup
+    Delete,
 }
 
 /// Minimal representation of an OIDC factor for reporting
@@ -220,13 +220,13 @@ struct EventPayload {
 
 /// Reports client events with a base report persisted under a prefixed folder.
 pub struct ClientEventsReporter {
-    /// Scoped filesystem middleware for this module (prefixes paths).
-    fs: FileSystemMiddleware,
+    /// Filesystem handle scoped to this module's directory.
+    fs: ScopedFileSystem,
 }
 
 impl ClientEventsReporter {
     #[must_use]
-    /// Constructs a new `ClientEventsReporter` with a scoped filesystem middleware.
+    /// Constructs a new `ClientEventsReporter` with a scoped filesystem handle.
     pub fn new() -> Self {
         Self::default()
     }
@@ -407,7 +407,7 @@ impl PreparedEvent {
 impl Default for ClientEventsReporter {
     fn default() -> Self {
         Self {
-            fs: create_middleware(Self::FS_PREFIX),
+            fs: ScopedFileSystem::new(Self::FS_PREFIX),
         }
     }
 }
@@ -460,7 +460,7 @@ impl ClientEventsReporter {
         let serialized =
             serde_json::to_vec(base).map_err(|_| ClientEventsError::Json)?;
         self.fs
-            .write_file(Self::BASE_FILE, serialized)
+            .write_file(Self::BASE_FILE, &serialized)
             .map_err(ClientEventsError::FileSystemError)
     }
 
@@ -496,7 +496,7 @@ impl ClientEventsReporter {
     /// # Errors
     /// Returns an error if manifest or base report cannot be read/written.
     pub fn sync_base_report_with_manifest(&self) -> Result<(), ClientEventsError> {
-        let fs = get_filesystem_raw()?;
+        let fs = unscoped_filesystem();
         let mut base = self.read_base_report().unwrap_or_default();
 
         // Load manifest via manager (unchecked, no remote gate as it's not mutating the state)
@@ -535,18 +535,11 @@ impl ClientEventsReporter {
     }
 }
 
-/// Reports the outcome of `BackupManager::remove_factor` as a `RemoveMainFactor`
-/// event. Native MUST NOT also send one, or every removal is double-counted.
-///
-/// Fire-and-forget: the user is already waiting on the result this merely describes,
-/// so the send is detached and the caller returns without it.
-///
-/// # Spawning
-/// `bedrock_export` wraps every exported async fn in `async_compat::Compat`, which
-/// enters a process-global runtime handle on each poll, so the task outlives this
-/// call
-pub(super) fn send_remove_factor_event(
-    result: &Result<RemoveFactorOutcome, BackupOperationError>,
+/// Reports a backup operation without waiting for event delivery.
+/// TODO: removing all reports from native side.
+pub(super) fn send_operation_event<T>(
+    kind: BackupReportEventKind,
+    result: &Result<T, BackupOperationError>,
 ) {
     if matches!(
         result,
@@ -560,7 +553,7 @@ pub(super) fn send_remove_factor_event(
     // Composed *before* spawning: the caller goes on to delete the base report this
     // reads, and a spawned task would not poll until after that.
     let request = match ClientEventsReporter::new().prepare_event(
-        &BackupReportEventKind::RemoveMainFactor,
+        &kind,
         result.is_ok(),
         result.as_ref().err().map(ToString::to_string),
         Utc::now().to_rfc3339(),
@@ -569,7 +562,9 @@ pub(super) fn send_remove_factor_event(
         Ok(request) => request,
         Err(error) => {
             crate::warn!(
-                "[ClientEvents] failed to compose RemoveMainFactor event: {error:?}"
+                event_kind = kind,
+                error_message = error,
+                "client_event.prepare_failed"
             );
             return;
         }
@@ -578,7 +573,9 @@ pub(super) fn send_remove_factor_event(
     tokio::spawn(async move {
         if let Err(error) = request.post().await {
             crate::warn!(
-                "[ClientEvents] failed to send RemoveMainFactor event: {error:?}"
+                event_kind = kind,
+                error_message = error,
+                "client_event.send_failed"
             );
         }
     });
@@ -659,8 +656,36 @@ fn report_input(metadata: &BackupMetadata) -> BackupReportInput {
 }
 
 #[cfg(test)]
-mod remove_factor_event_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn delete_event_uses_the_backend_wire_name() {
+        assert_eq!(BackupReportEventKind::Delete.to_string(), "delete");
+        assert_eq!(
+            serde_json::to_value(BackupReportEventKind::Delete).unwrap(),
+            serde_json::json!("delete")
+        );
+    }
+
+    #[tokio::test]
+    async fn native_cannot_double_report_a_delete_event() {
+        let error = crate::backup::BackupManager::new()
+            .send_event(
+                BackupReportEventKind::Delete,
+                true,
+                None,
+                Utc::now().to_rfc3339(),
+                false,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, crate::backup::BackupError::Generic { error_message }
+            if error_message == "delete events are automatically sent by Bedrock")
+        );
+    }
 
     fn oidc(created_at: i64, google: bool) -> crate::backup::BackupFactor {
         crate::backup::BackupFactor {

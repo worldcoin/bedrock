@@ -8,6 +8,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7](https://github.com/worldcoin/bedrock/compare/0.7.6...0.7.7) - 2026-10-28
+
+### Added
+
+- *(transactions)* redeem Universal uAssets for USDC ([#486](https://github.com/worldcoin/bedrock/pull/486))
+- *(transactions)* prepare ERC-4626 withdrawals before signing ([#466](https://github.com/worldcoin/bedrock/pull/466))
+- *(transactions)* prepare ERC-4626 deposits before signing ([#465](https://github.com/worldcoin/bedrock/pull/465))
+
+### Fixed
+
+- *(deps)* resolve cargo deny advisory failures ([#489](https://github.com/worldcoin/bedrock/pull/489))
+
+## [0.7.6](https://github.com/worldcoin/bedrock/compare/0.7.5...0.7.6) - 2026-10-20
+
+### Added
+
+- *(transactions)* execute unified vault migrations through v3 ([#477](https://github.com/worldcoin/bedrock/pull/477))
+- *(transactions)* migrate legacy WLD/USD vaults via transaction_erc4626_migrate ([#472](https://github.com/worldcoin/bedrock/pull/472))
+
+## [0.7.5](https://github.com/worldcoin/bedrock/compare/0.7.4...0.7.5) - 2026-10-08
+
+### Added
+
+- *(migrations)* submit TFH paymaster approvals through V3 ([#474](https://github.com/worldcoin/bedrock/pull/474))
+
+### Fixed
+
+- *(transactions)* preserve insufficient fee balance errors ([#475](https://github.com/worldcoin/bedrock/pull/475))
+
+## [0.7.4](https://github.com/worldcoin/bedrock/compare/0.7.3...0.7.4) - 2026-10-02
+
+### Added
+
+- *(transactions)* screen transfer participants before signing ([#463](https://github.com/worldcoin/bedrock/pull/463))
+
+### Other
+
+- *(deps)* bump strum from 0.27.2 to 0.28.0 ([#467](https://github.com/worldcoin/bedrock/pull/467))
+
+## [0.7.3](https://github.com/worldcoin/bedrock/compare/0.7.2...0.7.3) - 2026-09-29
+
+### Added
+
+- *(transactions)* use v3 RPC for prepared transfers ([#461](https://github.com/worldcoin/bedrock/pull/461))
+- *(transactions)* prepare transfers with a custom bundler ([#460](https://github.com/worldcoin/bedrock/pull/460))
+- *(transactions)* support ERC-20 self-sponsorship ([#458](https://github.com/worldcoin/bedrock/pull/458))
+- reconcile legacy sync factor cleanup with Secure Enclave signer ([#446](https://github.com/worldcoin/bedrock/pull/446))
+- ERC-4626 vault-to-vault migrate ([#436](https://github.com/worldcoin/bedrock/pull/436))
+
+### Fixed
+
+- approve TFH paymaster tokens without balance checks ([#459](https://github.com/worldcoin/bedrock/pull/459))
+
+### Added
+
+- ERC-4626 vault-to-vault migrate (`transaction_erc4626_migrate(from, to)`) migrates full redeemable shares (`min(balanceOf, maxRedeem)`); leftover source shares possible if `maxRedeem` binds; `previewRedeem` snapshot + 0.03% deposit haircut (dust stays on Safe); destination `previewDeposit > 0`; zero-first approve when needed
+- *(test)* Morpho Re7 WARS V1→V2 migrate fork e2e
+
+## [0.7.2](https://github.com/worldcoin/bedrock/compare/0.7.1...0.7.2) - 2026-09-17
+
+### Added
+
+- *(backup)* expose batch file changes (WIDC-267) ([#455](https://github.com/worldcoin/bedrock/pull/455))
+- *(backup)* guard legacy file removal by checksum (WIDC-217) ([#452](https://github.com/worldcoin/bedrock/pull/452))
+- batch backup file changes ([#440](https://github.com/worldcoin/bedrock/pull/440))
+- improvements to SIWE parsing ([#449](https://github.com/worldcoin/bedrock/pull/449))
+
+### Other
+
+- align Rust toolchains on 1.98.1 ([#437](https://github.com/worldcoin/bedrock/pull/437))
+- *(backup)* cover combined file updates (WIDC-267) ([#451](https://github.com/worldcoin/bedrock/pull/451))
+
+## [0.7.1](https://github.com/worldcoin/bedrock/compare/0.7.0...0.7.1) - 2026-09-11
+
+### Added
+
+- *(transactions)* prepare ERC-20 transfers before signing ([#439](https://github.com/worldcoin/bedrock/pull/439))
+
+### Other
+
+- *(contracts)* point TFH paymaster at the new proxy ([#448](https://github.com/worldcoin/bedrock/pull/448))
+
+## [0.7.0](https://github.com/worldcoin/bedrock/compare/0.6.2...0.7.0) - 2026-09-09
+
+### Added
+
+- [**breaking**] delete backup method & simplify factor removal logic ([#422](https://github.com/worldcoin/bedrock/pull/422))
+- *(migration)* top up the TFH paymaster's ERC-20 allowance (staging only) ([#433](https://github.com/worldcoin/bedrock/pull/433))
+- *(migration)* track fire-and-forget userOp hashes and harden the retry loop ([#408](https://github.com/worldcoin/bedrock/pull/408))
+
+### Fixed
+
+- *(transactions)* use NTP time for on-chain signature deadlines ([#444](https://github.com/worldcoin/bedrock/pull/444))
+- erc4337 tx exec flaky test ([#445](https://github.com/worldcoin/bedrock/pull/445))
+
+### Other
+
+- *(rpc)* parse sponsorship decline responses ([#435](https://github.com/worldcoin/bedrock/pull/435))
+- update Worldchain URLs. ([#442](https://github.com/worldcoin/bedrock/pull/442))
+- *(rpc)* preserve structured error responses ([#434](https://github.com/worldcoin/bedrock/pull/434))
+- *(deps)* bump base64 from 0.22.1 to 0.23.1 ([#430](https://github.com/worldcoin/bedrock/pull/430))
+
+## [0.6.2](https://github.com/worldcoin/bedrock/compare/0.6.1...0.6.2) - 2026-09-01
+
+### Fixed
+
+- treat a missing local manifest as an empty list in list_files ([#428](https://github.com/worldcoin/bedrock/pull/428))
+- *(test)* await ERC-4337 transaction receipt ([#427](https://github.com/worldcoin/bedrock/pull/427))
+
+### Other
+
+- *(rpc)* split wire types and tests ([#426](https://github.com/worldcoin/bedrock/pull/426))
+
+## [0.6.1](https://github.com/worldcoin/bedrock/compare/0.6.0...0.6.1) - 2026-08-24
+
+### Fixed
+
+- hex parsing could allow multiple 0x prefixes ([#421](https://github.com/worldcoin/bedrock/pull/421))
+- treat empty retrieve_metadata manifest_hash as no remote backup ([#418](https://github.com/worldcoin/bedrock/pull/418))
+- enforces response max size for custom RPC/bundlers ([#417](https://github.com/worldcoin/bedrock/pull/417))
+
+## [0.6.0](https://github.com/worldcoin/bedrock/compare/0.5.3...0.6.0) - 2026-08-20
+
+### Added
+
+- [**breaking**] migrate filesystem management to rust with std::fs ([#415](https://github.com/worldcoin/bedrock/pull/415))
+- [**breaking**] structured attr logging ([#391](https://github.com/worldcoin/bedrock/pull/391))
+- [**breaking**] factor removal flow ([#409](https://github.com/worldcoin/bedrock/pull/409))
+
 ## [0.5.3](https://github.com/worldcoin/bedrock/compare/0.5.2...0.5.3) - 2026-08-14
 
 ### Added

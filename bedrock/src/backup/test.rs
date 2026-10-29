@@ -1,7 +1,7 @@
 use crate::backup::backup_format::v0::{V0Backup, V0BackupFile};
 use crate::backup::backup_format::v0::{V0BackupManifest, V0BackupManifestEntry};
 use crate::backup::backup_format::BackupFormat;
-use crate::backup::manifest::{BackupManifest, ManifestManager};
+use crate::backup::manifest::{BackupFileChange, BackupManifest, ManifestManager};
 use crate::backup::service_client::{
     set_backup_service_api, BackupServiceApi, RetrieveMetadataResponsePayload,
     SyncSubmitRequest,
@@ -9,9 +9,8 @@ use crate::backup::service_client::{
 use crate::backup::FactorType;
 use crate::backup::{BackupFileDesignator, BackupManager};
 use crate::primitives::filesystem::{
-    create_middleware, get_filesystem_raw, FileSystem,
+    init_test_filesystem, unscoped_filesystem, ScopedFileSystem,
 };
-use crate::primitives::filesystem::{set_filesystem, InMemoryFileSystem};
 use crate::root_key::RootKey;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -37,16 +36,138 @@ fn siegel_from_str(secret: &str) -> Arc<SiegelSession> {
     session
 }
 
+/// Points Bedrock at the shared per-process test root.
+///
+/// The root is shared by every test in the process, so each test scopes its files
+/// under a prefix of its own, exactly as modules do at runtime.
 fn ensure_fs_initialized() {
-    if crate::primitives::filesystem::get_filesystem_raw().is_err() {
-        let fs = InMemoryFileSystem::new();
-        set_filesystem(std::sync::Arc::new(fs));
-    }
+    init_test_filesystem();
 }
 
 // =========================
 // ManifestManager tests
 // =========================
+
+#[tokio::test]
+#[serial]
+async fn test_batch_conditional_removal_preserves_other_identity_and_retries() {
+    let api = init_test_globals();
+    api.reset();
+    let prefix = "backup_test_face_migration";
+    let legacy = "conditional_face/legacy.bin";
+    let scoped = "conditional_face/alice.bin";
+    let other = "conditional_face/bob.bin";
+    let checksum = hex::encode(blake3::hash(b"ALICE").as_bytes());
+    write_global_file(scoped, b"ALICE");
+    write_global_file(other, b"BOB");
+    // The legacy file has already been renamed: only the manifest still refers to it.
+    let initial = BackupManifest::V0(V0BackupManifest {
+        files: vec![
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::FacePkg,
+                file_path: legacy.into(),
+                checksum_hex: checksum.clone(),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::FacePkg,
+                file_path: other.into(),
+                checksum_hex: hex::encode(blake3::hash(b"BOB").as_bytes()),
+            },
+        ],
+    });
+    write_manifest_with_prefix(&initial, prefix);
+    api.set_remote_hash(compute_manifest_hash(&initial));
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    let root = RootKey::new_random().danger_to_json().unwrap();
+    let manager = ManifestManager::new_with_prefix(prefix);
+    for _ in 0..2 {
+        let changes = vec![
+            BackupFileChange::Put {
+                designator: BackupFileDesignator::FacePkg,
+                path: scoped.into(),
+            },
+            BackupFileChange::RemoveIfChecksumMatches {
+                designator: BackupFileDesignator::FacePkg,
+                path: format!("./{legacy}"),
+                checksum_hex: checksum.to_uppercase(),
+            },
+        ];
+        manager
+            .sync_changes(&root, hex::encode(key.public_key().as_bytes()), changes)
+            .await
+            .unwrap();
+    }
+    let BackupManifest::V0(committed) = get_manifest_from_disk(prefix);
+    assert_eq!(committed.files.len(), 2);
+    assert!(committed
+        .files
+        .iter()
+        .any(|entry| entry.file_path == scoped));
+    let BackupManifest::V0(original) = initial;
+    assert_eq!(
+        committed
+            .files
+            .iter()
+            .find(|entry| entry.file_path == other),
+        Some(&original.files[1]),
+    );
+    assert_eq!(api.state.lock().unwrap().sync_count, 1);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_batch_conditional_removal_rejects_changed_owner_without_committing() {
+    let api = init_test_globals();
+    let prefix = "backup_test_face_changed_owner";
+    for wrong_designator in [false, true] {
+        api.reset();
+        let initial = BackupManifest::V0(V0BackupManifest {
+            files: vec![V0BackupManifestEntry {
+                designator: BackupFileDesignator::FacePkg,
+                file_path: "conditional_changed/legacy.bin".into(),
+                checksum_hex: hex::encode(blake3::hash(b"BOB").as_bytes()),
+            }],
+        });
+        write_manifest_with_prefix(&initial, prefix);
+        api.set_remote_hash(compute_manifest_hash(&initial));
+        write_global_file("conditional_changed/new.bin", b"NEW");
+        let key = SecretKey::generate(&mut rand::thread_rng());
+        let result = ManifestManager::new_with_prefix(prefix)
+            .sync_changes(
+                &RootKey::new_random().danger_to_json().unwrap(),
+                hex::encode(key.public_key().as_bytes()),
+                vec![
+                    BackupFileChange::Put {
+                        designator: BackupFileDesignator::FacePkg,
+                        path: "conditional_changed/new.bin".into(),
+                    },
+                    BackupFileChange::RemoveIfChecksumMatches {
+                        designator: if wrong_designator {
+                            BackupFileDesignator::OrbPkg
+                        } else {
+                            BackupFileDesignator::FacePkg
+                        },
+                        path: "conditional_changed/legacy.bin".into(),
+                        checksum_hex: hex::encode(
+                            blake3::hash(if wrong_designator {
+                                b"BOB"
+                            } else {
+                                b"ALICE"
+                            })
+                            .as_bytes(),
+                        ),
+                    },
+                ],
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::backup::BackupError::InvalidFileForBackup(_)),
+        ));
+        assert_eq!(get_manifest_from_disk(prefix), initial);
+        assert_eq!(api.state.lock().unwrap().sync_count, 0);
+    }
+}
 
 #[derive(Default, Clone, Debug)]
 struct NextSyncErrorConfig {
@@ -74,6 +195,10 @@ impl FakeBackupServiceApi {
     }
     fn set_remote_hash(&self, hex_hash: String) {
         self.state.lock().unwrap().remote_manifest_hash_hex = Some(hex_hash);
+    }
+    /// Simulates the server reporting no backup for the account (empty `manifest_hash`).
+    fn set_no_remote_backup(&self) {
+        self.state.lock().unwrap().remote_manifest_hash_hex = Some(String::new());
     }
     fn set_sync_error_bad_status(&self, code: u64, response_body: Vec<u8>) {
         self.state.lock().unwrap().sync_error = Some(NextSyncErrorConfig {
@@ -123,7 +248,7 @@ static TEST_API: OnceLock<Arc<FakeBackupServiceApi>> = OnceLock::new();
 
 fn init_test_globals() -> Arc<FakeBackupServiceApi> {
     // Filesystem
-    set_filesystem(Arc::new(InMemoryFileSystem::new()));
+    ensure_fs_initialized();
     // API
     TEST_API.get().cloned().unwrap_or_else(|| {
         let api = Arc::new(FakeBackupServiceApi::default());
@@ -135,14 +260,21 @@ fn init_test_globals() -> Arc<FakeBackupServiceApi> {
 
 fn write_manifest_with_prefix(manifest: &BackupManifest, prefix: &str) {
     let bytes = serde_json::to_vec(manifest).unwrap();
-    let mw = create_middleware(prefix);
-    mw.write_file("manifest.json", bytes).unwrap();
+    ScopedFileSystem::new(prefix)
+        .write_file("manifest.json", &bytes)
+        .unwrap();
 }
 
 fn get_manifest_from_disk(prefix: &str) -> BackupManifest {
-    let fs = get_filesystem_raw().unwrap().clone();
-    let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
+    let bytes = read_manifest_bytes(prefix);
     serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Reads the raw manifest written under `prefix`.
+fn read_manifest_bytes(prefix: &str) -> Vec<u8> {
+    unscoped_filesystem()
+        .read_file(&format!("{prefix}/manifest.json"))
+        .unwrap()
 }
 
 fn compute_manifest_hash(manifest: &BackupManifest) -> String {
@@ -150,15 +282,12 @@ fn compute_manifest_hash(manifest: &BackupManifest) -> String {
 }
 
 fn compute_manifest_hash_from_disk(prefix: &str) -> String {
-    let fs: Arc<dyn FileSystem> = get_filesystem_raw().unwrap().clone();
-    let bytes = fs.read_file(format!("{prefix}/manifest.json")).unwrap();
-    let manifest: BackupManifest = serde_json::from_slice(&bytes).unwrap();
+    let manifest = get_manifest_from_disk(prefix);
     hex::encode(manifest.to_hash().unwrap())
 }
 
 fn write_global_file(path: &str, contents: &[u8]) {
-    let fs = get_filesystem_raw().unwrap().clone();
-    fs.write_file(path.to_string(), contents.to_vec()).unwrap();
+    unscoped_filesystem().write_file(path, contents).unwrap();
 }
 
 #[test]
@@ -166,6 +295,305 @@ fn test_backup_manifest_default_hash() {
     let manifest = BackupManifest::V0(V0BackupManifest { files: vec![] });
     let hash = hex::encode(manifest.to_hash().unwrap());
     assert_eq!(hash, BackupManifest::default_hash_hex());
+}
+
+#[tokio::test]
+#[serial]
+async fn test_batch_refreshes_vault_with_document_changes_in_one_sync() {
+    let api = init_test_globals();
+    let prefix = "backup_test_batch_vault";
+    for operation in ["store", "replace", "remove"] {
+        api.reset();
+        let initial = BackupManifest::V0(V0BackupManifest {
+            files: vec![
+                V0BackupManifestEntry {
+                    designator: BackupFileDesignator::CredentialVault,
+                    file_path: "batch/vault.bin".into(),
+                    checksum_hex: hex::encode(blake3::hash(b"OLD VAULT").as_bytes()),
+                },
+                V0BackupManifestEntry {
+                    designator: BackupFileDesignator::DocumentPkg,
+                    file_path: "batch/document.bin".into(),
+                    checksum_hex: hex::encode(blake3::hash(b"OLD DOCUMENT").as_bytes()),
+                },
+            ],
+        });
+        write_manifest_with_prefix(&initial, prefix);
+        api.set_remote_hash(compute_manifest_hash(&initial));
+        write_global_file("batch/vault.bin", b"FRESH VAULT EXPORT");
+        write_global_file("batch/new.bin", b"NEW DOCUMENT");
+        // A replace must update BOTH checksums before validation. A separate vault
+        // upload would fail here on the old document checksum.
+        write_global_file(
+            "batch/document.bin",
+            if operation == "replace" {
+                b"CHANGED"
+            } else {
+                b"OLD DOCUMENT"
+            },
+        );
+        let mutation = match operation {
+            "store" => BackupFileChange::Put {
+                designator: BackupFileDesignator::DocumentPkg,
+                path: "./batch/new.bin".into(),
+            },
+            "replace" => BackupFileChange::ReplaceFiles {
+                designator: BackupFileDesignator::DocumentPkg,
+                paths: vec!["batch/document.bin".into()],
+            },
+            _ => BackupFileChange::Remove {
+                path: "batch/document.bin".into(),
+            },
+        };
+        let key = SecretKey::generate(&mut rand::thread_rng());
+        let manager = ManifestManager::new_with_prefix(prefix);
+        if operation == "store" {
+            // Reproduce the production path: recreating the vault and then only
+            // storing the document rejects the previous vault checksum.
+            let error = manager
+                .store_file(
+                    BackupFileDesignator::DocumentPkg,
+                    "batch/new.bin".into(),
+                    &RootKey::new_random().danger_to_json().unwrap(),
+                    hex::encode(key.public_key().as_bytes()),
+                )
+                .await
+                .expect_err("fresh export cannot match the previous vault checksum");
+            assert!(
+                matches!(error, crate::backup::BackupError::InvalidChecksumError { designator } if designator == "credential_vault")
+            );
+            assert_eq!(api.state.lock().unwrap().sync_count, 0);
+        }
+        manager
+            .sync_changes(
+                &RootKey::new_random().danger_to_json().unwrap(),
+                hex::encode(key.public_key().as_bytes()),
+                vec![
+                    BackupFileChange::ReplaceFiles {
+                        designator: BackupFileDesignator::CredentialVault,
+                        paths: vec!["batch/vault.bin".into()],
+                    },
+                    mutation,
+                ],
+            )
+            .await
+            .unwrap();
+        let committed = get_manifest_from_disk(prefix);
+        let state = api.state.lock().unwrap();
+        assert_eq!(state.sync_count, 1);
+        let upload = state.last_sync.clone().unwrap();
+        drop(state);
+        assert_eq!(
+            upload.current_manifest_hash,
+            compute_manifest_hash(&initial)
+        );
+        assert_eq!(upload.new_manifest_hash, compute_manifest_hash(&committed));
+        let BackupManifest::V0(manifest) = committed;
+        let files = manager
+            .build_unsealed_backup_files_from_manifest(&manifest)
+            .unwrap();
+        let vault = files
+            .iter()
+            .find(|file| file.designator == BackupFileDesignator::CredentialVault)
+            .unwrap();
+        assert_eq!(vault.data, b"FRESH VAULT EXPORT");
+        let BackupFormat::V0(uploaded) =
+            BackupFormat::from_bytes(&key.unseal(&upload.sealed_backup).unwrap())
+                .unwrap();
+        assert_eq!(uploaded.files, files);
+        assert_eq!(
+            files.len(),
+            match operation {
+                "store" => 3,
+                "replace" => 2,
+                _ => 1,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_batch_refreshes_document_with_vault_and_referrals_preserving_siblings() {
+    let api = init_test_globals();
+    api.reset();
+    let prefix = "backup_test_batch_refresh";
+    let sources = [
+        (
+            BackupFileDesignator::CredentialVault,
+            "batch_refresh/vault.bin",
+            "old vault",
+            "new vault",
+        ),
+        (
+            BackupFileDesignator::DocumentPkg,
+            "batch_refresh/document.bin",
+            "old document",
+            "new document",
+        ),
+        (
+            BackupFileDesignator::DocumentPkg,
+            "batch_refresh/sibling.bin",
+            "sibling",
+            "sibling",
+        ),
+        (
+            BackupFileDesignator::AnonymizedThirdPartyAnalytics,
+            "batch_refresh/referrals.json",
+            "old referrals",
+            "new referrals",
+        ),
+        (
+            BackupFileDesignator::AnonymizedThirdPartyAnalytics,
+            "batch_refresh/other_platform_referrals.json",
+            "other platform referrals",
+            "other platform referrals",
+        ),
+    ];
+    let initial = BackupManifest::V0(V0BackupManifest {
+        files: sources
+            .iter()
+            .map(|(designator, path, previous, current)| {
+                write_global_file(path, current.as_bytes());
+                V0BackupManifestEntry {
+                    designator: designator.clone(),
+                    file_path: (*path).into(),
+                    checksum_hex: hex::encode(
+                        blake3::hash(previous.as_bytes()).as_bytes(),
+                    ),
+                }
+            })
+            .collect(),
+    });
+    write_manifest_with_prefix(&initial, prefix);
+    api.set_remote_hash(compute_manifest_hash(&initial));
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    ManifestManager::new_with_prefix(prefix)
+        .sync_changes(
+            &RootKey::new_random().danger_to_json().unwrap(),
+            hex::encode(key.public_key().as_bytes()),
+            vec![
+                BackupFileChange::ReplaceFiles {
+                    designator: BackupFileDesignator::CredentialVault,
+                    paths: vec!["batch_refresh/vault.bin".into()],
+                },
+                BackupFileChange::Put {
+                    designator: BackupFileDesignator::DocumentPkg,
+                    path: "batch_refresh/document.bin".into(),
+                },
+                BackupFileChange::Put {
+                    designator: BackupFileDesignator::AnonymizedThirdPartyAnalytics,
+                    path: "batch_refresh/referrals.json".into(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let state = api.state.lock().unwrap();
+    assert_eq!(
+        state.sync_count, 1,
+        "refresh must not upload an intermediate removal"
+    );
+    let upload = state.last_sync.clone().unwrap();
+    drop(state);
+    let committed = get_manifest_from_disk(prefix);
+    assert_eq!(
+        upload.current_manifest_hash,
+        compute_manifest_hash(&initial)
+    );
+    assert_eq!(upload.new_manifest_hash, compute_manifest_hash(&committed));
+    let BackupFormat::V0(uploaded) =
+        BackupFormat::from_bytes(&key.unseal(&upload.sealed_backup).unwrap()).unwrap();
+    let BackupManifest::V0(manifest) = committed;
+    assert_eq!(uploaded.files.len(), sources.len());
+    assert_eq!(manifest.files.len(), sources.len());
+    for (designator, path, _, current) in sources {
+        let entry = manifest
+            .files
+            .iter()
+            .find(|entry| entry.file_path == path)
+            .unwrap();
+        assert_eq!(entry.designator, designator);
+        assert_eq!(
+            entry.checksum_hex,
+            hex::encode(blake3::hash(current.as_bytes()).as_bytes())
+        );
+        assert!(
+            uploaded.files.iter().any(|file| {
+                file.designator == designator && file.data == current.as_bytes()
+            }),
+            "uploaded backup must include {path}"
+        );
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_batch_preserves_manifest_on_corruption_stale_remote_or_upload_failure() {
+    let api = init_test_globals();
+    let prefix = "backup_test_batch_failure";
+    for failure in ["corruption", "stale", "upload", "missing_source"] {
+        api.reset();
+        let initial = BackupManifest::V0(V0BackupManifest {
+            files: vec![V0BackupManifestEntry {
+                designator: BackupFileDesignator::OrbPkg,
+                file_path: "batch/unchanged.bin".into(),
+                checksum_hex: hex::encode(blake3::hash(b"ORIGINAL").as_bytes()),
+            }],
+        });
+        write_manifest_with_prefix(&initial, prefix);
+        let initial_bytes = read_manifest_bytes(prefix);
+        api.set_remote_hash(if failure == "stale" {
+            hex::encode([42; 32])
+        } else {
+            compute_manifest_hash(&initial)
+        });
+        write_global_file(
+            "batch/unchanged.bin",
+            if failure == "corruption" {
+                b"CORRUPTED"
+            } else {
+                b"ORIGINAL"
+            },
+        );
+        write_global_file("batch/vault.bin", b"FRESH VAULT");
+        if failure == "upload" {
+            api.set_sync_error_bad_status(500, b"server error".to_vec());
+        }
+        let mut mutations = vec![BackupFileChange::ReplaceFiles {
+            designator: BackupFileDesignator::CredentialVault,
+            paths: vec!["batch/vault.bin".into()],
+        }];
+        if failure == "missing_source" {
+            mutations.push(BackupFileChange::Put {
+                designator: BackupFileDesignator::DocumentPkg,
+                path: "batch/missing_source.bin".into(),
+            });
+        }
+        let key = SecretKey::generate(&mut rand::thread_rng());
+        let error = ManifestManager::new_with_prefix(prefix)
+            .sync_changes(
+                &RootKey::new_random().danger_to_json().unwrap(),
+                hex::encode(key.public_key().as_bytes()),
+                mutations,
+            )
+            .await
+            .expect_err("batch must fail");
+        if failure == "corruption" {
+            assert!(matches!(
+                error,
+                crate::backup::BackupError::InvalidChecksumError { .. }
+            ));
+        }
+        if failure == "stale" {
+            assert!(matches!(
+                error,
+                crate::backup::BackupError::RemoteAheadStaleError
+            ));
+        }
+        assert_eq!(read_manifest_bytes(prefix), initial_bytes);
+        assert_eq!(api.state.lock().unwrap().sync_count, 0);
+    }
 }
 
 #[tokio::test]
@@ -221,17 +649,138 @@ async fn test_list_files_stale_remote() {
 
 #[tokio::test]
 #[serial]
-async fn test_list_files_missing_manifest() {
+async fn test_list_files_no_remote_backup() {
     let api = init_test_globals();
     api.reset();
 
-    // Do not create a manifest for this prefix
+    let m = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::OrbPkg,
+            file_path: "orb_pkg/personal_custody/pcp.bin".to_string(),
+            checksum_hex: hex::encode(blake3::hash(b"abc").as_bytes()),
+        }],
+    });
+    write_manifest_with_prefix(&m, "backup_test_list_no_remote");
+    api.set_no_remote_backup();
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_no_remote");
+    let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
+    assert_eq!(list, vec!["orb_pkg/personal_custody/pcp.bin".to_string()]);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_store_file_no_remote_backup_creates_backup() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Local manifest exists but the account has no remote backup yet.
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        files: vec![],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_no_remote");
+    api.set_no_remote_backup();
+
+    write_global_file("pcp/source.bin", b"hello-bytes");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_no_remote");
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "pcp/source.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // The first sync uses the default (empty) manifest hash as the current state.
+    let last = api.state.lock().unwrap().last_sync.clone().unwrap();
+    assert_eq!(
+        last.current_manifest_hash,
+        BackupManifest::default_hash_hex()
+    );
+    assert_ne!(last.new_manifest_hash, last.current_manifest_hash);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_store_file_no_remote_backup_with_nonempty_local_manifest() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Local manifest already has an entry, but the account has no remote backup
+    // (e.g. local writes raced ahead of the first successful sync).
+    write_global_file("docs/existing.bin", b"EXISTING");
+    let m0 = BackupManifest::V0(crate::backup::backup_format::v0::V0BackupManifest {
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::DocumentPkg,
+            file_path: "docs/existing.bin".to_string(),
+            checksum_hex: hex::encode(blake3::hash(b"EXISTING").as_bytes()),
+        }],
+    });
+    write_manifest_with_prefix(&m0, "backup_test_store_no_remote_nonempty");
+    api.set_no_remote_backup();
+
+    write_global_file("pcp/source.bin", b"hello-bytes");
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let backup_pk_hex = hex::encode(backup_sk.public_key().as_bytes());
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_store_no_remote_nonempty");
+    mgr.store_file(
+        BackupFileDesignator::OrbPkg,
+        "pcp/source.bin".to_string(),
+        &RootKey::new_random().danger_to_json().unwrap(),
+        backup_pk_hex,
+    )
+    .await
+    .unwrap();
+
+    // With no remote head, the sync parent is the default manifest hash even
+    // though the local manifest is non-empty; the upload carries both files.
+    let last = api.state.lock().unwrap().last_sync.clone().unwrap();
+    assert_eq!(
+        last.current_manifest_hash,
+        BackupManifest::default_hash_hex()
+    );
+
+    let committed = get_manifest_from_disk("backup_test_store_no_remote_nonempty");
+    assert_eq!(committed.entries_length(), 2);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_list_files_missing_manifest_no_remote_is_empty() {
+    let api = init_test_globals();
+    api.reset();
+
+    // No local manifest was ever written (account never created a backup).
+    api.set_no_remote_backup();
+
     let mgr = ManifestManager::new_with_prefix("backup_test_list_missing");
+    let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
+    assert!(list.is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn test_list_files_missing_manifest_with_remote_is_stale() {
+    let api = init_test_globals();
+    api.reset();
+
+    // Remote backup exists but the local manifest is missing (e.g. fresh install before restore).
+    api.set_remote_hash(hex::encode(blake3::hash(b"remote-backup").as_bytes()));
+
+    let mgr = ManifestManager::new_with_prefix("backup_test_list_missing_remote");
     let err = mgr
         .list_files(BackupFileDesignator::OrbPkg)
         .await
-        .expect_err("expected missing manifest error");
-    assert_eq!(err.to_string(), "Manifest not found");
+        .expect_err("expected stale error");
+    assert_eq!(
+        err.to_string(),
+        "Remote manifest is ahead of local; fetch and apply latest backup before updating"
+    );
 }
 
 #[tokio::test]
@@ -241,8 +790,8 @@ async fn test_list_files_corrupted_manifest() {
     api.reset();
 
     // Write an invalid JSON manifest under the backup prefix
-    let mw = create_middleware("backup_test_list_corrupted");
-    mw.write_file("manifest.json", b"not-json".to_vec())
+    ScopedFileSystem::new("backup_test_list_corrupted")
+        .write_file("manifest.json", b"not-json")
         .unwrap();
 
     // Set remote hash to whatever is on disk (parsing will fail before staleness check)
@@ -291,13 +840,62 @@ async fn test_store_file_happy_path_and_commit() {
     .unwrap();
 
     // Manifest committed with one entry
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_store_1/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_store_1");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     assert_eq!(committed["manifest"]["files"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_store_file_refreshes_changed_contents_without_removing_entry() {
+    let api = init_test_globals();
+    api.reset();
+    let prefix = "backup_test_store_refresh";
+    write_manifest_with_prefix(&BackupManifest::default(), prefix);
+    let manager = ManifestManager::new_with_prefix(prefix);
+    let root = RootKey::new_random().danger_to_json().unwrap();
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    let public_key = hex::encode(key.public_key().as_bytes());
+    let path = "pcp/refresh.bin";
+
+    write_global_file(path, b"before");
+    manager
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            path.into(),
+            &root,
+            public_key.clone(),
+        )
+        .await
+        .unwrap();
+    write_global_file(path, b"after");
+    manager
+        .store_file(
+            BackupFileDesignator::OrbPkg,
+            path.into(),
+            &root,
+            public_key.clone(),
+        )
+        .await
+        .unwrap();
+
+    let BackupManifest::V0(manifest) = get_manifest_from_disk(prefix);
+    assert_eq!(manifest.files.len(), 1);
+    assert_eq!(
+        manifest.files[0].checksum_hex,
+        hex::encode(blake3::hash(b"after").as_bytes())
+    );
+    let uploaded = api.state.lock().unwrap().last_sync.clone().unwrap();
+    let archive = key.unseal(&uploaded.sealed_backup).unwrap();
+    let BackupFormat::V0(backup) = BackupFormat::from_bytes(&archive).unwrap();
+    assert_eq!(backup.files[0].data, b"after");
+
+    manager
+        .store_file(BackupFileDesignator::OrbPkg, path.into(), &root, public_key)
+        .await
+        .unwrap();
+    assert_eq!(api.state.lock().unwrap().sync_count, 2);
 }
 
 #[tokio::test]
@@ -333,10 +931,7 @@ async fn test_store_file_accepts_dot_slash_path() {
     .unwrap();
 
     // Manifest committed with previous hash == m0 and one entry with normalized path
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_store_dot_path/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_store_dot_path");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     let files = committed["manifest"]["files"].as_array().unwrap();
@@ -396,10 +991,7 @@ async fn test_store_file_with_unicode_paths() {
     .unwrap();
 
     // Read manifest and verify paths are present
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_store_unicode/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_store_unicode");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     let files = committed["manifest"]["files"].as_array().unwrap();
@@ -452,6 +1044,10 @@ async fn test_store_file_propagates_sync_failure() {
     // The error should be an HTTP error propagated through BackupError
     let msg = err.to_string();
     assert!(msg.contains("Bad status code"), "unexpected error: {msg}");
+    assert_eq!(
+        compute_manifest_hash_from_disk("backup_test_store_sync_failure"),
+        compute_manifest_hash(&m0)
+    );
 }
 
 #[tokio::test]
@@ -686,10 +1282,7 @@ async fn test_replace_all_files_for_designator_happy_path() {
     .unwrap();
 
     // Manifest updated and committed
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_replace_1/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_replace_1");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     assert_eq!(committed["version"], "V0");
     // previous manifest hash field removed, verify only file set
@@ -757,10 +1350,7 @@ async fn test_remove_file_happy_and_not_found() {
     .unwrap();
 
     // Manifest now contains only the document entry
-    let fs = get_filesystem_raw().unwrap().clone();
-    let committed = fs
-        .read_file("backup_test_remove_1/manifest.json".to_string())
-        .unwrap();
+    let committed = read_manifest_bytes("backup_test_remove_1");
     let committed: serde_json::Value = serde_json::from_slice(&committed).unwrap();
     let files = committed["manifest"]["files"].as_array().unwrap();
     assert_eq!(files.len(), 1);
@@ -773,6 +1363,177 @@ async fn test_remove_file_happy_and_not_found() {
         .await
         .expect_err("expected file-not-found error");
     assert!(err.to_string().contains("File not found in manifest"));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_sync_changes_uploads_one_complete_backup() {
+    let api = init_test_globals();
+    api.reset();
+    let prefix = "backup_test_batch";
+    let before = BackupManifest::V0(V0BackupManifest {
+        files: vec![
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::OrbPkg,
+                file_path: "orb/old.bin".into(),
+                checksum_hex: hex::encode(blake3::hash(b"old").as_bytes()),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::DocumentPkg,
+                file_path: "docs/remove.bin".into(),
+                checksum_hex: hex::encode(blake3::hash(b"remove").as_bytes()),
+            },
+            V0BackupManifestEntry {
+                designator: BackupFileDesignator::DocumentPkg,
+                file_path: "docs/keep.bin".into(),
+                checksum_hex: hex::encode(blake3::hash(b"keep").as_bytes()),
+            },
+        ],
+    });
+    write_manifest_with_prefix(&before, prefix);
+    api.set_remote_hash(compute_manifest_hash(&before));
+    let expected_files = [
+        ("docs/keep.bin", b"keep".as_slice()),
+        ("docs/new.bin", b"new".as_slice()),
+        ("orb/one.bin", b"one".as_slice()),
+        ("orb/two.bin", b"two".as_slice()),
+    ];
+    for (path, contents) in expected_files {
+        write_global_file(path, contents);
+    }
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    ManifestManager::new_with_prefix(prefix)
+        .sync_changes(
+            &RootKey::new_random().danger_to_json().unwrap(),
+            hex::encode(key.public_key().as_bytes()),
+            vec![
+                BackupFileChange::Put {
+                    designator: BackupFileDesignator::DocumentPkg,
+                    path: "docs/new.bin".into(),
+                },
+                BackupFileChange::Remove {
+                    path: "docs/remove.bin".into(),
+                },
+                BackupFileChange::ReplaceFiles {
+                    designator: BackupFileDesignator::OrbPkg,
+                    paths: vec!["orb/one.bin".into(), "orb/two.bin".into()],
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let uploaded = api.state.lock().unwrap().last_sync.clone().unwrap();
+    assert_eq!(api.state.lock().unwrap().sync_count, 1);
+    assert_eq!(
+        uploaded.current_manifest_hash,
+        compute_manifest_hash(&before)
+    );
+    assert_eq!(
+        uploaded.new_manifest_hash,
+        compute_manifest_hash_from_disk(prefix)
+    );
+    let archive = key.unseal(&uploaded.sealed_backup).unwrap();
+    let BackupFormat::V0(backup) = BackupFormat::from_bytes(&archive).unwrap();
+    assert_eq!(backup.files.len(), expected_files.len());
+    for (path, contents) in expected_files {
+        let file = backup.files.iter().find(|file| file.path == path).unwrap();
+        assert_eq!(file.data, contents);
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_sync_changes_failure_preserves_manifest() {
+    let api = init_test_globals();
+    let prefix = "backup_test_batch_failure";
+    let manager = ManifestManager::new_with_prefix(prefix);
+    let root = RootKey::new_random().danger_to_json().unwrap();
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    let public_key = hex::encode(key.public_key().as_bytes());
+    write_global_file("batch/valid.bin", b"valid");
+    let cases = [
+        BackupFileChange::Put {
+            designator: BackupFileDesignator::OrbPkg,
+            path: "batch/missing.bin".into(),
+        },
+        BackupFileChange::Remove {
+            path: "batch/missing.bin".into(),
+        },
+        BackupFileChange::ReplaceFiles {
+            designator: BackupFileDesignator::OrbPkg,
+            paths: vec!["batch/valid.bin".into(), "batch/missing.bin".into()],
+        },
+    ];
+    for failing_change in cases {
+        api.reset();
+        write_manifest_with_prefix(&BackupManifest::default(), prefix);
+        let before = read_manifest_bytes(prefix);
+        manager
+            .sync_changes(
+                &root,
+                public_key.clone(),
+                vec![
+                    BackupFileChange::Put {
+                        designator: BackupFileDesignator::OrbPkg,
+                        path: "batch/valid.bin".into(),
+                    },
+                    failing_change,
+                ],
+            )
+            .await
+            .expect_err("an invalid edit must reject the whole batch");
+        assert_eq!(read_manifest_bytes(prefix), before);
+        assert!(api.state.lock().unwrap().last_sync.is_none());
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_sync_changes_recreates_missing_remote_without_local_changes() {
+    let api = init_test_globals();
+    api.reset();
+    let prefix = "backup_test_batch_missing_remote";
+    let path = "batch/existing.bin";
+    write_global_file(path, b"existing");
+    let manifest = BackupManifest::V0(V0BackupManifest {
+        files: vec![V0BackupManifestEntry {
+            designator: BackupFileDesignator::OrbPkg,
+            file_path: path.into(),
+            checksum_hex: hex::encode(blake3::hash(b"existing").as_bytes()),
+        }],
+    });
+    write_manifest_with_prefix(&manifest, prefix);
+    api.set_no_remote_backup();
+    let key = SecretKey::generate(&mut rand::thread_rng());
+    ManifestManager::new_with_prefix(prefix)
+        .replace_all_files_for_designator(
+            BackupFileDesignator::OrbPkg,
+            path.into(),
+            &RootKey::new_random().danger_to_json().unwrap(),
+            hex::encode(key.public_key().as_bytes()),
+        )
+        .await
+        .unwrap();
+    let uploaded = api.state.lock().unwrap().last_sync.clone().unwrap();
+    assert_eq!(
+        uploaded.current_manifest_hash,
+        BackupManifest::default_hash_hex()
+    );
+    assert_eq!(uploaded.new_manifest_hash, compute_manifest_hash(&manifest));
+    assert_eq!(api.state.lock().unwrap().sync_count, 1);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_sync_changes_empty_batch_needs_no_credentials_or_manifest() {
+    let api = init_test_globals();
+    api.reset();
+    ManifestManager::new_with_prefix("backup_test_empty_batch")
+        .sync_changes("", String::new(), vec![])
+        .await
+        .unwrap();
+    assert_eq!(api.state.lock().unwrap().sync_count, 0);
 }
 
 // =========================
@@ -1090,22 +1851,16 @@ fn test_unpack_writes_files_and_manifest() {
         .unwrap();
 
     // Assert: files exist at expected paths (global filesystem, no prefix)
-    let global_fs = crate::primitives::filesystem::get_filesystem_raw()
-        .unwrap()
-        .clone();
+    let global_fs = unscoped_filesystem();
     assert!(global_fs
-        .file_exists("orb_pkg/personal_custody/pcp-1234.bin".to_string())
+        .file_exists("orb_pkg/personal_custody/pcp-1234.bin")
         .unwrap());
     assert!(global_fs
-        .file_exists(
-            "document_pkg/document_personal_custody/passport-1.bin".to_string()
-        )
+        .file_exists("document_pkg/document_personal_custody/passport-1.bin")
         .unwrap());
 
     // Manifest is written under backup_manager/manifest.json
-    let manifest_bytes = global_fs
-        .read_file("backup_manager/manifest.json".to_string())
-        .unwrap();
+    let manifest_bytes = read_manifest_bytes("backup_manager");
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(manifest["version"], "V0");
     let files_array = manifest["manifest"]["files"].as_array().unwrap();
@@ -1115,6 +1870,125 @@ fn test_unpack_writes_files_and_manifest() {
     let checksum1 = &files_array[1]["checksum_hex"];
     assert!(checksum0.is_string());
     assert!(checksum1.is_string());
+}
+
+/// Seals `files` into a backup and returns the arguments
+/// `decrypt_and_unpack_sealed_backup` expects.
+fn seal_backup_for_unpacking(files: Vec<V0BackupFile>) -> (Vec<u8>, String, String) {
+    let unsealed = BackupFormat::V0(V0Backup {
+        root_secret: RootKey::new_random(),
+        files,
+    });
+    let unsealed_bytes = unsealed.to_bytes().unwrap();
+
+    let backup_sk = SecretKey::generate(&mut rand::thread_rng());
+    let sealed = backup_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &unsealed_bytes)
+        .unwrap();
+
+    let factor_sk = SecretKey::generate(&mut rand::thread_rng());
+    let encrypted_backup_keypair = factor_sk
+        .public_key()
+        .seal(&mut rand::thread_rng(), &backup_sk.to_bytes())
+        .unwrap();
+
+    (
+        sealed,
+        hex::encode(encrypted_backup_keypair),
+        hex::encode(factor_sk.to_bytes()),
+    )
+}
+
+/// A backup payload carries attacker-controlled paths. One the filesystem refuses must
+/// abort the whole restore before anything is written, not part-way through it.
+#[test]
+#[serial]
+fn test_unpack_rejects_the_whole_payload_on_an_unusable_path() {
+    ensure_fs_initialized();
+    let manager = BackupManager::new();
+
+    let reserved = format!(
+        "{}/planted.bin",
+        crate::primitives::filesystem::ATOMIC_STAGED_DIRECTORY
+    );
+    for hostile_path in [reserved.as_str(), "./", "."] {
+        let good_path = format!("orb_pkg/before-{}.bin", hostile_path.len());
+        let files = vec![
+            V0BackupFile {
+                data: b"written-first".to_vec(),
+                checksum: blake3::hash(b"written-first").as_bytes().to_owned(),
+                path: good_path.clone(),
+                designator: BackupFileDesignator::OrbPkg,
+            },
+            V0BackupFile {
+                data: b"hostile".to_vec(),
+                checksum: blake3::hash(b"hostile").as_bytes().to_owned(),
+                path: hostile_path.to_string(),
+                designator: BackupFileDesignator::DocumentPkg,
+            },
+        ];
+        let (sealed, keypair, factor) = seal_backup_for_unpacking(files);
+
+        let result = manager.decrypt_and_unpack_sealed_backup(
+            &sealed,
+            keypair,
+            factor,
+            FactorType::Prf,
+        );
+        let Err(err) = result else {
+            panic!("expected `{hostile_path}` to be rejected");
+        };
+        assert!(
+            err.to_string().contains("Invalid file for backup"),
+            "unexpected error for `{hostile_path}`: {err}"
+        );
+
+        // The valid entry ahead of it must not have been written either.
+        assert!(
+            !unscoped_filesystem().file_exists(&good_path).unwrap(),
+            "`{hostile_path}` left a partially applied restore behind"
+        );
+    }
+}
+
+#[test]
+#[serial]
+fn test_unpack_rejects_two_entries_resolving_to_one_file() {
+    ensure_fs_initialized();
+    let manager = BackupManager::new();
+
+    for alias in ["orb_pkg/./aliased.bin", "orb_pkg/Aliased.bin"] {
+        let files = vec![
+            V0BackupFile {
+                data: b"first".to_vec(),
+                checksum: blake3::hash(b"first").as_bytes().to_owned(),
+                path: "orb_pkg/aliased.bin".to_string(),
+                designator: BackupFileDesignator::OrbPkg,
+            },
+            V0BackupFile {
+                data: b"second".to_vec(),
+                checksum: blake3::hash(b"second").as_bytes().to_owned(),
+                path: alias.to_string(),
+                designator: BackupFileDesignator::DocumentPkg,
+            },
+        ];
+        let (sealed, keypair, factor) = seal_backup_for_unpacking(files);
+
+        let result = manager.decrypt_and_unpack_sealed_backup(
+            &sealed,
+            keypair,
+            factor,
+            FactorType::Prf,
+        );
+        let Err(err) = result else {
+            panic!("expected `{alias}` to be rejected as an alias");
+        };
+        assert!(err.to_string().contains("Invalid file for backup"), "{err}");
+        assert!(!unscoped_filesystem()
+            .file_exists("orb_pkg/aliased.bin")
+            .unwrap());
+    }
 }
 
 #[test]
@@ -1173,23 +2047,17 @@ fn test_unpack_writes_files_and_manifest_unicode() {
         .unwrap();
 
     // Assert: files exist at expected paths (global filesystem, no prefix)
-    let global_fs = crate::primitives::filesystem::get_filesystem_raw()
-        .unwrap()
-        .clone();
+    let global_fs = unscoped_filesystem();
     assert!(global_fs
-        .file_exists("orb_pkg/personal_custody/résumé-αβγ.bin".to_string())
+        .file_exists("orb_pkg/personal_custody/résumé-αβγ.bin")
         .unwrap());
     assert!(global_fs
-        .file_exists("document_pkg/İstanbul/ŞĞÜ-çö.bin".to_string())
+        .file_exists("document_pkg/İstanbul/ŞĞÜ-çö.bin")
         .unwrap());
-    assert!(global_fs
-        .file_exists("document_pkg/ไทย/บีน.bin".to_string())
-        .unwrap());
+    assert!(global_fs.file_exists("document_pkg/ไทย/บีน.bin").unwrap());
 
     // Manifest is written under backup_manager/manifest.json and includes the paths
-    let manifest_bytes = global_fs
-        .read_file("backup_manager/manifest.json".to_string())
-        .unwrap();
+    let manifest_bytes = read_manifest_bytes("backup_manager");
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(manifest["version"], "V0");
     let files_array = manifest["manifest"]["files"].as_array().unwrap();

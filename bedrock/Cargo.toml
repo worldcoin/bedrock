@@ -36,8 +36,9 @@ alloy = { version = "2.0.4", default-features = false, features = [
 ] }
 anyhow = "1.0"
 async-trait = "0.1.89"
-aws-nitro-enclaves-nsm-api = "0.4.0"
-base64 = "0.22.1"
+# Attestation verification uses API types without the NSM device driver.
+aws-nitro-enclaves-nsm-api = { version = "0.4.0", default-features = false }
+base64 = "0.23.1"
 bedrock-macros = { path = "../bedrock-macros" }
 blake3 = "1.8.3"
 chrono = { version = "0.4.42", default-features = false, features = [
@@ -78,12 +79,12 @@ secrecy = { version = "0.10", features = ["serde"] }
 serde = "1.0.219"
 serde_json = "1.0"
 sha2 = "0.11.0"
-strum = { version = "0.27.2", features = ["derive"] }
+strum = { version = "0.28.0", features = ["derive"] }
 subtle = { version = "2.6.1", default-features = false }
 futures = "0.3"
 tar = "0.4.40"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["time"] }
+tokio = { version = "1.51.6", features = ["time"] }
 tracing = "0.1.41"
 tracing-log = "0.2.0"
 turnkey_enclave_encrypt = "0.6.1"
@@ -112,6 +113,6 @@ alloy = { version = "2.0.4", default-features = false, features = [
 ] }
 dotenvy = "0.15.7"
 serial_test = "3.4.0"
-tokio = { version = "1.50.0", features = ["time", "test-util"] }
+tokio = { version = "1.51.6", features = ["time", "test-util"] }
 tokio-test = "0.4.5"
 wiremock = "0.6.5"

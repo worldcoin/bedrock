@@ -46,6 +46,12 @@ pub enum TransactionTypeId {
     WLDVaultMigration = 139,
     /// USD Vault migration to ERC-4626 vault
     USDVaultMigration = 140,
+    /// ERC-20 approve for the TFH multi-token paymaster
+    TfhPaymasterApprove = 141,
+    /// ERC-4626 vault migration to another ERC-4626 vault
+    ERC4626Migrate = 142,
+    /// Universal uAsset redemption into USDC
+    UAssetRedemption = 143,
 }
 
 impl TransactionTypeId {

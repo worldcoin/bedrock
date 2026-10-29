@@ -10,7 +10,7 @@
 //! increases monotonically over time as yield accrues block by block.
 
 use alloy::{
-    primitives::{Address, Bytes, U256},
+    primitives::{address, Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -30,9 +30,19 @@ use crate::{
     transactions::contracts::erc4626::IERC4626,
 };
 
+/// The production legacy `WLDVault` contract address on World Chain.
+pub const WLD_LEGACY_VAULT_ADDRESS: Address =
+    address!("0x14a028cC500108307947dca4a1Aa35029FB66CE0");
+
+/// The production and staging legacy `WLDVault` deployments on World Chain.
+pub const WLD_LEGACY_VAULT_ADDRESSES: [Address; 2] = [
+    WLD_LEGACY_VAULT_ADDRESS,
+    address!("0x1d080cb46aedc27f24b684e3d305ec401db1b5ee"),
+];
+
 sol! {
     /// The WLD Vault contract interface.
-    /// Reference: <https://worldchain-mainnet.explorer.alchemy.com/address/0x14a028cC500108307947dca4a1Aa35029FB66CE0?tab=contract>
+    /// Reference: <https://explorer.worldchain.worldcoin.org/address/0x14a028cC500108307947dca4a1Aa35029FB66CE0?tab=contract>
     #[derive(serde::Serialize)]
     interface WLDVault {
         function token() public view returns (address);

@@ -243,7 +243,7 @@ class BedrockToolingTests {
     @Test
     fun testBedrockConfigInitialization() {
         // Initialize config with staging environment
-        uniffi.bedrock.setConfig(uniffi.bedrock.BedrockEnvironment.STAGING, uniffi.bedrock.Os.ANDROID)
+        BedrockTestSupport.setUp()
 
         // Verify current environment is staging
         val config = uniffi.bedrock.getConfig()
@@ -253,8 +253,15 @@ class BedrockToolingTests {
         // Verify config is initialized
         assertTrue(uniffi.bedrock.isInitialized(), "Config should be initialized")
 
-        // Try to initialize again - should be ignored (check logs for warning)
-        uniffi.bedrock.setConfig(uniffi.bedrock.BedrockEnvironment.PRODUCTION, uniffi.bedrock.Os.ANDROID)
+        // Initializing again is refused, even with the same root: the committed config
+        // is what Bedrock keeps using, so a silent no-op would hide the stray call.
+        assertFailsWith<uniffi.bedrock.PrimitiveException.Generic> {
+            uniffi.bedrock.setConfig(
+                uniffi.bedrock.BedrockEnvironment.PRODUCTION,
+                uniffi.bedrock.Os.ANDROID,
+                BedrockTestSupport.dataDirectory,
+            )
+        }
 
         // Environment should still be staging
         val configAfterSecondInit = uniffi.bedrock.getConfig()
@@ -268,14 +275,22 @@ class BedrockToolingTests {
     @Test
     fun testBedrockConfigEnvironmentTypes() {
         // Test creating config with different environments
-        val stagingConfig = uniffi.bedrock.BedrockConfig(uniffi.bedrock.BedrockEnvironment.STAGING, uniffi.bedrock.Os.ANDROID)
+        val stagingConfig = uniffi.bedrock.BedrockConfig(
+            uniffi.bedrock.BedrockEnvironment.STAGING,
+            uniffi.bedrock.Os.ANDROID,
+            BedrockTestSupport.dataDirectory,
+        )
         assertEquals(
             uniffi.bedrock.BedrockEnvironment.STAGING,
             stagingConfig.environment(),
             "Staging config should have staging environment",
         )
 
-        val productionConfig = uniffi.bedrock.BedrockConfig(uniffi.bedrock.BedrockEnvironment.PRODUCTION, uniffi.bedrock.Os.ANDROID)
+        val productionConfig = uniffi.bedrock.BedrockConfig(
+            uniffi.bedrock.BedrockEnvironment.PRODUCTION,
+            uniffi.bedrock.Os.ANDROID,
+            BedrockTestSupport.dataDirectory,
+        )
         assertEquals(
             uniffi.bedrock.BedrockEnvironment.PRODUCTION,
             productionConfig.environment(),

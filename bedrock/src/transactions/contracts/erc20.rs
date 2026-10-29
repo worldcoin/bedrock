@@ -15,6 +15,8 @@ use crate::{
     transactions::{RpcClient, RpcError},
 };
 
+use super::multisend::{MultiSend, MultiSendTx};
+
 sol! {
     /// The ERC20 contract interface.
     ///
@@ -135,6 +137,94 @@ impl Erc20 {
     #[must_use]
     pub fn encode_allowance(owner: Address, spender: Address) -> Vec<u8> {
         IErc20::allowanceCall { owner, spender }.abi_encode()
+    }
+
+    /// Encodes an ERC-20 `balanceOf` call.
+    #[must_use]
+    pub fn encode_balance_of(account: Address) -> Vec<u8> {
+        IErc20::balanceOfCall { account }.abi_encode()
+    }
+}
+
+/// Batched ERC-20 `approve(spender, amount)` calls via `MultiSend`.
+///
+/// One 4337 `UserOperation` granting `spender` a specific allowance on each
+/// token. Unlike [`BatchPermit2Approval`](super::permit2::BatchPermit2Approval)
+/// the spender and the per-token amounts are both callers' choice.
+pub struct BatchErc20Approval {
+    call_data: Bytes,
+    to: Address,
+    operation: SafeOperation,
+    transaction_type: TransactionTypeId,
+}
+
+impl BatchErc20Approval {
+    /// Batches `approve(spender, amount)` for each `(token, amount)` pair.
+    ///
+    /// `transaction_type` tags the nonce key, so each caller's approvals get
+    /// their own transaction class.
+    #[must_use]
+    pub fn new(
+        spender: Address,
+        approvals: &[(Address, U256)],
+        transaction_type: TransactionTypeId,
+    ) -> Self {
+        let entries: Vec<MultiSendTx> = approvals
+            .iter()
+            .map(|(token, amount)| {
+                let data = Self::encode_approve(spender, *amount);
+                MultiSendTx {
+                    operation: SafeOperation::Call as u8,
+                    to: *token,
+                    value: U256::ZERO,
+                    data_length: U256::from(data.len()),
+                    data: data.into(),
+                }
+            })
+            .collect();
+
+        let bundle = MultiSend::build_bundle(&entries);
+
+        Self {
+            call_data: bundle.data.into(),
+            to: bundle.to,
+            operation: bundle.operation,
+            transaction_type,
+        }
+    }
+
+    fn encode_approve(spender: Address, value: U256) -> Vec<u8> {
+        IErc20::approveCall { spender, value }.abi_encode()
+    }
+}
+
+impl Is4337Encodable for BatchErc20Approval {
+    type MetadataArg = ();
+
+    fn build_execute_user_op_call_data(&self) -> Bytes {
+        ISafe4337Module::executeUserOpCall {
+            to: self.to,
+            value: U256::ZERO,
+            data: self.call_data.clone(),
+            operation: self.operation as u8,
+        }
+        .abi_encode()
+        .into()
+    }
+
+    fn build_preflight_user_operation(
+        &self,
+        wallet_address: Address,
+        _metadata: Option<Self::MetadataArg>,
+    ) -> Result<UserOperation, PrimitiveError> {
+        let key =
+            NonceKeyV1::new(self.transaction_type, InstructionFlag::Default, [0u8; 10]);
+
+        Ok(UserOperation::new_with_defaults(
+            wallet_address,
+            key.encode(),
+            self.build_execute_user_op_call_data(),
+        ))
     }
 }
 

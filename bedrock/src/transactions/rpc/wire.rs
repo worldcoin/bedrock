@@ -1,0 +1,312 @@
+use alloy::primitives::{Address, Bytes, U128, U256};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+
+/// JSON-RPC request ID
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Id {
+    /// Numeric ID
+    Number(u64),
+    /// String ID
+    String(String),
+}
+
+/// Supported RPC methods in Bedrock
+#[derive(Debug, Clone, Serialize)]
+pub enum RpcMethod {
+    /// Request sponsorship for a `UserOperation` (V1)
+    #[serde(rename = "wa_sponsorUserOperation")]
+    SponsorUserOperation,
+    /// Request sponsorship for a `UserOperation` (V3)
+    #[serde(rename = "pm_sponsorUserOperation")]
+    PmSponsorUserOperation,
+    /// Screen addresses (V3)
+    #[serde(rename = "wa_screenAddresses")]
+    ScreenAddresses,
+    /// Queries the status of a `UserOperation`
+    #[serde(rename = "wa_getUserOperationReceipt")]
+    WaGetUserOperationReceipt,
+    /// Relay a signed Safe `execTransaction` for the backend to submit on-chain
+    #[serde(rename = "wa_relaySafeTransaction")]
+    RelaySafeTransaction,
+    /// Submit a signed `UserOperation` (V1)
+    #[serde(rename = "eth_sendUserOperation")]
+    SendUserOperation,
+    /// Submit a signed `UserOperation` (V2)
+    #[serde(rename = "eth_sendUserOperation")]
+    SendUserOperationV2,
+    /// Submit a prepared `UserOperation` (V3)
+    #[serde(rename = "eth_sendUserOperation")]
+    SendUserOperationV3,
+    /// Estimate gas for an unsigned `UserOperation`
+    #[serde(rename = "eth_estimateUserOperationGas")]
+    EstimateUserOperationGas,
+    /// Make a read call to a smart contract
+    #[serde(rename = "eth_call")]
+    EthCall,
+    /// Read a single storage slot of a contract
+    #[serde(rename = "eth_getStorageAt")]
+    EthGetStorageAt,
+    /// Query supported ERC-4337 entry points
+    #[serde(rename = "eth_supportedEntryPoints")]
+    SupportedEntryPoints,
+}
+
+/// 4337 provider selection to be passed by native apps
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RpcProviderName {
+    /// Let TFH backend load balance between available providers
+    Any,
+    /// Use Alchemy as 4337 provider
+    Alchemy,
+    /// Use Pimlico as 4337 provider
+    Pimlico,
+}
+
+impl RpcProviderName {
+    /// Returns the wire/header value for the provider
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Alchemy => "alchemy",
+            Self::Pimlico => "pimlico",
+        }
+    }
+}
+
+/// JSON-RPC request envelope, shared with [`crate::transactions::custom_bundler`].
+#[derive(Debug, Serialize)]
+pub struct JsonRpcRequest<T> {
+    jsonrpc: &'static str,
+    id: Id,
+    method: RpcMethod,
+    params: T,
+}
+
+impl<T> JsonRpcRequest<T> {
+    pub(crate) const fn new(method: RpcMethod, id: Id, params: T) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            method,
+            params,
+        }
+    }
+}
+
+/// JSON-RPC error response, shared with [`crate::transactions::custom_bundler`].
+#[derive(Debug, Deserialize)]
+pub struct JsonRpcError {
+    pub code: i64,
+    pub message: String,
+    #[serde(default)]
+    pub data: Option<Value>,
+}
+
+/// Policy reason the user pays the fee for a prepared operation.
+#[derive(Debug, PartialEq, Eq, strum::EnumIter)]
+pub enum PmSponsorshipDeclineReason {
+    /// The L2 base fee exceeded the sponsorship threshold.
+    L2BaseFee,
+    /// The L1 data fee exceeded the sponsorship threshold.
+    L1DataFee,
+    /// The user's transaction count exceeded the sponsorship threshold.
+    TransactionCount,
+    /// The estimated gas usage exceeded the sponsorship threshold.
+    GasUsage,
+    /// A reason introduced by a newer sponsorship service.
+    Unknown(String),
+}
+
+impl std::fmt::Display for PmSponsorshipDeclineReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::L2BaseFee => "l2_base_fee",
+            Self::L1DataFee => "l1_data_fee",
+            Self::TransactionCount => "tx_count",
+            Self::GasUsage => "gas_usage",
+            Self::Unknown(value) => value,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for PmSponsorshipDeclineReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "l2_base_fee" => Self::L2BaseFee,
+            "l1_data_fee" => Self::L1DataFee,
+            "tx_count" => Self::TransactionCount,
+            "gas_usage" => Self::GasUsage,
+            _ => Self::Unknown(value),
+        })
+    }
+}
+
+/// Response from `wa_sponsorUserOperation`
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SponsorUserOperationResponse {
+    /// Paymaster address
+    pub paymaster: Option<Address>,
+    /// Paymaster data
+    pub paymaster_data: Option<Bytes>,
+    /// Pre-verification gas
+    pub pre_verification_gas: U256,
+    /// Verification gas limit
+    pub verification_gas_limit: U128,
+    /// Call gas limit
+    pub call_gas_limit: U128,
+    /// Paymaster verification gas limit
+    pub paymaster_verification_gas_limit: Option<U128>,
+    /// Paymaster post-op gas limit
+    pub paymaster_post_op_gas_limit: Option<U128>,
+    /// Max priority fee per gas
+    pub max_priority_fee_per_gas: U128,
+    /// Max fee per gas
+    pub max_fee_per_gas: U128,
+    /// provider name
+    pub provider_name: RpcProviderName,
+}
+
+/// Gas, paymaster, and fee fields returned by `pm_sponsorUserOperation` (V3).
+///
+/// Paymaster fields (`paymaster`, `paymaster_data`,
+/// `paymaster_verification_gas_limit`, `paymaster_post_op_gas_limit`) are
+/// absent from the bundler-sponsored response shape and present on the
+/// self-sponsored (token) response — see
+/// `bedrock/src/transactions/transaction.md`. They are modelled as
+/// `Option<T>` so both shapes deserialize.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PmSponsorUserOperationResponse {
+    /// Call gas limit
+    pub call_gas_limit: U128,
+    /// Verification gas limit
+    pub verification_gas_limit: U128,
+    /// Pre-verification gas
+    pub pre_verification_gas: U256,
+    /// Max fee per gas
+    pub max_fee_per_gas: U128,
+    /// Max priority fee per gas
+    pub max_priority_fee_per_gas: U128,
+    /// Paymaster address (absent on the bundler-sponsored path)
+    pub paymaster: Option<Address>,
+    /// Paymaster verification gas limit (absent on the bundler-sponsored path)
+    pub paymaster_verification_gas_limit: Option<U128>,
+    /// Paymaster post-op gas limit (absent on the bundler-sponsored path)
+    pub paymaster_post_op_gas_limit: Option<U128>,
+    /// Paymaster data (absent on the bundler-sponsored path)
+    pub paymaster_data: Option<Bytes>,
+    /// Fee metadata; absent when TFH sponsors the operation.
+    pub fee: Option<PmSelfSponsorshipFee>,
+}
+
+impl PmSponsorUserOperationResponse {
+    /// Temporal's bundler-sponsored V3 response has execution gas but no user fee.
+    pub(crate) fn is_sponsored(&self) -> bool {
+        self.paymaster.is_none()
+            && self.paymaster_data.is_none()
+            && self.paymaster_verification_gas_limit.is_none()
+            && self.paymaster_post_op_gas_limit.is_none()
+            && self.fee.is_none()
+            && !self.call_gas_limit.is_zero()
+            && !self.verification_gas_limit.is_zero()
+            && self.pre_verification_gas.is_zero()
+            && self.max_fee_per_gas.is_zero()
+            && self.max_priority_fee_per_gas.is_zero()
+    }
+
+    /// Temporal's self-sponsored V3 response contains priced TFH paymaster fields.
+    pub(crate) fn is_self_sponsored(&self) -> bool {
+        self.paymaster.is_some()
+            && self.paymaster_data.is_some()
+            && self
+                .paymaster_verification_gas_limit
+                .is_some_and(|gas| !gas.is_zero())
+            && self
+                .paymaster_post_op_gas_limit
+                .is_some_and(|gas| !gas.is_zero())
+            && self.fee.is_some()
+            && !self.call_gas_limit.is_zero()
+            && !self.verification_gas_limit.is_zero()
+            && !self.pre_verification_gas.is_zero()
+            && !self.max_fee_per_gas.is_zero()
+    }
+}
+
+/// Fee metadata for an operation the user self-sponsors through the TFH paymaster.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PmSelfSponsorshipFee {
+    /// Estimated ERC-20 network fee in token base units.
+    pub estimated_cost_in_token: String,
+    /// Token used for the network fee.
+    pub token: Address,
+    /// Policy reason the user pays the network fee.
+    pub decline_reason: PmSponsorshipDeclineReason,
+}
+
+/// Response from `wa_getUserOperationReceipt`
+#[derive(Debug, Deserialize, uniffi::Record, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WaGetUserOperationReceiptResponse {
+    /// User operation hash
+    pub user_op_hash: String,
+    /// Transaction hash, if the user operation has been included in a block
+    pub transaction_hash: Option<String>,
+    /// Sender address
+    pub sender: String,
+    /// Status (`pending`, `error`, `mined_success`, or `mined_revert`)
+    pub status: String,
+    /// Source (flexible field representing the transaction type or origin)
+    pub source: String,
+    /// Source ID, if available
+    pub source_id: Option<String>,
+    /// Self-sponsor token, if applicable
+    pub self_sponsor_token: Option<String>,
+    /// Self-sponsor amount, if applicable
+    pub self_sponsor_amount: Option<String>,
+    /// Block timestamp, if the user operation has been included in a block
+    pub block_timestamp: Option<String>,
+}
+
+/// Single positional param for the `wa_relaySafeTransaction` JSON-RPC call.
+///
+/// Mirrors the arguments of the Safe `execTransaction` method plus the target
+/// Safe. All numeric fields are `0x`-prefixed hex and addresses are
+/// `0x`-prefixed; `signatures` is the packed owner signature(s).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelaySafeTransactionRequest {
+    /// The Safe whose `execTransaction` is being called.
+    pub safe_address: String,
+    /// `to` argument of `execTransaction`.
+    pub to: String,
+    /// `value` argument.
+    pub value: String,
+    /// `data` argument.
+    pub data: String,
+    /// `operation` argument (`0` = call, `1` = delegatecall).
+    pub operation: u8,
+    /// `safeTxGas` argument.
+    pub safe_tx_gas: String,
+    /// `baseGas` argument.
+    pub base_gas: String,
+    /// `gasPrice` argument.
+    pub gas_price: String,
+    /// `gasToken` argument.
+    pub gas_token: String,
+    /// `refundReceiver` argument.
+    pub refund_receiver: String,
+    /// `nonce` argument.
+    pub nonce: String,
+    /// Packed owner signature(s).
+    pub signatures: String,
+}

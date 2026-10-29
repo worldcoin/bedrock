@@ -1,5 +1,28 @@
-use std::sync::{Arc, OnceLock};
+//! Filesystem access for Bedrock modules.
+//!
+//! Bedrock owns its file IO directly. Passing files through the FFI boundary consumes at
+//! least 2x more memory with `UniFFI`.
+//!
+//! TODO: Due to migration with other libraries and native code, Bedrock operates in the whole
+//! data directory. A more robust approach would be that each library has its folder in the data
+//! directory, with each library being the only one who can operate on it. This requires progressive
+//! migration. For example, Bedrock's new files could start being written in a Bedrock directory.
+
+use std::fs::{self, File};
+use std::io::{self, BufReader, Write};
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use thiserror::Error;
+
+use crate::primitives::config::get_config;
+use crate::primitives::PrimitiveError;
+
+/// Size of the buffer used to stream files when checksumming.
+const CHECKSUM_CHUNK_SIZE: usize = 65_536; // 64 KiB
+
+/// Directory under the data directory where in-flight writes are staged for atomic writes.
+pub(crate) const ATOMIC_STAGED_DIRECTORY: &str = ".bedrock-staged";
 
 /// Errors that can occur during filesystem operations
 #[derive(Debug, Error, uniffi::Error)]
@@ -10,218 +33,187 @@ pub enum FileSystemError {
     /// Something went wrong with the filesystem operation
     #[error("IO failure: {0}")]
     IoFailure(String),
-    /// Filesystem not initialized
+    /// No data directory is available because `set_config` has not been called yet
     #[error("filesystem not initialized")]
     NotInitialized,
-    /// Unexpected UniFFI callback error
-    #[error("unexpected uniffi callback error: {0}")]
-    UnexpectedUniFFICallbackError(String),
+    /// The requested path traverses outside the Bedrock data directory or names no file
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
 }
 
-/// Converts unexpected UniFFI callback errors to `FileSystemError`.
+/// Maps an IO error where a missing file is an expected, separately reported outcome.
 ///
-/// This implementation is required for foreign trait support. When native apps
-/// (Swift/Kotlin) implement `FileSystem` and encounter unexpected
-/// errors (panics, unhandled exceptions), UniFFI converts them to this error type
-/// instead of causing Rust to panic.
-///
-/// The error reason from the foreign implementation is preserved in the
-/// `UnexpectedUniFFICallbackError` variant for debugging purposes.
-///
-/// Without this implementation, unexpected foreign errors would panic the Rust code.
-impl From<uniffi::UnexpectedUniFFICallbackError> for FileSystemError {
-    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        Self::UnexpectedUniFFICallbackError(error.reason)
+/// `std::fs` errors never embed the path they failed on, so the message is safe to log
+fn io_error_or_missing(operation: &str, error: &io::Error) -> FileSystemError {
+    if error.kind() == io::ErrorKind::NotFound {
+        FileSystemError::FileDoesNotExist
+    } else {
+        FileSystemError::IoFailure(format!("failed to {operation}: {error}"))
     }
 }
 
-/// Trait representing a filesystem that can be implemented by the native side
-#[uniffi::export(with_foreign)]
-pub trait FileSystem: Send + Sync {
-    /// Check if a file exists at the given path
-    ///
-    /// # Errors
-    /// - `FileSystemError` if the operation fails
-    fn file_exists(&self, file_path: String) -> Result<bool, FileSystemError>;
-
-    /// Read file contents
-    ///
-    /// # Errors
-    /// - `FileSystemError::IoFailure` if the file cannot be read
-    /// - `FileSystemError::FileDoesNotExist` if the file doesn't exist
-    fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError>;
-
-    /// List files in a specific directory. No recursion and no subdirectories are returned.
-    ///
-    /// # Notes
-    /// Files are returned without the directory path. Only the file name is returned.
-    ///
-    /// # Errors
-    /// - `FileSystemError::IoFailure` if the directory cannot be listed
-    fn list_files_at_directory(
-        &self,
-        folder_path: String,
-    ) -> Result<Vec<String>, FileSystemError>;
-
-    /// Read a specific byte range from a file
-    ///
-    /// Returns up to `max_length` bytes starting at `offset`. Returns an empty vector
-    /// when `offset` is at or beyond the end of the file.
-    ///
-    /// # Errors
-    /// - `FileSystemError::IoFailure` if the file cannot be read
-    /// - `FileSystemError::FileDoesNotExist` if the file doesn't exist
-    fn read_file_range(
-        &self,
-        file_path: String,
-        offset: u64,
-        max_length: u64,
-    ) -> Result<Vec<u8>, FileSystemError>;
-
-    /// Write file contents
-    ///
-    /// # Errors
-    /// - `FileSystemError::IoFailure` if the file cannot be written, with details about the failure
-    fn write_file(
-        &self,
-        file_path: String,
-        file_buffer: Vec<u8>,
-    ) -> Result<(), FileSystemError>;
-
-    /// Delete a file
-    ///
-    /// # Errors
-    /// - `FileSystemError::FileDoesNotExist` if the file does not exist
-    /// - `FileSystemError::IoFailure` if the file cannot be deleted
-    fn delete_file(&self, file_path: String) -> Result<(), FileSystemError>;
+/// Maps an IO error where a missing file is not an expected outcome.
+fn io_failure(operation: &str, error: &io::Error) -> FileSystemError {
+    FileSystemError::IoFailure(format!("failed to {operation}: {error}"))
 }
 
-/// Extension helpers for `FileSystem`.
-///
-/// These are provided as default methods implemented for all `FileSystem`s.
-pub trait FileSystemExt {
-    /// Calculates the `blake3` checksum of the file at the given path.
-    ///
-    /// Implementations should avoid loading the entire file into memory where possible.
-    /// Uses `read_file_range` in a loop to stream the file.
-    ///
-    /// # Errors
-    /// - `FileSystemError::FileDoesNotExist` if the path does not exist
-    /// - `FileSystemError::IoFailure` for unexpected underlying IO/read errors
-    fn calculate_checksum_and_size(
-        &self,
-        file_path: &str,
-    ) -> Result<([u8; 32], u64), FileSystemError>;
-}
-
-impl<T> FileSystemExt for T
-where
-    T: FileSystem + ?Sized,
-{
-    fn calculate_checksum_and_size(
-        &self,
-        file_path: &str,
-    ) -> Result<([u8; 32], u64), FileSystemError> {
-        let mut hasher = blake3::Hasher::new();
-        let mut offset: u64 = 0;
-        let chunk_size: u64 = 65_536; // 64 KiB (64 * 1024)
-        loop {
-            let chunk =
-                self.read_file_range(file_path.to_string(), offset, chunk_size)?;
-            if chunk.is_empty() {
-                break;
-            }
-            hasher.update(&chunk);
-
-            debug_assert!(
-                u64::try_from(chunk.len()).is_ok(),
-                "chunk.len() cannot overflow because chunk_size is set"
-            );
-            offset = offset.saturating_add(chunk.len() as u64);
-        }
-        Ok((hasher.finalize().into(), offset))
-    }
-}
-
-/// A global instance of the user-provided filesystem
-static FILESYSTEM_INSTANCE: OnceLock<Arc<dyn FileSystem>> = OnceLock::new();
-
-/// Sets the global filesystem instance
-///
-/// This function allows you to provide your own implementation of the `FileSystem` trait.
-/// It should be called once during application initialization.
-///
-/// # Arguments
-///
-/// * `filesystem` - An `Arc` containing your filesystem implementation.
-///
-/// # Note
-///
-/// If the filesystem has already been set, this function will print a message and do nothing.
-#[uniffi::export]
-pub fn set_filesystem(filesystem: Arc<dyn FileSystem>) {
-    match FILESYSTEM_INSTANCE.set(filesystem) {
-        Ok(()) => (),
-        Err(_) => println!("FileSystem already set"),
-    }
-}
-
-/// Gets a reference to the global filesystem instance
-///
-/// # ⚠️ WARNING
-/// This function bypasses the `FileSystemMiddleware` and should only be used internally
-/// by the middleware itself. Direct usage skips important path prefixing and scoping.
-///
-/// For normal filesystem operations, use `FileSystemMiddleware` created via `create_middleware()`.
+/// Validates the data directory and creates it if missing.
 ///
 /// # Errors
-/// - `FileSystemError::NotInitialized` if the filesystem has not been initialized via `set_filesystem`
-pub(crate) fn get_filesystem_raw(
-) -> Result<&'static Arc<dyn FileSystem>, FileSystemError> {
-    FILESYSTEM_INSTANCE
-        .get()
-        .ok_or(FileSystemError::NotInitialized)
+/// - If the provided path is not absolute
+/// - If unexpectedly the data directory cannot be created
+pub(crate) fn prepare_data_directory(
+    data_directory: &Path,
+) -> Result<(), PrimitiveError> {
+    if !data_directory.is_absolute() {
+        return Err(PrimitiveError::InvalidInput {
+            attribute: "path".to_string(),
+            error_message: "the Bedrock data directory must be absolute".to_string(),
+        });
+    }
+
+    fs::create_dir_all(data_directory).map_err(|error| PrimitiveError::Generic {
+        error_message: format!("create the Bedrock data directory: {error}"),
+    })?;
+
+    // ensures the staged directory is writable
+    fs::create_dir_all(data_directory.join(ATOMIC_STAGED_DIRECTORY)).map_err(|error| {
+        PrimitiveError::Generic {
+            error_message: format!(
+                "the Bedrock data directory is not writable: {error}"
+            ),
+        }
+    })
 }
 
-/// Safely invoke a filesystem callback, catching any panics from UniFFI lifting.
-///
-/// When foreign implementations (Kotlin/Swift) throw exceptions during callbacks,
-/// UniFFI may panic while lifting the return value. This helper catches those panics
-/// and converts them to proper errors.
-///
-/// This is particularly important when Kotlin coroutines are cancelled mid-callback,
-/// as the `CancellationException` cannot be properly represented in the return type
-/// and causes UniFFI to panic during `RustBuffer` destruction.
-fn catch_callback_panic<T, F>(operation: &str, f: F) -> Result<T, FileSystemError>
-where
-    F: FnOnce() -> Result<T, FileSystemError> + std::panic::UnwindSafe,
-{
-    std::panic::catch_unwind(f)
-        .map_err(|_| {
-            FileSystemError::UnexpectedUniFFICallbackError(format!(
-                "panic in FileSystem.{operation} callback"
-            ))
-        })
-        .and_then(|result| result)
+/// Discards writes staged but not committed (e.g. process died). Called only
+/// at Bedrock initialization, so no Bedrock system has written files yet.
+pub(crate) fn clear_stale_staged_writes(data_directory: &Path) {
+    match fs::remove_dir_all(data_directory.join(ATOMIC_STAGED_DIRECTORY)) {
+        Ok(()) => (),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+        Err(error) => {
+            crate::warn!(error_message = error, "Could not clear stale staged writes");
+        }
+    }
 }
 
-/// Middleware wrapper that enforces path prefixing for filesystem operations
+/// Appends a caller-supplied relative path to `target`, rejecting traversal.
+fn append_relative(target: &mut PathBuf, path: &str) -> Result<(), FileSystemError> {
+    for component in Path::new(path.trim_start_matches('/')).components() {
+        match component {
+            Component::Normal(segment) => {
+                if segment.as_encoded_bytes().contains(&0) {
+                    return Err(FileSystemError::InvalidPath(
+                        "path must not contain a NUL byte".to_string(),
+                    ));
+                }
+                target.push(segment);
+            }
+            Component::CurDir => (),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(FileSystemError::InvalidPath(
+                    "path must not traverse outside the Bedrock data directory"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Rejects any path in an atomic staged directory. Only this module can touch it.
+fn reject_staging_directory(
+    data_directory: &Path,
+    resolved: &Path,
+) -> Result<(), FileSystemError> {
+    let reserved = resolved
+        .strip_prefix(data_directory)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|first| {
+            first
+                .as_os_str()
+                .eq_ignore_ascii_case(std::ffi::OsStr::new(ATOMIC_STAGED_DIRECTORY))
+        });
+
+    if reserved {
+        return Err(FileSystemError::InvalidPath(
+            "path is inside a directory reserved by Bedrock".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Names a staged file uniquely across the processes and threads sharing a data directory.
+fn staged_file_name() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{sequence}.tmp", std::process::id())
+}
+
+/// Writes `contents` to `destination` through a staged file and an atomic rename.
+fn write_atomically(
+    data_directory: &Path,
+    destination: &Path,
+    contents: &[u8],
+) -> Result<(), FileSystemError> {
+    let parent = destination.parent().unwrap_or(data_directory);
+    fs::create_dir_all(parent)
+        .map_err(|error| io_failure("create parent directory", &error))?;
+
+    let staging = data_directory.join(ATOMIC_STAGED_DIRECTORY);
+    fs::create_dir_all(&staging)
+        .map_err(|error| io_failure("create atomic staged directory", &error))?;
+    let staged = staging.join(staged_file_name());
+
+    let result = (|| {
+        let mut file = File::create(&staged)
+            .map_err(|error| io_failure("create staged file", &error))?;
+        file.write_all(contents)
+            .map_err(|error| io_failure("write staged file", &error))?;
+
+        if let Ok(existing) = fs::metadata(destination) {
+            fs::set_permissions(&staged, existing.permissions())
+                .map_err(|error| io_failure("carry over file permissions", &error))?;
+        }
+
+        file.sync_all()
+            .map_err(|error| io_failure("flush staged file", &error))?;
+        fs::rename(&staged, destination)
+            .map_err(|error| io_failure("commit written file", &error))
+    })();
+
+    if result.is_err() {
+        drop(fs::remove_file(&staged)); // Best effort
+    }
+
+    result
+}
+
+/// Filesystem handle scoped to a sub-directory of the data directory.
 ///
-/// This struct is created by the `bedrock_export` macro and ensures all filesystem
-/// operations are scoped to a specific prefix (typically the struct name).
-pub struct FileSystemMiddleware {
+/// Every path passed to its methods is relative to `data directory / prefix`. Construct one per
+/// module so files owned by different modules cannot collide; `bedrock_export` does this
+/// automatically for exported structs.
+pub struct ScopedFileSystem {
+    /// Sub-directory that scopes this handle. Empty means the data directory itself.
     prefix: String,
 }
 
-/// Creates a filesystem middleware for a given struct name
-/// This is used internally by the `bedrock_export` macro
+/// Returns a handle at the data directory, without any module scoping.
+///
+/// Only for paths that are already qualified relative to the data directory, such as backup
+/// manifest entries owned by other modules. Prefer the `_bedrock_fs` handle injected by
+/// `bedrock_export` for module-owned files.
 #[must_use]
-pub fn create_middleware(struct_name: &str) -> FileSystemMiddleware {
-    FileSystemMiddleware::new(struct_name)
+pub fn unscoped_filesystem() -> ScopedFileSystem {
+    ScopedFileSystem::new("")
 }
 
-impl FileSystemMiddleware {
-    /// Creates a new filesystem middleware with the given prefix
+impl ScopedFileSystem {
+    /// Creates a handle scoped to `prefix` under the data directory.
     #[must_use]
     pub fn new(prefix: &str) -> Self {
         Self {
@@ -229,434 +221,784 @@ impl FileSystemMiddleware {
         }
     }
 
-    /// Prefixes a path with the middleware's prefix
-    fn prefix_path(&self, path: &str) -> String {
-        if path.starts_with(&self.prefix) {
-            path.to_string()
-        } else {
-            format!("{}/{}", self.prefix, path.trim_start_matches('/'))
+    /// Returns the configured Bedrock data directory.
+    ///
+    /// # Errors
+    /// - [`FileSystemError::NotInitialized`] if `set_config` has not been called
+    pub(crate) fn data_directory() -> Result<PathBuf, FileSystemError> {
+        get_config()
+            .map(|config| config.data_directory().to_path_buf())
+            .ok_or(FileSystemError::NotInitialized)
+    }
+
+    /// Resolves a path that may name a directory, including the scope root itself.
+    ///
+    /// # Errors
+    /// - [`FileSystemError::NotInitialized`] if no data directory has been configured
+    /// - [`FileSystemError::InvalidPath`] if the path escapes the scope or is reserved
+    fn resolve_directory(&self, folder_path: &str) -> Result<PathBuf, FileSystemError> {
+        let data_directory = Self::data_directory()?;
+
+        let mut resolved = data_directory.clone();
+        append_relative(&mut resolved, &self.prefix)?;
+        append_relative(&mut resolved, folder_path)?;
+
+        reject_staging_directory(&data_directory, &resolved)?;
+        Ok(resolved)
+    }
+
+    /// Resolves a path that must name a file inside the scope.
+    ///
+    /// # Errors
+    /// - [`FileSystemError::NotInitialized`] if no data directory has been configured
+    /// - [`FileSystemError::InvalidPath`] if the path escapes the scope, is reserved, or
+    ///   names no file
+    fn resolve_file(&self, file_path: &str) -> Result<PathBuf, FileSystemError> {
+        let data_directory = Self::data_directory()?;
+
+        let mut scope = data_directory.clone();
+        append_relative(&mut scope, &self.prefix)?;
+
+        let mut resolved = scope.clone();
+        append_relative(&mut resolved, file_path)?;
+
+        if resolved == scope {
+            return Err(FileSystemError::InvalidPath(
+                "path must name a file, not the directory it is scoped to".to_string(),
+            ));
+        }
+
+        reject_staging_directory(&data_directory, &resolved)?;
+        Ok(resolved)
+    }
+
+    /// Resolves a path without touching the filesystem, so a batch of untrusted paths can
+    /// be rejected before any of them is used.
+    ///
+    /// # Errors
+    /// - [`FileSystemError::NotInitialized`] if no data directory has been configured
+    /// - [`FileSystemError::InvalidPath`] if the path escapes the scope, is reserved, or
+    ///   names no file
+    pub fn resolved_file_path(
+        &self,
+        file_path: &str,
+    ) -> Result<PathBuf, FileSystemError> {
+        self.resolve_file(file_path)
+    }
+
+    /// Checks whether a file exists at the given path.
+    ///
+    /// Directories are not files: a path pointing at one reports `false`.
+    ///
+    /// # Errors
+    /// - `FileSystemError` if the path is invalid or the metadata lookup fails
+    pub fn file_exists(&self, file_path: &str) -> Result<bool, FileSystemError> {
+        let path = self.resolve_file(file_path)?;
+        match fs::metadata(&path) {
+            Ok(metadata) => Ok(metadata.is_file()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(io_failure("check whether file exists", &error)),
         }
     }
 
-    /// Check if a file exists at the given path (with prefix)
+    /// Reads the full contents of a file.
     ///
     /// # Errors
-    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    /// - Any error from the underlying filesystem implementation
-    pub fn file_exists(&self, file_path: &str) -> Result<bool, FileSystemError> {
-        let fs = get_filesystem_raw()?;
-        let prefixed_path = self.prefix_path(file_path);
-        catch_callback_panic(
-            "file_exists",
-            std::panic::AssertUnwindSafe(|| fs.file_exists(prefixed_path)),
-        )
-    }
-
-    /// Read file contents (with prefix)
-    ///
-    /// # Errors
-    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    /// - Any error from the underlying filesystem implementation
+    /// - [`FileSystemError::FileDoesNotExist`] if the file doesn't exist
+    /// - [`FileSystemError::IoFailure`] if the file cannot be read
     pub fn read_file(&self, file_path: &str) -> Result<Vec<u8>, FileSystemError> {
-        let fs = get_filesystem_raw()?;
-        let prefixed_path = self.prefix_path(file_path);
-        catch_callback_panic(
-            "read_file",
-            std::panic::AssertUnwindSafe(|| fs.read_file(prefixed_path)),
-        )
+        let path = self.resolve_file(file_path)?;
+        fs::read(&path).map_err(|error| io_error_or_missing("read file", &error))
     }
 
-    /// Read a specific byte range from a file (with prefix)
+    /// Writes a file, creating any missing parent directories.
+    ///
+    /// The write is atomic: readers observe either the previous contents or the new ones.
     ///
     /// # Errors
-    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    /// - Any error from the underlying filesystem implementation
-    pub fn read_file_range(
+    /// - [`FileSystemError::IoFailure`] if the file cannot be written
+    pub fn write_file(
         &self,
         file_path: &str,
-        offset: u64,
-        max_length: u64,
-    ) -> Result<Vec<u8>, FileSystemError> {
-        let fs = get_filesystem_raw()?;
-        let prefixed_path = self.prefix_path(file_path);
-        catch_callback_panic(
-            "read_file_range",
-            std::panic::AssertUnwindSafe(|| {
-                fs.read_file_range(prefixed_path, offset, max_length)
-            }),
-        )
+        file_buffer: &[u8],
+    ) -> Result<(), FileSystemError> {
+        let data_directory = Self::data_directory()?;
+        let destination = self.resolve_file(file_path)?;
+        write_atomically(&data_directory, &destination, file_buffer)
     }
 
-    /// List files in a directory (with prefix)
+    /// Deletes a file.
     ///
     /// # Errors
-    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    /// - Any error from the underlying filesystem implementation
+    /// - [`FileSystemError::FileDoesNotExist`] if the file does not exist
+    /// - [`FileSystemError::IoFailure`] if the file cannot be deleted
+    pub fn delete_file(&self, file_path: &str) -> Result<(), FileSystemError> {
+        let path = self.resolve_file(file_path)?;
+        fs::remove_file(&path)
+            .map_err(|error| io_error_or_missing("delete file", &error))
+    }
+
+    /// Lists the names of the files directly inside a directory, sorted.
+    ///
+    /// # Notes
+    /// Names are returned without the directory path. Sub-directories are neither
+    /// recursed into nor listed, and a directory that doesn't exist lists as empty.
+    ///
+    /// # Errors
+    /// - [`FileSystemError::IoFailure`] if the directory cannot be listed
     pub fn list_files_at_directory(
         &self,
         folder_path: &str,
     ) -> Result<Vec<String>, FileSystemError> {
-        let fs = get_filesystem_raw()?;
-        let prefixed_path = self.prefix_path(folder_path);
-        catch_callback_panic(
-            "list_files_at_directory",
-            std::panic::AssertUnwindSafe(|| fs.list_files_at_directory(prefixed_path)),
-        )
+        let path = self.resolve_directory(folder_path)?;
+
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Vec::new())
+            }
+            Err(error) => return Err(io_failure("list directory", &error)),
+        };
+
+        let mut file_names = Vec::new();
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| io_failure("read directory entry", &error))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| io_failure("inspect directory entry", &error))?;
+            if file_type.is_dir() {
+                continue;
+            }
+            file_names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+
+        file_names.sort_unstable();
+        Ok(file_names)
     }
 
-    /// Write file contents (with prefix)
+    /// Calculates the `blake3` checksum and the size in bytes of a file.
+    ///
+    /// The file is streamed rather than loaded into memory, so it is safe on large files.
     ///
     /// # Errors
-    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    /// - Any error from the underlying filesystem implementation
-    pub fn write_file(
+    /// - [`FileSystemError::FileDoesNotExist`] if the path does not exist
+    /// - [`FileSystemError::IoFailure`] for any other read failure
+    pub fn calculate_checksum_and_size(
         &self,
         file_path: &str,
-        file_buffer: Vec<u8>,
-    ) -> Result<(), FileSystemError> {
-        let fs = get_filesystem_raw()?;
-        let prefixed_path = self.prefix_path(file_path);
-        catch_callback_panic(
-            "write_file",
-            std::panic::AssertUnwindSafe(|| fs.write_file(prefixed_path, file_buffer)),
-        )
-    }
+    ) -> Result<([u8; 32], u64), FileSystemError> {
+        let path = self.resolve_file(file_path)?;
+        let file = File::open(&path)
+            .map_err(|error| io_error_or_missing("open file", &error))?;
 
-    /// Delete a file (with prefix)
-    ///
-    /// # Errors
-    /// - `FileSystemError::NotInitialized` if the filesystem has not been initialized
-    /// - `FileSystemError::FileDoesNotExist` if the file does not exist
-    /// - Any other error from the underlying filesystem implementation
-    pub fn delete_file(&self, file_path: &str) -> Result<(), FileSystemError> {
-        let fs = get_filesystem_raw()?;
-        let prefixed_path = self.prefix_path(file_path);
-        catch_callback_panic(
-            "delete_file",
-            std::panic::AssertUnwindSafe(|| fs.delete_file(prefixed_path)),
-        )
+        let mut reader = BufReader::with_capacity(CHECKSUM_CHUNK_SIZE, file);
+        let mut hasher = blake3::Hasher::new();
+        let size = io::copy(&mut reader, &mut hasher)
+            .map_err(|error| io_failure("read file", &error))?;
+
+        Ok((hasher.finalize().into(), size))
     }
 }
 
-// Re-export InMemoryFileSystem for tests
 #[cfg(test)]
-pub use tests::InMemoryFileSystem;
+pub(crate) fn init_test_filesystem() {
+    use crate::primitives::config::{set_config, BedrockEnvironment, Os};
+
+    static INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+    // `get_or_init` blocks the other threads until this finishes, so no test observes a
+    // half-prepared data directory.
+    INITIALIZED.get_or_init(|| {
+        let root =
+            std::env::temp_dir().join(format!("bedrock-tests-{}", std::process::id()));
+        // A recycled PID could leave state from a previous run behind.
+        drop(fs::remove_dir_all(&root));
+
+        set_config(
+            BedrockEnvironment::Staging,
+            Os::Ios,
+            root.to_string_lossy().into_owned(),
+        )
+        .expect("configure the test data directory");
+    });
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// **This is intended exclusively for testing.**
-    #[derive(Debug)]
-    pub struct InMemoryFileSystem {
-        files: std::sync::Arc<
-            std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
-        >,
+    /// Returns a handle scoped to a directory only this test uses.
+    ///
+    /// Tests share one data directory, so an empty prefix here would wipe every other test's files.
+    fn scoped(prefix: &str) -> ScopedFileSystem {
+        assert!(!prefix.is_empty(), "tests must use a prefix of their own");
+
+        init_test_filesystem();
+        let fs = ScopedFileSystem::new(prefix);
+        drop(fs::remove_dir_all(
+            fs.resolve_directory("").expect("resolve scope root"),
+        ));
+        fs
     }
 
-    #[allow(clippy::missing_panics_doc)]
-    impl InMemoryFileSystem {
-        /// Creates a new empty in-memory filesystem
-        #[must_use]
-        pub fn new() -> Self {
-            Self {
-                files: Arc::new(
-                    std::sync::Mutex::new(std::collections::HashMap::new()),
-                ),
-            }
-        }
-
-        /// Creates a new in-memory filesystem with some initial files for testing
-        ///
-        /// # Arguments
-        /// * `initial_files` - A slice of tuples containing (path, content) pairs
-        ///
-        /// # Examples
-        /// ```rust
-        /// use bedrock::primitives::filesystem::InMemoryFileSystem;
-        ///
-        /// let fs = InMemoryFileSystem::with_files(&[
-        ///     ("config.json", r#"{"test": true}"#),
-        ///     ("data/users.txt", "alice\nbob\ncharlie"),
-        /// ]);
-        /// ```
-        #[must_use]
-        pub fn with_files(initial_files: &[(&str, &str)]) -> Self {
-            let fs = Self::new();
-            for (path, content) in initial_files {
-                // Use write_file directly instead of setup_file
-                let _ = fs.write_file((*path).to_string(), content.as_bytes().to_vec());
-            }
-            fs
-        }
-
-        /// Creates a directory in the filesystem
-        ///
-        /// In the in-memory filesystem, directories are represented by ensuring
-        /// that the directory path exists in our internal tracking.
-        ///
-        /// # Arguments
-        /// * `path` - The directory path
-        pub fn setup_directory(&self, path: &str) {
-            let normalized_path = Self::normalize_path(path);
-            let dir_path = if normalized_path.ends_with('/') {
-                normalized_path
-            } else {
-                format!("{normalized_path}/")
-            };
-
-            // Create a marker for the directory
-            self.files
-                .lock()
-                .unwrap()
-                .insert(format!("{dir_path}__DIR__"), Vec::new());
-        }
-
-        /// Clears all files from the filesystem
-        pub fn clear(&self) {
-            self.files.lock().unwrap().clear();
-        }
-
-        /// Returns the number of files in the filesystem
-        #[must_use]
-        pub fn file_count(&self) -> usize {
-            self.files
-                .lock()
-                .unwrap()
-                .keys()
-                .filter(|k| !k.ends_with("__DIR__"))
-                .count()
-        }
-
-        /// Returns all file paths currently in the filesystem
-        #[must_use]
-        pub fn all_file_paths(&self) -> Vec<String> {
-            self.files
-                .lock()
-                .unwrap()
-                .keys()
-                .filter(|k| !k.ends_with("__DIR__"))
-                .cloned()
-                .collect()
-        }
-
-        /// Checks if the filesystem contains a specific file
-        #[must_use]
-        pub fn contains_file(&self, path: &str) -> bool {
-            let normalized_path = Self::normalize_path(path);
-            self.files.lock().unwrap().contains_key(&normalized_path)
-        }
-
-        /// Normalizes a file path by removing leading slashes and ensuring consistency
-        fn normalize_path(path: &str) -> String {
-            path.trim_start_matches('/').to_string()
-        }
-
-        /// Checks if a path represents a directory
-        #[allow(dead_code)]
-        fn is_directory(&self, path: &str) -> bool {
-            let normalized_path = Self::normalize_path(path);
-            let dir_marker = if normalized_path.ends_with('/') {
-                format!("{normalized_path}__DIR__")
-            } else {
-                format!("{normalized_path}/__DIR__")
-            };
-
-            self.files.lock().unwrap().contains_key(&dir_marker)
-        }
+    /// Creates a data directory used by a single test.
+    ///
+    /// Tests that assert on staging cannot share the global data directory: they would observe, and
+    /// `prepare_data_directory` would delete, writes other tests have in flight.
+    fn isolated_data_directory(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("bedrock-{name}-{}", std::process::id()));
+        drop(fs::remove_dir_all(&root));
+        fs::create_dir_all(&root).expect("create isolated data directory");
+        root
     }
 
-    impl Default for InMemoryFileSystem {
-        fn default() -> Self {
-            Self::new()
-        }
+    /// Returns the names of the writes currently staged under `root`.
+    fn staged_writes_in(data_directory: &Path) -> Vec<String> {
+        let staging = data_directory.join(ATOMIC_STAGED_DIRECTORY);
+        let Ok(entries) = fs::read_dir(&staging) else {
+            return Vec::new();
+        };
+        entries
+            .map(|entry| entry.expect("read staged entry").file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect()
     }
 
-    impl Clone for InMemoryFileSystem {
-        fn clone(&self) -> Self {
-            let files = self.files.lock().unwrap().clone();
-            Self {
-                files: Arc::new(std::sync::Mutex::new(files)),
-            }
-        }
-    }
-
-    impl FileSystem for InMemoryFileSystem {
-        fn file_exists(&self, file_path: String) -> Result<bool, FileSystemError> {
-            let normalized_path = Self::normalize_path(&file_path);
-            Ok(self.files.lock().unwrap().contains_key(&normalized_path))
-        }
-
-        fn read_file(&self, file_path: String) -> Result<Vec<u8>, FileSystemError> {
-            let normalized_path = Self::normalize_path(&file_path);
-            self.files
-                .lock()
-                .unwrap()
-                .get(&normalized_path)
-                .cloned()
-                .ok_or(FileSystemError::FileDoesNotExist)
-        }
-
-        fn list_files_at_directory(
-            &self,
-            folder_path: String,
-        ) -> Result<Vec<String>, FileSystemError> {
-            let normalized_folder = Self::normalize_path(&folder_path);
-            let folder_prefix = if normalized_folder.is_empty() {
-                String::new()
-            } else if normalized_folder.ends_with('/') {
-                normalized_folder
-            } else {
-                format!("{normalized_folder}/")
-            };
-
-            let files: Vec<String> = self
-                .files
-                .lock()
-                .unwrap()
-                .keys()
-                .filter(|path| {
-                    // Exclude directory markers
-                    if path.ends_with("__DIR__") {
-                        return false;
-                    }
-
-                    if folder_prefix.is_empty() {
-                        // Root listing: only items with no '/' are immediate children
-                        !path.contains('/')
-                    } else if path.starts_with(&folder_prefix) {
-                        // Strip the prefix and ensure there is no further '/' => immediate child
-                        let rest = &path[folder_prefix.len()..];
-                        !rest.is_empty() && !rest.contains('/')
-                    } else {
-                        false
-                    }
-                })
-                .map(|path| path.split('/').next_back().unwrap().to_string())
-                .collect();
-
-            Ok(files)
-        }
-
-        #[allow(clippy::manual_let_else)]
-        fn read_file_range(
-            &self,
-            file_path: String,
-            offset: u64,
-            max_length: u64,
-        ) -> Result<Vec<u8>, FileSystemError> {
-            let normalized_path = Self::normalize_path(&file_path);
-            let start_usize = usize::try_from(offset)
-                .map_err(|_| FileSystemError::IoFailure("offset".to_string()))?;
-            let end_add = offset.saturating_add(max_length);
-            let result = {
-                let files = self.files.lock().unwrap();
-                if let Some(data) = files.get(&normalized_path) {
-                    let data_len_u64 = data.len() as u64;
-                    if offset >= data_len_u64 {
-                        Ok(Vec::new())
-                    } else {
-                        let end_u64 = std::cmp::min(data_len_u64, end_add);
-                        let end_usize = usize::try_from(end_u64).map_err(|_| {
-                            FileSystemError::IoFailure("end_u64".to_string())
-                        })?;
-                        Ok(data[start_usize..end_usize].to_vec())
-                    }
-                } else {
-                    Err(FileSystemError::FileDoesNotExist)
-                }
-            };
-            result
-        }
-
-        fn write_file(
-            &self,
-            file_path: String,
-            file_buffer: Vec<u8>,
-        ) -> Result<(), FileSystemError> {
-            let normalized_path = Self::normalize_path(&file_path);
-            self.files
-                .lock()
-                .unwrap()
-                .insert(normalized_path, file_buffer);
-            Ok(())
-        }
-
-        fn delete_file(&self, file_path: String) -> Result<(), FileSystemError> {
-            let normalized_path = Self::normalize_path(&file_path);
-            let removed = self.files.lock().unwrap().remove(&normalized_path);
-            match removed {
-                Some(_) => Ok(()),
-                None => Err(FileSystemError::FileDoesNotExist),
-            }
+    #[test]
+    fn test_prepare_root_rejects_relative_paths() {
+        for path in ["", "relative/dir", "./here"] {
+            let error = prepare_data_directory(Path::new(path)).unwrap_err();
+            assert!(matches!(
+                &error,
+                PrimitiveError::InvalidInput { attribute, error_message }
+                    if attribute == "path"
+                        && error_message == "the Bedrock data directory must be absolute"
+            ));
         }
     }
 
     #[test]
-    fn test_filesystem_middleware_prefixing() {
-        // Set up in-memory filesystem
-        let _ = FILESYSTEM_INSTANCE.set(Arc::new(InMemoryFileSystem::new()));
+    fn test_paths_containing_a_nul_byte_are_rejected() {
+        let fs = scoped("fs_nul");
 
-        // Test with snake_case prefix (as would be generated by bedrock_export macro)
-        let middleware = FileSystemMiddleware::new("test_module");
-
-        // Test that paths are properly prefixed
-        assert_eq!(middleware.prefix_path("file.txt"), "test_module/file.txt");
-        assert_eq!(middleware.prefix_path("/file.txt"), "test_module/file.txt");
-        assert_eq!(
-            middleware.prefix_path("test_module/file.txt"),
-            "test_module/file.txt"
-        );
-    }
-
-    #[test]
-    fn test_catch_callback_panic_handles_panic() {
-        // Test that catch_callback_panic catches panics and converts them to errors.
-        // This simulates what happens when Kotlin throws CancellationException
-        // during a FileSystem callback.
-
-        // Test with a closure that panics
-        let result = catch_callback_panic(
-            "test_operation",
-            std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, FileSystemError> {
-                panic!("Simulated panic from Kotlin callback (e.g., CancellationException)");
-            }),
-        );
-
-        // Should return error, not panic
-        assert!(
-            matches!(
-                result,
-                Err(FileSystemError::UnexpectedUniFFICallbackError(_))
-            ),
-            "Expected UnexpectedUniFFICallbackError, got: {result:?}"
-        );
-
-        // Verify the error message contains the operation name
-        if let Err(FileSystemError::UnexpectedUniFFICallbackError(msg)) = result {
+        // Lexically valid, but `std::fs` refuses it at the syscall
+        for path in ["bad\0name.bin", "dir/bad\0name.bin", "ba\0d/name.bin"] {
             assert!(
-                msg.contains("test_operation"),
-                "Error message should mention the operation: {msg}"
+                matches!(
+                    fs.resolved_file_path(path),
+                    Err(FileSystemError::InvalidPath(_))
+                ),
+                "expected `{}` to be rejected",
+                path.escape_debug()
+            );
+            assert!(matches!(
+                fs.write_file(path, b"payload"),
+                Err(FileSystemError::InvalidPath(_))
+            ));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_prepare_root_rejects_a_read_only_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = isolated_data_directory("read-only-root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+
+        // A privileged user ignores the mode bits, which would make this vacuous.
+        let privileged = fs::create_dir(root.join("control")).is_ok();
+        if privileged {
+            eprintln!("skipping: running with privileges that bypass directory modes");
+        } else {
+            assert!(
+                matches!(
+                    prepare_data_directory(&root),
+                    Err(PrimitiveError::Generic { .. })
+                ),
+                "a data directory that cannot be written to must be refused"
             );
         }
 
-        // Test with a closure that returns Ok
-        let ok_result = catch_callback_panic(
-            "test_operation",
-            std::panic::AssertUnwindSafe(|| Ok::<(), FileSystemError>(())),
-        );
-        assert!(ok_result.is_ok(), "Should pass through Ok results");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        drop(fs::remove_dir_all(&root));
+    }
 
-        // Test with a closure that returns Err
-        let err_result = catch_callback_panic(
-            "test_operation",
-            std::panic::AssertUnwindSafe(|| {
-                Err::<(), FileSystemError>(FileSystemError::FileDoesNotExist)
-            }),
+    #[test]
+    #[cfg(unix)]
+    fn test_overwriting_keeps_the_destination_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fs_handle = scoped("fs_perms");
+        fs_handle.write_file("secret.bin", b"first").unwrap();
+
+        let path = fs_handle.resolve_file("secret.bin").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        // The rename swaps in a new inode, so without carrying the mode across the file
+        // would come back with the staging default.
+        fs_handle.write_file("secret.bin", b"second").unwrap();
+
+        assert_eq!(fs_handle.read_file("secret.bin").unwrap(), b"second");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
         );
+    }
+
+    #[test]
+    fn test_prepare_root_creates_the_directory() {
+        let root = std::env::temp_dir()
+            .join(format!("bedrock-prepare-{}", std::process::id()))
+            .join("nested");
+        drop(fs::remove_dir_all(&root));
+
+        prepare_data_directory(&root).expect("root should be created");
+        assert!(root.is_dir());
+
+        // Idempotent: an existing root is accepted as-is.
+        prepare_data_directory(&root).expect("existing root should be accepted");
+
+        drop(fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn test_prepare_root_reports_an_uncreatable_directory() {
+        let blocker = std::env::temp_dir()
+            .join(format!("bedrock-prepare-blocked-{}", std::process::id()));
+        drop(fs::remove_file(&blocker));
+        fs::write(&blocker, b"not a directory").expect("create blocking file");
+
+        assert!(matches!(
+            prepare_data_directory(&blocker.join("root")),
+            Err(PrimitiveError::Generic { .. })
+        ));
+
+        drop(fs::remove_file(&blocker));
+    }
+
+    /// Re-runs a single test in a child process, so it starts with no global config.
+    ///
+    /// The test must branch on `marker` and only assert in the child.
+    fn run_in_fresh_process(test_name: &str, marker: &str) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "--nocapture", test_name])
+            .env(marker, "1")
+            .output()
+            .expect("re-run this test in a child process");
+
+        let report = String::from_utf8_lossy(&output.stdout);
         assert!(
-            matches!(err_result, Err(FileSystemError::FileDoesNotExist)),
-            "Should pass through regular errors"
+            output.status.success(),
+            "child run failed:\n{report}{}",
+            String::from_utf8_lossy(&output.stderr)
         );
+        // A filter that matches nothing also exits 0, which would silently pass.
+        assert!(
+            report.contains("1 passed"),
+            "child did not run the test, only: {report}"
+        );
+    }
+
+    /// Marks the child run of [`test_operations_report_not_initialized_without_a_data_directory`].
+    const UNINITIALIZED_CHILD_ENV: &str = "BEDROCK_UNINITIALIZED_FS_CHILD";
+
+    /// Full libtest path of that test, needed to re-run exactly it in the child.
+    const UNINITIALIZED_TEST_NAME: &str =
+        "primitives::filesystem::tests::test_operations_report_not_initialized_without_a_data_directory";
+
+    #[test]
+    fn test_operations_report_not_initialized_without_a_data_directory() {
+        // Every other test installs the global config, so the unconfigured path can only
+        // be exercised in a fresh process.
+        if std::env::var_os(UNINITIALIZED_CHILD_ENV).is_none() {
+            run_in_fresh_process(UNINITIALIZED_TEST_NAME, UNINITIALIZED_CHILD_ENV);
+            return;
+        }
+
+        assert!(matches!(
+            unscoped_filesystem().read_file("anything.txt"),
+            Err(FileSystemError::NotInitialized)
+        ));
+    }
+
+    /// Marks the child run of [`test_a_rejected_data_directory_leaves_the_config_uncommitted`].
+    const REJECTED_DIRECTORY_CHILD_ENV: &str = "BEDROCK_REJECTED_DIRECTORY_CHILD";
+
+    /// Full libtest path of that test, needed to re-run exactly it in the child.
+    const REJECTED_DIRECTORY_TEST_NAME: &str =
+        "primitives::filesystem::tests::test_a_rejected_data_directory_leaves_the_config_uncommitted";
+
+    #[test]
+    fn test_a_rejected_data_directory_leaves_the_config_uncommitted() {
+        use crate::primitives::config::{
+            get_config, is_initialized, set_config, BedrockEnvironment, Os,
+        };
+
+        // Needs a process where the config has not been committed yet: committing before
+        // validating is exactly the regression this guards against.
+        if std::env::var_os(REJECTED_DIRECTORY_CHILD_ENV).is_none() {
+            run_in_fresh_process(
+                REJECTED_DIRECTORY_TEST_NAME,
+                REJECTED_DIRECTORY_CHILD_ENV,
+            );
+            return;
+        }
+
+        assert!(matches!(
+            set_config(
+                BedrockEnvironment::Staging,
+                Os::Ios,
+                "relative/bedrock".to_string()
+            ),
+            Err(PrimitiveError::InvalidInput { .. })
+        ));
+        assert!(
+            !is_initialized(),
+            "a rejected data directory must not be committed"
+        );
+
+        // The caller can correct the path and try again.
+        init_test_filesystem();
+        assert!(is_initialized());
+
+        let committed = get_config()
+            .unwrap()
+            .data_directory()
+            .to_string_lossy()
+            .into_owned();
+        assert!(matches!(
+            set_config(BedrockEnvironment::Production, Os::Android, committed),
+            Err(PrimitiveError::Generic { .. })
+        ));
+        assert_eq!(
+            get_config().unwrap().environment(),
+            BedrockEnvironment::Staging
+        );
+
+        // A refused call must not create the root it named.
+        let other = std::env::temp_dir().join("bedrock-rejected-second-root");
+        drop(fs::remove_dir_all(&other));
+        assert!(matches!(
+            set_config(
+                BedrockEnvironment::Staging,
+                Os::Ios,
+                other.to_string_lossy().into_owned()
+            ),
+            Err(PrimitiveError::Generic { .. })
+        ));
+        assert!(
+            !other.exists(),
+            "a refused call must not create a data directory"
+        );
+
+        // The committed root still works.
+        unscoped_filesystem()
+            .write_file("still_works.txt", b"x")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_write_read_roundtrip() {
+        let fs = scoped("fs_roundtrip");
+        fs.write_file("greeting.txt", b"Hello, World!").unwrap();
+        assert_eq!(fs.read_file("greeting.txt").unwrap(), b"Hello, World!");
+    }
+
+    #[test]
+    fn test_write_creates_missing_parent_directories() {
+        let fs = scoped("fs_nested");
+        fs.write_file("a/b/c/config.json", b"{}").unwrap();
+        assert_eq!(fs.read_file("a/b/c/config.json").unwrap(), b"{}");
+    }
+
+    #[test]
+    fn test_write_overwrites_existing_file() {
+        let fs = scoped("fs_overwrite");
+        fs.write_file("data.bin", b"first").unwrap();
+        fs.write_file("data.bin", b"second").unwrap();
+        assert_eq!(fs.read_file("data.bin").unwrap(), b"second");
+    }
+
+    #[test]
+    fn test_successful_write_leaves_nothing_staged() {
+        let root = isolated_data_directory("staged-ok");
+        let destination = root.join("nested").join("data.bin");
+
+        write_atomically(&root, &destination, b"payload").unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"payload");
+        assert!(
+            staged_writes_in(&root).is_empty(),
+            "{:?}",
+            staged_writes_in(&root)
+        );
+
+        drop(fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn test_failed_write_leaves_nothing_staged() {
+        let root = isolated_data_directory("staged-fail");
+        // A rename cannot replace a non-empty directory with a regular file.
+        let destination = root.join("occupied");
+        fs::create_dir_all(destination.join("child")).unwrap();
+
+        assert!(matches!(
+            write_atomically(&root, &destination, b"payload"),
+            Err(FileSystemError::IoFailure(_))
+        ));
+        assert!(
+            staged_writes_in(&root).is_empty(),
+            "{:?}",
+            staged_writes_in(&root)
+        );
+
+        drop(fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn test_paths_naming_no_file_are_rejected() {
+        let fs = scoped("fs_empty_path");
+
+        // `unpack_backup_to_filesystem` trims a leading `/`, so a payload path of `"/"`
+        // arrives here as `""`. Staging these anywhere but under the root would put
+        // attacker-supplied bytes outside it.
+        for path in ["", "/", ".", "./"] {
+            assert!(
+                matches!(
+                    fs.write_file(path, b"payload"),
+                    Err(FileSystemError::InvalidPath(_))
+                ),
+                "expected `{path}` to be rejected"
+            );
+            assert!(
+                matches!(fs.read_file(path), Err(FileSystemError::InvalidPath(_))),
+                "expected `{path}` to be rejected"
+            );
+            assert!(
+                matches!(fs.delete_file(path), Err(FileSystemError::InvalidPath(_))),
+                "expected `{path}` to be rejected"
+            );
+            assert!(
+                matches!(fs.file_exists(path), Err(FileSystemError::InvalidPath(_))),
+                "expected `{path}` to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stale_staged_writes_are_cleared() {
+        let root = isolated_data_directory("staging-sweep");
+        let orphan = root.join(ATOMIC_STAGED_DIRECTORY).join("99999-0.tmp");
+        fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        fs::write(&orphan, b"debris from a process killed mid-write").unwrap();
+
+        clear_stale_staged_writes(&root);
+        assert!(!orphan.exists());
+
+        // A root that never staged anything is not an error.
+        clear_stale_staged_writes(&root);
+
+        drop(fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn test_read_missing_file_reports_does_not_exist() {
+        let fs = scoped("fs_missing");
+        assert!(matches!(
+            fs.read_file("nope.txt"),
+            Err(FileSystemError::FileDoesNotExist)
+        ));
+    }
+
+    #[test]
+    fn test_delete_file() {
+        let fs = scoped("fs_delete");
+        fs.write_file("temp.txt", b"bye").unwrap();
+        assert!(fs.file_exists("temp.txt").unwrap());
+
+        fs.delete_file("temp.txt").unwrap();
+        assert!(!fs.file_exists("temp.txt").unwrap());
+    }
+
+    #[test]
+    fn test_delete_missing_file_reports_does_not_exist() {
+        let fs = scoped("fs_delete_missing");
+        assert!(matches!(
+            fs.delete_file("nope.txt"),
+            Err(FileSystemError::FileDoesNotExist)
+        ));
+    }
+
+    #[test]
+    fn test_file_exists_is_false_for_directories() {
+        let fs = scoped("fs_dir_not_file");
+        fs.write_file("nested/file.txt", b"x").unwrap();
+        assert!(!fs.file_exists("nested").unwrap());
+    }
+
+    #[test]
+    fn test_list_files_is_not_recursive_and_excludes_directories() {
+        let fs = scoped("fs_list");
+        fs.write_file("data/users.txt", b"alice").unwrap();
+        fs.write_file("data/metadata.txt", b"meta").unwrap();
+        fs.write_file("data/subdir/nested.txt", b"nested").unwrap();
+
+        assert_eq!(
+            fs.list_files_at_directory("data").unwrap(),
+            vec!["metadata.txt", "users.txt"]
+        );
+    }
+
+    #[test]
+    fn test_list_files_at_missing_directory_is_empty() {
+        let fs = scoped("fs_list_missing");
+        assert!(fs
+            .list_files_at_directory("never/created")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_list_files_accepts_current_directory_notation() {
+        let fs = scoped("fs_list_dot");
+        fs.write_file("root.txt", b"x").unwrap();
+        assert_eq!(fs.list_files_at_directory(".").unwrap(), vec!["root.txt"]);
+    }
+
+    #[test]
+    fn test_paths_are_scoped_to_the_prefix() {
+        init_test_filesystem();
+        let scoped_fs = ScopedFileSystem::new("fs_scope");
+        let root_fs = unscoped_filesystem();
+
+        scoped_fs.write_file("file.txt", b"scoped").unwrap();
+
+        assert_eq!(
+            root_fs.read_file("fs_scope/file.txt").unwrap(),
+            b"scoped".to_vec()
+        );
+        assert!(!root_fs.file_exists("file.txt").unwrap());
+    }
+
+    #[test]
+    fn test_leading_slash_is_treated_as_root_relative() {
+        let fs = scoped("fs_leading_slash");
+        fs.write_file("/file.txt", b"x").unwrap();
+        assert!(fs.file_exists("file.txt").unwrap());
+    }
+
+    #[test]
+    fn test_prefix_is_applied_even_when_the_path_repeats_it() {
+        init_test_filesystem();
+        let fs = ScopedFileSystem::new("fs_repeat");
+        let resolved = fs.resolve_file("fs_repeat/file.txt").unwrap();
+        assert!(resolved.ends_with("fs_repeat/fs_repeat/file.txt"));
+    }
+
+    #[test]
+    fn test_parent_traversal_is_rejected() {
+        let fs = scoped("fs_traversal");
+
+        for path in ["../escaped.txt", "a/../../escaped.txt", "..", "a/.."] {
+            assert!(
+                matches!(fs.read_file(path), Err(FileSystemError::InvalidPath(_))),
+                "expected `{path}` to be rejected"
+            );
+            assert!(
+                matches!(
+                    fs.write_file(path, b"x"),
+                    Err(FileSystemError::InvalidPath(_))
+                ),
+                "expected `{path}` to be rejected"
+            );
+            assert!(
+                matches!(fs.delete_file(path), Err(FileSystemError::InvalidPath(_))),
+                "expected `{path}` to be rejected"
+            );
+            assert!(
+                matches!(fs.file_exists(path), Err(FileSystemError::InvalidPath(_))),
+                "expected `{path}` to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_scoped_writes_stage_under_the_root_not_the_scope() {
+        let fs = scoped("fs_staging_location");
+        fs.write_file("nested/data.bin", b"payload").unwrap();
+
+        // Staging under the scope would put a staging directory inside every
+        // module's tree, out of reach of the startup sweep.
+        let scope = fs.resolve_directory("").unwrap();
+        assert!(!scope.join(ATOMIC_STAGED_DIRECTORY).exists());
+        assert!(!scope.join("nested").join(ATOMIC_STAGED_DIRECTORY).exists());
+    }
+
+    #[test]
+    fn test_the_staging_directory_is_not_addressable() {
+        init_test_filesystem();
+        let fs = unscoped_filesystem();
+
+        // A restored backup payload must not be able to name Bedrock's own scratch
+        // space; the startup sweep would delete whatever landed there.
+        // Built from the constant: spelling these out let a rename silently turn this
+        // test into a no-op, which is exactly what it exists to catch.
+        let reserved = ATOMIC_STAGED_DIRECTORY;
+        for path in [
+            format!("{reserved}/planted.bin"),
+            format!("/{reserved}/planted.bin"),
+            format!("./{reserved}/planted.bin"),
+            reserved.to_string(),
+            // Same directory on a case-insensitive volume.
+            format!("{}/planted.bin", reserved.to_uppercase()),
+        ] {
+            let path = path.as_str();
+            assert!(
+                matches!(
+                    fs.write_file(path, b"payload"),
+                    Err(FileSystemError::InvalidPath(_))
+                ),
+                "expected `{path}` to be rejected"
+            );
+        }
+
+        assert!(matches!(
+            fs.list_files_at_directory(reserved),
+            Err(FileSystemError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn test_checksum_matches_blake3_of_contents() {
+        let fs = scoped("fs_checksum");
+        fs.write_file("greeting.txt", b"Hello, World!").unwrap();
+
+        let (checksum, size) = fs.calculate_checksum_and_size("greeting.txt").unwrap();
+        assert_eq!(checksum, <[u8; 32]>::from(blake3::hash(b"Hello, World!")));
+        assert_eq!(size, 13);
+    }
+
+    #[test]
+    fn test_checksum_streams_files_larger_than_one_chunk() {
+        let fs = scoped("fs_checksum_large");
+        let data = vec![7_u8; CHECKSUM_CHUNK_SIZE * 3 + 11];
+        fs.write_file("large.bin", &data).unwrap();
+
+        let (checksum, size) = fs.calculate_checksum_and_size("large.bin").unwrap();
+        assert_eq!(checksum, <[u8; 32]>::from(blake3::hash(&data)));
+        assert_eq!(size, data.len() as u64);
+    }
+
+    #[test]
+    fn test_checksum_of_missing_file_reports_does_not_exist() {
+        let fs = scoped("fs_checksum_missing");
+        assert!(matches!(
+            fs.calculate_checksum_and_size("nope.bin"),
+            Err(FileSystemError::FileDoesNotExist)
+        ));
     }
 }
