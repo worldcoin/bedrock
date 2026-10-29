@@ -40,12 +40,16 @@ enum SwiftCmd {
         /// Output directory (defaults to `swift/`).
         #[arg(long)]
         out_dir: Option<PathBuf>,
+        /// Include the `tooling_tests` FFI testers. Only for the foreign test suite.
+        #[arg(long)]
+        tooling_tests: bool,
     },
     /// Build a local Swift package importable via SPM `file://` URLs.
     Local,
     /// Build bindings and run the foreign Swift test suite on a simulator.
     Test,
-    /// Run the foreign Swift test suite against an already-built `Bedrock.xcframework`.
+    /// Run the foreign Swift test suite against a `Bedrock.xcframework` built with
+    /// `build --tooling-tests`.
     RunTests,
     /// Emit `Package.swift` referencing a hosted xcframework asset.
     Archive {
@@ -83,7 +87,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Swift { cmd } => match cmd {
-            SwiftCmd::Build { out_dir } => swift::build(out_dir.as_deref()),
+            SwiftCmd::Build {
+                out_dir,
+                tooling_tests,
+            } => swift::build(out_dir.as_deref(), tooling_tests),
             SwiftCmd::Local => swift::local(),
             SwiftCmd::Test => swift::test(),
             SwiftCmd::RunTests => swift::run_tests(),
