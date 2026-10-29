@@ -397,7 +397,8 @@ pub fn run_tests() -> Result<()> {
     let framework = swift.join("Bedrock.xcframework");
     if !framework.exists() {
         bail!(
-            "Bedrock.xcframework not found at {} — run `cargo xtask swift build --tooling-tests` first",
+            "Bedrock.xcframework not found at {} — run \
+             `cargo xtask swift build --tooling-tests` first",
             framework.display()
         );
     }
