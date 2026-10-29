@@ -319,8 +319,10 @@ impl Turnkey {
         body: String,
     ) -> Result<String, TurnkeyError> {
         // Validate JSON body, but raw bytes are signed
-        let _json: serde_json::Value =
-            serde_json::from_str(&body).map_err(|_| TurnkeyError::DecodeBodyError)?;
+        let _json: serde_json::Value = serde_json::from_str(&body).map_err(|_| {
+            root_secret.obliviate();
+            TurnkeyError::DecodeBodyError
+        })?;
 
         let (signature, public_key) = root_secret.read_once(
             move |bytes| -> Result<
@@ -733,6 +735,27 @@ mod tests {
             result.unwrap_err().to_string(),
             "siegel session error: session has been consumed"
         );
+    }
+
+    #[test]
+    fn test_rejected_requests_wipe_the_session() {
+        let client = Turnkey::new();
+
+        let api_private_key = siegel_from_str(&hex::encode([1u8; 32]));
+        assert!(client
+            .stamp("invalid_json", api_private_key.clone())
+            .is_err());
+        assert!(api_private_key.is_consumed());
+
+        let factor_secret = siegel_from_str(&hex::encode([1u8; 32]));
+        let result = client.generate_import_bundle_for_factor_secret(
+            factor_secret.clone(),
+            "invalid_json",
+            "organization",
+            "user",
+        );
+        assert!(result.is_err());
+        assert!(factor_secret.is_consumed());
     }
 
     #[test]

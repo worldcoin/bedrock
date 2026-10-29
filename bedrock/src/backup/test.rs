@@ -2293,13 +2293,16 @@ fn test_stamp_with_backup_account_key_rejects_invalid_body() {
     let turnkey = crate::backup::turnkey::Turnkey::new();
     let root_secret = known_root_secret();
 
+    let session = siegel_from_str(&root_secret);
+
     let err = turnkey
-        .stamp_with_backup_account_key(
-            siegel_from_str(&root_secret),
-            "not json".to_string(),
-        )
+        .stamp_with_backup_account_key(session.clone(), "not json".to_string())
         .expect_err("should fail with invalid stamp body");
     assert_eq!(err.to_string(), "Failed to decode request body as JSON");
+    assert!(
+        session.is_consumed(),
+        "the unused root secret must be wiped"
+    );
 }
 
 #[test]
@@ -2358,4 +2361,32 @@ fn test_add_new_factor_rejects_malformed_factor_secret_and_wipes_both() {
         assert!(err.to_string().contains(expected), "{err}");
         assert!(existing.is_consumed() && new.is_consumed());
     }
+}
+
+#[test]
+fn test_failed_backup_calls_wipe_every_session() {
+    let manager = BackupManager::new();
+
+    let root_secret = siegel_from_str("not json");
+    let factor_secret = siegel_from_str(&"01".repeat(32));
+    let err = manager
+        .create_sealed_backup_for_new_user(
+            root_secret.clone(),
+            factor_secret.clone(),
+            FactorType::Prf,
+        )
+        .expect_err("invalid root secret must be rejected");
+    assert!(err.to_string().contains("Invalid root secret"), "{err}");
+    assert!(root_secret.is_consumed() && factor_secret.is_consumed());
+
+    let factor_secret = siegel_from_str(&"01".repeat(32));
+    let err = manager
+        .decrypt_and_unpack_sealed_backup(
+            &[],
+            "00".to_string(),
+            factor_secret.clone(),
+            FactorType::Prf,
+        )
+        .expect_err("empty sealed backup must be rejected");
+    assert!(factor_secret.is_consumed(), "{err}");
 }
