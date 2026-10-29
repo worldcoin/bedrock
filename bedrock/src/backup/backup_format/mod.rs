@@ -14,7 +14,12 @@ impl BackupFormat {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BackupError> {
-        V0Backup::from_bytes(bytes).map(Self::V0)
+        if V0Backup::peek_version(bytes)? {
+            let backup = V0Backup::from_bytes(bytes)?;
+            Ok(Self::V0(backup))
+        } else {
+            Err(BackupError::VersionNotDetectedError)
+        }
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, BackupError> {
