@@ -84,6 +84,8 @@ fn host_build() -> Result<()> {
         "--package",
         "bedrock",
         "--release",
+        "--features",
+        "tooling_tests",
     ]))?;
 
     let lib = host_library(&root)?;
