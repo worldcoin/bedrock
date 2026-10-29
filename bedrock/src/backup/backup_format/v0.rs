@@ -13,8 +13,8 @@ const ROOT_SECRET_FILE: &str = "root_secret.json";
 /// Maximum number of bytes a backup archive may decompress to.
 ///
 /// Defense-in-depth in case an attacker is able to provide a malicious backup. Peak memory
-/// while restoring can still reach about three times this, as `tar` expands GNU long names
-/// and sparse maps before an entry's size can be checked.
+/// while restoring can still reach a few times this: `tar` expands long names and sparse
+/// maps before an entry can be checked, and `ciborium` copies a byte string once.
 const MAX_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 
 /// V0 version of the backup manifest. See `BackupManifest` for more details.
@@ -103,7 +103,8 @@ impl V0Backup {
     /// Deserialize the `BackupFormat` from unencrypted bytes.
     ///
     /// # Errors
-    /// * If the archive cannot be decompressed or read, `BackupError::IoError` is returned.
+    /// * If the archive cannot be decompressed or read, or holds anything but regular files,
+    ///   `BackupError::IoError` is returned.
     /// * If the file name cannot be read, `BackupError::ReadFileNameError` is returned.
     /// * If a file cannot be decoded from CBOR, `BackupError::DecodeBackupFileError` is returned.
     /// * If a file checksum does not match, `BackupError::InvalidChecksumError` is returned.
@@ -223,7 +224,11 @@ fn read_version_tag<R: Read>(archive: &mut Archive<R>) -> Result<bool, BackupErr
             .ok_or(BackupError::ReadFileNameError)?
             .to_string();
         if path == VERSION_TAG {
-            // The archive sets the entry's size; one byte past the tag is enough to compare.
+            // Only a regular file can be the tag, as reading a sparse entry is quadratic in
+            // its block count. One byte past the tag is enough to compare.
+            if !file.header().entry_type().is_file() {
+                return Ok(false);
+            }
             let mut version_data = Vec::new();
             file.take(2).read_to_end(&mut version_data)?;
             return Ok(version_data == [0]);
@@ -238,22 +243,22 @@ fn read_entries<R: Read>(
 ) -> Result<(String, Vec<V0BackupFile>), BackupError> {
     let mut root_secret = String::new();
     let mut files = Vec::new();
-    let mut remaining_bytes = MAX_DECOMPRESSED_BYTES;
 
     for entry in archive.entries()? {
         let mut file = entry?;
-        // Charged on the logical size: sparse holes never pass through `BoundedReader`,
-        // and `tar` never yields more than `size()` from an entry.
-        remaining_bytes =
-            remaining_bytes.checked_sub(file.size()).ok_or_else(|| {
-                crate::critical!(
-                    entry_bytes = file.size(),
-                    remaining_bytes = remaining_bytes,
-                    max_decompressed_bytes = MAX_DECOMPRESSED_BYTES,
-                    "Backup archive entries exceed the maximum decompressed size"
-                );
-                BackupError::BackupTooLargeError
-            })?;
+        // `to_bytes` only writes regular files, whose every byte passes through
+        // `BoundedReader`. A GNU sparse entry synthesizes bytes it never sees, and reading
+        // one is quadratic in its block count.
+        let entry_type = file.header().entry_type();
+        if !entry_type.is_file() {
+            crate::critical!(
+                entry_type = char::from(entry_type.as_byte()),
+                "Backup archive holds an entry that is not a regular file"
+            );
+            return Err(BackupError::IoError(
+                "backup archive holds an entry that is not a regular file".to_string(),
+            ));
+        }
         let path = file
             .path()?
             .to_str()
@@ -265,7 +270,7 @@ fn read_entries<R: Read>(
         } else if path == VERSION_TAG {
             // Skip the version tag file, it should be checked by .peek_version
         } else {
-            // Decoded from the entry so its data is held once, and buffered because
+            // Decoded from the entry instead of a copy of it, and buffered because
             // `ciborium` reads a byte array one element at a time.
             let file: V0BackupFile = ciborium::from_reader(BufReader::new(file))
                 .inspect_err(|e| {
@@ -687,7 +692,7 @@ mod tests {
         if version_tagged {
             write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
         }
-        write_to_archive(&mut archive, "bomb.bin", &oversized).unwrap();
+        write_to_archive(&mut archive, ROOT_SECRET_FILE, &oversized).unwrap();
 
         archive.finish().unwrap();
         let encoder = archive.into_inner().unwrap();
@@ -780,7 +785,7 @@ mod tests {
     }
 
     /// Long names are read by `tar` itself, so only the decoder cap sees them; here it trips
-    /// partway through decoding a file that is within the entry budget on its own.
+    /// partway through decoding a file that is under the cap on its own.
     #[test]
     fn test_from_bytes_rejects_long_name_overflow_mid_decode() {
         let data = vec![0u8; 30 * 1024 * 1024];
@@ -808,37 +813,37 @@ mod tests {
         );
     }
 
-    /// Builds an archive holding one GNU sparse entry per name: ~1 KiB of physical data
-    /// declaring a `hole`-sized logical gap. `tar` synthesizes the hole from `io::repeat`, so
-    /// the expansion never passes through the gzip stream.
-    fn sparse_bomb(names: &[&str], hole: u64) -> Vec<u8> {
+    /// Builds an archive holding one GNU sparse entry: ~1 KiB of physical data declaring a
+    /// 1 GiB logical size. `tar` synthesizes the hole from `io::repeat`, so the expansion
+    /// never passes through the gzip stream.
+    fn sparse_bomb(name: &str) -> Vec<u8> {
+        const HOLE: u64 = 1024 * 1024 * 1024;
         const DATA_BLOCK: u64 = 512;
+
+        let mut header = Header::new_gnu();
+        header.set_mode(0o600);
+        header.set_entry_type(tar::EntryType::GNUSparse);
+        header.set_size(DATA_BLOCK * 2);
+        {
+            let gnu = header.as_gnu_mut().unwrap();
+            gnu.sparse[0].set_offset(0);
+            gnu.sparse[0].set_length(DATA_BLOCK);
+            gnu.sparse[1].set_offset(HOLE);
+            gnu.sparse[1].set_length(DATA_BLOCK);
+            gnu.set_real_size(HOLE + DATA_BLOCK);
+        }
+        header.set_path(name).unwrap();
+        header.set_cksum();
 
         let mut result = Vec::new();
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
         let mut archive = Builder::new(gz_builder);
-        for name in names {
-            let mut header = Header::new_gnu();
-            header.set_mode(0o600);
-            header.set_entry_type(tar::EntryType::GNUSparse);
-            header.set_size(DATA_BLOCK * 2);
-            {
-                let gnu = header.as_gnu_mut().unwrap();
-                gnu.sparse[0].set_offset(0);
-                gnu.sparse[0].set_length(DATA_BLOCK);
-                gnu.sparse[1].set_offset(hole);
-                gnu.sparse[1].set_length(DATA_BLOCK);
-                gnu.set_real_size(hole + DATA_BLOCK);
-            }
-            header.set_path(name).unwrap();
-            header.set_cksum();
-            archive
-                .append(
-                    &header,
-                    Cursor::new(vec![0u8; usize::try_from(DATA_BLOCK * 2).unwrap()]),
-                )
-                .unwrap();
-        }
+        archive
+            .append(
+                &header,
+                Cursor::new(vec![0u8; usize::try_from(DATA_BLOCK * 2).unwrap()]),
+            )
+            .unwrap();
         write_to_archive(&mut archive, VERSION_TAG, &[0]).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap().finish().unwrap();
@@ -848,32 +853,47 @@ mod tests {
 
     #[test]
     fn test_from_bytes_rejects_sparse_bomb() {
-        let bomb = sparse_bomb(&["personal_custody/bomb.bin"], 1024 * 1024 * 1024);
+        let bomb = sparse_bomb("personal_custody/bomb.bin");
         assert!(bomb.len() < 1024 * 1024);
 
         assert_eq!(
             V0Backup::from_bytes(&bomb).unwrap_err().to_string(),
-            "Backup archive exceeds the maximum size"
+            "IO error: backup archive holds an entry that is not a regular file"
         );
     }
 
     #[test]
     fn test_from_bytes_rejects_sparse_version_tag() {
-        let bomb = sparse_bomb(&[VERSION_TAG], 1024 * 1024 * 1024);
+        let bomb = sparse_bomb(VERSION_TAG);
         assert!(!V0Backup::peek_version(&bomb).unwrap());
         assert_eq!(
             V0Backup::from_bytes(&bomb).unwrap_err().to_string(),
-            "Backup archive exceeds the maximum size"
+            "IO error: backup archive holds an entry that is not a regular file"
         );
     }
 
-    /// The budget is cumulative: two entries that each fit cannot add up past the cap.
     #[test]
-    fn test_from_bytes_rejects_sparse_entries_over_the_cap_together() {
-        let bomb = sparse_bomb(&[ROOT_SECRET_FILE, ROOT_SECRET_FILE], 40 * 1024 * 1024);
-        assert_eq!(
-            V0Backup::from_bytes(&bomb).unwrap_err().to_string(),
-            "Backup archive exceeds the maximum size"
-        );
+    fn test_peek_version_ignores_sparse_version_tag() {
+        let mut header = Header::new_gnu();
+        header.set_mode(0o600);
+        header.set_entry_type(tar::EntryType::GNUSparse);
+        header.set_size(1);
+        {
+            let gnu = header.as_gnu_mut().unwrap();
+            gnu.sparse[0].set_offset(0);
+            gnu.sparse[0].set_length(1);
+            gnu.set_real_size(1);
+        }
+        header.set_path(VERSION_TAG).unwrap();
+        header.set_cksum();
+
+        let mut result = Vec::new();
+        let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
+        let mut archive = Builder::new(gz_builder);
+        archive.append(&header, Cursor::new(vec![0u8])).unwrap();
+        archive.finish().unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+
+        assert!(!V0Backup::peek_version(&result).unwrap());
     }
 }
