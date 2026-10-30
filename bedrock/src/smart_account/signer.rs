@@ -195,7 +195,8 @@ impl SafeSmartAccount {
     ///
     /// Spec Reference: <https://eips.ethereum.org/EIPS/eip-712>
     ///
-    /// Should not be called directly. Use `sign_message_eip_191_prefixed`, `sign_message`, `sign_digest` or `sign_safe_op` instead.
+    /// Should not be called directly. Use `sign_message_eip_191_prefixed`, `sign_message`,
+    /// `sign_digest` or `sign_safe_op` instead.
     pub(crate) fn eip_712_hash(
         &self,
         structured_data_hash: FixedBytes<32>,

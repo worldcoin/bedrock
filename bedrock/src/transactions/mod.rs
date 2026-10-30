@@ -1038,6 +1038,17 @@ impl SafeSmartAccount {
             route = route,
             "Submitting prepared transaction"
         );
+        if let Err(e) =
+            self.ensure_own_sender(prepared_transaction.user_operation.sender)
+        {
+            log_failure("validate_account", &e);
+            return Err(TransactionError::Generic {
+                error_message: format!(
+                    "Prepared transaction belongs to another account: {e}"
+                ),
+            });
+        }
+
         let mut user_operation = prepared_transaction.user_operation.clone();
         let user_op_hash = if let Some(url) = &prepared_transaction.custom_bundler_url {
             self.sign_user_operation(&mut user_operation, Network::WorldChain)

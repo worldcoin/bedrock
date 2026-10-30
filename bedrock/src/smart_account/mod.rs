@@ -410,7 +410,10 @@ impl SafeSmartAccount {
     /// Rejects a user operation for another Safe. The `Safe4337Module` domain is shared by every
     /// Safe on a chain, so a signature over a foreign `sender` would authorize any other Safe
     /// this EOA owns.
-    fn ensure_own_sender(&self, sender: Address) -> Result<(), SafeSmartAccountError> {
+    pub(crate) fn ensure_own_sender(
+        &self,
+        sender: Address,
+    ) -> Result<(), SafeSmartAccountError> {
         if sender == self.wallet_address {
             return Ok(());
         }

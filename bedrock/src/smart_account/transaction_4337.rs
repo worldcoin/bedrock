@@ -39,18 +39,19 @@ pub(super) fn bounded_validity_timestamps(
 /// Unix seconds `minutes` after `now`.
 ///
 /// # Errors
-/// Returns `InvalidInput` if the result doesn't fit in a `u64` (e.g. the clock reads before 1970).
+/// Returns `InvalidInput` unless the result is after the Unix epoch, since `0` never expires.
 fn deadline_seconds(
     now: DateTime<Utc>,
     minutes: i64,
 ) -> Result<u64, SafeSmartAccountError> {
-    u64::try_from((now + Duration::minutes(minutes)).timestamp()).map_err(|_| {
-        SafeSmartAccountError::InvalidInput {
+    u64::try_from((now + Duration::minutes(minutes)).timestamp())
+        .ok()
+        .filter(|&seconds| seconds > 0)
+        .ok_or_else(|| SafeSmartAccountError::InvalidInput {
             attribute: "validUntil".to_string(),
             error_message: "could not compute validUntil from the current time"
                 .to_string(),
-        }
-    })
+        })
 }
 
 /// Rejects a `validUntil` (Unix seconds) that never expires (`0`) or ends more than
@@ -561,15 +562,17 @@ mod tests {
     }
 
     #[test]
-    fn test_check_valid_until_fails_for_a_clock_before_1970() {
-        let now = DateTime::from_timestamp(-3600, 0).unwrap();
+    fn test_check_valid_until_fails_when_the_deadline_is_not_after_1970() {
+        for seconds in [-3600, -35 * 60] {
+            let now = DateTime::from_timestamp(seconds, 0).unwrap();
 
-        let error = check_valid_until(1, now).unwrap_err();
+            let error = check_valid_until(1, now).unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "invalid input on validUntil: could not compute validUntil from the current time"
-        );
+            assert_eq!(
+                error.to_string(),
+                "invalid input on validUntil: could not compute validUntil from the current time"
+            );
+        }
     }
 
     #[test]
