@@ -76,7 +76,6 @@ async fn test_uasset_redemption_safe_batch_and_rollback() -> anyhow::Result<()> 
 
     account
         .transaction_uasset_redeem(
-            &vault.to_string(),
             vec![quote(token_a, 1_000_000), quote(token_b, 2_000_000)],
             None,
         )
@@ -96,7 +95,6 @@ async fn test_uasset_redemption_safe_batch_and_rollback() -> anyhow::Result<()> 
     // A failing second redemption must undo the first redemption and both approvals.
     let result = account
         .transaction_uasset_redeem(
-            &vault.to_string(),
             vec![quote(token_a, 1_000_000), quote(token_b, 2_000_001)],
             None,
         )
