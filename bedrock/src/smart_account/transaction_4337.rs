@@ -6,15 +6,13 @@
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::{
-    SafeSmartAccount, SafeSmartAccountError, SafeSmartAccountSigner,
-};
+use crate::smart_account::{SafeSmartAccount, SafeSmartAccountError};
 use crate::transactions::rpc::{RpcClient, RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
 use chrono::{DateTime, Duration, Utc};
 
-use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
+use crate::primitives::contracts::ENTRYPOINT_4337;
 
 /// The default validity duration for 4337 `UserOperation` signatures.
 ///
@@ -38,6 +36,24 @@ pub(super) fn bounded_validity_timestamps(
     Ok((valid_after, valid_until))
 }
 
+/// Unix seconds `minutes` after `now`.
+///
+/// # Errors
+/// Returns `InvalidInput` unless the result is after the Unix epoch, since `0` never expires.
+fn deadline_seconds(
+    now: DateTime<Utc>,
+    minutes: i64,
+) -> Result<u64, SafeSmartAccountError> {
+    u64::try_from((now + Duration::minutes(minutes)).timestamp())
+        .ok()
+        .filter(|&seconds| seconds > 0)
+        .ok_or_else(|| SafeSmartAccountError::InvalidInput {
+            attribute: "validUntil".to_string(),
+            error_message: "could not compute validUntil from the current time"
+                .to_string(),
+        })
+}
+
 /// Rejects a `validUntil` (Unix seconds) that never expires (`0`) or ends more than
 /// [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] plus clock skew after `now`. One already in the
 /// past is accepted: the `EntryPoint` rejects it as expired.
@@ -52,14 +68,10 @@ fn check_valid_until(
             error_message: "validUntil must be set, 0 never expires".to_string(),
         });
     }
-    let max_valid_until: u64 = (now
-        + Duration::minutes(
-            USER_OPERATION_VALIDITY_DURATION_MINUTES
-                + FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES,
-        ))
-    .timestamp()
-    .try_into()
-    .unwrap_or(0);
+    let max_valid_until = deadline_seconds(
+        now,
+        USER_OPERATION_VALIDITY_DURATION_MINUTES + FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES,
+    )?;
     if valid_until > max_valid_until {
         crate::warn!(
             valid_until = valid_until,
@@ -84,6 +96,8 @@ impl SafeSmartAccount {
     /// [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] from now.
     ///
     /// # Errors
+    /// * Returns `RpcError` if the operation's `sender` is not this Safe
+    /// * Returns `RpcError` if `validUntil` cannot be computed from the current time
     /// * Returns `RpcError` if the `EncodedSafeOpStruct` cannot be built from the operation
     /// * Returns `RpcError` if the signing process fails
     pub(crate) fn sign_user_operation(
@@ -96,10 +110,8 @@ impl SafeSmartAccount {
         let valid_after_bytes: [u8; 6] = [0u8; 6];
 
         // validUntil = now + configured duration
-        let valid_until_seconds = (now_with_ntp()
-            + Duration::minutes(USER_OPERATION_VALIDITY_DURATION_MINUTES))
-        .timestamp();
-        let valid_until_seconds: u64 = valid_until_seconds.try_into().unwrap_or(0);
+        let valid_until_seconds =
+            deadline_seconds(now_with_ntp(), USER_OPERATION_VALIDITY_DURATION_MINUTES)?;
         let valid_until_u48 = U48::from(valid_until_seconds);
         let valid_until_bytes_full = valid_until_seconds.to_be_bytes();
         let valid_until_bytes: &[u8] = &valid_until_bytes_full[2..8]; // 48-bit timestamp
@@ -110,11 +122,7 @@ impl SafeSmartAccount {
             valid_until_u48,
         )?;
 
-        let signature = self.sign_digest(
-            encoded_safe_op.into_transaction_hash(),
-            network as u32,
-            Some(*GNOSIS_SAFE_4337_MODULE),
-        )?;
+        let signature = self.sign_safe_op(encoded_safe_op, network as u32)?;
 
         // Compose the final signature: validAfter (6 bytes) + validUntil (6 bytes) + ECDSA (65 bytes) = 77 bytes
         let mut full_signature = Vec::with_capacity(77);
@@ -284,6 +292,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        primitives::contracts::GNOSIS_SAFE_4337_MODULE,
         smart_account::SafeSmartAccount,
         transactions::{foreign::UnparsedUserOperation, SponsorUserOperationResponse},
     };
@@ -553,6 +562,23 @@ mod tests {
     }
 
     #[test]
+    fn test_check_valid_until_fails_when_the_deadline_is_not_after_1970() {
+        let zero_deadline = -(USER_OPERATION_VALIDITY_DURATION_MINUTES
+            + FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES)
+            * 60;
+        for seconds in [-3600, zero_deadline] {
+            let now = DateTime::from_timestamp(seconds, 0).unwrap();
+
+            let error = check_valid_until(1, now).unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                "invalid input on validUntil: could not compute validUntil from the current time"
+            );
+        }
+    }
+
+    #[test]
     fn test_extract_validity_timestamps_invalid_signature_length() {
         let user_op = UserOperation {
             signature: vec![0xFF; 65].into(), // Too short - missing timestamp data
@@ -652,5 +678,29 @@ mod tests {
         let (valid_after, valid_until) = user_op.extract_validity_timestamps().unwrap();
         assert_eq!(valid_after, U48::from(0u64));
         assert!(valid_until > U48::from(0u64));
+    }
+
+    #[test]
+    fn test_sign_user_operation_rejects_another_sender() {
+        let safe = SafeSmartAccount::from_private_key_hex(
+            "4142710b9b4caaeb000b8e5de271bbebac7f509aab2f5e61d1ed1958bfe6d583"
+                .to_string(),
+            "0x4564420674EA68fcc61b463C0494807C759d47e6",
+        )
+        .unwrap();
+        let mut user_op = UserOperation::new_with_defaults(
+            address!("0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6"),
+            U256::ZERO,
+            Bytes::from_str("0x1234").unwrap(),
+        );
+        let placeholder = user_op.signature.clone();
+
+        let result = safe.sign_user_operation(&mut user_op, Network::WorldChain);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("user operation sender is not this Safe"));
+        assert_eq!(user_op.signature, placeholder);
     }
 }

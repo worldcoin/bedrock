@@ -11,3 +11,6 @@ pub mod safe_4337_module;
 
 /// Tops up the paymaster's ERC-20 allowance. Staging and sandbox only.
 pub mod tfh_paymaster_approval;
+
+#[cfg(test)]
+mod pinned_contracts;

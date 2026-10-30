@@ -81,7 +81,7 @@ fn start_gzip_bomb_http_server() -> String {
 }
 
 /// A minimal `UnparsedUserOperation` whose fields are valid hex strings.
-/// The sender address is arbitrary because error tests never reach on-chain execution.
+/// The sender must be the signing Safe's own address, or signing is refused before the bundler.
 fn minimal_unparsed_user_op(sender: &str) -> UnparsedUserOperation {
     let nonce_key = NonceKeyV1::new(
         TransactionTypeId::Transfer,
