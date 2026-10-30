@@ -563,7 +563,10 @@ mod tests {
 
     #[test]
     fn test_check_valid_until_fails_when_the_deadline_is_not_after_1970() {
-        for seconds in [-3600, -35 * 60] {
+        let zero_deadline = -(USER_OPERATION_VALIDITY_DURATION_MINUTES
+            + FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES)
+            * 60;
+        for seconds in [-3600, zero_deadline] {
             let now = DateTime::from_timestamp(seconds, 0).unwrap();
 
             let error = check_valid_until(1, now).unwrap_err();
