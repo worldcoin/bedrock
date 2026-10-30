@@ -6,11 +6,13 @@
 use crate::primitives::contracts::{EncodedSafeOpStruct, UserOperation};
 use crate::primitives::ntp::now_with_ntp;
 use crate::primitives::{Network, PrimitiveError};
-use crate::smart_account::{SafeSmartAccount, SafeSmartAccountSigner};
+use crate::smart_account::{
+    SafeSmartAccount, SafeSmartAccountError, SafeSmartAccountSigner,
+};
 use crate::transactions::rpc::{RpcClient, RpcError, RpcProviderName};
 
 use alloy::primitives::{aliases::U48, Address, Bytes, FixedBytes};
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 
 use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 
@@ -18,6 +20,61 @@ use crate::primitives::contracts::{ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE};
 ///
 /// Operations are valid for this duration from the time they are signed.
 pub const USER_OPERATION_VALIDITY_DURATION_MINUTES: i64 = 30;
+
+/// Slack on top of [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] for a caller whose clock runs
+/// ahead of NTP when it picks `validUntil`.
+const FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES: i64 = 5;
+
+/// Reads the caller-chosen validity window from a placeholder signature and rejects it unless
+/// [`check_valid_until`] accepts it against NTP time.
+///
+/// # Errors
+/// Returns an error if the signature is malformed, or `InvalidInput` if the window is unbounded.
+pub(super) fn bounded_validity_timestamps(
+    user_op: &UserOperation,
+) -> Result<(U48, U48), SafeSmartAccountError> {
+    let (valid_after, valid_until) = user_op.extract_validity_timestamps()?;
+    check_valid_until(valid_until.to(), now_with_ntp())?;
+    Ok((valid_after, valid_until))
+}
+
+/// Rejects a `validUntil` (Unix seconds) that never expires (`0`) or ends more than
+/// [`USER_OPERATION_VALIDITY_DURATION_MINUTES`] plus clock skew after `now`. One already in the
+/// past is accepted: the `EntryPoint` rejects it as expired.
+fn check_valid_until(
+    valid_until: u64,
+    now: DateTime<Utc>,
+) -> Result<(), SafeSmartAccountError> {
+    if valid_until == 0 {
+        crate::warn!("rejected 4337 signature request that never expires");
+        return Err(SafeSmartAccountError::InvalidInput {
+            attribute: "signature".to_string(),
+            error_message: "validUntil must be set, 0 never expires".to_string(),
+        });
+    }
+    let max_valid_until: u64 = (now
+        + Duration::minutes(
+            USER_OPERATION_VALIDITY_DURATION_MINUTES
+                + FOREIGN_VALIDITY_CLOCK_SKEW_MINUTES,
+        ))
+    .timestamp()
+    .try_into()
+    .unwrap_or(0);
+    if valid_until > max_valid_until {
+        crate::warn!(
+            valid_until = valid_until,
+            max_valid_until = max_valid_until,
+            "rejected 4337 signature request with too long a validity window"
+        );
+        return Err(SafeSmartAccountError::InvalidInput {
+            attribute: "signature".to_string(),
+            error_message: format!(
+                "validUntil {valid_until} is after the latest allowed {max_valid_until}"
+            ),
+        });
+    }
+    Ok(())
+}
 
 impl SafeSmartAccount {
     /// Signs a `UserOperation` with fresh validity timestamps and sets the composed
@@ -473,6 +530,26 @@ mod tests {
 
         assert_eq!(valid_after, U48::from(valid_after_timestamp));
         assert_eq!(valid_until, U48::from(valid_until_timestamp));
+    }
+
+    #[test]
+    fn test_check_valid_until_allows_at_most_35_minutes() {
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let latest = 1_700_000_000 + 35 * 60;
+
+        for valid_until in [1, 1_700_000_000, latest] {
+            assert!(
+                check_valid_until(valid_until, now).is_ok(),
+                "validUntil {valid_until} must be accepted"
+            );
+        }
+        for valid_until in [0, latest + 1, 0xffff_ffff_ffff] {
+            let error = check_valid_until(valid_until, now).unwrap_err();
+            assert!(
+                error.to_string().starts_with("invalid input on signature:"),
+                "validUntil {valid_until} must be rejected, got {error}"
+            );
+        }
     }
 
     #[test]
