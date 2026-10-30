@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use alloy::{
-    primitives::{Address, Bytes, U256},
+    primitives::{address, Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -20,6 +20,8 @@ use super::{
     erc20::Erc20,
     multisend::{MultiSend, MultiSendBundle, MultiSendTx},
 };
+
+const VAULT_ADDRESS: Address = address!("1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca");
 
 sol! {
     /// Universal's shared-liquidity wind-down vault interface.
@@ -49,28 +51,20 @@ pub struct UniversalWindDownVault {
 impl UniversalWindDownVault {
     /// Builds a batch without RPC calls, signing, or submission.
     ///
-    /// `vault_address` must come from trusted backend configuration. This encoder
-    /// does not authenticate the vault or check balances, rates, pause state, or
-    /// liquidity. The caller must supply only redeemable holdings and preserve
-    /// the amounts and minimum payouts accepted by the user.
+    /// Uses the pinned World Chain vault. This encoder does not check balances,
+    /// rates, pause state, or liquidity. The caller must
+    /// supply only redeemable holdings and preserve the amounts and minimum
+    /// payouts accepted by the user.
     ///
     /// # Errors
     /// Returns `PrimitiveError::InvalidInput` for invalid addresses or uint256
     /// values, zero addresses/amounts/minimums, an empty batch, or duplicate tokens.
-    pub fn new(
-        vault_address: &str,
-        redemptions: &[UAssetRedemption],
-    ) -> Result<Self, PrimitiveError> {
+    pub fn new(redemptions: &[UAssetRedemption]) -> Result<Self, PrimitiveError> {
         let invalid =
             |attribute: &str, error_message: &str| PrimitiveError::InvalidInput {
                 attribute: attribute.to_string(),
                 error_message: error_message.to_string(),
             };
-        // TODO: Pin the independently verified deployed World Chain vault before production rollout.
-        let vault = Address::parse_from_ffi(vault_address, "vault_address")?;
-        if vault.is_zero() {
-            return Err(invalid("vault_address", "Vault address must not be zero"));
-        }
         if redemptions.is_empty() {
             return Err(invalid(
                 "redemptions",
@@ -83,7 +77,7 @@ impl UniversalWindDownVault {
         for redemption in redemptions {
             let token =
                 Address::parse_from_ffi(&redemption.token_address, "token_address")?;
-            if token.is_zero() || token == vault {
+            if token.is_zero() || token == VAULT_ADDRESS {
                 return Err(invalid(
                     "token_address",
                     "Token must be nonzero and different from the vault",
@@ -107,14 +101,14 @@ impl UniversalWindDownVault {
                 ));
             }
 
-            let approve = Erc20::encode_approve(vault, amount);
+            let approve = Erc20::encode_approve(VAULT_ADDRESS, amount);
             let redeem = IUniversalWindDownVault::redeemCall {
                 asset: token,
                 amount,
                 minimumUSDCAmount: minimum,
             }
             .abi_encode();
-            for (to, data) in [(token, approve), (vault, redeem)] {
+            for (to, data) in [(token, approve), (VAULT_ADDRESS, redeem)] {
                 entries.push(MultiSendTx {
                     operation: SafeOperation::Call as u8,
                     to,
@@ -169,26 +163,24 @@ impl Is4337Encodable for UniversalWindDownVault {
 /// The result includes exact-amount token approvals and calls to the vault, wrapped
 /// in a delegatecall to the existing Safe `MultiSend`. USDC is paid to the Safe.
 /// It is not bare vault calldata and must not be sent directly to the vault.
-/// No RPC calls, signing, or submission occur. Use a trusted backend vault address
-/// and only redeemable holdings with the amounts/minimum payouts accepted by the
-/// user. One failed call reverts the entire batch, including all approvals.
+/// No RPC calls, signing, or submission occur. Uses the pinned World Chain vault.
+/// Use only redeemable holdings with the amounts/minimum
+/// payouts accepted by the user. One failed call reverts the entire batch,
+/// including all approvals.
 ///
 /// # Errors
 /// Returns `PrimitiveError::InvalidInput` for invalid redemption inputs.
 #[uniffi::export]
 #[allow(clippy::needless_pass_by_value)] // UniFFI requires an owned list at the FFI boundary.
 pub fn build_uasset_redemption_call_data(
-    vault_address: &str,
     redemptions: Vec<UAssetRedemption>,
 ) -> Result<HexEncodedData, PrimitiveError> {
-    let transaction = UniversalWindDownVault::new(vault_address, &redemptions)?;
+    let transaction = UniversalWindDownVault::new(&redemptions)?;
     HexEncodedData::new(&hex::encode(transaction.build_execute_user_op_call_data()))
 }
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::address;
-
     use super::*;
     use crate::{
         primitives::BEDROCK_NONCE_PREFIX_CONST,
@@ -198,7 +190,7 @@ mod tests {
         },
     };
 
-    const VAULT: &str = "0x1111111111111111111111111111111111111111";
+    const VAULT: &str = "0x1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca";
     const TOKEN_A: &str = "0x2222222222222222222222222222222222222222";
     const TOKEN_B: &str = "0x3333333333333333333333333333333333333333";
 
@@ -211,10 +203,10 @@ mod tests {
     }
 
     #[test]
-    fn encodes_single_and_multiple_redemptions() {
+    fn encodes_single_and_multiple_redemptions_to_pinned_vault() {
         for tokens in [vec![TOKEN_A], vec![TOKEN_A, TOKEN_B]] {
             let quotes = tokens.iter().map(|token| quote(token)).collect();
-            let encoded = build_uasset_redemption_call_data(VAULT, quotes).unwrap();
+            let encoded = build_uasset_redemption_call_data(quotes).unwrap();
             let call_data =
                 hex::decode(encoded.as_str().trim_start_matches("0x")).unwrap();
             let outer =
@@ -259,31 +251,23 @@ mod tests {
     #[test]
     fn rejects_invalid_redemption_inputs() {
         let mut cases = vec![
-            ("invalid", vec![quote(TOKEN_A)]),
-            (
-                "0x0000000000000000000000000000000000000000",
-                vec![quote(TOKEN_A)],
-            ),
-            (VAULT, vec![]),
-            (VAULT, vec![quote(TOKEN_A), quote(TOKEN_A)]),
-            (VAULT, vec![quote(VAULT)]),
-            (VAULT, vec![quote("invalid")]),
-            (
-                VAULT,
-                vec![quote("0x0000000000000000000000000000000000000000")],
-            ),
+            vec![],
+            vec![quote(TOKEN_A), quote(TOKEN_A)],
+            vec![quote(VAULT)],
+            vec![quote("invalid")],
+            vec![quote("0x0000000000000000000000000000000000000000")],
         ];
         for value in ["0", "-1", "", "1.5", "not-a-number", "115792089237316195423570985008687907853269984665640564039457584007913129639936"] {
             let mut invalid_amount = quote(TOKEN_A);
             invalid_amount.amount = value.to_string();
-            cases.push((VAULT, vec![invalid_amount]));
+            cases.push(vec![invalid_amount]);
             let mut invalid_minimum = quote(TOKEN_A);
             invalid_minimum.minimum_usdc_amount = value.to_string();
-            cases.push((VAULT, vec![invalid_minimum]));
+            cases.push(vec![invalid_minimum]);
         }
-        for (vault, quotes) in cases {
+        for quotes in cases {
             assert!(matches!(
-                build_uasset_redemption_call_data(vault, quotes),
+                build_uasset_redemption_call_data(quotes),
                 Err(PrimitiveError::InvalidInput { .. })
             ));
         }
@@ -295,21 +279,17 @@ mod tests {
         let mut maximum = quote(token);
         maximum.amount = U256::MAX.to_string();
         maximum.minimum_usdc_amount = U256::MAX.to_string();
-        assert!(UniversalWindDownVault::new(VAULT, &[maximum]).is_ok());
-        assert!(UniversalWindDownVault::new(
-            VAULT,
-            &[
-                quote(token),
-                quote("0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD")
-            ],
-        )
+        assert!(UniversalWindDownVault::new(&[maximum]).is_ok());
+        assert!(UniversalWindDownVault::new(&[
+            quote(token),
+            quote("0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD")
+        ],)
         .is_err());
     }
 
     #[test]
     fn uses_redemption_nonce_and_safe_sender() {
-        let transaction =
-            UniversalWindDownVault::new(VAULT, &[quote(TOKEN_A)]).unwrap();
+        let transaction = UniversalWindDownVault::new(&[quote(TOKEN_A)]).unwrap();
         let wallet = address!("4444444444444444444444444444444444444444");
         let operation = transaction
             .build_preflight_user_operation(wallet, None)

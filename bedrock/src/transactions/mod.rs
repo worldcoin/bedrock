@@ -1155,9 +1155,10 @@ impl SafeSmartAccount {
 
     /// Redeems one or more Universal uAssets for USDC on World Chain atomically.
     ///
-    /// Use the trusted `contractAddress` from the backend's redemption status and
-    /// only holdings marked redeemable. Pass their accepted `amount` and quoted
-    /// `usdcAmount` as each redemption's amount and minimum payout respectively.
+    /// Uses the pinned World Chain vault. Use only holdings marked redeemable
+    /// in the backend's redemption status. Pass their accepted `amount` and
+    /// quoted `usdcAmount` as each redemption's
+    /// amount and minimum payout respectively.
     /// Exact-amount approvals and redemptions execute together through `MultiSend`;
     /// any failed call reverts the entire batch. Balances and quotes are not refreshed
     /// or silently adjusted here. Sponsorship/gas limits may constrain batch size.
@@ -1174,7 +1175,6 @@ impl SafeSmartAccount {
     /// sponsorship, signing, or submission fails.
     pub async fn transaction_uasset_redeem(
         &self,
-        vault_address: &str,
         redemptions: Vec<UAssetRedemption>,
         custom_bundler_url: Option<String>,
     ) -> Result<HexEncodedData, TransactionError> {
@@ -1182,7 +1182,6 @@ impl SafeSmartAccount {
         let result: Result<HexEncodedData, TransactionError> = async {
             let transaction =
                 contracts::universal_wind_down_vault::UniversalWindDownVault::new(
-                    vault_address,
                     &redemptions,
                 )?;
             stage = "screening";
@@ -1231,7 +1230,6 @@ impl SafeSmartAccount {
                 network = Network::WorldChain.network_name(),
                 stage = stage,
                 failure_class = failure_class(&error_message),
-                vault = vault_address,
                 redemption_count = redemptions.len(),
                 error_message = error_message,
                 "Failed to redeem Universal uAssets"

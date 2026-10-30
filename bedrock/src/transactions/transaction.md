@@ -317,7 +317,7 @@ routes. Their signatures do not include a custom bundler URL.
 ## Universal uAsset redemptions
 
 After confirmation, call `SafeSmartAccount.transaction_uasset_redeem` using
-`contractAddress` and only `redeemable` holdings from
+only `redeemable` holdings from
 `GET /uasset-sunset/redemption/status`. Map each holding to `UAssetRedemption`:
 
 | Record field | Status field |
@@ -325,6 +325,11 @@ After confirmation, call `SafeSmartAccount.transaction_uasset_redeem` using
 | `token_address` | `tokenAddress` |
 | `amount` | `amount` |
 | `minimum_usdc_amount` | `usdcAmount` |
+
+The vault is pinned to World Chain deployment
+`0x1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca`. Neither redemption API accepts a
+vault address; Bedrock selects the approval spender and redemption target
+internally. The backend status `contractAddress` is not a transaction input.
 
 Amounts are integer strings in base units: 18 decimals for uAssets, 6 for USDC.
 Safe MultiSend batches exact-amount approval/redemption pairs atomically,
@@ -334,7 +339,7 @@ invalid addresses/uint256 values, and zero amounts or minimum payouts fail
 before requesting sponsorship or signing. Existing transaction type IDs remain
 unchanged; redemption uses ID 143.
 
-`build_uasset_redemption_call_data(vault_address, redemptions)` exposes the same
+`build_uasset_redemption_call_data(redemptions)` exposes the same
 encoder without network access or signing. Its result is the Safe's full
 `executeUserOp` calldata, not a direct call to the vault.
 

@@ -54,7 +54,7 @@ async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
         "0x4564420674EA68fcc61b463C0494807C759d47e6",
     )
     .unwrap();
-    let vault = "0x1111111111111111111111111111111111111111";
+    let vault = "0x1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca";
     let quote = || {
         vec![UAssetRedemption {
             token_address: "0x2222222222222222222222222222222222222222".to_string(),
@@ -77,7 +77,7 @@ async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
         ),
     ]);
     let result = account
-        .transaction_uasset_redeem(vault, quote(), None)
+        .transaction_uasset_redeem(quote(), None)
         .await
         .unwrap();
     assert_eq!(result.as_str(), hash);
@@ -107,7 +107,7 @@ async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
             ("pm_sponsorUserOperation", sponsorship),
         ]);
         assert!(account
-            .transaction_uasset_redeem(vault, quote(), None)
+            .transaction_uasset_redeem(quote(), None)
             .await
             .is_err());
         assert_eq!(http.requests.lock().unwrap().len(), 2);
@@ -153,7 +153,7 @@ async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
         .mount(&server)
         .await;
         let result = account
-            .transaction_uasset_redeem(vault, quote(), Some(server.uri()))
+            .transaction_uasset_redeem(quote(), Some(server.uri()))
             .await;
         match failure {
             None => assert_eq!(result.unwrap().as_str(), hash),
@@ -199,14 +199,14 @@ async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
         })));
         assert!(matches!(
             account
-                .transaction_uasset_redeem(vault, quote(), custom_bundler_url.clone())
+                .transaction_uasset_redeem(quote(), custom_bundler_url.clone())
                 .await,
             Err(TransactionError::AddressRestricted)
         ));
         assert_eq!(http.requests.lock().unwrap().len(), 1);
         http.requests.lock().unwrap().clear();
         assert!(account
-            .transaction_uasset_redeem(vault, vec![], custom_bundler_url)
+            .transaction_uasset_redeem(vec![], custom_bundler_url)
             .await
             .is_err());
         assert!(http.requests.lock().unwrap().is_empty());
