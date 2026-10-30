@@ -157,7 +157,7 @@ async fn custom_bundler_submission_rejects_wrong_account_and_surfaces_rpc_error(
         .submit_prepared_transaction(&prepared)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("another account"));
+    assert!(error.to_string().contains("sender is not this Safe"));
     assert!(server.received_requests().await.unwrap().is_empty());
 
     prepared.user_operation.sender = account.wallet_address;

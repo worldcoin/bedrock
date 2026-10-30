@@ -9,7 +9,11 @@ use k256::ecdsa::SigningKey;
 use ruint::aliases::U256;
 
 use crate::{
-    primitives::{address::BedrockAddress, HexEncodedData},
+    primitives::{
+        address::BedrockAddress,
+        contracts::{EncodedSafeOpStruct, GNOSIS_SAFE_4337_MODULE},
+        HexEncodedData,
+    },
     smart_account::signer_from_siegel_bytes,
 };
 
@@ -74,9 +78,10 @@ pub trait SafeSmartAccountSigner {
         chain_id: u32,
     ) -> Result<Signature, SafeSmartAccountError>;
 
-    /// Signs an already pre-computed digest as EIP-712 message.
+    /// Signs an already pre-computed digest as EIP-712 message under the Safe's own domain.
     ///
-    /// This is used for example to sign transaction data.
+    /// This is used for example to sign transaction data. `SafeOp`s go through
+    /// [`SafeSmartAccount::sign_safe_op`] instead.
     ///
     /// # Errors
     /// - Will throw an error if the signature process fails.
@@ -84,7 +89,6 @@ pub trait SafeSmartAccountSigner {
         &self,
         digest: FixedBytes<32>,
         chain_id: u32,
-        domain_separator_address: Option<Address>,
     ) -> Result<Signature, SafeSmartAccountError>;
 }
 
@@ -111,15 +115,33 @@ impl SafeSmartAccountSigner for SafeSmartAccount {
         &self,
         digest: FixedBytes<32>,
         chain_id: u32,
-        domain_separator_address: Option<Address>,
     ) -> Result<Signature, SafeSmartAccountError> {
-        let message_hash =
-            self.eip_712_hash(digest, chain_id, domain_separator_address);
+        let message_hash = self.eip_712_hash(digest, chain_id, None);
         self.sign_hash_sync(&message_hash)
     }
 }
 
 impl SafeSmartAccount {
+    /// Signs a `SafeOp` under the `Safe4337Module` domain. Every signature in that domain goes
+    /// through here, so none can skip the sender check.
+    ///
+    /// # Errors
+    /// - Returns `InvalidInput` if the `SafeOp` is for another Safe.
+    /// - Will throw an error if the signature process fails.
+    pub fn sign_safe_op(
+        &self,
+        safe_op: EncodedSafeOpStruct,
+        chain_id: u32,
+    ) -> Result<Signature, SafeSmartAccountError> {
+        self.ensure_own_sender(safe_op.safe)?;
+        let message_hash = self.eip_712_hash(
+            safe_op.into_transaction_hash(),
+            chain_id,
+            Some(*GNOSIS_SAFE_4337_MODULE),
+        );
+        self.sign_hash_sync(&message_hash)
+    }
+
     /// Signs a fully encoded digest using the wallet's private key.
     ///
     /// The key is pulled from the [`SmartAccountKeyManager`] via a one-shot
@@ -173,7 +195,7 @@ impl SafeSmartAccount {
     ///
     /// Spec Reference: <https://eips.ethereum.org/EIPS/eip-712>
     ///
-    /// Should not be called directly. Use `sign_message_eip_191_prefixed`, `sign_message` or `sign_digest` instead.
+    /// Should not be called directly. Use `sign_message_eip_191_prefixed`, `sign_message`, `sign_digest` or `sign_safe_op` instead.
     pub(crate) fn eip_712_hash(
         &self,
         structured_data_hash: FixedBytes<32>,

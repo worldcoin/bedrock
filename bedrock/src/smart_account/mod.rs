@@ -244,7 +244,7 @@ impl SafeSmartAccount {
         transaction: SafeTransaction,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let signature =
-            self.sign_digest(transaction.get_transaction_hash()?, chain_id, None)?;
+            self.sign_digest(transaction.get_transaction_hash()?, chain_id)?;
         Ok(signature.into())
     }
 
@@ -308,6 +308,8 @@ impl SafeSmartAccount {
         user_operation: UnparsedUserOperation,
     ) -> Result<HexEncodedData, SafeSmartAccountError> {
         let user_op: UserOperation = user_operation.try_into()?;
+        // Before the placeholder is read, so a foreign `sender` gets this error and log.
+        self.ensure_own_sender(user_op.sender)?;
         let (valid_after, valid_until) =
             transaction_4337::bounded_validity_timestamps(&user_op)?;
         let encoded_safe_op_struct = EncodedSafeOpStruct::from_user_op_with_validity(
@@ -316,13 +318,7 @@ impl SafeSmartAccount {
             valid_until,
         )?;
 
-        self.ensure_own_sender(user_op.sender)?;
-
-        let signature = self.sign_digest(
-            encoded_safe_op_struct.into_transaction_hash(),
-            chain_id,
-            Some(*GNOSIS_SAFE_4337_MODULE),
-        )?;
+        let signature = self.sign_safe_op(encoded_safe_op_struct, chain_id)?;
 
         Ok(signature.into())
     }
@@ -946,7 +942,8 @@ mod tests {
             sender: "0xdab5dc22350f9a6aff03cf3d9341aad0ba42d2a6".to_string(),
             nonce: "0x0".to_string(),
             call_data: "0x".to_string(),
-            signature: format!("0x{}01{}", "00".repeat(11), "ff".repeat(65)),
+            // Malformed, so this also checks the sender is checked first.
+            signature: "0x".to_string(),
             call_gas_limit: "0x0".to_string(),
             verification_gas_limit: "0x0".to_string(),
             pre_verification_gas: "0x0".to_string(),

@@ -8,8 +8,7 @@ use bedrock::test_utils::PackedUserOperation;
 use bedrock::{
     primitives::Network,
     smart_account::{
-        EncodedSafeOpStruct, SafeSmartAccount, SafeSmartAccountSigner, UserOperation,
-        ENTRYPOINT_4337, GNOSIS_SAFE_4337_MODULE,
+        EncodedSafeOpStruct, SafeSmartAccount, UserOperation, ENTRYPOINT_4337,
     },
     test_utils::IEntryPoint,
     transactions::foreign::UnparsedUserOperation,
@@ -100,13 +99,12 @@ async fn test_integration_erc4337_transaction_execution() -> anyhow::Result<()> 
     )
     .expect("Failed to create SafeSmartAccount");
     let (va, vu) = user_op.extract_validity_timestamps()?;
-    let op_hash = EncodedSafeOpStruct::from_user_op_with_validity(&user_op, va, vu)
-        .unwrap()
-        .into_transaction_hash();
+    let safe_op =
+        EncodedSafeOpStruct::from_user_op_with_validity(&user_op, va, vu).unwrap();
 
     let worldchain_chain_id = Network::WorldChain as u32;
     let sig = safe_account
-        .sign_digest(op_hash, worldchain_chain_id, Some(*GNOSIS_SAFE_4337_MODULE))?
+        .sign_safe_op(safe_op, worldchain_chain_id)?
         .as_bytes();
     let mut sig_with_timestamps = Vec::with_capacity(77);
     sig_with_timestamps.extend_from_slice(valid_after);
