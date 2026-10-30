@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/worldcoin/bedrock/compare/0.7.7...0.8.0) - 2026-10-30
+
+### Fixed
+
+- [**breaking**] pin Universal redemption vault internally ([#497](https://github.com/worldcoin/bedrock/pull/497))
+- bound 4337 validity ([#496](https://github.com/worldcoin/bedrock/pull/496))
+
+### Other
+
+- don't include tooling_tests in prod builds ([#493](https://github.com/worldcoin/bedrock/pull/493))
+- [**breaking**] remove nitro enclave verification ([#492](https://github.com/worldcoin/bedrock/pull/492))
+
 ## [0.7.7](https://github.com/worldcoin/bedrock/compare/0.7.6...0.7.7) - 2026-10-28
 
 ### Added
