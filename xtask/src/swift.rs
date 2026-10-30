@@ -24,7 +24,10 @@ fn swift_dir() -> PathBuf {
 }
 
 /// Build the entire output for Swift bindings into `Bedrock.xcframework`.
-pub fn build(out_dir: Option<&Path>) -> Result<()> {
+///
+/// `tooling_tests` compiles in the FFI testers the foreign test suite needs; release builds
+/// must leave it off.
+pub fn build(out_dir: Option<&Path>, tooling_tests: bool) -> Result<()> {
     let root = project_root();
     let swift = swift_dir();
     let out_dir = match out_dir {
@@ -60,7 +63,7 @@ pub fn build(out_dir: Option<&Path>) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
 
-    build_ios_static_libs(&root)?;
+    build_ios_static_libs(&root, tooling_tests)?;
     let sim_universal = lipo_universal_sim(&root, &sim_universal_dir)?;
     generate_uniffi_bindings(&root, &bindings_dir)?;
     assemble_ffi_module(&bindings_dir, &sources_dir, &headers_dir)?;
@@ -81,11 +84,18 @@ pub fn build(out_dir: Option<&Path>) -> Result<()> {
 }
 
 /// `cargo build` the `bedrock` crate for every iOS target (device, arm sim, x86 sim).
-fn build_ios_static_libs(root: &Path) -> Result<()> {
+fn build_ios_static_libs(root: &Path, tooling_tests: bool) -> Result<()> {
+    let features: &[&str] = if tooling_tests {
+        &["--features", "tooling_tests"]
+    } else {
+        &[]
+    };
     for target in IOS_TARGETS {
         run(Command::new("cargo")
             .current_dir(root)
-            .args(["build", "--package", "bedrock", "--release", "--target"])
+            .args(["build", "--package", "bedrock", "--release"])
+            .args(features)
+            .arg("--target")
             .arg(target)
             .env("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)
             .env("RUSTFLAGS", IOS_RUSTFLAGS))?;
@@ -289,7 +299,7 @@ pub fn local() -> Result<()> {
     }
     std::fs::create_dir_all(&local_build)?;
 
-    build(Some(&local_build))?;
+    build(Some(&local_build), false)?;
     let binary_target = r#".binaryTarget(
             name: "BedrockFFI",
             path: "Bedrock.xcframework"
@@ -370,7 +380,7 @@ pub fn archive(asset_url: &str, checksum: &str, release_version: &str) -> Result
 /// Build the bindings and run the foreign Swift test suite on an iOS simulator.
 pub fn test() -> Result<()> {
     println!("🔨 Building Swift bindings");
-    build(None)?;
+    build(None, true)?;
     run_tests()
 }
 
@@ -387,7 +397,8 @@ pub fn run_tests() -> Result<()> {
     let framework = swift.join("Bedrock.xcframework");
     if !framework.exists() {
         bail!(
-            "Bedrock.xcframework not found at {} — run `cargo xtask swift build` first",
+            "Bedrock.xcframework not found at {} — run \
+             `cargo xtask swift build --tooling-tests` first",
             framework.display()
         );
     }

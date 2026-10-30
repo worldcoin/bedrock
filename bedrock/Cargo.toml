@@ -18,7 +18,7 @@ crate-type = ["lib", "staticlib", "cdylib"]
 name = "bedrock"
 
 [features]
-default = ["tooling_tests"]
+# Demo and tester FFI objects for the foreign binding tests. Never ship it.
 tooling_tests = []
 # Test_utils are for unit and integration tests.
 test_utils = []
@@ -36,8 +36,6 @@ alloy = { version = "2.0.4", default-features = false, features = [
 ] }
 anyhow = "1.0"
 async-trait = "0.1.89"
-# Attestation verification uses API types without the NSM device driver.
-aws-nitro-enclaves-nsm-api = { version = "0.4.0", default-features = false }
 base64 = "0.23.1"
 bedrock-macros = { path = "../bedrock-macros" }
 blake3 = "1.8.3"
@@ -47,7 +45,6 @@ chrono = { version = "0.4.42", default-features = false, features = [
   "serde",
 ] }
 ciborium = "0.2.2"
-coset = "0.4.2"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 dryoc = "0.8.0"
 flate2 = "1.1.9"
@@ -64,7 +61,6 @@ p256 = { version = "0.13.2", default-features = false, features = [
   "pem",
   "pkcs8",
 ] }
-p384 = { version = "0.13", default-features = false, features = ["ecdsa", "sha384"] }
 rand = { version = "0.8.5", default-features = false, features = ["std"] }
 reqwest = { version = "0.13", default-features = false, features = [
   "default-tls",
@@ -90,8 +86,6 @@ tracing-log = "0.2.0"
 turnkey_enclave_encrypt = "0.6.1"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 uuid = { version = "1.23.0", features = ["v4"], default-features = false }
-webpki = "0.22"
-x509-cert = { version = "0.2.5", features = ["pem"] }
 zeroize = "1.8"
 hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
 http = "1.4.0"
