@@ -54,7 +54,7 @@ async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
         "0x4564420674EA68fcc61b463C0494807C759d47e6",
     )
     .unwrap();
-    let vault = "0x1111111111111111111111111111111111111111";
+    let vault = "0x1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca";
     let quote = || {
         vec![UAssetRedemption {
             token_address: "0x2222222222222222222222222222222222222222".to_string(),
@@ -206,7 +206,15 @@ async fn redemption_uses_free_v3_or_custom_bundler_and_requires_screening() {
         assert_eq!(http.requests.lock().unwrap().len(), 1);
         http.requests.lock().unwrap().clear();
         assert!(account
-            .transaction_uasset_redeem(vault, vec![], custom_bundler_url)
+            .transaction_uasset_redeem(vault, vec![], custom_bundler_url.clone())
+            .await
+            .is_err());
+        assert!(account
+            .transaction_uasset_redeem(
+                "0x1111111111111111111111111111111111111111",
+                quote(),
+                custom_bundler_url,
+            )
             .await
             .is_err());
         assert!(http.requests.lock().unwrap().is_empty());

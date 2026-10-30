@@ -326,6 +326,12 @@ After confirmation, call `SafeSmartAccount.transaction_uasset_redeem` using
 | `amount` | `amount` |
 | `minimum_usdc_amount` | `usdcAmount` |
 
+The vault is pinned to World Chain deployment
+`0x1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca`. Both APIs retain the
+`vault_address` argument for client compatibility, but reject any other address
+before network calls or signing. Backend configuration cannot redirect approvals
+or redemptions to another contract.
+
 Amounts are integer strings in base units: 18 decimals for uAssets, 6 for USDC.
 Safe MultiSend batches exact-amount approval/redemption pairs atomically,
 paying USDC back to the Safe.

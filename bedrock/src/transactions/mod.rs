@@ -1155,9 +1155,10 @@ impl SafeSmartAccount {
 
     /// Redeems one or more Universal uAssets for USDC on World Chain atomically.
     ///
-    /// Use the trusted `contractAddress` from the backend's redemption status and
-    /// only holdings marked redeemable. Pass their accepted `amount` and quoted
-    /// `usdcAmount` as each redemption's amount and minimum payout respectively.
+    /// Use `contractAddress` from the backend's redemption status; it must match
+    /// the pinned World Chain vault. Use only holdings marked redeemable. Pass
+    /// their accepted `amount` and quoted `usdcAmount` as each redemption's
+    /// amount and minimum payout respectively.
     /// Exact-amount approvals and redemptions execute together through `MultiSend`;
     /// any failed call reverts the entire batch. Balances and quotes are not refreshed
     /// or silently adjusted here. Sponsorship/gas limits may constrain batch size.

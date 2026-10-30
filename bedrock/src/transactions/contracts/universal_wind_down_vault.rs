@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use alloy::{
-    primitives::{Address, Bytes, U256},
+    primitives::{address, Address, Bytes, U256},
     sol,
     sol_types::SolCall,
 };
@@ -20,6 +20,8 @@ use super::{
     erc20::Erc20,
     multisend::{MultiSend, MultiSendBundle, MultiSendTx},
 };
+
+const VAULT_ADDRESS: Address = address!("1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca");
 
 sol! {
     /// Universal's shared-liquidity wind-down vault interface.
@@ -49,14 +51,15 @@ pub struct UniversalWindDownVault {
 impl UniversalWindDownVault {
     /// Builds a batch without RPC calls, signing, or submission.
     ///
-    /// `vault_address` must come from trusted backend configuration. This encoder
-    /// does not authenticate the vault or check balances, rates, pause state, or
-    /// liquidity. The caller must supply only redeemable holdings and preserve
-    /// the amounts and minimum payouts accepted by the user.
+    /// `vault_address` must match the pinned World Chain vault. This encoder
+    /// does not check balances, rates, pause state, or liquidity. The caller must
+    /// supply only redeemable holdings and preserve the amounts and minimum
+    /// payouts accepted by the user.
     ///
     /// # Errors
     /// Returns `PrimitiveError::InvalidInput` for invalid addresses or uint256
-    /// values, zero addresses/amounts/minimums, an empty batch, or duplicate tokens.
+    /// values, an unrecognized vault, zero addresses/amounts/minimums, an empty
+    /// batch, or duplicate tokens.
     pub fn new(
         vault_address: &str,
         redemptions: &[UAssetRedemption],
@@ -66,10 +69,12 @@ impl UniversalWindDownVault {
                 attribute: attribute.to_string(),
                 error_message: error_message.to_string(),
             };
-        // TODO: Pin the independently verified deployed World Chain vault before production rollout.
         let vault = Address::parse_from_ffi(vault_address, "vault_address")?;
-        if vault.is_zero() {
-            return Err(invalid("vault_address", "Vault address must not be zero"));
+        if vault != VAULT_ADDRESS {
+            return Err(invalid(
+                "vault_address",
+                "Vault must be the deployed World Chain redemption vault",
+            ));
         }
         if redemptions.is_empty() {
             return Err(invalid(
@@ -169,9 +174,10 @@ impl Is4337Encodable for UniversalWindDownVault {
 /// The result includes exact-amount token approvals and calls to the vault, wrapped
 /// in a delegatecall to the existing Safe `MultiSend`. USDC is paid to the Safe.
 /// It is not bare vault calldata and must not be sent directly to the vault.
-/// No RPC calls, signing, or submission occur. Use a trusted backend vault address
-/// and only redeemable holdings with the amounts/minimum payouts accepted by the
-/// user. One failed call reverts the entire batch, including all approvals.
+/// No RPC calls, signing, or submission occur. The vault must match the pinned
+/// World Chain deployment. Use only redeemable holdings with the amounts/minimum
+/// payouts accepted by the user. One failed call reverts the entire batch,
+/// including all approvals.
 ///
 /// # Errors
 /// Returns `PrimitiveError::InvalidInput` for invalid redemption inputs.
@@ -187,8 +193,6 @@ pub fn build_uasset_redemption_call_data(
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::address;
-
     use super::*;
     use crate::{
         primitives::BEDROCK_NONCE_PREFIX_CONST,
@@ -198,7 +202,7 @@ mod tests {
         },
     };
 
-    const VAULT: &str = "0x1111111111111111111111111111111111111111";
+    const VAULT: &str = "0x1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca";
     const TOKEN_A: &str = "0x2222222222222222222222222222222222222222";
     const TOKEN_B: &str = "0x3333333333333333333333333333333333333333";
 
@@ -254,6 +258,26 @@ mod tests {
             }
             assert!(remaining.is_empty());
         }
+    }
+
+    #[test]
+    fn accepts_only_the_pinned_vault_regardless_of_address_case() {
+        assert!(matches!(
+            build_uasset_redemption_call_data(
+                "0x1111111111111111111111111111111111111111",
+                vec![quote(TOKEN_A)],
+            ),
+            Err(PrimitiveError::InvalidInput { attribute, .. }) if attribute == "vault_address"
+        ));
+        let checksummed = VAULT.parse::<Address>().unwrap().to_checksum(None);
+        assert_eq!(
+            build_uasset_redemption_call_data(VAULT, vec![quote(TOKEN_A)])
+                .unwrap()
+                .as_str(),
+            build_uasset_redemption_call_data(&checksummed, vec![quote(TOKEN_A)])
+                .unwrap()
+                .as_str(),
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use alloy::{
-    primitives::{Address, U256},
-    providers::{ext::AnvilApi, ProviderBuilder},
+    primitives::{address, Address, U256},
+    providers::{ext::AnvilApi, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
 };
@@ -38,11 +38,17 @@ async fn test_uasset_redemption_safe_batch_and_rollback() -> anyhow::Result<()> 
     provider
         .anvil_set_balance(owner.address(), U256::from(10u64.pow(19)))
         .await?;
-    let vault: Address = foundry::ForgeCreate::new(
+    let fixture_address: Address = foundry::ForgeCreate::new(
         "solidity/src/UAssetRedemptionFixture.sol:UAssetRedemptionFixture",
     )
     .run(format!("0x{private_key}"), anvil.endpoint_url().to_string())?
     .parse()?;
+    // Install the fixture at the production pin on the local fork. Its token
+    // addresses are immutable, so copying runtime code preserves the fixture.
+    let vault = address!("1f69bbf9f7ed316bcf1e0cf12f81d261a9bdc2ca");
+    provider
+        .anvil_set_code(vault, provider.get_code_at(fixture_address).await?)
+        .await?;
     let safe = common::deploy_safe(&provider, owner.address(), U256::ZERO).await?;
     let fixture = IUAssetRedemptionFixture::new(vault, &provider);
     fixture.fundUser(safe).send().await?.get_receipt().await?;
