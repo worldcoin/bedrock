@@ -2309,3 +2309,5 @@ fn test_stamp_with_backup_account_key_rejects_invalid_root_secret() {
         .expect_err("should fail with invalid root secret");
     assert!(err.to_string().contains("Invalid root secret"));
 }
+
+mod file_source;

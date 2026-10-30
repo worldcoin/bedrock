@@ -11,9 +11,7 @@ use crate::backup::{
     BackupOidcAccount, BackupOperationError,
 };
 use crate::primitives::config::Os;
-use crate::primitives::filesystem::{
-    unscoped_filesystem, FileSystemError, ScopedFileSystem,
-};
+use crate::primitives::filesystem::{FileSystemError, ScopedFileSystem};
 use crate::primitives::http_client::{get_http_client, HttpError, HttpHeader};
 use crate::HttpMethod;
 
@@ -39,6 +37,10 @@ pub enum ClientEventsError {
     /// HTTP error when sending events
     #[error(transparent)]
     HttpError(#[from] crate::primitives::http_client::HttpError),
+
+    /// A manifest entry could not be read from its configured storage.
+    #[error("backup file: {0}")]
+    BackupFile(String),
 
     /// `FileSystem` error
     #[error(transparent)]
@@ -489,14 +491,18 @@ impl ClientEventsReporter {
 
     /// Sync the base report with the current manifest contents.
     ///
-    /// Iterates all files listed in the global manifest, streams each file to calculate
-    /// its size, and writes the aggregate (in KB, rounded up) to `backup_size_kb`.
+    /// Iterates all files listed in the global manifest, calculates each file's size,
+    /// and writes the aggregate (in KB, rounded up) to `backup_size_kb`.
     /// Also updates `is_backup_enabled` and `backup_file_designators`.
     ///
+    /// Files on disk are streamed. Entries of designators registered with
+    /// [`set_backup_file_handlers`](super::set_backup_file_handlers) are read whole
+    /// through the host source.
+    ///
     /// # Errors
-    /// Returns an error if manifest or base report cannot be read/written.
+    /// Returns an error if the manifest or base report cannot be read or written, or
+    /// if a file cannot be read from disk or from the host source.
     pub fn sync_base_report_with_manifest(&self) -> Result<(), ClientEventsError> {
-        let fs = unscoped_filesystem();
         let mut base = self.read_base_report().unwrap_or_default();
 
         // Load manifest via manager (unchecked, no remote gate as it's not mutating the state)
@@ -510,17 +516,49 @@ impl ClientEventsReporter {
         };
         let BackupManifest::V0(manifest) = manifest;
 
-        let mut designators: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
-        let mut total_size_bytes: u64 = 0;
-
-        for entry in manifest.files {
-            designators.insert(entry.designator.to_string());
+        let mut sizes = Vec::with_capacity(manifest.files.len());
+        for entry in &manifest.files {
             let (_checksum, size_bytes) =
-                fs.calculate_checksum_and_size(&entry.file_path)?;
+                super::file_source::checksum_and_size_for_file(
+                    &entry.designator,
+                    &entry.file_path,
+                )
+                .map_err(|failure| {
+                    ClientEventsError::BackupFile(failure.to_string())
+                })?;
+            sizes.push((entry.designator.clone(), size_bytes));
+        }
+        Self::apply_file_sizes(&mut base, sizes);
+        self.write_base_report(&base)?;
+        Ok(())
+    }
+
+    /// Syncs the base report from files whose bytes are already in memory.
+    ///
+    /// Sync and restore use this so that host-owned entries are not read through the
+    /// host source a second time just to measure them.
+    ///
+    /// # Errors
+    /// Returns an error if the base report cannot be written.
+    pub(super) fn sync_base_report_with_sizes(
+        &self,
+        sizes: Vec<(BackupFileDesignator, u64)>,
+    ) -> Result<(), ClientEventsError> {
+        let mut base = self.read_base_report().unwrap_or_default();
+        Self::apply_file_sizes(&mut base, sizes);
+        self.write_base_report(&base)
+    }
+
+    fn apply_file_sizes(
+        base: &mut BaseReport,
+        sizes: Vec<(BackupFileDesignator, u64)>,
+    ) {
+        let mut designators = std::collections::BTreeSet::new();
+        let mut total_size_bytes: u64 = 0;
+        for (designator, size_bytes) in sizes {
+            designators.insert(designator.to_string());
             total_size_bytes = total_size_bytes.saturating_add(size_bytes);
         }
-
         base.is_backup_enabled = Some(true);
         base.backup_file_designators = Some(
             designators
@@ -529,9 +567,6 @@ impl ClientEventsReporter {
                 .collect(),
         );
         base.backup_size_kb = Some(total_size_bytes.div_ceil(1024));
-
-        self.write_base_report(&base)?;
-        Ok(())
     }
 }
 
