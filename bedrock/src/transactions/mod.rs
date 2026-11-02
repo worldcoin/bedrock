@@ -1038,14 +1038,14 @@ impl SafeSmartAccount {
             route = route,
             "Submitting prepared transaction"
         );
-        if prepared_transaction.user_operation.sender != self.wallet_address {
-            log_failure(
-                "validate_account",
-                &"Prepared transaction belongs to another account",
-            );
+        if let Err(e) =
+            self.ensure_own_sender(prepared_transaction.user_operation.sender)
+        {
+            log_failure("validate_account", &e);
             return Err(TransactionError::Generic {
-                error_message: "Prepared transaction belongs to another account"
-                    .to_string(),
+                error_message: format!(
+                    "Prepared transaction belongs to another account: {e}"
+                ),
             });
         }
 
