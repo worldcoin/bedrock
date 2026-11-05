@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/worldcoin/bedrock/compare/0.8.0...0.8.1) - 2026-11-05
+
+### Fixed
+
+- bind 4337 sender, pin contract addresses ([#494](https://github.com/worldcoin/bedrock/pull/494))
+
+### Other
+
+- cover Universal redemption in the World Chain fork suite ([#504](https://github.com/worldcoin/bedrock/pull/504))
+
 ## [0.8.0](https://github.com/worldcoin/bedrock/compare/0.7.7...0.8.0) - 2026-10-30
 
 ### Fixed
