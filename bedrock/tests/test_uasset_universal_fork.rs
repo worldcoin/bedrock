@@ -299,9 +299,10 @@ async fn balances<P: Provider<Ethereum>>(
 fn assert_settlement(
     before: &Balances,
     after: &Balances,
+    amounts: [u64; 2],
     total: U256,
 ) -> anyhow::Result<()> {
-    for (i, amount) in AMOUNTS.iter().enumerate() {
+    for (i, amount) in amounts.iter().enumerate() {
         ensure!(
             after.safe_assets[i] == before.safe_assets[i] - U256::from(*amount),
             "asset debit mismatch"
@@ -333,7 +334,7 @@ async fn assert_execution<P: Provider<Ethereum>>(
     from_block: u64,
     safe: Address,
     success: bool,
-    payouts: [U256; 2],
+    payouts: &[U256],
 ) -> anyhow::Result<()> {
     let operations = IEntryPoint::new(*ENTRYPOINT_4337, provider)
         .UserOperationEvent_filter()
@@ -351,7 +352,7 @@ async fn assert_execution<P: Provider<Ethereum>>(
         .query()
         .await?;
     ensure!(
-        redemptions.len() == if success { 2 } else { 0 },
+        redemptions.len() == if success { payouts.len() } else { 0 },
         "unexpected committed redemption events"
     );
     if success {
@@ -477,9 +478,9 @@ where
     let before = balances(&provider, safe).await?;
     let block = provider.get_block_number().await? + 1;
     account.transaction_uasset_redeem(quotes(), None).await?;
-    assert_execution(&provider, block, safe, true, payouts).await?;
+    assert_execution(&provider, block, safe, true, &payouts).await?;
     let after = balances(&provider, safe).await?;
-    assert_settlement(&before, &after, total)?;
+    assert_settlement(&before, &after, AMOUNTS, total)?;
 
     // The second minimum is one USDC base unit too high. An executed failure, not
     // merely any RPC error, must leave balances, supply and both approvals unchanged.
@@ -493,7 +494,7 @@ where
             .is_err(),
         "invalid minimum succeeded"
     );
-    assert_execution(&provider, block, safe, false, payouts).await?;
+    assert_execution(&provider, block, safe, false, &payouts).await?;
     ensure!(
         balances(&provider, safe).await? == after,
         "minimum-payout failure was not atomic"
@@ -540,7 +541,7 @@ where
             .is_err(),
         "underfunded batch succeeded"
     );
-    assert_execution(&provider, block, safe, false, payouts).await?;
+    assert_execution(&provider, block, safe, false, &payouts).await?;
     ensure!(
         balances(&provider, safe).await? == underfunded,
         "liquidity failure was not atomic"
@@ -556,8 +557,16 @@ where
     admin.anvil_stop_impersonating_account(vault_owner).await?;
     let block = provider.get_block_number().await? + 1;
     account.transaction_uasset_redeem(quotes(), None).await?;
-    assert_execution(&provider, block, safe, true, payouts).await?;
+    assert_execution(&provider, block, safe, true, &payouts).await?;
     let recovered = balances(&provider, safe).await?;
-    assert_settlement(&after, &recovered, total)?;
+    assert_settlement(&after, &recovered, AMOUNTS, total)?;
+
+    // A one-item request redeems only uSOL, leaving uXRP balances and supply intact.
+    let single = quotes().into_iter().take(1).collect();
+    let block = provider.get_block_number().await? + 1;
+    account.transaction_uasset_redeem(single, None).await?;
+    assert_execution(&provider, block, safe, true, &payouts[..1]).await?;
+    let single_redeemed = balances(&provider, safe).await?;
+    assert_settlement(&recovered, &single_redeemed, [AMOUNTS[0], 0], payouts[0])?;
     Ok(())
 }
