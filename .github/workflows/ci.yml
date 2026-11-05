@@ -211,6 +211,12 @@ jobs:
         with:
           toolchain: 1.98.1
 
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0 https://github.com/actions/setup-java/releases/tag/v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+
       - name: Build and test Kotlin bindings
         run: cargo xtask kotlin test
 
