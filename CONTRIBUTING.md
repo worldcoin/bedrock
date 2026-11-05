@@ -48,68 +48,38 @@ Integration tests deploy and interact with Safe contracts on a local fork of Wor
 
 ### Universal wind-down vault integration
 
-`test_uasset_universal_fork` runs Bedrock's `transaction_uasset_redeem` against
-Universal's deployed vault, controller and beacon-backed tokens. It complements
-the fast fixture test in `test_uasset_redemption`; it does not replace contract
-bytecode with a test vault. The test is explicitly ignored in the default suite
-because it requires a separately prepared fork and archive RPC access.
-
-Prepare the environment using [Universal PR #17](https://github.com/Alongside-Finance/universal-winddown/pull/17).
-Pin both its source revision and World Chain block so its mock rates, migration
-implementation and existing token holders are reproducible. In a separate terminal:
+`test_uasset_universal_fork` runs automatically with the normal integration suite.
+Like the other fork tests, it starts and tears down its own Anvil instance using
+`WORLDCHAIN_RPC_URL` (or the public fallback). No separately prepared fork,
+Universal checkout, or opt-in flag is required. Run it alone with:
 
 ```bash
-git clone https://github.com/Alongside-Finance/universal-winddown.git
-cd universal-winddown
-git fetch origin d03529bcc805d04044e8ccc3450db0f9f6aa14a2
-git checkout --detach d03529bcc805d04044e8ccc3450db0f9f6aa14a2
-git submodule update --init --recursive
-FORK_BLOCK_NUMBER=37242824 KEEP_RUNNING=true ./evm/scripts/start-local-world-fork.sh
+cargo test -p bedrock --test test_uasset_universal_fork -- --nocapture
 ```
 
-The launcher needs `anvil`, `cast`, `forge`, `jq`, `python3` and `rg`. Set
-`WORLD_RPC_URL` to an archive-capable World Chain RPC if the default public
-endpoint is unavailable. Wait for the launcher's `ready` message before running
-the test. Keep Anvil bound to loopback; it exposes impersonation and state-editing
-RPC methods.
+The test pins World Chain block `37242824` and applies the two-asset subset of
+[Universal PR #17's setup](https://github.com/Alongside-Finance/universal-winddown/blob/d03529bcc805d04044e8ccc3450db0f9f6aa14a2/evm/scripts/start-local-world-fork.sh):
+configure mock rates and burn permissions, fund the deployed vault, deploy the
+upstream `WrappedAssetV2`, upgrade the production beacon through its owner, verify
+preserved names/supplies/holder balances, and unpause. All writes target Anvil.
+The deployed vault and controller bytecode remain intact. The migration's
+reproducible deployment artifact and regeneration instructions are in
+[`bedrock/tests/fixtures/universal`](bedrock/tests/fixtures/universal/README.md).
 
-On Foundry 1.5.1, the public RPC can reject automatic `eth_feeHistory` estimation
-with `invalid block range`. For that toolchain, append
-`--gas-price 1000000000 --priority-gas-price 1000000` to the launcher's `cast send`
-and `forge create` commands. Do not set global `ETH_GAS_PRICE` variables: they
-also affect read-only `cast call` requests. A failed pre-upgrade read can also
-surface later as `name changed`; check the earlier RPC errors before treating it
-as a migration failure. These are limitations of the pinned upstream launcher.
+It transfers existing uSOL/uXRP from pinned holders into a newly deployed Safe and
+checks fractional quote rounding, exact USDC settlement, supply burns, consumed
+approvals and real EntryPoint/vault events. Excessive minimum payout on the
+second asset and insufficient shared USDC must each roll back the whole batch;
+restoring liquidity must allow a successful retry. An unrelated transport error
+cannot pass a rollback case. RPC requests have a 15-second deadline and the test
+body has a 180-second deadline.
 
-From the Bedrock repository:
-
-```bash
-UNIVERSAL_FORK_RPC_URL=http://127.0.0.1:8545 \
-  cargo test -p bedrock --test test_uasset_universal_fork -- --ignored --nocapture
-```
-
-The test starts its own child Anvil fork and destroys it when done, leaving the
-prepared environment untouched. RPC requests have a 15-second deadline and the
-test body has a 180-second deadline. It transfers existing uSOL/uXRP from pinned
-holders into a newly deployed Safe, preserving token supply, and checks:
-
-- Fractional quotes use integer rounding from 18-decimal assets to 6-decimal USDC.
-- Signed Safe MultiSend redemption burns both assets and pays the Safe exactly;
-  exact-amount approvals are consumed and the vault retains no redeemed tokens.
-- An excessive minimum on the second asset rolls back the first redemption,
-  both burns, USDC transfers and approvals.
-- Shared USDC sufficient for the first asset but insufficient for the whole batch
-  also rolls back atomically; restoring liquidity allows a successful retry.
-- Real EntryPoint outcome events and vault redemption events agree with the
-  balance/supply assertions, so an unrelated transport error cannot pass a
-  rollback case.
-
-Universal's launcher uses mock rates and synthetic vault USDC. Bedrock's existing
-`AnvilBackedHttpClient` mocks screening and sponsorship, but executes signed
-operations through the real EntryPoint, Safe module and MultiSend contracts.
-This test does **not** validate a production bundler/paymaster, backend quotes,
-receipt API or mobile UI; `wa_getUserOperationReceipt` is deliberately not used
-as evidence because that helper returns a static success response.
+This complements `test_uasset_redemption`'s lightweight fixture. Mock rates and
+synthetic vault USDC match Universal's script. `AnvilBackedHttpClient` mocks
+screening and sponsorship, but executes signed operations through the real
+EntryPoint, Safe module and MultiSend. This does not validate a production
+bundler/paymaster, backend quotes, receipt API or mobile UI. Assertions use
+on-chain events and state, not the helper's static receipt response.
 
 ## Code of Conduct
 
