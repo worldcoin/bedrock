@@ -47,6 +47,9 @@ pub mod migration;
 /// Support for Sign in with Ethereum ([ERC-4361](https://eips.ethereum.org/EIPS/eip-4361))
 pub mod siwe;
 
+/// World ID device proofs for the Auth bridge.
+pub mod device_proof;
+
 /// Test utilities for unit and integration tests
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;

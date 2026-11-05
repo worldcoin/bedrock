@@ -210,6 +210,7 @@ impl RootKey {
 
 /// Subkey ID. Namespace used for the Backup ID.
 const BACKUP_SUBKEY_ID: u64 = 0x101;
+const DEVICE_PROOF_SUBKEY_ID: u64 = 0x102;
 
 /// Private key derivation implementations. These are sensitive and not exposed to foreign bindings.
 impl RootKey {
@@ -232,6 +233,27 @@ impl RootKey {
             })?;
         subkey.zeroize();
         Ok(backup_key)
+    }
+
+    pub(crate) fn derive_device_proof_key(
+        &self,
+    ) -> Result<p256_auth::ecdsa::SigningKey, RootKeyError> {
+        let seed = self.derive_subkey(DEVICE_PROOF_SUBKEY_ID)?;
+        for counter in 0_u32..256 {
+            let mut hash = Sha256::new();
+            hash.update(b"WORLD-ID/IDP/DEVICE-KEY/V1\0");
+            hash.update(seed.expose_secret());
+            hash.update(counter.to_be_bytes());
+            let mut candidate: [u8; 32] = hash.finalize().into();
+            let key = p256_auth::ecdsa::SigningKey::from_slice(&candidate);
+            candidate.zeroize();
+            if let Ok(key) = key {
+                return Ok(key);
+            }
+        }
+        Err(RootKeyError::KeyDerivation(
+            "could not derive a P-256 device proof key".to_string(),
+        ))
     }
 
     /// Key derivation. "Public" value.
