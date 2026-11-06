@@ -24,7 +24,7 @@ pub struct V0BackupManifest {
 pub struct V0BackupManifestEntry {
     /// Logical designator for the file.
     pub designator: BackupFileDesignator,
-    /// Full path under the user data directory where the file resides.
+    /// Relative file path or host-owned logical ID, also used as the archive entry name.
     pub file_path: String,
     /// Lowercase hex-encoded checksum of the file's raw bytes (32 bytes → 64 chars).
     pub checksum_hex: String,
@@ -47,7 +47,7 @@ pub struct V0BackupFile {
     pub data: Vec<u8>,
     /// The blake3 hash of the file.
     pub checksum: [u8; 32],
-    /// Relative path under the user data directory; also used as archive entry name.
+    /// Relative file path or host-owned logical ID; also used as archive entry name.
     pub path: String,
     /// Logical designator for this file. Required to reconstruct the manifest when unpacking a backup from the remote.
     pub designator: BackupFileDesignator,
@@ -136,10 +136,9 @@ impl V0Backup {
                 file.read_to_end(&mut data)?;
 
                 let file: V0BackupFile = ciborium::from_reader(Cursor::new(&data))
-                    .inspect_err(|e| {
+                    .inspect_err(|_| {
                         crate::error!(
-                            path = path,
-                            error_message = e,
+                            failure_class = "decode_backup_file",
                             "Failed to deserialize backup file"
                         );
                     })?;
@@ -179,12 +178,23 @@ impl V0Backup {
     /// * If a backup file cannot be CBOR-encoded, `BackupError::EncodeBackupFileError` is returned.
     /// * If any of the metadata or files cannot be written, `BackupError::IoError` is returned.
     pub fn to_bytes(&self) -> Result<Vec<u8>, BackupError> {
+        self.to_bytes_with_clock(|| {
+            #[allow(clippy::cast_sign_loss)]
+            let mtime = Utc::now().timestamp() as u64;
+            mtime
+        })
+    }
+
+    pub(crate) fn to_bytes_with_clock(
+        &self,
+        clock: impl Fn() -> u64,
+    ) -> Result<Vec<u8>, BackupError> {
         let mut result = Vec::new();
         let gz_builder = GzEncoder::new(&mut result, flate2::Compression::default());
         let mut archive = Builder::new(gz_builder);
 
         // Add a version tag to the archive
-        write_to_archive(&mut archive, VERSION_TAG, &[0])?;
+        write_to_archive(&mut archive, VERSION_TAG, &[0], clock())?;
 
         // Add root secret
         write_to_archive(
@@ -195,6 +205,7 @@ impl V0Backup {
                 .danger_to_json()
                 .map_err(|_| BackupError::EncodeRootSecretError)?
                 .as_bytes(),
+            clock(),
         )?;
 
         // Add files (e.g. PCPs)
@@ -203,7 +214,7 @@ impl V0Backup {
             // We use CBOR as it's more performant than JSON for the binary data (more compact).
             let mut encoded_file: Vec<u8> = Vec::new();
             ciborium::into_writer(file, &mut encoded_file)?;
-            write_to_archive(&mut archive, &file.path, &encoded_file)?;
+            write_to_archive(&mut archive, &file.path, &encoded_file, clock())?;
         }
 
         // Finish the archive
@@ -220,11 +231,11 @@ fn write_to_archive(
     archive: &mut Builder<GzEncoder<&mut Vec<u8>>>,
     name: &str,
     data: &[u8],
+    mtime: u64,
 ) -> Result<(), BackupError> {
     let mut header = Header::new_gnu();
     header.set_size(data.len() as u64);
-    #[allow(clippy::cast_sign_loss)]
-    header.set_mtime(Utc::now().timestamp() as u64);
+    header.set_mtime(mtime);
     // 600 = you can read and write the file or directory, but other users have no access to it
     header.set_mode(0o600);
     header.set_cksum();
@@ -235,6 +246,14 @@ fn write_to_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_to_archive(
+        archive: &mut Builder<GzEncoder<&mut Vec<u8>>>,
+        name: &str,
+        data: &[u8],
+    ) -> Result<(), BackupError> {
+        super::write_to_archive(archive, name, data, 0)
+    }
 
     #[test]
     fn test_v0_backup() {
