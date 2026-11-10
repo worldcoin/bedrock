@@ -7,7 +7,7 @@ use crate::backup::service_client::{
     SyncSubmitRequest,
 };
 use crate::backup::FactorType;
-use crate::backup::{BackupFileDesignator, BackupManager};
+use crate::backup::{BackupError, BackupFileDesignator, BackupManager};
 use crate::primitives::filesystem::{
     init_test_filesystem, unscoped_filesystem, ScopedFileSystem,
 };
@@ -2068,6 +2068,240 @@ fn test_unpack_writes_files_and_manifest_unicode() {
     assert!(paths.contains("orb_pkg/personal_custody/résumé-αβγ.bin"));
     assert!(paths.contains("document_pkg/İstanbul/ŞĞÜ-çö.bin"));
     assert!(paths.contains("document_pkg/ไทย/บีน.bin"));
+}
+
+fn backup_file(
+    designator: BackupFileDesignator,
+    path: &str,
+    data: &[u8],
+) -> V0BackupFile {
+    V0BackupFile {
+        data: data.to_vec(),
+        checksum: blake3::hash(data).as_bytes().to_owned(),
+        path: path.to_string(),
+        designator,
+    }
+}
+
+fn manifest_entry_for(
+    designator: BackupFileDesignator,
+    path: &str,
+    data: &[u8],
+) -> V0BackupManifestEntry {
+    V0BackupManifestEntry {
+        designator,
+        file_path: path.to_string(),
+        checksum_hex: hex::encode(blake3::hash(data).as_bytes()),
+    }
+}
+
+fn write_local_manifest(entries: Vec<V0BackupManifestEntry>) -> BackupManifest {
+    let manifest = BackupManifest::V0(V0BackupManifest { files: entries });
+    ManifestManager::new().write_manifest(&manifest).unwrap();
+    manifest
+}
+
+fn read_local_manifest() -> BackupManifest {
+    serde_json::from_slice(&read_manifest_bytes("backup_manager")).unwrap()
+}
+
+#[test]
+#[serial]
+fn test_designator_unpack_restores_only_that_designator_and_merges_manifest() {
+    ensure_fs_initialized();
+    let fs = unscoped_filesystem();
+    let orb_path = "designator_restore/orb_pkg/encrypted-package-a.dat";
+    let document_path = "designator_restore/document_pkg/doc.dat";
+    let vault_path = "designator_restore/vault/export.json";
+    let stale_orb_path = "designator_restore/orb_pkg/encrypted-package-old.dat";
+
+    fs.write_file(document_path, b"newer-local-document")
+        .unwrap();
+
+    fs.write_file(vault_path, b"newer-local-vault").unwrap();
+
+    let kept_entries = || {
+        vec![
+            manifest_entry_for(
+                BackupFileDesignator::DocumentPkg,
+                document_path,
+                b"newer-local-document",
+            ),
+            manifest_entry_for(
+                BackupFileDesignator::CredentialVault,
+                vault_path,
+                b"newer-local-vault",
+            ),
+        ]
+    };
+
+    let mut local_entries = kept_entries();
+    local_entries.push(manifest_entry_for(
+        BackupFileDesignator::OrbPkg,
+        stale_orb_path,
+        b"missing-on-disk",
+    ));
+    write_local_manifest(local_entries);
+
+    let (sealed, keypair, factor) = seal_backup_for_unpacking(vec![
+        backup_file(BackupFileDesignator::OrbPkg, orb_path, b"backed-up-orb"),
+        backup_file(
+            BackupFileDesignator::DocumentPkg,
+            document_path,
+            b"older-backed-up-document",
+        ),
+        backup_file(
+            BackupFileDesignator::CredentialVault,
+            vault_path,
+            b"older-backed-up-vault",
+        ),
+    ]);
+
+    BackupManager::new()
+        .decrypt_and_unpack_sealed_backup_designator(
+            &sealed,
+            keypair,
+            factor,
+            FactorType::Prf,
+            BackupFileDesignator::OrbPkg,
+        )
+        .unwrap();
+
+    assert_eq!(fs.read_file(orb_path).unwrap(), b"backed-up-orb");
+    assert_eq!(
+        fs.read_file(document_path).unwrap(),
+        b"newer-local-document"
+    );
+    assert_eq!(fs.read_file(vault_path).unwrap(), b"newer-local-vault");
+
+    let mut expected_entries = kept_entries();
+    expected_entries.push(manifest_entry_for(
+        BackupFileDesignator::OrbPkg,
+        orb_path,
+        b"backed-up-orb",
+    ));
+
+    assert_eq!(
+        read_local_manifest(),
+        BackupManifest::V0(V0BackupManifest {
+            files: expected_entries,
+        })
+    );
+}
+
+#[test]
+#[serial]
+fn test_designator_unpack_requires_a_local_manifest() {
+    ensure_fs_initialized();
+    ManifestManager::new().danger_delete_manifest().unwrap();
+    let orb_path = "designator_restore_no_manifest/orb_pkg/encrypted-package-a.dat";
+    let (sealed, keypair, factor) = seal_backup_for_unpacking(vec![backup_file(
+        BackupFileDesignator::OrbPkg,
+        orb_path,
+        b"backed-up-orb",
+    )]);
+
+    let result = BackupManager::new().decrypt_and_unpack_sealed_backup_designator(
+        &sealed,
+        keypair,
+        factor,
+        FactorType::Prf,
+        BackupFileDesignator::OrbPkg,
+    );
+
+    assert!(
+        matches!(result, Err(BackupError::ManifestNotFound)),
+        "{result:?}"
+    );
+
+    assert!(!unscoped_filesystem().file_exists(orb_path).unwrap());
+}
+
+#[test]
+#[serial]
+fn test_designator_unpack_rejects_a_path_owned_by_another_designator() {
+    ensure_fs_initialized();
+    let fs = unscoped_filesystem();
+    let shared_path = "designator_restore_collision/shared.dat";
+    fs.write_file(shared_path, b"local-document").unwrap();
+
+    let local_manifest = write_local_manifest(vec![manifest_entry_for(
+        BackupFileDesignator::DocumentPkg,
+        shared_path,
+        b"local-document",
+    )]);
+
+    let (sealed, keypair, factor) = seal_backup_for_unpacking(vec![backup_file(
+        BackupFileDesignator::OrbPkg,
+        "designator_restore_collision/SHARED.dat",
+        b"backed-up-orb",
+    )]);
+
+    let result = BackupManager::new().decrypt_and_unpack_sealed_backup_designator(
+        &sealed,
+        keypair,
+        factor,
+        FactorType::Prf,
+        BackupFileDesignator::OrbPkg,
+    );
+
+    let Err(err) = result else {
+        panic!("expected the colliding path to be rejected");
+    };
+
+    assert!(err.to_string().contains("Invalid file for backup"), "{err}");
+    assert_eq!(fs.read_file(shared_path).unwrap(), b"local-document");
+    assert_eq!(read_local_manifest(), local_manifest);
+}
+
+#[test]
+#[serial]
+fn test_designator_unpack_without_backup_files_drops_local_entries() {
+    ensure_fs_initialized();
+    let fs = unscoped_filesystem();
+    let document_path = "designator_restore_empty/document_pkg/doc.dat";
+    fs.write_file(document_path, b"local-document").unwrap();
+
+    let document_entry = || {
+        manifest_entry_for(
+            BackupFileDesignator::DocumentPkg,
+            document_path,
+            b"local-document",
+        )
+    };
+
+    write_local_manifest(vec![
+        document_entry(),
+        manifest_entry_for(
+            BackupFileDesignator::OrbPkg,
+            "designator_restore_empty/orb_pkg/gone.dat",
+            b"gone",
+        ),
+    ]);
+
+    let (sealed, keypair, factor) = seal_backup_for_unpacking(vec![backup_file(
+        BackupFileDesignator::DocumentPkg,
+        document_path,
+        b"older-backed-up-document",
+    )]);
+
+    BackupManager::new()
+        .decrypt_and_unpack_sealed_backup_designator(
+            &sealed,
+            keypair,
+            factor,
+            FactorType::Prf,
+            BackupFileDesignator::OrbPkg,
+        )
+        .unwrap();
+
+    assert_eq!(fs.read_file(document_path).unwrap(), b"local-document");
+    assert_eq!(
+        read_local_manifest(),
+        BackupManifest::V0(V0BackupManifest {
+            files: vec![document_entry()],
+        })
+    );
 }
 
 #[test]
