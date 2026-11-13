@@ -65,7 +65,7 @@ fn roundtrip_minimal() {
     assert_eq!(parsed.expiration_time, msg.expiration_time);
     assert_eq!(parsed.not_before, msg.not_before);
     assert_eq!(parsed.request_id, msg.request_id);
-    assert!(parsed.resources.is_empty());
+    assert_eq!(parsed.resources, Vec::<Uri>::new());
 
     // Getter methods for foreign bindings
     assert_eq!(parsed.statement(), msg.statement);

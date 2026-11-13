@@ -856,10 +856,10 @@ mod tests {
     #[test]
     fn test_list_files_at_missing_directory_is_empty() {
         let fs = scoped("fs_list_missing");
-        assert!(fs
-            .list_files_at_directory("never/created")
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            fs.list_files_at_directory("never/created").unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

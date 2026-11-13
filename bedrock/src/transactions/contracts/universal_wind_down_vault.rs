@@ -244,7 +244,7 @@ mod tests {
                     remaining = &remaining[85 + length..];
                 }
             }
-            assert!(remaining.is_empty());
+            assert_eq!(remaining, b"");
         }
     }
 
