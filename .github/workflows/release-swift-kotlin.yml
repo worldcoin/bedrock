@@ -157,7 +157,8 @@ jobs:
 
       - name: Install Cross
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross --locked
+          cargo install cross --locked --git https://github.com/cross-rs/cross \
+            --rev a9301e91f72bba3850460512685f6b16062015ff # 2026-10-31
 
       - name: Build for target
         run: |
