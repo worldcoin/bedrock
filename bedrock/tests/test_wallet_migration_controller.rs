@@ -113,7 +113,7 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
 
     // 3) Launch 1: the repair is relayed, and everything else is held back.
     //    A userOp could not validate yet, so submitting one would be waste.
-    let summary = controller.run().await;
+    let summary = controller.run("migration").await;
     assert_eq!(summary.total, 3);
     assert_eq!(summary.pending, 1, "the repair was submitted");
     assert_eq!(summary.skipped, 2, "the dependents were held back");
@@ -156,7 +156,7 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
 
     // 4) Launch 2: the repair is observed in place, which converges it and
     //    unblocks both dependents in the same pass.
-    let summary = controller.run().await;
+    let summary = controller.run("migration").await;
     assert_eq!(summary.succeeded, 1, "the repair converged");
     assert_eq!(summary.pending, 2, "both dependents submitted");
 
@@ -192,7 +192,7 @@ async fn test_repair_runs_alone_then_unblocks_the_rest() -> anyhow::Result<()> {
     );
 
     // 5) Launch 3: both approvals observe their end state and settle.
-    let summary = controller.run().await;
+    let summary = controller.run("migration").await;
     assert_eq!(summary.succeeded, 2, "both approvals are proven landed");
     assert_eq!(summary.skipped, 1, "the repair was already done");
     assert_eq!(summary.pending, 0);

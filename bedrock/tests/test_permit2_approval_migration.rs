@@ -170,7 +170,7 @@ async fn test_permit2_approval_migration_full_flow() -> anyhow::Result<()> {
         provider.raw_request("evm_snapshot".into(), ()).await?;
 
     // 12) First controller pass: submits fire-and-forget and stays in flight.
-    let summary = controller.run().await;
+    let summary = controller.run("migration").await;
     assert_eq!(
         summary.pending, 1,
         "first pass should submit and stay pending"
@@ -198,7 +198,7 @@ async fn test_permit2_approval_migration_full_flow() -> anyhow::Result<()> {
     // 14) Second controller pass, an hour later: the gap is open again, so it
     //     re-submits. Nothing about the dropped submission is consulted.
     skip_resubmit_cooldown(&kv_store, "wallet.permit2.approval");
-    let summary = controller.run().await;
+    let summary = controller.run("migration").await;
     assert_eq!(summary.pending, 1, "second pass should re-submit");
     let record = &controller.list_records()?[0];
     assert!(matches!(record.status, MigrationStatus::InProgress));
@@ -207,7 +207,7 @@ async fn test_permit2_approval_migration_full_flow() -> anyhow::Result<()> {
     // 15) Third controller pass: the resubmitted approvals landed, so the
     //     observation converges and the migration is recorded complete.
     skip_resubmit_cooldown(&kv_store, "wallet.permit2.approval");
-    let summary = controller.run().await;
+    let summary = controller.run("migration").await;
     assert_eq!(
         summary.succeeded, 1,
         "third pass should converge to Succeeded"

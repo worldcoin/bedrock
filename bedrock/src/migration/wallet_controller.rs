@@ -91,20 +91,25 @@ impl WalletMigrationController {
     ///
     /// The prerequisite goes first and alone; the rest run in parallel only
     /// once it has *converged*. Never fails — problems land in the summary.
-    pub async fn run(&self) -> MigrationRunSummary {
+    pub async fn run(&self, telemetry_namespace: &str) -> MigrationRunSummary {
         let mut summary = MigrationRunSummary {
             total: i32::try_from(self.len()).unwrap_or(i32::MAX),
             ..MigrationRunSummary::default()
         };
 
         if let Some(prerequisite) = &self.prerequisite {
-            summary.merge_counts(&self.reconcile_one(prerequisite.as_ref()).await);
+            summary.merge_counts(
+                &self
+                    .reconcile_one(prerequisite.as_ref(), telemetry_namespace)
+                    .await,
+            );
 
             if !self.has_converged(&prerequisite.migration_id()) {
                 crate::warn!(
                     prerequisite = prerequisite.migration_id(),
                     blocked = self.migrations.len(),
-                    "wallet_migration.dependents_blocked"
+                    "wallet_{}.dependents_blocked",
+                    telemetry_namespace
                 );
                 summary.skipped +=
                     i32::try_from(self.migrations.len()).unwrap_or(i32::MAX);
@@ -115,7 +120,7 @@ impl WalletMigrationController {
         let results = join_all(
             self.migrations
                 .iter()
-                .map(|m| self.reconcile_one(m.as_ref())),
+                .map(|m| self.reconcile_one(m.as_ref(), telemetry_namespace)),
         )
         .await;
         for s in results {
@@ -141,12 +146,13 @@ impl WalletMigrationController {
     async fn reconcile_one(
         &self,
         migration: &dyn WalletMigration,
+        telemetry_namespace: &str,
     ) -> MigrationRunSummary {
         let id = migration.migration_id();
 
         let mut record = match self.records.load::<MigrationRecord>(&id) {
             Ok(r) => r,
-            Err(e) => return Self::storage_failure(&id, &e),
+            Err(e) => return Self::storage_failure(&id, &e, telemetry_namespace),
         };
 
         // Step 1: terminal migrations are never looked at again.
@@ -157,14 +163,20 @@ impl WalletMigrationController {
         // Step 2: every other launch observes. Submitting is what gets held
         // back — because the cap is spent, or because a submission has not had
         // its hour to land — and then the pass observes without acting.
-        let settling = Self::still_settling(&id, &record);
+        let settling = Self::still_settling(&id, &record, telemetry_namespace);
         if record.attempts >= MAX_ATTEMPTS || settling {
             let summary = self
-                .observe_only(&id, &mut record, migration, settling)
+                .observe_only(
+                    &id,
+                    &mut record,
+                    migration,
+                    settling,
+                    telemetry_namespace,
+                )
                 .await;
             record.last_attempted_at = Some(Utc::now());
             if let Err(e) = self.records.save(&id, &record) {
-                return Self::storage_failure(&id, &e);
+                return Self::storage_failure(&id, &e, telemetry_namespace);
             }
             return summary;
         }
@@ -174,14 +186,15 @@ impl WalletMigrationController {
         let duration_ms = (Utc::now() - started).num_milliseconds();
 
         // Step 3: turn that outcome into the new record state.
-        let summary = Self::apply(&id, &mut record, outcome, duration_ms);
+        let summary =
+            Self::apply(&id, &mut record, outcome, duration_ms, telemetry_namespace);
         record.last_attempted_at = Some(Utc::now());
 
         // Step 4: one write, after the pass. Nothing is persisted beforehand —
         // if the app dies mid-submission the next launch re-observes anyway,
         // and a lost write only costs an attempt count, which fails open.
         if let Err(e) = self.records.save(&id, &record) {
-            return Self::storage_failure(&id, &e);
+            return Self::storage_failure(&id, &e, telemetry_namespace);
         }
 
         summary
@@ -196,13 +209,14 @@ impl WalletMigrationController {
         record: &mut MigrationRecord,
         outcome: Result<WalletMigrationResult, MigrationError>,
         duration_ms: i64,
+        telemetry_namespace: &str,
     ) -> MigrationRunSummary {
         match outcome {
             // Reported as a success only if we submitted something, or every
             // fresh install shows a burst of successes it never earned.
             Ok(WalletMigrationResult::Converged) => {
                 let did_work = record.attempts > 0;
-                Self::mark_converged(id, record, false);
+                Self::mark_converged(id, record, false, telemetry_namespace);
                 if did_work {
                     MigrationRunSummary::succeeded()
                 } else {
@@ -231,7 +245,8 @@ impl WalletMigrationController {
                     attempt = record.attempts,
                     max_attempts = MAX_ATTEMPTS,
                     duration_ms = duration_ms,
-                    "wallet_migration.submitted"
+                    "wallet_{}.submitted",
+                    telemetry_namespace
                 );
                 MigrationRunSummary::pending()
             }
@@ -245,7 +260,8 @@ impl WalletMigrationController {
                     error_code = error_code,
                     error_message = error_message,
                     duration_ms = duration_ms,
-                    "wallet_migration.retry"
+                    "wallet_{}.retry",
+                    telemetry_namespace
                 );
                 Self::mark_failed(
                     record,
@@ -263,7 +279,8 @@ impl WalletMigrationController {
                     migration_id = id,
                     error_message = format!("{e:?}"),
                     duration_ms = duration_ms,
-                    "wallet_migration.observe_failed"
+                    "wallet_{}.observe_failed",
+                    telemetry_namespace
                 );
                 MigrationRunSummary::skipped()
             }
@@ -280,12 +297,13 @@ impl WalletMigrationController {
         record: &mut MigrationRecord,
         migration: &dyn WalletMigration,
         settling: bool,
+        telemetry_namespace: &str,
     ) -> MigrationRunSummary {
         match migration.end_state_holds().await {
             // It landed. True whether we were waiting on it or had run out of
             // attempts — either way the work is done.
             Ok(true) => {
-                Self::mark_converged(id, record, true);
+                Self::mark_converged(id, record, true, telemetry_namespace);
                 MigrationRunSummary::succeeded()
             }
 
@@ -299,7 +317,8 @@ impl WalletMigrationController {
                     attempts = record.attempts,
                     submission =
                         Submission::reference_or_none(record.last_submission.as_ref()),
-                    "wallet_migration.gave_up"
+                    "wallet_{}.gave_up",
+                    telemetry_namespace
                 );
                 Self::mark_failed(
                     record,
@@ -322,7 +341,8 @@ impl WalletMigrationController {
                     migration_id = id,
                     error_message = format!("{e:?}"),
                     observed_only = true,
-                    "wallet_migration.observe_failed"
+                    "wallet_{}.observe_failed",
+                    telemetry_namespace
                 );
                 MigrationRunSummary::skipped()
             }
@@ -331,12 +351,18 @@ impl WalletMigrationController {
 
     /// Record that the end state holds, and start the cap over: the gap those
     /// attempts belonged to is closed.
-    fn mark_converged(id: &str, record: &mut MigrationRecord, observed_only: bool) {
+    fn mark_converged(
+        id: &str,
+        record: &mut MigrationRecord,
+        observed_only: bool,
+        telemetry_namespace: &str,
+    ) {
         crate::info!(
             migration_id = id,
             attempts = record.attempts,
             observed_only = observed_only,
-            "wallet_migration.converged"
+            "wallet_{}.converged",
+            telemetry_namespace
         );
         record.status = MigrationStatus::Succeeded;
         record.completed_at.get_or_insert_with(Utc::now);
@@ -362,7 +388,11 @@ impl WalletMigrationController {
     /// Measured from when it *went out*, never from the last pass: observe-only
     /// passes bump `last_attempted_at`, so keying off that would let a user who
     /// opens the app hourly push the deadline forward forever.
-    fn still_settling(id: &str, record: &MigrationRecord) -> bool {
+    fn still_settling(
+        id: &str,
+        record: &MigrationRecord,
+        telemetry_namespace: &str,
+    ) -> bool {
         if !matches!(record.status, MigrationStatus::InProgress) {
             return false;
         }
@@ -374,7 +404,8 @@ impl WalletMigrationController {
             crate::info!(
                 migration_id = id,
                 submitted_at = sent_at.to_rfc3339(),
-                "wallet_migration.settling"
+                "wallet_{}.settling",
+                telemetry_namespace
             );
         }
         settling
@@ -421,11 +452,16 @@ impl WalletMigrationController {
     ///
     /// Reported as retryable and left untouched: losing a record is cheap, but
     /// acting on a half-read one is not.
-    fn storage_failure(id: &str, e: &MigrationError) -> MigrationRunSummary {
+    fn storage_failure(
+        id: &str,
+        e: &MigrationError,
+        telemetry_namespace: &str,
+    ) -> MigrationRunSummary {
         crate::error!(
             migration_id = id,
             error_message = format!("{e:?}"),
-            "wallet_migration.storage_error"
+            "wallet_{}.storage_error",
+            telemetry_namespace
         );
         MigrationRunSummary::failed_retryable()
     }
@@ -618,7 +654,7 @@ mod tests {
         let m = ScriptedMigration::new("never.needed", vec![converged]);
         let c = controller(vec![m.clone()]);
 
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.succeeded, 0);
         assert!(matches!(
@@ -638,7 +674,7 @@ mod tests {
             ScriptedMigration::new("submits.then.lands", vec![submitted, converged]);
         let c = controller(vec![m.clone()]);
 
-        let first = c.run().await;
+        let first = c.run("migration").await;
         assert_eq!(first.pending, 1);
         let record = c
             .records
@@ -648,7 +684,7 @@ mod tests {
         assert_eq!(record.attempts, 1);
 
         advance_past_cooldown(&c, "submits.then.lands");
-        let second = c.run().await;
+        let second = c.run("migration").await;
         assert_eq!(second.succeeded, 1, "the observation proves completion");
         assert!(matches!(
             c.records
@@ -667,13 +703,13 @@ mod tests {
         let c = controller(vec![m.clone()]);
 
         for _ in 0..MAX_ATTEMPTS {
-            c.run().await;
+            c.run("migration").await;
             advance_past_cooldown(&c, "never.lands");
         }
         assert_eq!(m.calls(), MAX_ATTEMPTS as usize);
 
         // The cap is spent: this pass confirms on chain and gives up.
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.failed_terminal, 1);
         assert_eq!(
             m.calls(),
@@ -685,7 +721,7 @@ mod tests {
         assert_eq!(record.attempts, MAX_ATTEMPTS);
 
         advance_past_cooldown(&c, "never.lands");
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.skipped, 1, "terminal migrations never run again");
         assert_eq!(m.calls(), MAX_ATTEMPTS as usize);
     }
@@ -700,12 +736,12 @@ mod tests {
         let m = ScriptedMigration::new("sub.hourly", vec![submitted]);
         let c = controller(vec![m.clone()]);
 
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(m.calls(), 1);
 
         // Two more launches inside the window. Each bumps `last_attempted_at`.
         for _ in 0..2 {
-            let summary = c.run().await;
+            let summary = c.run("migration").await;
             assert_eq!(summary.pending, 1, "still settling, so no resubmission");
         }
         assert_eq!(m.calls(), 1);
@@ -714,7 +750,7 @@ mod tests {
         // Backdating only the submission is enough to release the cooldown,
         // even though `last_attempted_at` was just set to now.
         advance_past_cooldown(&c, "sub.hourly");
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(m.calls(), 2, "the window runs from the submission");
     }
 
@@ -730,7 +766,7 @@ mod tests {
 
         // Spend the cap, leaving the final submission fresh.
         for i in 0..MAX_ATTEMPTS {
-            c.run().await;
+            c.run("migration").await;
             if i < MAX_ATTEMPTS - 1 {
                 advance_past_cooldown(&c, "cap.spent");
             }
@@ -739,7 +775,7 @@ mod tests {
         assert_eq!(record_of(&c, "cap.spent").attempts, MAX_ATTEMPTS);
 
         // Cap spent, but the last submission has not had its hour.
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(
             summary.pending, 1,
             "not written off while it may still land"
@@ -751,7 +787,7 @@ mod tests {
 
         // Once it has had its hour and still has not landed, it is dead.
         advance_past_cooldown(&c, "cap.spent");
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.failed_terminal, 1);
         assert!(matches!(
             record_of(&c, "cap.spent").status,
@@ -772,12 +808,12 @@ mod tests {
         let c = controller(vec![m.clone()]);
 
         for _ in 0..MAX_ATTEMPTS {
-            c.run().await;
+            c.run("migration").await;
             advance_past_cooldown(&c, "lands.last");
         }
 
         m.close_gap();
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.succeeded, 1);
         assert_eq!(m.calls(), MAX_ATTEMPTS as usize, "no extra submission");
         let record = record_of(&c, "lands.last");
@@ -813,14 +849,14 @@ mod tests {
         });
         let c = controller(vec![m.clone()]);
         for _ in 0..MAX_ATTEMPTS {
-            c.run().await;
+            c.run("migration").await;
             advance_past_cooldown(&c, "cannot.observe");
         }
 
         // The cap is spent, but now the chain cannot be read.
         m.broken.store(true, Ordering::SeqCst);
 
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.skipped, 1);
         assert!(matches!(
             c.records
@@ -839,7 +875,7 @@ mod tests {
         let c = controller(vec![m.clone()]);
 
         for _ in 0..(MAX_ATTEMPTS * 3) {
-            c.run().await;
+            c.run("migration").await;
         }
         let record = record_of(&c, "offline");
         assert_eq!(record.attempts, 0, "nothing was ever submitted");
@@ -865,7 +901,7 @@ mod tests {
         }
 
         let c = controller(vec![Arc::new(AlwaysErrors)]);
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.skipped, 1);
         let record = record_of(&c, "errors");
         assert!(matches!(record.status, MigrationStatus::NotStarted));
@@ -888,7 +924,7 @@ mod tests {
         };
 
         // Cold start 1: the repair is submitted, so the dependent is not run.
-        let first = c.run().await;
+        let first = c.run("migration").await;
         assert_eq!(first.total, 2);
         assert_eq!(first.pending, 1);
         assert_eq!(first.skipped, 1);
@@ -896,7 +932,7 @@ mod tests {
 
         // Cold start 2: the repair is observed in place, so the dependent runs.
         advance_past_cooldown(&c, "prereq");
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(dependent.calls(), 1);
     }
 
@@ -915,11 +951,11 @@ mod tests {
             migrations: vec![dependent.clone()],
         };
 
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(dependent.calls(), 1, "dependent runs once the repair holds");
 
         advance_past_cooldown(&c, "dependent");
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(prereq.calls(), 2, "the chain is re-read every launch");
         assert_eq!(dependent.calls(), 2, "dependent keeps retrying");
     }
@@ -931,16 +967,16 @@ mod tests {
         let m = ScriptedMigration::new("in.flight", vec![submitted]);
         let c = controller(vec![m.clone()]);
 
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(m.calls(), 1);
 
-        let summary = c.run().await;
+        let summary = c.run("migration").await;
         assert_eq!(summary.pending, 1, "still settling");
         assert_eq!(m.calls(), 1, "must not re-submit within the cooldown");
         assert_eq!(m.observations(), 1, "but the chain is still read");
 
         advance_past_cooldown(&c, "in.flight");
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(
             m.calls(),
             2,
@@ -959,11 +995,11 @@ mod tests {
         );
         let c = controller(vec![m.clone()]);
 
-        c.run().await;
+        c.run("migration").await;
         advance_past_cooldown(&c, "drifts");
-        c.run().await;
+        c.run("migration").await;
         advance_past_cooldown(&c, "drifts");
-        c.run().await;
+        c.run("migration").await;
         assert!(matches!(
             record_of(&c, "drifts").status,
             MigrationStatus::Succeeded
@@ -978,7 +1014,7 @@ mod tests {
         );
 
         // The state drifts back; the next launch observes it and acts.
-        c.run().await;
+        c.run("migration").await;
         assert_eq!(
             c.records
                 .load::<MigrationRecord>("drifts")
@@ -997,7 +1033,7 @@ mod tests {
             kv.clone(),
             vec![ScriptedMigration::new("collides", vec![converged])],
         );
-        c.run().await;
+        c.run("migration").await;
 
         assert!(kv.get("migration:wallet:collides".to_string()).is_ok());
         assert!(
