@@ -15,6 +15,7 @@ mod controller;
 mod error;
 mod processor;
 mod record_store;
+mod telemetry;
 
 mod wallet_controller;
 mod wallet_migration;
@@ -33,6 +34,7 @@ pub use processors::safe_4337_module_processor::Safe4337ModuleProcessor;
 pub use record_store::{
     MigrationRecord, MigrationRecordEntry, MigrationStatus, Submission,
 };
+pub use telemetry::MigrationNamespace;
 pub use wallet_migration::{WalletMigration, WalletMigrationResult};
 
 /// Exposed for integration tests only. Running this directly bypasses the

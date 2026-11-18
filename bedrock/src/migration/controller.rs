@@ -5,6 +5,7 @@ use crate::migration::record_store::RecordStore;
 use crate::migration::record_store::{
     MigrationRecord, MigrationRecordEntry, MigrationStatus,
 };
+use crate::migration::telemetry::{migration_log, MigrationNamespace};
 use crate::migration::wallet_controller::WalletMigrationController;
 use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
@@ -131,37 +132,19 @@ impl MigrationController {
     /// Thread-safe and fail-fast: a concurrent run errors immediately rather
     /// than waiting on the process-wide lock.
     ///
-    /// Omit `namespace` to preserve the existing controller lifecycle events.
-    /// A namespace replaces `migration` in run, native processor and wallet
-    /// controller events: `nonblocking` emits `nonblocking_run.started`,
-    /// `nonblocking.succeeded` and `wallet_nonblocking.submitted`.
-    /// Processor-owned logs are unchanged. Use a stable label, not a per-run
-    /// identifier or user data. IDs, records, execution and summaries are unaffected.
+    /// An explicit namespace adds a `namespace` attribute to controller lifecycle
+    /// events, including native processors and wallet migrations. Event names and
+    /// message payloads stay unchanged. Omit it to preserve legacy attributes too.
+    /// Processor-owned logs, IDs, records and execution are unaffected.
     ///
     /// # Errors
     ///
-    /// `InvalidOperation` for an invalid namespace or a concurrent run.
-    /// Namespaces must start with a lowercase ASCII letter, contain only
-    /// lowercase ASCII letters, digits or underscores, and be at most 64 bytes.
+    /// `InvalidOperation` if another run is already in progress.
     #[uniffi::method(default(namespace = None))]
     pub async fn run_migrations(
         &self,
-        namespace: Option<String>,
+        namespace: Option<MigrationNamespace>,
     ) -> Result<MigrationRunSummary, MigrationError> {
-        let namespace = namespace.as_deref().unwrap_or("migration");
-        if namespace.len() > 64
-            || !namespace
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_lowercase)
-            || !namespace
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-        {
-            return Err(MigrationError::InvalidOperation(
-                "Telemetry namespace must be 1-64 lowercase ASCII letters, digits or underscores, starting with a letter.".to_string(),
-            ));
-        }
         // Try to acquire the global lock. If another migration is running, fail immediately.
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
             MigrationError::InvalidOperation(
@@ -255,14 +238,15 @@ impl MigrationController {
     /// Internal async implementation of `run_migrations`
     async fn run_migrations_async(
         &self,
-        telemetry_namespace: &str,
+        telemetry_namespace: Option<MigrationNamespace>,
     ) -> Result<MigrationRunSummary, MigrationError> {
         // Store start time for duration tracking
         let run_start_time = Utc::now();
 
-        crate::info!(
-            "{}_run.started total_processors={} timestamp={}",
+        migration_log!(
+            info,
             telemetry_namespace,
+            "migration_run.started total_processors={} timestamp={}",
             self.processors.len() + self.wallet.len(),
             run_start_time.to_rfc3339()
         );
@@ -291,9 +275,7 @@ impl MigrationController {
 
         let run_duration_ms = (Utc::now() - run_start_time).num_milliseconds();
 
-        crate::info!(
-            "{}_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={} pending={}",
-            telemetry_namespace,
+        migration_log!(info, telemetry_namespace, "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={} pending={}",
             summary.total,
             summary.succeeded,
             summary.failed_retryable,
@@ -312,7 +294,7 @@ impl MigrationController {
     async fn run_single_processor(
         &self,
         processor: &dyn MigrationProcessor,
-        telemetry_namespace: &str,
+        telemetry_namespace: Option<MigrationNamespace>,
     ) -> MigrationRunSummary {
         let migration_id = processor.migration_id();
 
@@ -321,9 +303,10 @@ impl MigrationController {
             Ok(r) => r,
             Err(e) => {
                 return {
-                    crate::error!(
-                        "{}.storage_error error={:?} timestamp={}",
+                    migration_log!(
+                        error,
                         telemetry_namespace,
+                        "migration.storage_error error={:?} timestamp={}",
                         e,
                         Utc::now().to_rfc3339()
                     );
@@ -344,9 +327,10 @@ impl MigrationController {
                     .is_some_and(|recheck_at| Utc::now() >= recheck_at);
 
                 if recheck_due {
-                    crate::info!(
-                        "{}.recheck_due id={} recheck_at={} timestamp={}",
+                    migration_log!(
+                        info,
                         telemetry_namespace,
+                        "migration.recheck_due id={} recheck_at={} timestamp={}",
                         migration_id,
                         record
                             .recheck_at
@@ -362,9 +346,10 @@ impl MigrationController {
 
             MigrationStatus::FailedTerminal => {
                 // Terminal state - migration failed permanently
-                crate::info!(
-                    "{}.skipped id={} reason=terminal_failure timestamp={}",
+                migration_log!(
+                    info,
                     telemetry_namespace,
+                    "migration.skipped id={} reason=terminal_failure timestamp={}",
                     migration_id,
                     Utc::now().to_rfc3339()
                 );
@@ -391,9 +376,10 @@ impl MigrationController {
         let is_applicable = match processor.is_applicable().await {
             Ok(applicable) => applicable,
             Err(e) => {
-                crate::error!(
-                    "{}.is_applicable_error id={} error={:?} timestamp={}",
+                migration_log!(
+                    error,
                     telemetry_namespace,
+                    "migration.is_applicable_error id={} error={:?} timestamp={}",
                     migration_id,
                     e,
                     Utc::now().to_rfc3339()
@@ -417,9 +403,10 @@ impl MigrationController {
         }
 
         // Execute the migration
-        crate::info!(
-            "{}.started id={} attempt={} timestamp={}",
+        migration_log!(
+            info,
             telemetry_namespace,
+            "migration.started id={} attempt={} timestamp={}",
             migration_id,
             record.attempts + 1,
             Utc::now().to_rfc3339()
@@ -436,9 +423,10 @@ impl MigrationController {
         // Save record before execution so we don't lose progress if the app crashes mid-migration
         if let Err(e) = self.save_record(&migration_id, &record) {
             return {
-                crate::error!(
-                    "{}.storage_error error={:?} timestamp={}",
+                migration_log!(
+                    error,
                     telemetry_namespace,
+                    "migration.storage_error error={:?} timestamp={}",
                     e,
                     Utc::now().to_rfc3339()
                 );
@@ -454,9 +442,10 @@ impl MigrationController {
         let outcome = match processor.execute().await {
             Ok(ProcessorResult::Success) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::info!(
-                    "{}.succeeded id={} attempt={} duration_ms={} timestamp={}",
+                migration_log!(
+                    info,
                     telemetry_namespace,
+                    "migration.succeeded id={} attempt={} duration_ms={} timestamp={}",
                     migration_id,
                     record.attempts,
                     duration_ms,
@@ -479,9 +468,7 @@ impl MigrationController {
                 ..
             }) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::warn!(
-                    "{}.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
-                    telemetry_namespace,
+                migration_log!(warn, telemetry_namespace, "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
                     migration_id, record.attempts, duration_ms, error_code, error_message, Utc::now().to_rfc3339()
                 );
                 record.status = MigrationStatus::FailedRetryable;
@@ -497,9 +484,7 @@ impl MigrationController {
                 error_message,
             }) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::error!(
-                    "{}.failed_terminal id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
-                    telemetry_namespace,
+                migration_log!(error, telemetry_namespace, "migration.failed_terminal id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
                     migration_id, record.attempts, duration_ms, error_code, error_message, Utc::now().to_rfc3339()
                 );
                 record.status = MigrationStatus::FailedTerminal;
@@ -512,9 +497,7 @@ impl MigrationController {
             }
             Err(e) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::error!(
-                    "{}.failed_unexpected id={} attempt={} duration_ms={} error={:?} timestamp={}",
-                    telemetry_namespace,
+                migration_log!(error, telemetry_namespace, "migration.failed_unexpected id={} attempt={} duration_ms={} error={:?} timestamp={}",
                     migration_id, record.attempts, duration_ms, e, Utc::now().to_rfc3339()
                 );
                 record.status = MigrationStatus::FailedRetryable;
@@ -530,9 +513,10 @@ impl MigrationController {
         // Save the final result (success/failure) to storage
         if let Err(e) = self.save_record(&migration_id, &record) {
             return {
-                crate::error!(
-                    "{}.storage_error error={:?} timestamp={}",
+                migration_log!(
+                    error,
                     telemetry_namespace,
+                    "migration.storage_error error={:?} timestamp={}",
                     e,
                     Utc::now().to_rfc3339()
                 );
