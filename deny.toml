@@ -48,4 +48,8 @@ ignore = [
   # and Alloy and Turnkey support crypto-bigint >=0.7.6.
   # Upstream tracking: https://github.com/alloy-rs/alloy/issues/4445
   { id = "RUSTSEC-2026-0387", reason = "HPKE and elliptic-curve dependencies require crypto-bigint 0.4/0.5, which have no patched release" },
+  # TODO: Remove after Bedrock migrates from chrono to jiff or time. Persisted
+  # DateTime<Utc> values must keep their serialized format.
+  # Upstream announcement: https://github.com/chronotope/chrono/issues/1768
+  { id = "RUSTSEC-2026-0543", reason = "Unmaintained `chrono` (2026-09-14); no maintained release, and replacing it changes persisted timestamp serialization" },
 ]
