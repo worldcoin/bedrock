@@ -5,6 +5,7 @@ use crate::migration::record_store::RecordStore;
 use crate::migration::record_store::{
     MigrationRecord, MigrationRecordEntry, MigrationStatus,
 };
+use crate::migration::telemetry::{migration_log, MigrationNamespace};
 use crate::migration::wallet_controller::WalletMigrationController;
 use crate::primitives::key_value_store::DeviceKeyValueStore;
 use crate::smart_account::SafeSmartAccount;
@@ -131,10 +132,19 @@ impl MigrationController {
     /// Thread-safe and fail-fast: a concurrent run errors immediately rather
     /// than waiting on the process-wide lock.
     ///
+    /// An explicit namespace adds a `namespace` attribute to controller lifecycle
+    /// events, including native processors and wallet migrations. Event names and
+    /// message payloads stay unchanged. Omit it to preserve legacy attributes too.
+    /// Processor-owned logs, IDs, records and execution are unaffected.
+    ///
     /// # Errors
     ///
     /// `InvalidOperation` if another run is already in progress.
-    pub async fn run_migrations(&self) -> Result<MigrationRunSummary, MigrationError> {
+    #[uniffi::method(default(namespace = None))]
+    pub async fn run_migrations(
+        &self,
+        namespace: Option<MigrationNamespace>,
+    ) -> Result<MigrationRunSummary, MigrationError> {
         // Try to acquire the global lock. If another migration is running, fail immediately.
         let _guard = MIGRATION_LOCK.try_lock().map_err(|_| {
             MigrationError::InvalidOperation(
@@ -143,7 +153,7 @@ impl MigrationController {
         })?;
 
         // Lock acquired - we have exclusive access to run migrations
-        self.run_migrations_async().await
+        self.run_migrations_async(namespace).await
         // Lock automatically released when _guard is dropped
     }
 
@@ -228,11 +238,14 @@ impl MigrationController {
     /// Internal async implementation of `run_migrations`
     async fn run_migrations_async(
         &self,
+        telemetry_namespace: Option<MigrationNamespace>,
     ) -> Result<MigrationRunSummary, MigrationError> {
         // Store start time for duration tracking
         let run_start_time = Utc::now();
 
-        crate::info!(
+        migration_log!(
+            info,
+            telemetry_namespace,
             "migration_run.started total_processors={} timestamp={}",
             self.processors.len() + self.wallet.len(),
             run_start_time.to_rfc3339()
@@ -241,11 +254,9 @@ impl MigrationController {
         // Foreign processors and wallet migrations run concurrently. They
         // share nothing but this lock and the summary.
         let foreign = async {
-            let results = join_all(
-                self.processors
-                    .iter()
-                    .map(|processor| self.run_single_processor(processor.as_ref())),
-            )
+            let results = join_all(self.processors.iter().map(|processor| {
+                self.run_single_processor(processor.as_ref(), telemetry_namespace)
+            }))
             .await;
 
             let mut summary = MigrationRunSummary {
@@ -258,13 +269,13 @@ impl MigrationController {
             summary
         };
 
-        let (mut summary, wallet) = futures::join!(foreign, self.wallet.run());
+        let (mut summary, wallet) =
+            futures::join!(foreign, self.wallet.run(telemetry_namespace));
         summary.merge(&wallet);
 
         let run_duration_ms = (Utc::now() - run_start_time).num_milliseconds();
 
-        crate::info!(
-            "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={} pending={}",
+        migration_log!(info, telemetry_namespace, "migration_run.completed total={} succeeded={} failed_retryable={} failed_terminal={} skipped={} duration_ms={} timestamp={} pending={}",
             summary.total,
             summary.succeeded,
             summary.failed_retryable,
@@ -283,6 +294,7 @@ impl MigrationController {
     async fn run_single_processor(
         &self,
         processor: &dyn MigrationProcessor,
+        telemetry_namespace: Option<MigrationNamespace>,
     ) -> MigrationRunSummary {
         let migration_id = processor.migration_id();
 
@@ -291,7 +303,9 @@ impl MigrationController {
             Ok(r) => r,
             Err(e) => {
                 return {
-                    crate::error!(
+                    migration_log!(
+                        error,
+                        telemetry_namespace,
                         "migration.storage_error error={:?} timestamp={}",
                         e,
                         Utc::now().to_rfc3339()
@@ -313,7 +327,9 @@ impl MigrationController {
                     .is_some_and(|recheck_at| Utc::now() >= recheck_at);
 
                 if recheck_due {
-                    crate::info!(
+                    migration_log!(
+                        info,
+                        telemetry_namespace,
                         "migration.recheck_due id={} recheck_at={} timestamp={}",
                         migration_id,
                         record
@@ -330,7 +346,9 @@ impl MigrationController {
 
             MigrationStatus::FailedTerminal => {
                 // Terminal state - migration failed permanently
-                crate::info!(
+                migration_log!(
+                    info,
+                    telemetry_namespace,
                     "migration.skipped id={} reason=terminal_failure timestamp={}",
                     migration_id,
                     Utc::now().to_rfc3339()
@@ -358,7 +376,9 @@ impl MigrationController {
         let is_applicable = match processor.is_applicable().await {
             Ok(applicable) => applicable,
             Err(e) => {
-                crate::error!(
+                migration_log!(
+                    error,
+                    telemetry_namespace,
                     "migration.is_applicable_error id={} error={:?} timestamp={}",
                     migration_id,
                     e,
@@ -383,7 +403,9 @@ impl MigrationController {
         }
 
         // Execute the migration
-        crate::info!(
+        migration_log!(
+            info,
+            telemetry_namespace,
             "migration.started id={} attempt={} timestamp={}",
             migration_id,
             record.attempts + 1,
@@ -401,7 +423,9 @@ impl MigrationController {
         // Save record before execution so we don't lose progress if the app crashes mid-migration
         if let Err(e) = self.save_record(&migration_id, &record) {
             return {
-                crate::error!(
+                migration_log!(
+                    error,
+                    telemetry_namespace,
                     "migration.storage_error error={:?} timestamp={}",
                     e,
                     Utc::now().to_rfc3339()
@@ -418,7 +442,9 @@ impl MigrationController {
         let outcome = match processor.execute().await {
             Ok(ProcessorResult::Success) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::info!(
+                migration_log!(
+                    info,
+                    telemetry_namespace,
                     "migration.succeeded id={} attempt={} duration_ms={} timestamp={}",
                     migration_id,
                     record.attempts,
@@ -442,8 +468,7 @@ impl MigrationController {
                 ..
             }) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::warn!(
-                    "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
+                migration_log!(warn, telemetry_namespace, "migration.failed_retryable id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
                     migration_id, record.attempts, duration_ms, error_code, error_message, Utc::now().to_rfc3339()
                 );
                 record.status = MigrationStatus::FailedRetryable;
@@ -459,8 +484,7 @@ impl MigrationController {
                 error_message,
             }) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::error!(
-                    "migration.failed_terminal id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
+                migration_log!(error, telemetry_namespace, "migration.failed_terminal id={} attempt={} duration_ms={} error_code={} error_message={} timestamp={}",
                     migration_id, record.attempts, duration_ms, error_code, error_message, Utc::now().to_rfc3339()
                 );
                 record.status = MigrationStatus::FailedTerminal;
@@ -473,8 +497,7 @@ impl MigrationController {
             }
             Err(e) => {
                 let duration_ms = (Utc::now() - execute_start).num_milliseconds();
-                crate::error!(
-                    "migration.failed_unexpected id={} attempt={} duration_ms={} error={:?} timestamp={}",
+                migration_log!(error, telemetry_namespace, "migration.failed_unexpected id={} attempt={} duration_ms={} error={:?} timestamp={}",
                     migration_id, record.attempts, duration_ms, e, Utc::now().to_rfc3339()
                 );
                 record.status = MigrationStatus::FailedRetryable;
@@ -490,7 +513,9 @@ impl MigrationController {
         // Save the final result (success/failure) to storage
         if let Err(e) = self.save_record(&migration_id, &record) {
             return {
-                crate::error!(
+                migration_log!(
+                    error,
+                    telemetry_namespace,
                     "migration.storage_error error={:?} timestamp={}",
                     e,
                     Utc::now().to_rfc3339()
@@ -655,7 +680,7 @@ mod tests {
         let controller =
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -679,14 +704,15 @@ mod tests {
         let controller_clone = controller.clone();
 
         // Start first migration (will hold lock for 100ms)
-        let handle1 = tokio::spawn(async move { controller.run_migrations().await });
+        let handle1 =
+            tokio::spawn(async move { controller.run_migrations(None).await });
 
         // Give first migration time to acquire lock
         sleep(Duration::from_millis(10)).await;
 
         // Try to start second migration while first is running
         let handle2 =
-            tokio::spawn(async move { controller_clone.run_migrations().await });
+            tokio::spawn(async move { controller_clone.run_migrations(None).await });
 
         // Wait for both to complete
         let result1 = handle1.await.unwrap();
@@ -718,11 +744,11 @@ mod tests {
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // First migration
-        let result1 = controller.run_migrations().await;
+        let result1 = controller.run_migrations(None).await;
         assert!(result1.is_ok());
 
         // Second migration should succeed (first is complete)
-        let result2 = controller.run_migrations().await;
+        let result2 = controller.run_migrations(None).await;
         assert!(result2.is_ok());
 
         // Migration already succeeded, so second run should skip it
@@ -747,7 +773,7 @@ mod tests {
             MigrationController::with_processors(failing_kv, vec![processor.clone()]);
 
         // First migration completes but with storage errors counted as failed_retryable
-        let result1 = controller1.run_migrations().await;
+        let result1 = controller1.run_migrations(None).await;
         assert!(result1.is_ok());
         let summary1 = result1.unwrap();
         assert_eq!(summary1.failed_retryable, 1);
@@ -759,7 +785,7 @@ mod tests {
         );
 
         // Second migration should succeed (lock was released)
-        let result2 = controller2.run_migrations().await;
+        let result2 = controller2.run_migrations(None).await;
         assert!(result2.is_ok());
     }
 
@@ -781,13 +807,15 @@ mod tests {
             MigrationController::with_processors(kv_store, vec![processor2.clone()]);
 
         // Start first controller's migration
-        let handle1 = tokio::spawn(async move { controller1.run_migrations().await });
+        let handle1 =
+            tokio::spawn(async move { controller1.run_migrations(None).await });
 
         // Give first migration time to acquire lock
         sleep(Duration::from_millis(10)).await;
 
         // Try second controller's migration while first is running
-        let handle2 = tokio::spawn(async move { controller2.run_migrations().await });
+        let handle2 =
+            tokio::spawn(async move { controller2.run_migrations(None).await });
 
         let result1 = handle1.await.unwrap();
         let result2 = handle2.await.unwrap();
@@ -818,7 +846,7 @@ mod tests {
         );
 
         // Run migrations
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().succeeded, 2);
 
@@ -859,7 +887,7 @@ mod tests {
         );
 
         // Migration should still run despite corrupted record
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -922,7 +950,7 @@ mod tests {
         for _ in 0..10 {
             let controller_clone = controller.clone();
             handles.push(tokio::spawn(async move {
-                controller_clone.run_migrations().await
+                controller_clone.run_migrations(None).await
             }));
         }
 
@@ -971,7 +999,7 @@ mod tests {
         );
 
         // InProgress is retried immediately
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1010,7 +1038,7 @@ mod tests {
         );
 
         // Run migrations - should skip
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1053,7 +1081,7 @@ mod tests {
 
         // Run migrations multiple times - should always skip
         for _ in 0..3 {
-            let result = controller.run_migrations().await;
+            let result = controller.run_migrations(None).await;
             assert!(result.is_ok());
 
             let summary = result.unwrap();
@@ -1086,7 +1114,7 @@ mod tests {
         );
 
         // Run migrations - NotStarted should check is_applicable and execute
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1129,7 +1157,7 @@ mod tests {
         );
 
         // Run migrations - FailedRetryable should retry immediately on next app open
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1169,7 +1197,7 @@ mod tests {
             vec![processor.clone()],
         );
 
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().succeeded, 1);
         assert_eq!(processor.execution_count(), 1);
@@ -1253,7 +1281,7 @@ mod tests {
         );
 
         // Run migrations
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
 
         let summary = result.unwrap();
@@ -1295,7 +1323,7 @@ mod tests {
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // TTL has expired and is_applicable returns true → should re-execute
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         let summary = result.unwrap();
         assert_eq!(summary.succeeded, 1);
@@ -1325,7 +1353,7 @@ mod tests {
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
         // Within TTL → should skip
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         let summary = result.unwrap();
         assert_eq!(summary.skipped, 1);
@@ -1397,13 +1425,13 @@ mod tests {
         );
 
         // Run migrations - should succeed
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().succeeded, 1);
         assert_eq!(processor.execution_count(), 1);
 
         // Second run - should skip (already succeeded)
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().skipped, 1);
         assert_eq!(processor.execution_count(), 1);
@@ -1413,7 +1441,7 @@ mod tests {
         assert_eq!(deleted, 1);
 
         // Third run - should execute again (record was deleted)
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().succeeded, 1);
         assert_eq!(processor.execution_count(), 2);
@@ -1448,7 +1476,7 @@ mod tests {
         );
 
         let start = std::time::Instant::now();
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         let elapsed = start.elapsed();
 
         assert!(result.is_ok());
@@ -1493,7 +1521,7 @@ mod tests {
         );
 
         // TTL expired, is_applicable returns false → skipped, no execution
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         let summary = result.unwrap();
         assert_eq!(summary.skipped, 1);
@@ -1525,7 +1553,7 @@ mod tests {
         let controller =
             MigrationController::with_processors(kv_store, vec![processor.clone()]);
 
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         let summary = result.unwrap();
         assert_eq!(summary.skipped, 1);
@@ -1550,7 +1578,7 @@ mod tests {
             vec![success_proc.clone(), fail_proc.clone(), skip_proc.clone()],
         );
 
-        let result = controller.run_migrations().await;
+        let result = controller.run_migrations(None).await;
         assert!(result.is_ok());
         let summary = result.unwrap();
         assert_eq!(summary.total, 3);
