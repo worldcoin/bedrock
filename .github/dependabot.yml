@@ -4,6 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    # Matches registry.global-min-publish-age in .cargo/config.toml.
+    cooldown:
+      default-days: 7
     assignees:
       - "paolodamico"
       - "aurel-fr"

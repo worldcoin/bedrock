@@ -487,10 +487,7 @@ impl BackupManager {
 
         let manifest_manager = ManifestManager::new();
         let (_manifest, local_manifest_hash) = manifest_manager.read_manifest()?;
-        if remote_manifest_hash == local_manifest_hash.to_vec() {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(remote_manifest_hash != local_manifest_hash.to_vec())
     }
 
     /// **For debugging purposes only**. Returns information on the local manifest.

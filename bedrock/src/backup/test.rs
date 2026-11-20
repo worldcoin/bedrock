@@ -760,7 +760,7 @@ async fn test_list_files_missing_manifest_no_remote_is_empty() {
 
     let mgr = ManifestManager::new_with_prefix("backup_test_list_missing");
     let list = mgr.list_files(BackupFileDesignator::OrbPkg).await.unwrap();
-    assert!(list.is_empty());
+    assert_eq!(list, Vec::<String>::new());
 }
 
 #[tokio::test]

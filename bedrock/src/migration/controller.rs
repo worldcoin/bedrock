@@ -332,10 +332,7 @@ impl MigrationController {
                         telemetry_namespace,
                         "migration.recheck_due id={} recheck_at={} timestamp={}",
                         migration_id,
-                        record
-                            .recheck_at
-                            .map(|t| t.to_rfc3339())
-                            .unwrap_or_default(),
+                        record.recheck_at.map_or_default(|t| t.to_rfc3339()),
                         Utc::now().to_rfc3339()
                     );
                     true

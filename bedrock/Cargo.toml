@@ -87,7 +87,6 @@ turnkey_enclave_encrypt = "0.6.1"
 uniffi = { workspace = true, features = ["build", "tokio"] }
 uuid = { version = "1.23.0", features = ["v4"], default-features = false }
 zeroize = "1.8"
-hex-literal = "1.1.0" # Provides the `hex!` macro for compile-time hex decoding
 http = "1.4.0"
 siegel-uniffi = { git = "https://github.com/toolsforhumanity/siegel", rev = "2bc2737a55b70c3c53683da992a22e2333f9280a", features = [
   "tracing",
@@ -106,6 +105,7 @@ alloy = { version = "2.0.4", default-features = false, features = [
   "node-bindings",
 ] }
 dotenvy = "0.15.7"
+hex-literal = "1.1.0"
 serial_test = "3.4.0"
 tokio = { version = "1.51.6", features = ["time", "test-util"] }
 tokio-test = "0.4.5"
