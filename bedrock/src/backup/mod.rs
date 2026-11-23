@@ -35,7 +35,7 @@ use siegel_uniffi::SiegelSession;
 use std::sync::Arc;
 
 use crate::backup::backup_format::v0::{
-    V0Backup, V0BackupManifest, V0BackupManifestEntry,
+    V0Backup, V0BackupFile, V0BackupManifest, V0BackupManifestEntry,
 };
 use crate::backup::backup_format::BackupFormat;
 use crate::backup::client_events::BackupReportInput;
@@ -226,34 +226,11 @@ impl BackupManager {
     ) -> Result<DecryptedBackup, BackupError> {
         crate::info!("Decrypting sealed backup with factor: {factor_type:?}");
 
-        if sealed_backup_data.is_empty() {
-            return Err(BackupError::InvalidSealedBackupError);
-        }
-
-        // Decode factor secret
-        let factor_secret_bytes = hex::decode(factor_secret)
-            .map_err(|_| BackupError::DecodeFactorSecretError)?;
-        if factor_secret_bytes.len() != 32 {
-            return Err(BackupError::InvalidFactorSecretLengthError);
-        }
-        let factor_secret_key = SecretKey::from_slice(&factor_secret_bytes)
-            .map_err(|_| BackupError::DecodeFactorSecretError)?;
-
-        // Decrypt `EncryptedBackupKeypair` (from Factor Secret)
-        let encrypted_backup_keypair_bytes = hex::decode(encrypted_backup_keypair)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-        let backup_keypair_bytes = factor_secret_key
-            .unseal(&encrypted_backup_keypair_bytes)
-            .map_err(|_| BackupError::DecryptBackupKeypairError)?;
-        let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
-            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
-
-        // Decrypt the Sealed Backup
-        let unsealed_backup = backup_secret_key
-            .unseal(sealed_backup_data)
-            .map_err(|_| BackupError::DecryptBackupError)?;
-
-        let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
+        let (unsealed_backup, backup_secret_key) = Self::decrypt_sealed_backup(
+            sealed_backup_data,
+            encrypted_backup_keypair,
+            factor_secret,
+        )?;
 
         crate::info!("Backup successfully decrypted, initiating unpacking.");
 
@@ -261,19 +238,53 @@ impl BackupManager {
 
         crate::info!("Backup successfully unpacked to filesystem.");
 
-        match unsealed_backup {
-            BackupFormat::V0(backup) => Ok(DecryptedBackup {
-                root_key_json: backup.root_secret.danger_to_json().map_err(|_| {
-                    BackupError::Generic {
-                        error_message: "unexpected. failed to serialize root secret"
-                            .to_string(),
-                    }
-                })?,
-                backup_keypair_public_key: hex::encode(
-                    backup_secret_key.public_key().as_bytes(),
-                ),
-            }),
-        }
+        Self::decrypted_backup(&unsealed_backup, &backup_secret_key)
+    }
+
+    /// Like [`Self::decrypt_and_unpack_sealed_backup`], but restores only `designator`'s files
+    /// and replaces only its entries in the local manifest. Other local files and entries are
+    /// kept. Safe to retry: files are written before the manifest.
+    ///
+    /// * `sealed_backup_data` - is the sealed backup data, encrypted with the backup keypair public key.
+    /// * `encrypted_backup_keypair` - is the backup keypair that was encrypted with the factor secret.
+    ///   Hex encoded.
+    /// * `factor_secret` - is the factor secret that was used to encrypt the backup keypair. Hex encoded.
+    /// * `factor_type` - is the type of factor that was used to encrypt the backup keypair.
+    /// * `designator` - is the kind of files to restore.
+    ///
+    /// # Errors
+    /// * The decoding and decryption errors of [`Self::decrypt_and_unpack_sealed_backup`].
+    /// * `BackupError::ManifestNotFound` - if there is no local manifest to merge into. Use
+    ///   [`Self::decrypt_and_unpack_sealed_backup`] to restore a device without one.
+    /// * `BackupError::InvalidFileForBackup` - if a restored path is unusable, duplicated, or
+    ///   already belongs to another designator in the local manifest. Nothing is written.
+    /// * `BackupError::IoError` - if the local manifest or a file cannot be read or written.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "uniffi requires owned arguments at the FFI boundary"
+    )]
+    pub fn decrypt_and_unpack_sealed_backup_designator(
+        &self,
+        sealed_backup_data: &[u8],
+        encrypted_backup_keypair: String,
+        factor_secret: String,
+        factor_type: FactorType,
+        designator: BackupFileDesignator,
+    ) -> Result<DecryptedBackup, BackupError> {
+        crate::info!(
+            designator = designator,
+            "Decrypting sealed backup to restore one designator with factor: {factor_type:?}"
+        );
+
+        let (unsealed_backup, backup_secret_key) = Self::decrypt_sealed_backup(
+            sealed_backup_data,
+            encrypted_backup_keypair,
+            factor_secret,
+        )?;
+
+        Self::unpack_designator_to_filesystem(&unsealed_backup, &designator)?;
+
+        Self::decrypted_backup(&unsealed_backup, &backup_secret_key)
     }
 
     /// Adds new factor by re-encrypting the backup keypair (not the backup itself!)
@@ -743,6 +754,63 @@ impl BackupManager {
         })
     }
 
+    fn decrypt_sealed_backup(
+        sealed_backup_data: &[u8],
+        encrypted_backup_keypair: String,
+        factor_secret: String,
+    ) -> Result<(BackupFormat, SecretKey), BackupError> {
+        if sealed_backup_data.is_empty() {
+            return Err(BackupError::InvalidSealedBackupError);
+        }
+
+        let factor_secret_bytes = hex::decode(factor_secret)
+            .map_err(|_| BackupError::DecodeFactorSecretError)?;
+
+        if factor_secret_bytes.len() != 32 {
+            return Err(BackupError::InvalidFactorSecretLengthError);
+        }
+
+        let factor_secret_key = SecretKey::from_slice(&factor_secret_bytes)
+            .map_err(|_| BackupError::DecodeFactorSecretError)?;
+
+        let encrypted_backup_keypair_bytes = hex::decode(encrypted_backup_keypair)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+
+        let backup_keypair_bytes = factor_secret_key
+            .unseal(&encrypted_backup_keypair_bytes)
+            .map_err(|_| BackupError::DecryptBackupKeypairError)?;
+
+        let backup_secret_key = SecretKey::from_slice(&backup_keypair_bytes)
+            .map_err(|_| BackupError::DecodeBackupKeypairError)?;
+
+        let unsealed_backup = backup_secret_key
+            .unseal(sealed_backup_data)
+            .map_err(|_| BackupError::DecryptBackupError)?;
+
+        let unsealed_backup = BackupFormat::from_bytes(&unsealed_backup)?;
+
+        Ok((unsealed_backup, backup_secret_key))
+    }
+
+    fn decrypted_backup(
+        unsealed_backup: &BackupFormat,
+        backup_secret_key: &SecretKey,
+    ) -> Result<DecryptedBackup, BackupError> {
+        let BackupFormat::V0(backup) = unsealed_backup;
+
+        Ok(DecryptedBackup {
+            root_key_json: backup.root_secret.danger_to_json().map_err(|_| {
+                BackupError::Generic {
+                    error_message: "unexpected. failed to serialize root secret"
+                        .to_string(),
+                }
+            })?,
+            backup_keypair_public_key: hex::encode(
+                backup_secret_key.public_key().as_bytes(),
+            ),
+        })
+    }
+
     fn unpack_backup_to_filesystem(
         unsealed_backup: &BackupFormat,
     ) -> Result<(), BackupError> {
@@ -754,16 +822,92 @@ impl BackupManager {
         // NOTE: we don't use the module's prefix (`backup/`) here; as this
         // unpacks files directly into their module-owned locations.
         let fs = unscoped_filesystem();
-        let mut manifest_entries: Vec<V0BackupManifestEntry> =
-            Vec::with_capacity(backup.files.len());
+        let files: Vec<&V0BackupFile> = backup.files.iter().collect();
 
-        crate::info!("Processing {} files for unpacking.", backup.files.len());
+        crate::info!("Processing {} files for unpacking.", files.len());
 
         // Paths come from the sealed backup, so validate all of them before writing any.
         // A write failing later still leaves earlier files replaced and no manifest.
-        let mut destinations =
-            std::collections::HashSet::with_capacity(backup.files.len());
-        for file in &backup.files {
+        Self::validate_unpack_destinations(&fs, &files)?;
+
+        let mut manifest_entries: Vec<V0BackupManifestEntry> =
+            Vec::with_capacity(files.len());
+
+        for file in files {
+            Self::write_unpacked_file(&fs, file)?;
+            manifest_entries.push(Self::unpacked_manifest_entry(file));
+        }
+
+        Self::save_unpacked_manifest(&BackupManifest::V0(V0BackupManifest {
+            files: manifest_entries,
+        }))
+    }
+
+    fn unpack_designator_to_filesystem(
+        unsealed_backup: &BackupFormat,
+        designator: &BackupFileDesignator,
+    ) -> Result<(), BackupError> {
+        let BackupFormat::V0(backup) = unsealed_backup;
+
+        ScopedFileSystem::data_directory()?;
+
+        let (BackupManifest::V0(mut manifest), _) =
+            ManifestManager::new().read_manifest()?;
+
+        let fs = unscoped_filesystem();
+        let files: Vec<&V0BackupFile> = backup
+            .files
+            .iter()
+            .filter(|file| file.designator == *designator)
+            .collect();
+
+        crate::info!(
+            designator = designator,
+            "Processing {} of {} backup files for a designator restore.",
+            files.len(),
+            backup.files.len()
+        );
+
+        Self::validate_unpack_destinations(&fs, &files)?;
+
+        manifest
+            .files
+            .retain(|entry| entry.designator != *designator);
+
+        manifest
+            .files
+            .extend(files.iter().map(|file| Self::unpacked_manifest_entry(file)));
+
+        let manifest = BackupManifest::V0(manifest);
+
+        // Fails if a restored path is already owned by another designator.
+        manifest.to_hash().inspect_err(|_| {
+            crate::error!(
+                designator = designator,
+                "Rejecting designator restore: a restored path is already used by another designator"
+            );
+        })?;
+
+        for file in files {
+            Self::write_unpacked_file(&fs, file)?;
+        }
+
+        Self::save_unpacked_manifest(&manifest)?;
+
+        crate::info!(
+            designator = designator,
+            "Backup files for one designator restored to filesystem."
+        );
+
+        Ok(())
+    }
+
+    fn validate_unpack_destinations(
+        fs: &ScopedFileSystem,
+        files: &[&V0BackupFile],
+    ) -> Result<(), BackupError> {
+        let mut destinations = std::collections::HashSet::with_capacity(files.len());
+        for file in files {
             let destination = fs
                 .resolved_file_path(file.path.trim_start_matches('/'))
                 .map_err(|e| {
@@ -790,61 +934,63 @@ impl BackupManager {
             }
         }
 
-        for file in &backup.files {
-            let rel_path = file.path.trim_start_matches('/');
+        Ok(())
+    }
 
-            // If a file already exists, verify checksum and log discrepancies before replacing.
-            let path_ref = rel_path.get(..14).unwrap_or(rel_path); // don't log the full path to avoid leaking info
-            match fs.file_exists(rel_path) {
-                Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
-                    Ok((local_checksum, _)) => {
-                        if local_checksum != file.checksum {
-                            crate::error!(
-                                    "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
-                                    file.designator
-                                );
-                        }
-                    }
-                    Err(e) => {
+    fn write_unpacked_file(
+        fs: &ScopedFileSystem,
+        file: &V0BackupFile,
+    ) -> Result<(), BackupError> {
+        let rel_path = file.path.trim_start_matches('/');
+
+        // If a file already exists, verify checksum and log discrepancies before replacing.
+        let path_ref = rel_path.get(..14).unwrap_or(rel_path); // don't log the full path to avoid leaking info
+        match fs.file_exists(rel_path) {
+            Ok(true) => match fs.calculate_checksum_and_size(rel_path) {
+                Ok((local_checksum, _)) => {
+                    if local_checksum != file.checksum {
                         crate::error!(
-                                "[BackupManager] failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
+                                "[BackupManager] checksum mismatch for existing file at {path_ref} (designator: {}). Replacing with remote content.",
+                                file.designator
                             );
                     }
-                },
-                Ok(false) => {}
+                }
                 Err(e) => {
                     crate::error!(
-                        "[BackupManager] failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
-                    );
+                            "[BackupManager] failed to compute checksum for existing file at {path_ref}: {e:?}. Replacing with remote content.",
+                        );
                 }
+            },
+            Ok(false) => {}
+            Err(e) => {
+                crate::error!(
+                    "[BackupManager] failed to check existence for {path_ref}: {e:?}. Proceeding to write.",
+                );
             }
-
-            fs.write_file(rel_path, &file.data).map_err(|e| {
-                let err = anyhow::Error::from(e)
-                    .context(format!("write unpacked file: {path_ref}"));
-                BackupError::from(err)
-            })?;
-
-            let designator = file.designator.clone();
-
-            manifest_entries.push(V0BackupManifestEntry {
-                designator,
-                file_path: rel_path.to_string(),
-                checksum_hex: hex::encode(file.checksum),
-            });
         }
 
-        let manifest = BackupManifest::V0(V0BackupManifest {
-            files: manifest_entries,
-        });
+        fs.write_file(rel_path, &file.data).map_err(|e| {
+            let err = anyhow::Error::from(e)
+                .context(format!("write unpacked file: {path_ref}"));
+            BackupError::from(err)
+        })
+    }
 
+    fn unpacked_manifest_entry(file: &V0BackupFile) -> V0BackupManifestEntry {
+        V0BackupManifestEntry {
+            designator: file.designator.clone(),
+            file_path: file.path.trim_start_matches('/').to_string(),
+            checksum_hex: hex::encode(file.checksum),
+        }
+    }
+
+    fn save_unpacked_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
         crate::debug!(
             "Saving manifest file with {} files",
             manifest.entries_length(),
         );
 
-        let manifest_manager = ManifestManager::new();
-        manifest_manager.write_manifest(&manifest)?;
+        ManifestManager::new().write_manifest(manifest)?;
 
         // Refresh the base report to reflect the unpacked manifest contents. This keeps
         // `backup_file_designators` and `backup_size_kb` in sync after a restore.
